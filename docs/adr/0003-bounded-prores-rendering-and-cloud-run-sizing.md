@@ -52,32 +52,47 @@ and can resume only missing stages from a validated run ID.
 
 ## Measurements
 
-The accepted cloud run uses image digest
-`sha256:a07c03b957b5d16422e2773f430168a78f477ef07ea50dd6fcaf08271b2a89b9`
-and object root `gs://animated-graph-cloud-jp-temporary/renderer-spike/20260716T213215Z`.
-The one-minute gates produced these results:
+The accepted rerun uses the Linux/AMD64 image manifest
+`europe-central2-docker.pkg.dev/animated-graph-cloud-jp/containers/animated-graph-cloud@sha256:1e4cbd1e9af97487286af0a14791b5f08bead56363fa2f06ed4b45b669da44b6`
+and object root
+`gs://animated-graph-cloud-jp-temporary/renderer-spike/20260716T231234Z`.
+The exact immutable image was built locally after a successful CI deployment;
+no SLSA, SBOM, or build-provenance attestation is claimed. Artifact Analysis
+reported `FINISHED_SUCCESS` with continuous analysis active and zero critical
+or high effective vulnerabilities (65 medium, 13 low, and 1 minimal). An
+earlier ARM64 startup attempt produced no renderer artifact. The corrected
+one-minute gates produced these results:
 
 | Case | Task wall | Render wall | Effective fps | Peak cgroup memory | Output bytes | SHA-256 |
 |---|---:|---:|---:|---:|---:|---|
-| 1080p25, 60 s | 142.421 s | 129.278 s | 11.603 | 1,145,954,304 | 247,192,377 | `3f5229f04a147b57d62f4ff889f5a6d8c1dcc58af80fb45256c860d66507d57d` |
-| 2.7k25, 60 s | 262.439 s | 245.318 s | 6.115 | 1,570,242,560 | 361,293,250 | `8f166fe1db723cb002144157ccbdcb0b57e516d673fef1ac0e510e39682fae9d` |
+| 1080p25, 60 s | 76.429 s | 64.227 s | 23.355 | 5,373,894,656 | 290,643,089 | `2a268ac71863378d7542352f4a5c2f17f5c3e1ee97011c14fe7b2776e13d1b2a` |
+| 2.7k25, 60 s | 132.401 s | 118.230 s | 12.687 | 10,465,345,536 | 454,511,039 | `3d110fe232040212c2e070e2071d4b1f3107c23b05a6c1b136d240d761bdd988` |
 
-Conservative linear projections were 18.99 minutes and 1.84 GiB for the
-eight-minute 1080p case, and 17.50 minutes and 1.35 GiB for the four-minute
-2.7K case. Both used less than 1.6 GB peak cgroup memory, so both maximum gates
-opened. The maximum cases then produced:
+Conservative linear projections were 10.19 minutes and 2.17 GiB for the
+eight-minute 1080p case, and 8.83 minutes and 1.69 GiB for the four-minute 2.7K
+case. Both stayed within the release gates, so both maximum cases ran and
+produced:
 
 | Case | Task wall | Render wall | Effective fps | Peak cgroup memory | Output bytes | SHA-256 |
 |---|---:|---:|---:|---:|---:|---|
-| 1080p25, 480 s | 750.432 s | 710.141 s | 16.898 | 2,978,852,864 | 1,967,526,968 | `4d56f8f6d46cdb2760c25260e739ef7d47f9f037225aac616cd0fbf9c529a3da` |
-| 2.7k25, 240 s | 882.436 s | 841.657 s | 7.129 | 2,884,014,080 | 1,438,775,896 | `c18c34b252472b39ffc59a3e5c2eeacb6af8e3c059c6835a13fd42eed85d0288` |
+| 1080p25, 480 s | 524.627 s | 473.172 s | 25.361 | 7,675,768,832 | 2,327,694,978 | `b81ee768f1d4fc109a87e66db0515cd43bc29acb72bab7d3292f5271fe6a2199` |
+| 2.7k25, 240 s | 482.442 s | 444.055 s | 13.512 | 11,897,987,072 | 1,821,740,649 | `ca9c7978946f2d74edca0112b1d5a606bc2174417d2aa1ad42ee34b5880828b3` |
 
-Both finished below 15 minutes, 3 GB peak cgroup memory, and 2 GB output.
-Maximum JFR evidence recorded 199,650 and 241,293 allocation samples, 2,400
-and 2,006 garbage collections, and 4,800 and 4,012 heap summaries. The staged
-runner's conservative USD 0.673768 total includes the successful matrix, prior
-attempts, cancellation overhead, and a deliberately rounded-up prior-spend
-allowance.
+Both finished below 9 minutes, 12 GB peak cgroup memory, and 2.33 GB output,
+well inside the 60-minute, 30 GiB, and 18 GiB acceptance bounds. Maximum JFR
+evidence recorded 50,837 and 34,450 allocation samples representing
+188,324,011,088 and 98,350,707,792 sampled bytes, 652 and 490 garbage
+collections, and 1,304 and 980 heap summaries. The recordings were 10,587,521
+and 6,528,668 bytes. The staged runner's conservative USD 0.990827 total
+includes the successful rerun and USD 0.688 of prior spend.
+
+Both maximum MOVs validate as conventional seekable, non-fragmented ProRes
+4444 `ap4h` containers. FFprobe decodes `yuva444p12le` with 16 alpha bits at
+the required dimensions and 25 fps. Each contains AAC-LC stereo at 48 kHz with
+the exact 192 kbps encoder target preserved in the report; sparse identical-
+channel heartbeat samples produce observed averages of 73,186 and 73,271 bps.
+Local downloads matched the report byte sizes and SHA-256 digests, and frame
+decoding succeeded at the midpoint and final second of each output.
 
 ## Consequences
 
@@ -89,6 +104,9 @@ Interrupted jobs may leave lifecycle-managed cloud objects, but zero retries
 prevent duplicate compute and resume validation prevents silently accepting a
 partial stage.
 
-The retained maximum MOVs are evidence for the manual DaVinci Resolve import
-and compositing check in GitHub issue #3; that human check is not part of this
-automated decision.
+The regenerated maximum MOVs were imported into DaVinci Resolve, sought near
+their midpoints and ends, alpha-composited over a checkerboard, and played with
+active audio meters. This agent-operated acceptance completes the media handoff
+for GitHub issue #3. The owner accepted the visible near-diagonal synthetic
+trace for this infrastructure spike; trace-shape fidelity remains tracked in
+GitHub issue #4 and does not change this decision.
