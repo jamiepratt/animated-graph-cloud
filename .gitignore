@@ -1,0 +1,13 @@
+.DS_Store
+.cpcache/
+.clj-kondo/.cache/
+.lsp/
+.terraform/
+*.tfplan
+*.tfstate
+*.tfstate.*
+*.tfvars
+!.terraform.lock.hcl
+.env
+target/
+
