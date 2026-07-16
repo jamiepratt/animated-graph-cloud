@@ -8,6 +8,42 @@
   (:import (java.io ByteArrayOutputStream OutputStream)
            (java.nio.file Files OpenOption)))
 
+(defn- streamed-rgba [render-spec]
+  (let [output (ByteArrayOutputStream.)]
+    {:result (frames/stream! render-spec output)
+     :rgba (.toByteArray output)}))
+
+(defn- visible-pixels [rgba width height]
+  (vec (for [y (range height)
+             x (range width)
+             :when (pos? (bit-and 0xff
+                                  (aget rgba (+ 3 (* 4 (+ x (* y width)))))))]
+         [x y])))
+
+(defn- alpha-bounds [^bytes rgba width]
+  (loop [pixel 0
+         visible-count 0
+         min-x width
+         max-x -1
+         min-y Integer/MAX_VALUE
+         max-y -1]
+    (if (< pixel (quot (alength rgba) 4))
+      (if (pos? (bit-and 0xff (aget rgba (+ 3 (* pixel 4)))))
+        (let [x (rem pixel width)
+              y (quot pixel width)]
+          (recur (inc pixel)
+                 (inc visible-count)
+                 (min min-x x)
+                 (max max-x x)
+                 (min min-y y)
+                 (max max-y y)))
+        (recur (inc pixel) visible-count min-x max-x min-y max-y))
+      {:visible-count visible-count
+       :min-x min-x
+       :max-x max-x
+       :min-y min-y
+       :max-y max-y})))
+
 (deftest presets-lock-the-spike-matrix
   (is (= {:id "1080p25"
           :width 1920
@@ -49,13 +85,10 @@
          media/aac-lc-contract)))
 
 (deftest frames-stream-as-rgba-with-transparency
-  (let [output (ByteArrayOutputStream.)
-        result (frames/stream! {:width 64
-                                :height 36
-                                :fps 2
-                                :duration-seconds 1}
-                               output)
-        rgba (.toByteArray output)
+  (let [{:keys [result rgba]} (streamed-rgba {:width 64
+                                              :height 36
+                                              :fps 2
+                                              :duration-seconds 1})
         alpha (map #(bit-and 0xff (aget rgba %))
                    (range 3 (alength rgba) 4))]
     (is (= {:frame-count 2 :buffer-count 1} result))
@@ -63,6 +96,47 @@
     (testing "the production-shaped overlay keeps both clear and visible pixels"
       (is (some zero? alpha))
       (is (some pos? alpha)))))
+
+(deftest frames-stream-only-a-full-frame-heart-rate-trace
+  (let [width 64
+        height 36
+        {:keys [rgba]} (streamed-rgba {:width width
+                                       :height height
+                                       :fps 1
+                                       :duration-seconds 1})
+        visible (visible-pixels rgba width height)
+        visible-by-column (group-by first visible)
+        xs (map first visible)
+        ys (map second visible)]
+    (testing "only the antialiased trace has alpha"
+      (is (pos? (count visible)))
+      (is (<= (count visible) (* width 8)))
+      (is (every? #(<= (count %) 8) (vals visible-by-column))))
+    (testing "the trace uses nearly the full frame coordinate system"
+      (is (>= (count visible-by-column) (- width 4)))
+      (is (<= (apply min xs) 2))
+      (is (>= (apply max xs) (- width 3)))
+      (is (<= (apply min ys) 2))
+      (is (>= (apply max ys) (- height 3))))))
+
+(deftest production-frame-dimensions-keep-the-trace-near-every-edge
+  (doseq [preset-id ["1080p25" "2.7k25"]]
+    (let [{:keys [width height]} (spec/preset preset-id)
+          {:keys [result rgba]} (streamed-rgba {:width width
+                                                :height height
+                                                :fps 1
+                                                :duration-seconds 1})
+          {:keys [visible-count min-x max-x min-y max-y]} (alpha-bounds rgba width)
+          horizontal-tolerance (Math/ceil (* width 0.02))
+          vertical-tolerance (Math/ceil (* height 0.03))]
+      (testing preset-id
+        (is (= {:frame-count 1 :buffer-count 1} result))
+        (is (= (* width height 4) (alength rgba)))
+        (is (pos? visible-count))
+        (is (<= min-x horizontal-tolerance))
+        (is (>= max-x (- width horizontal-tolerance 1)))
+        (is (<= min-y vertical-tolerance))
+        (is (>= max-y (- height vertical-tolerance 1)))))))
 
 (deftest heartbeat-wav-is-exact-stereo-pcm
   (let [output (ByteArrayOutputStream.)

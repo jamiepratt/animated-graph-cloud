@@ -1,6 +1,6 @@
 (ns agg.render.frames
   (:require [agg.render.spec :as spec])
-  (:import (java.awt AlphaComposite BasicStroke Color Font RenderingHints Transparency)
+  (:import (java.awt AlphaComposite BasicStroke Color RenderingHints Transparency)
            (java.awt.color ColorSpace)
            (java.awt.image BufferedImage ComponentColorModel DataBuffer DataBufferByte Raster)
            (java.io OutputStream)))
@@ -32,61 +32,45 @@
   (let [g (.createGraphics image)
         width (.getWidth image)
         height (.getHeight image)
-        panel-y (int (* height 0.61))
-        panel-height (- height panel-y)
-        margin (max 2 (int (* width 0.025)))
-        graph-left margin
-        graph-right (- width margin)
-        graph-top (+ panel-y (max 2 (int (* panel-height 0.18))))
-        graph-bottom (- height (max 2 (int (* panel-height 0.16))))
+        horizontal-margin (max 1 (int (Math/round (* width 0.015))))
+        vertical-margin (max 1 (int (Math/round (* height 0.02))))
+        graph-left horizontal-margin
+        graph-right (- width horizontal-margin 1)
+        graph-top vertical-margin
+        graph-bottom (- height vertical-margin 1)
         seconds (/ (double frame-index) (double fps))
-        sample-count (max 8 (min 160 (- graph-right graph-left)))]
+        sample-count (max 8 (min 160 (inc (- graph-right graph-left))))
+        samples (mapv (fn [point]
+                        (let [ratio (/ (double point) (double (dec sample-count)))
+                              sample-time (+ (- seconds 8.0) (* ratio 8.0))]
+                          {:x (+ graph-left
+                                 (int (* ratio (- graph-right graph-left))))
+                           :heart-rate (synthetic-heart-rate sample-time)}))
+                      (range sample-count))
+        minimum-heart-rate (apply min (map :heart-rate samples))
+        maximum-heart-rate (apply max (map :heart-rate samples))
+        heart-rate-range (max 1.0 (- maximum-heart-rate minimum-heart-rate))
+        y-for (fn [heart-rate]
+                (int (- graph-bottom
+                        (* (/ (- heart-rate minimum-heart-rate) heart-rate-range)
+                           (- graph-bottom graph-top)))))]
     (try
       (.setComposite g AlphaComposite/Clear)
       (.fillRect g 0 0 width height)
       (.setComposite g AlphaComposite/SrcOver)
       (.setRenderingHint g RenderingHints/KEY_ANTIALIASING RenderingHints/VALUE_ANTIALIAS_ON)
-      (.setColor g (Color. 5 14 28 112))
-      (.fillRoundRect g
-                      (quot margin 2)
-                      panel-y
-                      (- width margin)
-                      panel-height
-                      (max 4 (int (* height 0.018)))
-                      (max 4 (int (* height 0.018))))
-      (.setColor g (Color. 255 255 255 55))
-      (.setStroke g (BasicStroke. (float (max 1.0 (* height 0.0012)))))
-      (doseq [line (range 4)]
-        (let [y (+ graph-top
-                   (int (* line (/ (- graph-bottom graph-top) 3.0))))]
-          (.drawLine g graph-left y graph-right y)))
-      (.setColor g (Color. 255 55 82 245))
+      (.setColor g (Color. 255 55 82 255))
       (.setStroke g (BasicStroke. (float (max 1.5 (* height 0.0032)))
                                   BasicStroke/CAP_ROUND
                                   BasicStroke/JOIN_ROUND))
-      (loop [point 1
-             previous-x graph-left
-             previous-y (int (- graph-bottom
-                                (* (/ (- (synthetic-heart-rate (- seconds 8.0)) 80.0)
-                                      100.0)
-                                   (- graph-bottom graph-top))))]
-        (when (< point sample-count)
-          (let [ratio (/ (double point) (double (dec sample-count)))
-                x (+ graph-left (int (* ratio (- graph-right graph-left))))
-                sample-time (+ (- seconds 8.0) (* ratio 8.0))
-                normalized (-> (- (synthetic-heart-rate sample-time) 80.0)
-                               (/ 100.0)
-                               (max 0.0)
-                               (min 1.0))
-                y (int (- graph-bottom (* normalized (- graph-bottom graph-top))))]
-            (.drawLine g previous-x previous-y x y)
-            (recur (inc point) x y))))
-      (.setFont g (Font. Font/SANS_SERIF Font/BOLD (max 10 (int (* height 0.075)))))
-      (.setColor g (Color. 255 255 255 245))
-      (.drawString g
-                   (str (Math/round (synthetic-heart-rate seconds)))
-                   (float graph-left)
-                   (float (- graph-top (max 2 (int (* height 0.012))))))
+      (loop [[previous current & remaining] samples]
+        (when current
+          (.drawLine g
+                     (:x previous)
+                     (y-for (:heart-rate previous))
+                     (:x current)
+                     (y-for (:heart-rate current)))
+          (recur (cons current remaining))))
       (finally
         (.dispose g)))))
 
