@@ -140,6 +140,51 @@ resource "google_service_account" "deployer" {
   display_name = "Animated Graph Cloud GitHub deployer"
 }
 
+resource "google_cloud_run_v2_job" "renderer" {
+  project             = var.project_id
+  location            = var.region
+  name                = "agg-renderer"
+  deletion_protection = false
+
+  template {
+    parallelism = 1
+    task_count  = 1
+
+    template {
+      service_account       = google_service_account.renderer.email
+      execution_environment = "EXECUTION_ENVIRONMENT_GEN2"
+      max_retries           = 0
+      timeout               = "3600s"
+
+      containers {
+        image = var.renderer_image
+        args  = ["clojure.main", "-m", "agg.renderer.main"]
+
+        resources {
+          limits = {
+            cpu    = "8"
+            memory = "32Gi"
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [google_project_service.required["run.googleapis.com"]]
+}
+
+resource "google_storage_bucket_iam_member" "renderer_temporary_object_creator" {
+  bucket = google_storage_bucket.temporary.name
+  role   = "roles/storage.objectCreator"
+  member = "serviceAccount:${google_service_account.renderer.email}"
+}
+
+resource "google_storage_bucket_iam_member" "deployer_temporary_object_viewer" {
+  bucket = google_storage_bucket.temporary.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.deployer.email}"
+}
+
 resource "google_iam_workload_identity_pool" "github" {
   project                   = var.project_id
   workload_identity_pool_id = "github"

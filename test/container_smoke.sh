@@ -13,9 +13,25 @@ fi
 
 docker run --rm --entrypoint java "$image" -version 2>&1 | grep -q 'version "21\.'
 
+docker run --rm --entrypoint ffmpeg "$image" -version 2>&1 | grep -q 'ffmpeg version 8\.1\.2'
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -encoders 2>&1 | grep -q 'prores_ks'
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -encoders 2>&1 | grep -q 'aac'
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -h encoder=prores_ks 2>&1 | \
+  grep -q 'Supported pixel formats:.*yuva444p10le'
+
 renderer_output="$(docker run --rm "$image" clojure.main -m agg.renderer.main)"
 if [ "$renderer_output" != "$expected_renderer" ]; then
   echo "unexpected renderer output: $renderer_output" >&2
+  exit 1
+fi
+
+render_output="$(docker run --rm "$image" \
+  clojure.main -m agg.renderer.main \
+  --preset 1080p25 \
+  --duration-seconds 1 \
+  --profile false)"
+if [ "$render_output" != '{"severity":"INFO","component":"renderer","event":"render_complete","message":"Renderer job completed"}' ]; then
+  echo "renderer media smoke failed" >&2
   exit 1
 fi
 

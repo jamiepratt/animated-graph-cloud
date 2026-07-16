@@ -1,5 +1,6 @@
 {:paths ["src" "resources"]
- :deps {org.clojure/clojure {:mvn/version "1.12.5"}}
+ :deps {org.clojure/clojure {:mvn/version "1.12.5"}
+        org.clojure/data.json {:mvn/version "2.5.1"}}
  :aliases
  {:api {:main-opts ["-m" "agg.api.main"]}
   :renderer {:main-opts ["-m" "agg.renderer.main"]}

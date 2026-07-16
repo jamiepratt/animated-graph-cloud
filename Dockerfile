@@ -6,14 +6,65 @@ RUN clojure -P -T:build
 COPY src ./src
 RUN clojure -T:build uber
 
+FROM eclipse-temurin:21-jre-jammy@sha256:d63bd8d9b171999cbed8576f2c76e874dd4856791a358536e5c4d407e77edc13 AS ffmpeg-build
+
+ARG FFMPEG_VERSION=8.1.2
+ARG FFMPEG_SHA256=464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+       build-essential \
+       ca-certificates \
+       curl \
+       nasm \
+       xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --fail --location --silent --show-error \
+      "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
+      --output /tmp/ffmpeg.tar.xz \
+    && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum --check --strict \
+    && mkdir /tmp/ffmpeg \
+    && tar --extract --xz --file /tmp/ffmpeg.tar.xz --directory /tmp/ffmpeg --strip-components 1 \
+    && cd /tmp/ffmpeg \
+    && ./configure \
+       --prefix=/opt/ffmpeg \
+       --disable-autodetect \
+       --disable-debug \
+       --disable-doc \
+       --disable-everything \
+       --disable-network \
+       --disable-shared \
+       --enable-static \
+       --enable-ffmpeg \
+       --enable-ffprobe \
+       --enable-avcodec \
+       --enable-avformat \
+       --enable-swresample \
+       --enable-swscale \
+       --enable-protocol=file,pipe \
+       --enable-demuxer=mov,rawvideo,wav \
+       --enable-muxer=mov \
+       --enable-decoder=aac,pcm_s16le,prores,rawvideo \
+       --enable-encoder=aac,prores_ks \
+       --enable-parser=aac \
+       --enable-filter=aformat,aresample,format,scale \
+    && make --jobs="$(nproc)" \
+    && make install \
+    && /opt/ffmpeg/bin/ffmpeg -version \
+    && /opt/ffmpeg/bin/ffprobe -version
+
 FROM eclipse-temurin:21-jre-jammy@sha256:d63bd8d9b171999cbed8576f2c76e874dd4856791a358536e5c4d407e77edc13
 
 RUN groupadd --system app \
     && useradd --system --gid app --home-dir /app app
 WORKDIR /app
+COPY --from=ffmpeg-build /opt/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg-build /opt/ffmpeg/bin/ffprobe /usr/local/bin/ffprobe
 COPY --from=build --chown=app:app /workspace/target/animated-graph-cloud.jar ./animated-graph-cloud.jar
 
 USER app
+ENV JAVA_TOOL_OPTIONS="-Djava.awt.headless=true -Xmx2g"
 EXPOSE 8080
 ENTRYPOINT ["java", "-cp", "/app/animated-graph-cloud.jar"]
 CMD ["clojure.main", "-m", "agg.api.main"]

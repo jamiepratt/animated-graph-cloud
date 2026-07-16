@@ -29,6 +29,48 @@ test/container_smoke.sh animated-graph-cloud:local
 docker run --rm animated-graph-cloud:local clojure.main -m agg.renderer.main
 ```
 
+## ProRes renderer spike
+
+The renderer streams one reusable Java2D RGBA buffer to the bundled FFmpeg
+8.1.2 process. FFmpeg writes a seekable, non-fragmented ProRes 4444 MOV with
+deterministic AAC-LC heartbeat audio. `prores_ks` receives
+`yuva444p10le`; FFmpeg decodes the resulting `ap4h` stream as
+`yuva444p12le`, the profile's decoder representation.
+
+Run both bounded 10-second local cases and their media assertions:
+
+```sh
+docker build -t animated-graph-cloud:local .
+script/render_local_spike.sh animated-graph-cloud:local
+```
+
+Run the gated Warsaw Cloud Run matrix with an immutable Artifact Registry
+digest:
+
+```sh
+script/run_cloud_spike.sh \
+  europe-central2-docker.pkg.dev/animated-graph-cloud-jp/containers/animated-graph-cloud@sha256:DIGEST
+```
+
+To retry only a missing stage, append the existing UTC run ID and carry spend
+from earlier run IDs conservatively:
+
+```sh
+PRIOR_ESTIMATED_COST_USD=0.20 script/run_cloud_spike.sh \
+  europe-central2-docker.pkg.dev/animated-graph-cloud-jp/containers/animated-graph-cloud@sha256:DIGEST \
+  20260716T213215Z
+```
+
+The cloud script enforces one task at a time, zero retries, 8 vCPU, 32 GiB,
+and a 60-minute timeout. Each successful render uploads its MOV, JFR, and JSON
+report to the private temporary bucket, then removes local artifacts. Bucket
+objects expire after one day. Reports contain dimensions, timings, effective
+fps, cgroup peak memory, output size, checksum, FFprobe evidence, and JFR
+summaries; structured logs omit filenames and synthetic telemetry values.
+
+The retained maximum MOVs are inputs to the manual DaVinci Resolve check in
+GitHub issue #3.
+
 Infrastructure targets project `animated-graph-cloud-jp` in Warsaw (`europe-central2`). Application Default Credentials provide local authentication; do not create service-account key files or commit credentials.
 
 Pushes to `main` authenticate through GitHub Workload Identity Federation,

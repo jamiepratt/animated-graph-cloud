@@ -14,3 +14,6 @@ output "temporary_bucket" {
   value = google_storage_bucket.temporary.url
 }
 
+output "renderer_job" {
+  value = google_cloud_run_v2_job.renderer.id
+}

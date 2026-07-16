@@ -21,3 +21,13 @@ variable "github_repository" {
   default     = "jamiepratt/animated-graph-cloud"
 }
 
+variable "renderer_image" {
+  description = "Immutable application image used by the durable renderer job."
+  type        = string
+  default     = "europe-central2-docker.pkg.dev/animated-graph-cloud-jp/containers/animated-graph-cloud@sha256:a07c03b957b5d16422e2773f430168a78f477ef07ea50dd6fcaf08271b2a89b9"
+
+  validation {
+    condition     = can(regex("@sha256:[0-9a-f]{64}$", var.renderer_image))
+    error_message = "The renderer image must use an immutable SHA-256 digest."
+  }
+}
