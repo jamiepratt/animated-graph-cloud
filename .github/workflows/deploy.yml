@@ -98,17 +98,35 @@ jobs:
             --region "$REGION" \
             --wait
 
-      - name: Verify health, identities, and structured log
+      - id: service-url
+        name: Discover private API audience
         run: |
           service_url="$(gcloud run services describe "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --format 'value(status.url)')"
-          identity_token="$(gcloud auth print-identity-token)"
+          echo "url=$service_url" >>"$GITHUB_OUTPUT"
+
+      - id: health-auth
+        name: Mint private API identity token through WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud
+          service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service-url.outputs.url }}
+          id_token_include_email: true
+
+      - name: Verify health, identities, and structured log
+        env:
+          CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
+          CLOUD_RUN_ID_TOKEN: ${{ steps.health-auth.outputs.id_token }}
+        run: |
           health="$(curl --fail --silent --show-error \
             --retry 5 --retry-all-errors \
-            --header "Authorization: Bearer $identity_token" \
-            "$service_url/health")"
+            --header "Authorization: Bearer $CLOUD_RUN_ID_TOKEN" \
+            "$CLOUD_RUN_SERVICE_URL/health")"
           test "$health" = '{"status":"ok"}'
 
           service_identity="$(gcloud run services describe "$SERVICE" \
