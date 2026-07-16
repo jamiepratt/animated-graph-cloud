@@ -1,0 +1,137 @@
+name: Deploy smoke path
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: development-deployment
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: animated-graph-cloud-jp
+  PROJECT_NUMBER: "891643499444"
+  REGION: europe-central2
+  REPOSITORY: containers
+  SERVICE: agg-api
+  JOB: agg-renderer-smoke
+  IMAGE: europe-central2-docker.pkg.dev/animated-graph-cloud-jp/containers/animated-graph-cloud:${{ github.sha }}
+  DEPLOYER_SERVICE_ACCOUNT: agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com
+  API_SERVICE_ACCOUNT: agg-api@animated-graph-cloud-jp.iam.gserviceaccount.com
+  RENDERER_SERVICE_ACCOUNT: agg-renderer@animated-graph-cloud-jp.iam.gserviceaccount.com
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build --tag "$IMAGE" .
+
+      - name: Test image entry points
+        run: test/container_smoke.sh "$IMAGE"
+
+      - name: Scan image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - id: auth
+        name: Authenticate to Google Cloud without a key
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud
+          service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: ">= 541.0.0"
+
+      - name: Push image
+        run: |
+          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+          docker push "$IMAGE"
+
+      - name: Deploy private API service
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE" \
+            --service-account "$API_SERVICE_ACCOUNT" \
+            --port 8080 \
+            --cpu 1 \
+            --memory 512Mi \
+            --min 0 \
+            --max 2 \
+            --no-allow-unauthenticated \
+            --quiet
+
+      - name: Deploy and execute renderer smoke job
+        run: |
+          gcloud run jobs deploy "$JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE" \
+            --service-account "$RENDERER_SERVICE_ACCOUNT" \
+            --args clojure.main,-m,agg.renderer.main \
+            --tasks 1 \
+            --max-retries 0 \
+            --task-timeout 5m \
+            --cpu 1 \
+            --memory 512Mi \
+            --quiet
+          gcloud run jobs execute "$JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --wait
+
+      - name: Verify health, identities, and structured log
+        run: |
+          service_url="$(gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format 'value(status.url)')"
+          identity_token="$(gcloud auth print-identity-token)"
+          health="$(curl --fail --silent --show-error \
+            --retry 5 --retry-all-errors \
+            --header "Authorization: Bearer $identity_token" \
+            "$service_url/health")"
+          test "$health" = '{"status":"ok"}'
+
+          service_identity="$(gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format 'value(spec.template.spec.serviceAccountName)')"
+          job_identity="$(gcloud run jobs describe "$JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format 'value(spec.template.spec.template.spec.serviceAccountName)')"
+          test "$service_identity" = "$API_SERVICE_ACCOUNT"
+          test "$job_identity" = "$RENDERER_SERVICE_ACCOUNT"
+
+          attempt=0
+          event=""
+          while [ "$attempt" -lt 12 ] && [ "$event" != "smoke_complete" ]; do
+            event="$(gcloud logging read \
+              'resource.type="cloud_run_job" AND resource.labels.job_name="agg-renderer-smoke" AND jsonPayload.event="smoke_complete"' \
+              --project "$PROJECT_ID" \
+              --freshness 10m \
+              --limit 1 \
+              --format 'value(jsonPayload.event)')"
+            attempt=$((attempt + 1))
+            if [ "$event" != "smoke_complete" ]; then sleep 5; fi
+          done
+          test "$event" = "smoke_complete"

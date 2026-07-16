@@ -36,3 +36,18 @@ jobs:
       - run: terraform fmt -check -recursive
       - run: terraform -chdir=infra/dev init -backend=false -input=false
       - run: terraform -chdir=infra/dev validate
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build --tag animated-graph-cloud:ci .
+      - run: test/container_smoke.sh animated-graph-cloud:ci
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: animated-graph-cloud:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH

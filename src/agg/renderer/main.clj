@@ -2,5 +2,7 @@
   (:gen-class))
 
 (defn -main [& _]
-  (println "Animated Graph Cloud renderer bootstrap"))
-
+  (println (str "{\"severity\":\"INFO\","
+                "\"component\":\"renderer\","
+                "\"event\":\"smoke_complete\","
+                "\"message\":\"Renderer smoke job completed\"}")))

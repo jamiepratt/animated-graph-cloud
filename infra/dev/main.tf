@@ -179,3 +179,26 @@ resource "google_project_iam_member" "deployer_artifact_writer" {
   member  = "serviceAccount:${google_service_account.deployer.email}"
 }
 
+resource "google_project_iam_member" "deployer_run_admin" {
+  project = var.project_id
+  role    = "roles/run.admin"
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_project_iam_member" "deployer_log_viewer" {
+  project = var.project_id
+  role    = "roles/logging.viewer"
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_service_account_iam_member" "deployer_uses_api" {
+  service_account_id = google_service_account.api.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_service_account_iam_member" "deployer_uses_renderer" {
+  service_account_id = google_service_account.renderer.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.deployer.email}"
+}

@@ -20,7 +20,20 @@ java -cp target/animated-graph-cloud.jar clojure.main -m agg.api.main
 java -cp target/animated-graph-cloud.jar clojure.main -m agg.renderer.main
 ```
 
+The same JDK 21 image runs either entry point. The API is the default command;
+the renderer is selected by replacing the image arguments:
+
+```sh
+docker build -t animated-graph-cloud:local .
+test/container_smoke.sh animated-graph-cloud:local
+docker run --rm animated-graph-cloud:local clojure.main -m agg.renderer.main
+```
+
 Infrastructure targets project `animated-graph-cloud-jp` in Warsaw (`europe-central2`). Application Default Credentials provide local authentication; do not create service-account key files or commit credentials.
 
-Implementation work is tracked in GitHub Issues.
+Pushes to `main` authenticate through GitHub Workload Identity Federation,
+scan and push an immutable commit-tagged image, deploy the private `agg-api`
+service, and execute `agg-renderer-smoke`. The workflow verifies the health
+response, runtime identities, and the renderer's structured completion log.
 
+Implementation work is tracked in GitHub Issues.

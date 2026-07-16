@@ -1,0 +1,11 @@
+.git
+.github
+.clj-kondo
+.cpcache
+.lsp
+.terraform
+infra
+target
+test
+*.tfplan
+*.tfstate*
