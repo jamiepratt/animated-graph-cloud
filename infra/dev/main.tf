@@ -860,6 +860,20 @@ resource "google_project_iam_member" "api_run_invoker" {
   member  = "serviceAccount:${google_service_account.api.email}"
 }
 
+resource "google_project_iam_custom_role" "api_execution_reader" {
+  project     = var.project_id
+  role_id     = "aggExecutionReader"
+  title       = "Animated Graph Cloud execution reader"
+  description = "Read Cloud Run execution identity and overridden arguments for durable reconciliation"
+  permissions = ["run.executions.get", "run.executions.list"]
+}
+
+resource "google_project_iam_member" "api_execution_reader" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.api_execution_reader.id
+  member  = "serviceAccount:${google_service_account.api.email}"
+}
+
 resource "google_project_iam_member" "tasks_run_invoker" {
   project = var.project_id
   role    = "roles/run.invoker"

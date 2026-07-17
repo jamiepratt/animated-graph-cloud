@@ -23,6 +23,10 @@
   (launch-job! [launcher job-id])
   (cancel-execution! [launcher execution]))
 
+(defprotocol RecoverableJobLauncher
+  (launch-job-attempt! [launcher job-id attempt])
+  (find-active-execution [launcher job-id attempt]))
+
 (defprotocol RenderWorker
   (perform-render! [worker job-id request]))
 

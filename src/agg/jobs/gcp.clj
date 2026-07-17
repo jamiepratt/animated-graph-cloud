@@ -8,7 +8,7 @@
            (com.google.cloud.firestore DocumentSnapshot Firestore
                                        FirestoreException FirestoreOptions
                                        Transaction Transaction$Function)
-           (com.google.cloud.run.v2 ExecutionsClient JobsClient RunJobRequest
+           (com.google.cloud.run.v2 Execution ExecutionsClient JobsClient RunJobRequest
                                     RunJobRequest$Overrides
                                     RunJobRequest$Overrides$ContainerOverride)
            (com.google.cloud.storage BlobInfo HttpMethod Storage
@@ -179,10 +179,11 @@
           (when-not (duplicate-task? error)
             (throw error)))))))
 
-(defn- run-job-request [renderer-job job-id]
+(defn- run-job-request [renderer-job job-id attempt]
   (let [container (-> (RunJobRequest$Overrides$ContainerOverride/newBuilder)
                       (.addAllArgs ["clojure.main" "-m" "agg.renderer.main"
-                                    "--job-id" job-id])
+                                    "--job-id" job-id
+                                    "--attempt" (str attempt)])
                       (.build))
         overrides (-> (RunJobRequest$Overrides/newBuilder)
                       (.addContainerOverrides container)
@@ -193,17 +194,43 @@
         (.setOverrides overrides)
         (.build))))
 
+(defn- execution-option [^Execution execution flag]
+  (->> (.getContainersList (.getTemplate execution))
+       (mapcat #(.getArgsList %))
+       (partition 2 1)
+       (some (fn [[candidate value]]
+               (when (= flag candidate) value)))))
+
+(defn- active-execution-for-attempt [executions job-id attempt]
+  (some (fn [^Execution execution]
+          (when (and (not (.hasCompletionTime execution))
+                     (= job-id (execution-option execution "--job-id"))
+                     (= (str attempt)
+                        (execution-option execution "--attempt")))
+            (.getName execution)))
+        executions))
+
+(defn- launch-cloud-run! [^JobsClient jobs-client renderer-job job-id attempt]
+  (let [request (run-job-request renderer-job job-id attempt)
+        operation (.runJobAsync jobs-client request)
+        execution (await! (.getMetadata operation))]
+    (.getName execution)))
+
 (defrecord CloudRunLauncher [^JobsClient jobs-client
                              ^ExecutionsClient executions-client
                              renderer-job]
   lifecycle/JobLauncher
   (launch-job! [_ job-id]
-    (let [request (run-job-request renderer-job job-id)
-          operation (.runJobAsync jobs-client request)
-          execution (await! (.getMetadata operation))]
-      (.getName execution)))
+    (launch-cloud-run! jobs-client renderer-job job-id 1))
   (cancel-execution! [_ execution]
-    (await! (.cancelExecutionAsync executions-client execution))))
+    (await! (.cancelExecutionAsync executions-client execution)))
+  lifecycle/RecoverableJobLauncher
+  (launch-job-attempt! [_ job-id attempt]
+    (launch-cloud-run! jobs-client renderer-job job-id attempt))
+  (find-active-execution [_ job-id attempt]
+    (active-execution-for-attempt
+     (.. executions-client (listExecutions renderer-job) iterateAll)
+     job-id attempt)))
 
 (defn- capacity-data [leases]
   {"leases" leases})
@@ -332,57 +359,142 @@
     (let [jobs (.collection firestore "jobs")
           capacity-ref (.document (.collection firestore "orchestration") "capacity")
           now (now-ms clock)
-          stale-job-ids
+          stale-job-candidates
           (->> (await! (.get (.whereLessThanOrEqualTo
                               jobs "leaseExpiresAt" now)))
                .getDocuments
                (keep snapshot-job)
                (filter #(stale-job? now %))
-               (mapv :id))]
-      (transaction!
-       firestore
-       (fn [transaction]
-         (let [capacity (transaction-snapshot transaction capacity-ref)
-               leases (or (some-> ^DocumentSnapshot capacity .getData
-                                  (get "leases"))
-                          {})
-               candidate-job-ids (distinct (concat stale-job-ids
-                                                   (keys leases)))
-               job-snapshots
-               (mapv #(transaction-snapshot transaction (.document jobs %))
-                     candidate-job-ids)
-               jobs-by-id (->> job-snapshots
-                               (keep snapshot-job)
-                               (map (juxt :id identity))
-                               (into {}))
-               stale-jobs (->> (vals jobs-by-id)
-                               (filter #(stale-job? now %)))
-               retained-leases
-               (into {}
-                     (filter
-                      (fn [[job-id expires-at]]
-                        (let [job (get jobs-by-id job-id)]
-                          (and (> (long expires-at) now)
-                               (contains? #{:launching :running
-                                            :cancellation-requested}
-                                          (:state job))
-                               (= (long expires-at)
-                                  (:lease-expires-at job))))))
-                     leases)]
-           (doseq [job stale-jobs]
-             (let [updated
-                   (if (= :cancellation-requested (:state job))
-                     (terminal-job job :cancelled now)
-                     (assoc (terminal-job job :failed now)
-                            :failure "stale_lease"))]
-               (.set ^Transaction transaction
-                     (.document jobs (:id job))
-                     (job-doc updated))))
-           (when (not= leases retained-leases)
-             (.set ^Transaction transaction capacity-ref
-                   (capacity-data retained-leases)))
-           {:repaired-jobs (count stale-jobs)
-            :released-leases (- (count leases) (count retained-leases))})))))
+               vec)
+          unrecorded-job-candidates
+          (->> ["launching" "cancellation-requested"]
+               (mapcat (fn [state]
+                         (->> (await! (.get (.whereEqualTo jobs "state" state)))
+                              .getDocuments
+                              (keep snapshot-job))))
+               (filter #(nil? (:execution %)))
+               vec)
+          recovery-candidates
+          (->> (concat stale-job-candidates unrecorded-job-candidates)
+               (map (juxt :id identity))
+               (into {})
+               vals)
+          recoverable? (satisfies? lifecycle/RecoverableJobLauncher launcher)
+          recovered-executions
+          (if recoverable?
+            (->> recovery-candidates
+                 (keep (fn [{:keys [id attempt execution]}]
+                         (when-not execution
+                           (when-let [accepted
+                                      (lifecycle/find-active-execution
+                                       launcher id attempt)]
+                             [id {:attempt attempt
+                                  :execution accepted}]))))
+                 (into {}))
+            {})
+          result
+          (transaction!
+           firestore
+           (fn [transaction]
+             (let [capacity (transaction-snapshot transaction capacity-ref)
+                   leases (or (some-> ^DocumentSnapshot capacity .getData
+                                      (get "leases"))
+                              {})
+                   candidate-job-ids
+                   (distinct (concat (map :id stale-job-candidates)
+                                     (map :id recovery-candidates)
+                                     (keys leases)))
+                   job-snapshots
+                   (mapv #(transaction-snapshot transaction (.document jobs %))
+                         candidate-job-ids)
+                   jobs-by-id (->> job-snapshots
+                                   (keep snapshot-job)
+                                   (map (juxt :id identity))
+                                   (into {}))
+                   renewed-until (+ now (* 1000 lifecycle/lease-seconds))
+                   updates
+                   (into {}
+                         (keep
+                          (fn [job]
+                            (let [{recovered-attempt :attempt
+                                   execution :execution}
+                                  (get recovered-executions (:id job))
+                                  recoverable-job?
+                                  (and execution
+                                       (= recovered-attempt (:attempt job))
+                                       (nil? (:execution job))
+                                       (contains? #{:launching
+                                                    :cancellation-requested}
+                                                  (:state job)))
+                                  stale? (stale-job? now job)]
+                              (when (or recoverable-job? stale?)
+                                [(:id job)
+                                 (if recoverable-job?
+                                   (assoc job
+                                          :state
+                                          (if (= :cancellation-requested
+                                                 (:state job))
+                                            :cancellation-requested
+                                            :running)
+                                          :execution execution
+                                          :lease-expires-at renewed-until
+                                          :updated-at now)
+                                   (if (= :cancellation-requested (:state job))
+                                     (terminal-job job :cancelled now)
+                                     (assoc (terminal-job job :failed now)
+                                            :failure "stale_lease")))]))))
+                         (vals jobs-by-id))
+                   jobs-after-updates (merge jobs-by-id updates)
+                   recovered-leases
+                   (into {}
+                         (keep (fn [[job-id job]]
+                                 (when (and (:execution job)
+                                            (= renewed-until
+                                               (:lease-expires-at job)))
+                                   [job-id renewed-until])))
+                         updates)
+                   retained-leases
+                   (merge
+                    (into {}
+                          (filter
+                           (fn [[job-id expires-at]]
+                             (let [job (get jobs-after-updates job-id)]
+                               (and (> (long expires-at) now)
+                                    (contains? #{:launching :running
+                                                 :cancellation-requested}
+                                               (:state job))
+                                    (= (long expires-at)
+                                       (:lease-expires-at job))))))
+                          leases)
+                    recovered-leases)
+                   cancellations
+                   (->> updates
+                        (keep (fn [[job-id job]]
+                                (when (and (= :cancellation-requested
+                                              (:state job))
+                                           (:execution job))
+                                  {:job-id job-id
+                                   :execution (:execution job)})))
+                        vec)]
+               (doseq [[job-id updated] updates]
+                 (.set ^Transaction transaction
+                       (.document jobs job-id)
+                       (job-doc updated)))
+               (when (not= leases retained-leases)
+                 (.set ^Transaction transaction capacity-ref
+                       (capacity-data retained-leases)))
+               {:repaired-jobs (count updates)
+                :released-leases
+                (count (remove #(contains? retained-leases %)
+                               (keys leases)))
+                :cancellations cancellations})))]
+      (doseq [{:keys [job-id execution]} (:cancellations result)]
+        (complete-cancellation! firestore launcher clock
+                                (.document jobs job-id) capacity-ref
+                                job-id execution))
+      (-> result
+          (update :released-leases + (count (:cancellations result)))
+          (dissoc :cancellations))))
   lifecycle/JobService
   (submit-job! [_ idempotency-key request]
     (require-idempotency-key! idempotency-key)
@@ -519,7 +631,11 @@
       (if-not (:started? admission)
         (update admission :job public-job)
         (try
-          (let [execution (lifecycle/launch-job! launcher job-id)
+          (let [execution (if (satisfies? lifecycle/RecoverableJobLauncher
+                                          launcher)
+                            (lifecycle/launch-job-attempt!
+                             launcher job-id (get-in admission [:job :attempt]))
+                            (lifecycle/launch-job! launcher job-id))
                 running
                 (transaction!
                  firestore

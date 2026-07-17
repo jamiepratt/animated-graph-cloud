@@ -12,7 +12,9 @@
   (:import (com.google.api.gax.rpc AbortedException AlreadyExistsException
                                    StatusCode StatusCode$Code)
            (com.google.cloud.firestore FirestoreException FirestoreOptions)
+           (com.google.cloud.run.v2 Container Execution TaskTemplate)
            (com.google.cloud.storage StorageOptions)
+           (com.google.protobuf Timestamp)
            (io.grpc Status)
            (java.time Clock Instant ZoneOffset)
            (java.util Date)
@@ -126,11 +128,42 @@
 (deftest cloud-run-override-replaces-args-without-an-invalid-clear-flag
   (let [request (#'gcp/run-job-request
                  "projects/test/locations/europe-central2/jobs/renderer"
-                 "job-id")
+                 "job-id" 3)
         override (-> request .getOverrides (.getContainerOverrides 0))]
     (is (false? (.getClearArgs override)))
-    (is (= ["clojure.main" "-m" "agg.renderer.main" "--job-id" "job-id"]
+    (is (= ["clojure.main" "-m" "agg.renderer.main"
+            "--job-id" "job-id" "--attempt" "3"]
            (vec (.getArgsList override))))))
+
+(defn- cloud-run-execution [name job-id attempt completed?]
+  (let [container (-> (Container/newBuilder)
+                      (.addAllArgs ["clojure.main" "-m" "agg.renderer.main"
+                                    "--job-id" job-id
+                                    "--attempt" (str attempt)])
+                      .build)
+        template (-> (TaskTemplate/newBuilder)
+                     (.addContainers container)
+                     .build)
+        builder (doto (Execution/newBuilder)
+                  (.setName name)
+                  (.setTemplate template))]
+    (when completed?
+      (.setCompletionTime builder (-> (Timestamp/newBuilder)
+                                      (.setSeconds 1)
+                                      .build)))
+    (.build builder)))
+
+(deftest cloud-run-execution-correlation-is-active-and-attempt-exact
+  (let [unrelated (cloud-run-execution "executions/unrelated" "other-job" 2
+                                       false)
+        completed (cloud-run-execution "executions/completed" "job-id" 2 true)
+        active (cloud-run-execution "executions/active" "job-id" 3 false)]
+    (is (= "executions/active"
+           (#'gcp/active-execution-for-attempt
+            [unrelated completed active] "job-id" 3)))
+    (is (nil? (#'gcp/active-execution-for-attempt
+               [unrelated completed active] "job-id" 2))
+        "a completed execution cannot be adopted by a later retry")))
 
 (deftest signed-upload-is-a-bounded-content-type-locked-v4-put
   (let [signer (reify com.google.auth.ServiceAccountSigner
@@ -412,6 +445,105 @@
                  (get (.getData (.get (.get capacity-ref))) "leases")))
           (is (= {:repaired-jobs 0 :released-leases 0}
                  (jobs/reconcile-jobs! service))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
+(deftest firestore-reconciliation-adopts-an-accepted-unrecorded-execution
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId "animated-graph-cloud-execution-recovery-test")
+                        (.setEmulatorHost host)
+                        (.build)
+                        (.getService))
+          requests (atom {})
+          launched (atom [])
+          cancelled (atom [])
+          request-store
+          (reify jobs/RequestStore
+            (save-request! [_ job-id request]
+              (let [object (str "jobs/" job-id "/request.json")]
+                (swap! requests assoc object request)
+                object))
+            (load-request [_ object] (get @requests object)))
+          queue (reify jobs/JobQueue
+                  (enqueue-job! [_ _job-id _attempt]))
+          launcher
+          (reify
+            jobs/JobLauncher
+            (launch-job! [_ job-id]
+              (let [execution (str "executions/" job-id "-attempt-1")]
+                (swap! launched conj {:job-id job-id
+                                      :attempt 1
+                                      :execution execution})
+                execution))
+            (cancel-execution! [_ execution]
+              (swap! cancelled conj execution))
+            jobs/RecoverableJobLauncher
+            (launch-job-attempt! [_ job-id attempt]
+              (let [execution (str "executions/" job-id "-attempt-" attempt)]
+                (swap! launched conj {:job-id job-id
+                                      :attempt attempt
+                                      :execution execution})
+                execution))
+            (find-active-execution [_ job-id attempt]
+              (some (fn [accepted]
+                      (when (= [job-id attempt]
+                               ((juxt :job-id :attempt) accepted))
+                        (:execution accepted)))
+                    @launched)))
+          service (gcp/job-service {:firestore firestore
+                                    :request-store request-store
+                                    :queue queue
+                                    :launcher launcher})]
+      (try
+        (doseq [collection ["jobs" "job-idempotency" "orchestration"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (let [job-id (get-in (jobs/submit-job! service "accepted-unrecorded"
+                                               (fixture/render-request))
+                             [:job :id])
+              job-ref (.document (.collection firestore "jobs") job-id)
+              capacity-ref (.document (.collection firestore "orchestration")
+                                      "capacity")]
+          (jobs/dispatch-job! service job-id)
+          (let [future-lease 4102444800000]
+            (.get (.update job-ref
+                           {"state" "launching"
+                            "execution" (com.google.cloud.firestore.FieldValue/delete)
+                            "leaseExpiresAt" future-lease}))
+            (.get (.set capacity-ref {"leases" {job-id future-lease}})))
+
+          (is (= {:repaired-jobs 1 :released-leases 0}
+                 (jobs/reconcile-jobs! service)))
+          (is (= "running" (:state (jobs/get-job service job-id))))
+          (is (= 1 (count @launched)))
+          (is (false? (:started? (jobs/dispatch-job! service job-id))))
+          (is (= 1 (count @launched))
+              "redelivery does not launch a second renderer attempt")
+          (is (pos? (long (get-in (.getData (.get (.get capacity-ref)))
+                                  ["leases" job-id])))))
+        (let [job-id (get-in (jobs/submit-job! service "cancel-unrecorded"
+                                               (fixture/render-request))
+                             [:job :id])
+              job-ref (.document (.collection firestore "jobs") job-id)
+              capacity-ref (.document (.collection firestore "orchestration")
+                                      "capacity")
+              execution (str "executions/" job-id "-attempt-1")
+              future-lease 4102444800000]
+          (jobs/dispatch-job! service job-id)
+          (.get (.update job-ref
+                         {"state" "launching"
+                          "execution" (com.google.cloud.firestore.FieldValue/delete)
+                          "leaseExpiresAt" future-lease}))
+          (jobs/cancel-job! service job-id)
+
+          (is (= {:repaired-jobs 1 :released-leases 1}
+                 (jobs/reconcile-jobs! service)))
+          (is (= "cancelled" (:state (jobs/get-job service job-id))))
+          (is (= [execution] @cancelled)
+              "revocation-style cancellation reaches the orphan execution")
+          (is (nil? (get-in (.getData (.get (.get capacity-ref)))
+                            ["leases" job-id]))))
         (finally
           (.close firestore))))
     (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))

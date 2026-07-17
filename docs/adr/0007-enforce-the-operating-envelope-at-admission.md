@@ -26,11 +26,16 @@ never killed by a later budget decision.
 
 Cloud Scheduler sends an audience-bound OIDC request every five minutes using a
 dedicated `agg-scheduler` identity. Dispatch accepts only `agg-tasks`, while
-reconciliation accepts only `agg-scheduler`. The
-reconciler fails expired launching/running jobs with `stale_lease`, completes an
-expired cancellation as cancelled, and removes expired, mismatched, terminal,
-or missing-job capacity leases in the same transaction. Reconciliation is
-idempotent.
+reconciliation accepts only `agg-scheduler`. Cloud Run launches carry exact job
+ID and attempt arguments. The reconciler lists executions with a custom
+read-only role and adopts an active execution when Firestore still has an
+unrecorded `launching` or `cancellation-requested` attempt. Adoption records the
+execution, renews its capacity lease, and cancels it when cancellation was
+already requested. Completed or different attempts are never adopted. The
+reconciler otherwise fails expired launching/running jobs with `stale_lease`,
+completes an expired cancellation as cancelled, and removes expired,
+mismatched, terminal, or missing-job capacity leases in the same transaction.
+Reconciliation is idempotent.
 
 The temporary bucket keeps its one-day delete lifecycle and `jobs.expireAt`
 keeps its Firestore 90-day TTL. Structured application events expose only a

@@ -41,6 +41,15 @@
   (is (str/includes? terraform "roles/run.jobsExecutorWithOverrides"))
   (is (str/includes? terraform "roles/run.invoker")))
 
+(deftest reconciliation-can-list-executions-without-broad-run-administration
+  (is (str/includes? terraform
+                     "resource \"google_project_iam_custom_role\" \"api_execution_reader\""))
+  (is (str/includes? terraform "permissions = [\"run.executions.get\", \"run.executions.list\"]"))
+  (is (str/includes? terraform
+                     "role    = google_project_iam_custom_role.api_execution_reader.id"))
+  (is (str/includes? terraform
+                     "member  = \"serviceAccount:${google_service_account.api.email}\"")))
+
 (deftest terraform-locks-the-full-retention-and-reconciliation-contract
   (is (str/includes? terraform "age = 1"))
   (is (str/includes? terraform

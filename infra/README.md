@@ -17,8 +17,11 @@ dispatch concurrency is five, and every request carries an OIDC token for the
 dedicated `agg-tasks` identity and private API audience. Firestore owns job and
 capacity-lease state, with TTL enabled on `jobs.expireAt`. API and renderer
 identities receive only their required Firestore, queue, Run invocation, and
-temporary-object roles. The renderer remains one task with zero retries; task
-redelivery can retry admission but cannot duplicate a non-queued execution.
+temporary-object roles. A custom execution-reader role gives the API only
+`run.executions.get` and `run.executions.list`, allowing reconciliation to
+correlate an accepted execution from its job ID and attempt arguments. The
+renderer remains one task with zero retries; task redelivery can retry admission
+but cannot duplicate a non-queued execution.
 
 Cloud Scheduler calls the authenticated reconciliation route every five minutes
 with a dedicated `agg-scheduler` identity and the API origin as its OIDC

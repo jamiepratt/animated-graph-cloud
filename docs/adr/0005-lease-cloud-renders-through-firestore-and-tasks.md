@@ -27,9 +27,9 @@ unexpired leases. Duplicate delivery observes the non-queued state and does not
 start another execution. Capacity rejection is retryable by Cloud Tasks.
 
 The dispatcher starts the one-task `agg-renderer` Cloud Run Job with zero task
-retries, overriding its command only with `--job-id <UUID>`. The worker loads
-all other data by job ID, uses the issue-4 render seam, and uploads an
-attempt-unique MOV. Polling exposes `queued`, `launching`, `running`,
+retries, overriding its command with `--job-id <UUID> --attempt <number>`. The
+worker loads all other data by job ID, uses the issue-4 render seam, and uploads
+an attempt-unique MOV. Polling exposes `queued`, `launching`, `running`,
 `cancellation-requested`, and the terminal states `succeeded`, `failed`, or
 `cancelled`. Worker and launch crashes use explicit failure codes; output over
 18 GiB fails as `output_too_large`. Only failed or cancelled jobs can be
@@ -44,7 +44,8 @@ at most 15 minutes.
 
 Firestore is the durable source of truth and Cloud Tasks is only a delivery
 mechanism. Atomic admission prevents duplicate compute and enforces the five-job
-limit without keeping an API instance alive. A dispatcher crash after Cloud Run
-accepts an execution but before Firestore records its name remains detectable
-as an expired lease and requires reconciliation; zero automatic render retries
-prevents that ambiguity from multiplying compute.
+limit without keeping an API instance alive. If dispatch crashes after Cloud Run
+accepts an execution but before Firestore records its name, Scheduler correlates
+the active execution by exact job ID and attempt. It adopts that execution and
+renews the same durable capacity lease instead of permitting a duplicate; zero
+automatic render retries prevents that ambiguity from multiplying compute.
