@@ -69,10 +69,35 @@
     (:id (parse-json body))))
 
 (defn- range-offset [header]
-  (if-let [[_ last-byte] (some->> header
-                                  (re-matches #"bytes=\d+-(\d+)"))]
-    (inc (parse-long last-byte))
-    0))
+  (if (nil? header)
+    0
+    (if-let [[_ last-byte] (re-matches #"bytes=0-(\d+)" header)]
+      (inc (parse-long last-byte))
+      (throw (ex-info "Drive returned an invalid resumable range"
+                      {:type ::invalid-resumable-progress
+                       :range header})))))
+
+(defn- initial-offset [header size]
+  (let [offset (range-offset header)]
+    (when (or (neg? offset) (>= offset size))
+      (throw (ex-info "Drive resumable query returned an invalid offset"
+                      {:type ::invalid-resumable-progress
+                       :offset offset
+                       :size size})))
+    offset))
+
+(defn- continued-offset [header offset end size]
+  (let [reported (range-offset header)]
+    (when (or (<= reported offset)
+              (> reported (inc end))
+              (>= reported size))
+      (throw (ex-info "Drive resumable upload made invalid progress"
+                      {:type ::invalid-resumable-progress
+                       :offset offset
+                       :reported reported
+                       :sent-through end
+                       :size size})))
+    reported))
 
 (defn- read-chunk [^Path path offset length]
   (let [bytes (byte-array length)]
@@ -150,8 +175,7 @@
           (send! (authorized
                   {:method :put
                    :url session-uri
-                   :headers {"Content-Length" "0"
-                             "Content-Range" (str "bytes */" size)}}
+                   :headers {"Content-Range" (str "*/" size)}}
                   access-token))]
       (cond
         (contains? #{404 410} (:status query-response))
@@ -161,15 +185,16 @@
         {:status :complete :file-id (:id (parse-json (:body query-response)))}
 
         (= 308 (:status query-response))
-        (loop [offset (range-offset (get-in query-response [:headers "range"]))]
+        (loop [offset (initial-offset
+                       (get-in query-response [:headers "range"])
+                       size)]
           (let [length (int (min (long chunk-size) (- (long size) offset)))
                 end (dec (+ offset length))
                 response
                 (send! (authorized
                         {:method :put
                          :url session-uri
-                         :headers {"Content-Length" (str length)
-                                   "Content-Type" "video/quicktime"
+                         :headers {"Content-Type" "video/quicktime"
                                    "Content-Range"
                                    (str "bytes " offset "-" end "/" size)}
                          :body-bytes (read-chunk path offset length)}
@@ -182,9 +207,8 @@
               {:status :complete :file-id (:id (parse-json (:body response)))}
 
               (= 308 (:status response))
-              (let [reported (range-offset (get-in response [:headers "range"]))
-                    next-offset (max (inc end) reported)]
-                (recur next-offset))
+              (recur (continued-offset (get-in response [:headers "range"])
+                                       offset end size))
 
               :else
               (throw (ex-info "Drive resumable upload failed"

@@ -3,8 +3,36 @@
             [agg.drive.core :as drive]
             [agg.drive.gcp :as gcp]
             [clojure.data.json :as json]
-            [clojure.test :refer [deftest is]])
-  (:import (java.nio.file Files OpenOption)))
+            [clojure.test :refer [deftest is testing]])
+  (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
+           (java.net InetSocketAddress)
+           (java.nio.charset StandardCharsets)
+           (java.nio.file Files OpenOption)))
+
+(defn- local-upload-server [requests]
+  (let [server (HttpServer/create (InetSocketAddress. 0) 0)]
+    (.createContext
+     server "/upload"
+     (reify HttpHandler
+       (^void handle [_ ^HttpExchange exchange]
+         (let [request {:content-length (some-> exchange .getRequestHeaders
+                                                (.getFirst "Content-Length"))
+                        :content-range (some-> exchange .getRequestHeaders
+                                               (.getFirst "Content-Range"))
+                        :body (String. (.readAllBytes (.getRequestBody exchange))
+                                       StandardCharsets/UTF_8)}]
+           (swap! requests conj request)
+           (if (= 1 (count @requests))
+             (do
+               (.set (.getResponseHeaders exchange) "Range" "bytes=0-1")
+               (.sendResponseHeaders exchange 308 -1))
+             (let [body (.getBytes (json/write-str {:id "file-1"})
+                                   StandardCharsets/UTF_8)]
+               (.sendResponseHeaders exchange 200 (alength body))
+               (.write (.getResponseBody exchange) body)))
+           (.close exchange)))))
+    (.start server)
+    server))
 
 (deftest stored-drive-folder-is-verified-and-reused
   (let [requests (atom [])
@@ -55,9 +83,84 @@
       (is (= {:status :complete :file-id "file-1"}
              (drive/upload-resumable! gateway "access" "https://upload/session"
                                       path 5)))
-      (is (= "bytes */5" (get-in @requests [0 :headers "Content-Range"])))
+      (is (= "*/5" (get-in @requests [0 :headers "Content-Range"])))
       (is (= "bytes 2-4/5" (get-in @requests [1 :headers "Content-Range"])))
       (is (= "vie" (String. ^bytes (:body-bytes (second @requests)) "UTF-8")))
+      (finally
+        (Files/deleteIfExists path)))))
+
+(deftest java-http-client-sends-drive-resumable-headers-on-the-wire
+  (let [requests (atom [])
+        server (local-upload-server requests)
+        path (Files/createTempFile "real-resumable" ".mov"
+                                   (make-array java.nio.file.attribute.FileAttribute 0))
+        session-uri (str "http://127.0.0.1:"
+                         (.getPort (.getAddress server)) "/upload")
+        gateway (gcp/->RestDriveGateway gcp/http-send! (* 8 1024 1024))]
+    (try
+      (Files/writeString path "movie" (make-array OpenOption 0))
+      (is (= {:status :complete :file-id "file-1"}
+             (drive/upload-resumable! gateway "access" session-uri path 5)))
+      (is (= [{:content-length "0" :content-range "*/5" :body ""}
+              {:content-length "3" :content-range "bytes 2-4/5" :body "vie"}]
+             @requests))
+      (finally
+        (.stop server 0)
+        (Files/deleteIfExists path)))))
+
+(deftest resumable-continuation-obeys-partial-acknowledgements
+  (let [requests (atom [])
+        responses (atom [{:status 308 :headers {} :body ""}
+                         {:status 308 :headers {"range" "bytes=0-1"} :body ""}
+                         {:status 200 :headers {}
+                          :body (json/write-str {:id "file-1"})}])
+        gateway (gcp/->RestDriveGateway
+                 (fn [request]
+                   (swap! requests conj request)
+                   (let [response (first @responses)]
+                     (swap! responses subvec 1)
+                     response))
+                 5)
+        path (Files/createTempFile "partial-ack" ".mov"
+                                   (make-array java.nio.file.attribute.FileAttribute 0))]
+    (try
+      (Files/writeString path "0123456789" (make-array OpenOption 0))
+      (is (= {:status :complete :file-id "file-1"}
+             (drive/upload-resumable! gateway "access" "https://upload/session"
+                                      path 10)))
+      (is (= ["*/10" "bytes 0-4/10" "bytes 2-6/10"]
+             (mapv #(get-in % [:headers "Content-Range"]) @requests)))
+      (is (= ["01234" "23456"]
+             (mapv #(String. ^bytes (:body-bytes %) StandardCharsets/UTF_8)
+                   (rest @requests))))
+      (finally
+        (Files/deleteIfExists path)))))
+
+(deftest resumable-continuation-rejects-nonprogress-and-skipped-ranges
+  (let [path (Files/createTempFile "invalid-progress" ".mov"
+                                   (make-array java.nio.file.attribute.FileAttribute 0))]
+    (try
+      (Files/writeString path "0123456789" (make-array OpenOption 0))
+      (doseq [[label response]
+              [["no acknowledged progress" {:status 308 :headers {} :body ""}]
+               ["acknowledgement beyond sent bytes"
+                {:status 308 :headers {"range" "bytes=0-8"} :body ""}]]]
+        (testing label
+          (let [responses (atom [{:status 308 :headers {} :body ""}
+                                 response])
+                gateway (gcp/->RestDriveGateway
+                         (fn [_]
+                           (let [next-response (first @responses)]
+                             (swap! responses subvec 1)
+                             next-response))
+                         5)]
+            (is (= ::gcp/invalid-resumable-progress
+                   (try
+                     (drive/upload-resumable! gateway "access"
+                                              "https://upload/session" path 10)
+                     nil
+                     (catch clojure.lang.ExceptionInfo error
+                       (:type (ex-data error)))))))))
       (finally
         (Files/deleteIfExists path)))))
 

@@ -220,6 +220,36 @@
     (respond-redirect! exchange "/?drive=connected"
                        [(clear-oauth-cookie)])))
 
+(defn- landing! [^HttpExchange exchange auth-system]
+  (let [user (when-let [session (session-token exchange)]
+               (auth/session-user auth-system session))
+        body
+        (if user
+          (str "<!doctype html><html><head><meta charset=\"utf-8\">"
+               "<title>Animated Graph Cloud</title></head><body>"
+               "<h1>Animated Graph Cloud</h1>"
+               "<p><a href=\"/v1/auth/drive/start\">Connect Google Drive</a></p>"
+               "<button id=\"open-picker\" type=\"button\">Select telemetry or watermark</button>"
+               "<p>Selected: <output id=\"picker-selection\">None</output></p>"
+               "<script>const selection=document.getElementById('picker-selection');"
+               "document.getElementById('open-picker').addEventListener('click',()=>{"
+               "window.open('/v1/drive/picker','agg-picker','popup,width=960,height=720');});"
+               "window.addEventListener('message',event=>{"
+               "if(event.origin!==location.origin||event.data?.type!=='agg-picker'){return;}"
+               "selection.textContent=event.data.files.map(file=>file.name).join(', ')||'None';"
+               "});</script></body></html>")
+          (str "<!doctype html><html><head><meta charset=\"utf-8\">"
+               "<title>Animated Graph Cloud</title></head><body>"
+               "<h1>Animated Graph Cloud</h1>"
+               "<a href=\"/v1/auth/login/start\">Sign in with Google</a>"
+               "</body></html>"))]
+    (doto (.getResponseHeaders exchange)
+      (.set "Cache-Control" "no-store")
+      (.set "Referrer-Policy" "no-referrer")
+      (.set "Content-Security-Policy"
+            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'"))
+    (respond! exchange 200 "text/html; charset=utf-8" body)))
+
 (defn- picker! [^HttpExchange exchange auth-system picker-api-key picker-app-id]
   (let [user (require-user! exchange auth-system)
         {:keys [access-token]} (auth/drive-access! auth-system (:subject user))]
@@ -233,13 +263,17 @@
           (str "<!doctype html><html><head><meta charset=\"utf-8\">"
                "<title>Select Drive input</title>"
                "<script src=\"https://apis.google.com/js/api.js\"></script>"
-               "</head><body><p>Opening Google Drive Picker…</p><script>"
+               "</head><body><p>Opening Google Drive Picker…</p>"
+               "<p>Selected: <output id=\"picker-selection\">None</output></p><script>"
+               "const selection=document.getElementById('picker-selection');"
                "function pickerCallback(data){"
                "if(data.action===google.picker.Action.PICKED){"
                "const files=data.docs.map(d=>({id:d.id,name:d.name,mimeType:d.mimeType}));"
+               "selection.textContent=files.map(file=>file.name).join(', ')||'None';"
                "if(window.opener){window.opener.postMessage({type:'agg-picker',files},location.origin);}}}"
                "function openPicker(){gapi.load('picker',()=>{"
-               "const view=new google.picker.DocsView().setIncludeFolders(false);"
+               "const view=new google.picker.DocsView().setIncludeFolders(false)"
+               ".setMimeTypes('text/csv,image/png,application/octet-stream');"
                "new google.picker.PickerBuilder().addView(view)"
                ".setOAuthToken(" token ").setDeveloperKey(" api-key ")"
                ".setAppId(" app-id ").setOrigin(location.origin)"
@@ -290,6 +324,9 @@
           (cond
             (and (= "GET" method) (= "/health" path))
             (respond! exchange 200 "application/json; charset=utf-8" health-body)
+
+            (and auth-system (= "GET" method) (= "/" path))
+            (landing! exchange auth-system)
 
             (and auth-system (= "GET" method)
                  (= "/v1/auth/login/start" path))

@@ -194,7 +194,11 @@ rechecks `AGG_ALLOWED_EMAILS` on every authenticated request. Drive is connected
 separately at `GET /v1/auth/drive/start` with only `drive.file`; the callback
 encrypts the refresh token with the Warsaw KMS key and creates or reuses the
 user's `Animated Graph Cloud` folder. `GET /v1/drive/picker` opens a no-store
-Google Picker bridge for the same restricted grant.
+Google Picker bridge for the same restricted grant. The authenticated `/`
+entrypoint opens that bridge in a popup and accepts selected CSV, FIT-like
+binary, or PNG metadata only from the same origin. A directly opened Picker
+page also displays its selection, so the manual flow never discards it. The
+bridge does not broaden the server grant or silently download selected files.
 
 Completed cloud jobs upload their local MOV to a preallocated Drive file ID.
 Firestore retains the ID and resumable session so worker retries resume the

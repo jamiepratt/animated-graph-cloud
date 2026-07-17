@@ -174,7 +174,7 @@
     (is (= "drive-folder-1"
            (get-in @grants ["google-subject-1" :folder-id])))))
 
-(deftest drive-access-refreshes-an-encrypted-grant-and-revokes-invalid-grants
+(deftest drive-access-refreshes-an-encrypted-grant-and-revokes-only-invalid-grants
   (let [{:keys [system grants refreshes]} (drive-fixture)
         subject "google-subject-1"]
     (swap! grants assoc subject {:refresh-token-ciphertext "kms:refresh"
@@ -194,4 +194,44 @@
                nil
                (catch clojure.lang.ExceptionInfo error
                  (:type (ex-data error))))))
-      (is (true? (get-in @grants [subject :revoked?]))))))
+      (is (true? (get-in @grants [subject :revoked?]))))
+    (testing "a token response without access credentials proves the grant unusable"
+      (swap! grants assoc-in [subject :revoked?] false)
+      (let [empty-token-client
+            (reify auth/DriveTokenClient
+              (refresh-drive-token! [_ _] {}))]
+        (is (= ::auth/drive-grant-required
+               (try
+                 (auth/drive-access! (assoc system :drive-token-client
+                                            empty-token-client)
+                                     subject)
+                 nil
+                 (catch clojure.lang.ExceptionInfo error
+                   (:type (ex-data error))))))
+        (is (true? (get-in @grants [subject :revoked?])))))
+    (testing "transient OAuth and KMS failures preserve the durable grant"
+      (doseq [[label transient-system error-type]
+              [["OAuth"
+                (assoc system :drive-token-client
+                       (reify auth/DriveTokenClient
+                         (refresh-drive-token! [_ _]
+                           (throw (ex-info "temporarily unavailable"
+                                           {:type ::oauth-unavailable})))))
+                ::oauth-unavailable]
+               ["KMS"
+                (assoc system :cipher
+                       (reify auth/TokenCipher
+                         (encrypt-token! [_ value] value)
+                         (decrypt-token! [_ _]
+                           (throw (ex-info "KMS timeout"
+                                           {:type ::kms-unavailable})))))
+                ::kms-unavailable]]]
+        (testing label
+          (swap! grants assoc-in [subject :revoked?] false)
+          (is (= error-type
+                 (try
+                   (auth/drive-access! transient-system subject)
+                   nil
+                   (catch clojure.lang.ExceptionInfo error
+                     (:type (ex-data error))))))
+          (is (false? (get-in @grants [subject :revoked?]))))))))

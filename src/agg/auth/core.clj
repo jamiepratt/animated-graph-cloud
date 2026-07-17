@@ -261,8 +261,11 @@
           (throw (ex-info "Drive token refresh returned no access token"
                           {:type ::revoked-grant})))
         {:access-token access-token :folder-id folder-id})
-      (catch Throwable cause
-        (revoke-grant! grant-store subject)
-        (throw (ex-info "Drive authorization is expired or revoked"
-                        {:type ::drive-grant-required}
-                        cause))))))
+      (catch clojure.lang.ExceptionInfo cause
+        (if (= ::revoked-grant (:type (ex-data cause)))
+          (do
+            (revoke-grant! grant-store subject)
+            (throw (ex-info "Drive authorization is expired or revoked"
+                            {:type ::drive-grant-required}
+                            cause)))
+          (throw cause))))))

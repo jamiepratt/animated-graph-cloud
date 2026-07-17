@@ -32,8 +32,11 @@ requires the user to reconnect Drive.
 
 The first Drive grant creates `Animated Graph Cloud` and stores its ID; later
 grants verify and reuse it. The Picker bridge receives a short-lived refreshed
-access token in a no-store page and uses the same `drive.file` grant. The Picker
-key is restricted to `picker.googleapis.com` and the API origin.
+access token in a no-store page and uses the same `drive.file` grant. Its
+same-origin entrypoint receives selected file metadata from the popup, while a
+directly opened Picker displays the selection itself. The bridge does not
+download selected content or widen the server grant. The Picker key is
+restricted to `picker.googleapis.com` and the API origin.
 
 Before a renderer uploads bytes, it asks Drive for one generated file ID and
 atomically reserves that ID in Firestore under the job ID. The resumable session

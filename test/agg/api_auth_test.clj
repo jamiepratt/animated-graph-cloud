@@ -144,7 +144,27 @@
         (is (re-find #"google\.picker\.PickerBuilder" (.body response)))
         (is (re-find #"picker-access-token" (.body response)))
         (is (re-find #"picker-key" (.body response)))
-        (is (re-find #"891643499444" (.body response))))
+        (is (re-find #"891643499444" (.body response)))
+        (is (re-find #"id=\"picker-selection\"" (.body response)))
+        (is (re-find #"selection\.textContent" (.body response))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest browser-entrypoint-receives-picker-selections
+  (let [port (available-port)
+        {:keys [system session]} (auth-fixture)
+        server (api/start! port {:auth-system system})]
+    (try
+      (let [anonymous (get! port "/" {})
+            authenticated (get! port "/"
+                                {"Cookie" (str "agg_session=" session)})]
+        (is (= 200 (.statusCode anonymous)))
+        (is (re-find #"/v1/auth/login/start" (.body anonymous)))
+        (is (= 200 (.statusCode authenticated)))
+        (is (re-find #"/v1/auth/drive/start" (.body authenticated)))
+        (is (re-find #"window\.open\('/v1/drive/picker'" (.body authenticated)))
+        (is (re-find #"addEventListener\('message'" (.body authenticated)))
+        (is (re-find #"id=\"picker-selection\"" (.body authenticated))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
