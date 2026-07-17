@@ -1,0 +1,45 @@
+# 0007: Enforce the operating envelope at admission
+
+- Status: Accepted
+- Date: 2026-07-17
+
+## Context
+
+Cloud Tasks concurrency and billing notifications are safeguards, not durable
+admission decisions. A burst can race across API instances, explicit retries
+consume compute too, and a Cloud Run execution can terminate without releasing
+its Firestore lease. Operations also need actionable signals without putting
+job IDs, filenames, telemetry, tokens, or signed URLs in logs.
+
+## Decision
+
+One Firestore transaction admits each new idempotency key. It rejects when the
+UTC-day counter has reached 100, when five unexpired capacity leases exist, or
+when another conservative compute reservation would exceed the monthly ceiling.
+The development ceiling is USD 30 and each attempt reserves 25 cents, above the
+measured maximum-render compute cost. Its month uses Cloud Billing's Pacific
+calendar boundary. Explicit retries reserve again; duplicate
+submissions do not. Stable errors are `daily_submission_limit_exhausted`,
+`capacity_exhausted`, and `monthly_budget_exhausted`. Existing executions are
+never killed by a later budget decision.
+
+Cloud Scheduler sends an audience-bound OIDC request every five minutes. The
+reconciler fails expired launching/running jobs with `stale_lease`, completes an
+expired cancellation as cancelled, and removes expired, mismatched, terminal,
+or missing-job capacity leases in the same transaction. Reconciliation is
+idempotent.
+
+The temporary bucket keeps its one-day delete lifecycle and `jobs.expireAt`
+keeps its Firestore 90-day TTL. Structured application events expose only a
+bounded admission reason, queue age, repair counts, or generic failure class.
+Logs-based metrics, alert policies, and one dashboard cover queue age, failures,
+memory utilization, stale leases, Drive reauthorization, and budget admission.
+A separate Cloud Billing budget emits 50%, 80%, and 100% notifications.
+
+## Consequences
+
+Firestore, not API instance memory or billing alerts, is the admission source of
+truth. Reservations are intentionally conservative and are not refunded after
+failure or cancellation, so the application can stop early but cannot silently
+overspend its configured compute envelope. Operators must update the Terraform
+budget and deployment admission cents together when the ceiling changes.

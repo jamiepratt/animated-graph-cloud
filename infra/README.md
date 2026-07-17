@@ -20,6 +20,15 @@ identities receive only their required Firestore, queue, Run invocation, and
 temporary-object roles. The renderer remains one task with zero retries; task
 redelivery can retry admission but cannot duplicate a non-queued execution.
 
+Cloud Scheduler calls the authenticated reconciliation route every five minutes
+with the task identity and the API origin as its OIDC audience. Terraform also
+owns a USD 30 monthly billing budget with 50%, 80%, and 100% thresholds, five
+logs-based metrics, six alert policies, and the operations dashboard. Billing
+and Monitoring notifications go to the configured owner email; they do not stop
+resources. The API separately reserves 25 cents for
+every new render attempt and refuses work once the configured monthly ceiling is
+exhausted; the deployment workflow keeps those two values aligned.
+
 Google OAuth runtime values are operator-managed Secret Manager versions:
 `oauth-client-secret` contains the downloaded web-client JSON, `session-key`
 contains at least 32 random bytes, and `picker-api-key` contains a Google API key

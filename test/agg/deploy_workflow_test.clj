@@ -35,6 +35,49 @@
   (is (str/includes? terraform "roles/run.jobsExecutorWithOverrides"))
   (is (str/includes? terraform "roles/run.invoker")))
 
+(deftest terraform-locks-the-full-retention-and-reconciliation-contract
+  (is (str/includes? terraform "age = 1"))
+  (is (str/includes? terraform
+                     "resource \"google_cloud_scheduler_job\" \"reconcile\""))
+  (is (str/includes? terraform
+                     "uri         = \"${var.api_service_url}/internal/v1/jobs/reconcile\""))
+  (is (re-find #"schedule\s*=\s*\"\*/5 \* \* \* \*\"" terraform))
+  (is (str/includes? terraform "oidc_token")))
+
+(deftest configured-budget-is-both-alerted-and-enforced-at-admission
+  (is (str/includes? terraform
+                     "resource \"google_billing_budget\" \"development\""))
+  (doseq [threshold ["threshold_percent = 0.5"
+                     "threshold_percent = 0.8"
+                     "threshold_percent = 1.0"]]
+    (is (str/includes? terraform threshold)))
+  (is (str/includes? workflow "AGG_MONTHLY_BUDGET_CENTS=$MONTHLY_BUDGET_CENTS"))
+  (is (str/includes? workflow "AGG_RENDER_RESERVATION_CENTS=$RENDER_RESERVATION_CENTS")))
+
+(deftest logs-metrics-dashboard-and-alerts-cover-the-operating-envelope
+  (doseq [metric ["queue_age_ms" "render_failures" "stale_leases"
+                  "drive_reauthorization" "budget_admission_rejections"]]
+    (is (re-find (re-pattern
+                  (str "name\\s*=\\s*\\\"animated_graph_cloud/"
+                       metric "\\\""))
+                 terraform)))
+  (is (str/includes? terraform "EXTRACT(jsonPayload.queueAgeMs)"))
+  (is (str/includes? terraform
+                     "resource \"google_monitoring_dashboard\" \"operations\""))
+  (is (str/includes? terraform
+                     "resource \"google_monitoring_notification_channel\" \"owner_email\""))
+  (is (= 7 (count (re-seq #"notification_channels\s*=" terraform))))
+  (doseq [signal ["Queue age" "Render failures" "Memory utilization"
+                  "Stale leases" "Drive reauthorization"
+                  "Budget admission"]]
+    (is (str/includes? terraform signal)))
+  (doseq [alert ["queue_age" "render_failures" "memory_utilization"
+                 "stale_leases" "drive_reauthorization"
+                 "budget_admission"]]
+    (is (str/includes? terraform
+                       (str "resource \"google_monitoring_alert_policy\" \""
+                            alert "\"")))))
+
 (deftest delivery-enables-the-api-with-its-own-authenticated-task-audience
   (is (str/includes? workflow "AGG_JOB_LIFECYCLE_ENABLED=true"))
   (is (str/includes? workflow

@@ -22,6 +22,17 @@
 
 (def max-request-bytes contract/max-render-request-bytes)
 
+(defn- log-event! [event fields]
+  (println
+   (json/write-str
+    (merge {:severity "INFO"
+            :component "api"
+            :event event}
+           fields))))
+
+(defn- emit-event! [dependencies event fields]
+  ((or (:event-sink dependencies) log-event!) event fields))
+
 (defn- respond-bytes! [^HttpExchange exchange status content-type bytes]
   (doto (.getResponseHeaders exchange)
     (.set "Content-Type" content-type)
@@ -226,11 +237,12 @@
 (defn- require-session-user! [exchange auth-system]
   (assoc (require-user! exchange auth-system) :auth-kind :session))
 
-(defn- verified-task?
+(defn- verified-internal-caller?
   [exchange {:keys [auth-system task-token-verifier task-audience
-                    tasks-service-account]}]
+                    tasks-service-account]}
+   marker-header]
   (and (some-> exchange .getRequestHeaders
-               (.getFirst "X-CloudTasks-TaskName") not-empty)
+               (.getFirst marker-header) not-empty)
        (if-not auth-system
          true
          (when-let [token (bearer-token exchange)]
@@ -245,12 +257,36 @@
                     email-verified?))
              (catch Throwable _ false))))))
 
+(defn- verified-task? [exchange dependencies]
+  (verified-internal-caller? exchange dependencies "X-CloudTasks-TaskName"))
+
 (defn- dispatch-job! [exchange dependencies job-id]
   (if-not (verified-task? exchange dependencies)
     (respond-json! exchange 401 {:error "authenticated_task_required"})
     (let [{:keys [started? job]}
           (jobs/dispatch-job! (:job-service dependencies) job-id)]
+      (when started?
+        (let [created-at (Instant/parse (:createdAt job))
+              queue-age-ms (max 0 (.toMillis
+                                   (java.time.Duration/between
+                                    created-at (Instant/now))))]
+          (emit-event! dependencies "render_dispatched"
+                       {:queueAgeMs queue-age-ms})))
       (respond-json! exchange (if started? 202 200) job))))
+
+(defn- reconcile-jobs! [exchange dependencies]
+  (if-not (verified-internal-caller? exchange dependencies "X-CloudScheduler")
+    (respond-json! exchange 401 {:error "authenticated_scheduler_required"})
+    (let [{:keys [repaired-jobs released-leases]}
+          (jobs/reconcile-jobs! (:job-service dependencies))]
+      (emit-event! dependencies "reconciliation_complete"
+                   {:severity (if (pos? (+ repaired-jobs released-leases))
+                                "WARNING"
+                                "INFO")
+                    :repairedJobs repaired-jobs
+                    :releasedLeases released-leases})
+      (respond-json! exchange 200 {:repairedJobs repaired-jobs
+                                   :releasedLeases released-leases}))))
 
 (defn- begin-auth! [exchange auth-system flow]
   (let [started (auth/begin-flow! auth-system flow
@@ -551,6 +587,10 @@
             (dispatch-job! exchange dependencies (nth (.split path "/") 4))
 
             (and job-service (= "POST" method)
+                 (= "/internal/v1/jobs/reconcile" path))
+            (reconcile-jobs! exchange dependencies)
+
+            (and job-service (= "POST" method)
                  (re-matches #"/v1/jobs/[^/]+/cancel" path))
             (let [user (authenticated-user! exchange auth-system token-service)
                   job-id (nth (.split path "/") 3)]
@@ -606,14 +646,37 @@
               ::jobs/idempotency-conflict
               (respond-json! exchange 409 {:error "idempotency_conflict"})
 
+              ::jobs/daily-submission-limit-exhausted
+              (do
+                (emit-event! dependencies "admission_rejected"
+                             {:severity "WARNING"
+                              :reason "daily_submission_limit_exhausted"})
+                (respond-json! exchange 429
+                               {:error "daily_submission_limit_exhausted"}))
+
+              ::jobs/monthly-budget-exhausted
+              (do
+                (emit-event! dependencies "admission_rejected"
+                             {:severity "WARNING"
+                              :reason "monthly_budget_exhausted"})
+                (respond-json! exchange 429
+                               {:error "monthly_budget_exhausted"}))
+
               ::jobs/job-not-found
               (respond-json! exchange 404 {:error "job_not_found"})
 
               ::jobs/capacity-exhausted
-              (respond-json! exchange 503 {:error "capacity_exhausted"})
+              (do
+                (emit-event! dependencies "admission_rejected"
+                             {:severity "WARNING"
+                              :reason "capacity_exhausted"})
+                (respond-json! exchange 503 {:error "capacity_exhausted"}))
 
               ::jobs/launch-failed
-              (respond-json! exchange 502 {:error "launch_failed"})
+              (do
+                (emit-event! dependencies "job_failed"
+                             {:severity "ERROR" :reason "launch_failed"})
+                (respond-json! exchange 502 {:error "launch_failed"}))
 
               ::jobs/invalid-transition
               (respond-json! exchange 409 {:error "invalid_job_transition"})

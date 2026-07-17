@@ -1,5 +1,6 @@
 (ns agg.renderer.main
   (:require [agg.contracts.render :as contract]
+            [agg.auth.core :as auth]
             [agg.auth.gcp :as auth-gcp]
             [agg.drive.core :as drive]
             [agg.jobs.gcp :as gcp]
@@ -225,6 +226,13 @@
           (Files/deleteIfExists output-path)
           (Files/deleteIfExists report-path))))))
 
+(defn require-cloud-success! [result]
+  (when (= "failed" (:state result))
+    (throw (ex-info "Cloud renderer recorded a durable failure"
+                    {:type ::cloud-job-failed
+                     :failure-code (:failureCode result)})))
+  result)
+
 (defn run-cloud-job! [job-id]
   (let [project (get (System/getenv) "GOOGLE_CLOUD_PROJECT"
                      "animated-graph-cloud-jp")
@@ -239,9 +247,27 @@
             :region region
             :oauth-client-credentials
             (get (System/getenv) "AGG_OAUTH_CLIENT_CREDENTIALS")}))]
-    (jobs/run-job! (gcp/renderer-job-service
-                    (->CloudRenderWorker bucket drive-delivery run-job!))
-                   job-id)))
+    (require-cloud-success!
+     (jobs/run-job! (gcp/renderer-job-service
+                     (->CloudRenderWorker bucket drive-delivery run-job!))
+                    job-id))))
+
+(defn cloud-failure-event [cause]
+  (let [drive-reauthorization?
+        (loop [current cause]
+          (cond
+            (nil? current) false
+            (= ::auth/drive-grant-required (:type (ex-data current))) true
+            :else (recur (.getCause ^Throwable current))))]
+    (if drive-reauthorization?
+      {:severity "ERROR"
+       :component "renderer"
+       :event "drive_reauthorization_required"
+       :message "Google Drive reauthorization is required"}
+      {:severity "ERROR"
+       :component "renderer"
+       :event "cloud_render_failed"
+       :message "Cloud renderer job failed"})))
 
 (defn -main [& args]
   (if (= "--job-id" (first args))
@@ -251,11 +277,8 @@
                     "\"component\":\"renderer\","
                     "\"event\":\"cloud_render_complete\","
                     "\"message\":\"Cloud renderer job completed\"}"))
-      (catch Throwable _
-        (println (str "{\"severity\":\"ERROR\","
-                      "\"component\":\"renderer\","
-                      "\"event\":\"cloud_render_failed\","
-                      "\"message\":\"Cloud renderer job failed\"}"))
+      (catch Throwable cause
+        (println (json/write-str (cloud-failure-event cause)))
         (System/exit 1)))
     (if (empty? args)
       (println (str "{\"severity\":\"INFO\","

@@ -14,7 +14,7 @@
                                      Storage$SignUrlOption StorageOptions)
            (com.google.cloud.tasks.v2 CloudTasksClient HttpRequest
                                       OidcToken QueueName Task TaskName)
-           (java.time Clock Instant)
+           (java.time Clock Instant LocalDate YearMonth ZoneId ZoneOffset)
            (java.util Date UUID)
            (java.util.concurrent ExecutionException TimeUnit)))
 
@@ -38,6 +38,12 @@
 
 (defn- iso [epoch-ms]
   (str (Instant/ofEpochMilli (long epoch-ms))))
+
+(defn- utc-day [^Clock clock]
+  (str (LocalDate/now (.withZone clock ZoneOffset/UTC))))
+
+(defn- billing-month [^Clock clock]
+  (str (YearMonth/now (.withZone clock (ZoneId/of "America/Los_Angeles")))))
 
 (defn- job-doc [job]
   (cond-> {"id" (:id job)
@@ -206,6 +212,11 @@
 (defn- cancellation-state? [job]
   (contains? #{:cancelled :cancellation-requested} (:state job)))
 
+(defn- stale-job? [now job]
+  (and (contains? #{:launching :running :cancellation-requested} (:state job))
+       (some? (:lease-expires-at job))
+       (<= (:lease-expires-at job) now)))
+
 (defn- complete-cancellation! [^Firestore firestore launcher ^Clock clock
                                job-ref capacity-ref job-id execution]
   (lifecycle/cancel-execution! launcher execution)
@@ -226,13 +237,70 @@
           job))))))
 
 (defrecord FirestoreJobService [^Firestore firestore request-store queue launcher
-                                worker ^Clock clock]
+                                worker ^Clock clock daily-limit
+                                monthly-budget-cents render-reservation-cents]
   lifecycle/JobAccess
   (owns-job? [_ job-id subject]
     (= subject
        (:requester-subject
         (snapshot-job
          (await! (.get (.document (.collection firestore "jobs") job-id)))))))
+  lifecycle/JobReconciler
+  (reconcile-jobs! [_]
+    (let [jobs (.collection firestore "jobs")
+          capacity-ref (.document (.collection firestore "orchestration") "capacity")
+          now (now-ms clock)
+          stale-job-ids
+          (->> (await! (.get (.whereLessThanOrEqualTo
+                              jobs "leaseExpiresAt" now)))
+               .getDocuments
+               (keep snapshot-job)
+               (filter #(stale-job? now %))
+               (mapv :id))]
+      (transaction!
+       firestore
+       (fn [transaction]
+         (let [capacity (transaction-snapshot transaction capacity-ref)
+               leases (or (some-> ^DocumentSnapshot capacity .getData
+                                  (get "leases"))
+                          {})
+               candidate-job-ids (distinct (concat stale-job-ids
+                                                   (keys leases)))
+               job-snapshots
+               (mapv #(transaction-snapshot transaction (.document jobs %))
+                     candidate-job-ids)
+               jobs-by-id (->> job-snapshots
+                               (keep snapshot-job)
+                               (map (juxt :id identity))
+                               (into {}))
+               stale-jobs (->> (vals jobs-by-id)
+                               (filter #(stale-job? now %)))
+               retained-leases
+               (into {}
+                     (filter
+                      (fn [[job-id expires-at]]
+                        (let [job (get jobs-by-id job-id)]
+                          (and (> (long expires-at) now)
+                               (contains? #{:launching :running
+                                            :cancellation-requested}
+                                          (:state job))
+                               (= (long expires-at)
+                                  (:lease-expires-at job))))))
+                     leases)]
+           (doseq [job stale-jobs]
+             (let [updated
+                   (if (= :cancellation-requested (:state job))
+                     (terminal-job job :cancelled now)
+                     (assoc (terminal-job job :failed now)
+                            :failure "stale_lease"))]
+               (.set ^Transaction transaction
+                     (.document jobs (:id job))
+                     (job-doc updated))))
+           (when (not= leases retained-leases)
+             (.set ^Transaction transaction capacity-ref
+                   (capacity-data retained-leases)))
+           {:repaired-jobs (count stale-jobs)
+            :released-leases (- (count leases) (count retained-leases))})))))
   lifecycle/JobService
   (submit-job! [_ idempotency-key request]
     (require-idempotency-key! idempotency-key)
@@ -243,8 +311,14 @@
           now (now-ms clock)
           jobs (.collection firestore "jobs")
           idempotency (.collection firestore "job-idempotency")
+          orchestration (.collection firestore "orchestration")
           idempotency-ref (.document idempotency
                                      (lifecycle/request-digest idempotency-key))
+          capacity-ref (.document orchestration "capacity")
+          day (utc-day clock)
+          month (billing-month clock)
+          day-ref (.document orchestration (str "submissions-" day))
+          budget-ref (.document orchestration (str "budget-" month))
           candidate {:id job-id :state :queued :attempt 1
                      :request-object request-object
                      :requester-subject (:requesterSubject request)
@@ -264,11 +338,42 @@
                     :job (snapshot-job
                           (transaction-snapshot
                            transaction (.document jobs (get data "jobId"))))})
-                 (do
+                 (let [capacity (transaction-snapshot transaction capacity-ref)
+                       day-snapshot (transaction-snapshot transaction day-ref)
+                       budget-snapshot (transaction-snapshot transaction budget-ref)
+                       submitted (long (or (some-> ^DocumentSnapshot day-snapshot
+                                                   .getData
+                                                   (get "submissionCount"))
+                                           0))
+                       reserved (long (or (some-> ^DocumentSnapshot budget-snapshot
+                                                  .getData
+                                                  (get "reservedCents"))
+                                          0))]
+                   (when (>= (count (capacity-leases capacity now))
+                             lifecycle/max-active-leases)
+                     (throw (ex-info "All render leases are held"
+                                     {:type ::lifecycle/capacity-exhausted})))
+                   (when (>= submitted daily-limit)
+                     (throw (ex-info "Daily submission limit is exhausted"
+                                     {:type ::lifecycle/daily-submission-limit-exhausted})))
+                   (when (> (+ reserved render-reservation-cents)
+                            monthly-budget-cents)
+                     (throw (ex-info "Monthly compute budget is exhausted"
+                                     {:type ::lifecycle/monthly-budget-exhausted})))
                    (.set ^Transaction transaction (.document jobs job-id)
                          (job-doc candidate))
                    (.set ^Transaction transaction idempotency-ref
                          {"jobId" job-id "requestDigest" digest})
+                   (.set ^Transaction transaction day-ref
+                         {"day" day
+                          "submissionCount" (inc submitted)
+                          "updatedAt" now})
+                   (.set ^Transaction transaction budget-ref
+                         {"month" month
+                          "reservedCents" (+ reserved render-reservation-cents)
+                          "limitCents" monthly-budget-cents
+                          "reservationCents" render-reservation-cents
+                          "updatedAt" now})
                    {:created? true :job candidate})))))]
       (when (= :queued (get-in result [:job :state]))
         (lifecycle/enqueue-job! queue
@@ -384,6 +489,11 @@
         (public-job requested))))
   (retry-job! [_ job-id]
     (let [job-ref (.document (.collection firestore "jobs") job-id)
+          orchestration (.collection firestore "orchestration")
+          capacity-ref (.document orchestration "capacity")
+          month (billing-month clock)
+          budget-ref (.document orchestration (str "budget-" month))
+          now (now-ms clock)
           retried
           (transaction!
            firestore
@@ -395,13 +505,33 @@
                (when-not (contains? #{:cancelled :failed} (:state job))
                  (throw (ex-info "Only failed or cancelled jobs can be retried"
                                  {:type ::lifecycle/invalid-transition})))
-               (let [updated (-> job
+               (let [capacity (transaction-snapshot transaction capacity-ref)
+                     budget (transaction-snapshot transaction budget-ref)
+                     reserved (long (or (some-> ^DocumentSnapshot budget
+                                                .getData
+                                                (get "reservedCents"))
+                                        0))
+                     _ (when (>= (count (capacity-leases capacity now))
+                                 lifecycle/max-active-leases)
+                         (throw (ex-info "All render leases are held"
+                                         {:type ::lifecycle/capacity-exhausted})))
+                     _ (when (> (+ reserved render-reservation-cents)
+                                monthly-budget-cents)
+                         (throw (ex-info "Monthly compute budget is exhausted"
+                                         {:type ::lifecycle/monthly-budget-exhausted})))
+                     updated (-> job
                                  (assoc :state :queued
                                         :attempt (inc (:attempt job))
-                                        :updated-at (now-ms clock))
+                                        :updated-at now)
                                  (dissoc :failure :output :execution
                                          :lease-token :lease-expires-at))]
                  (.set ^Transaction transaction job-ref (job-doc updated))
+                 (.set ^Transaction transaction budget-ref
+                       {"month" month
+                        "reservedCents" (+ reserved render-reservation-cents)
+                        "limitCents" monthly-budget-cents
+                        "reservationCents" render-reservation-cents
+                        "updatedAt" now})
                  updated))))]
       (lifecycle/enqueue-job! queue job-id (:attempt retried))
       (public-job retried)))
@@ -473,14 +603,28 @@
 (defn run-launcher [renderer-job]
   (->CloudRunLauncher (JobsClient/create) (ExecutionsClient/create) renderer-job))
 
-(defn job-service [{:keys [firestore request-store queue launcher worker clock]
-                    :or {clock (Clock/systemUTC)}}]
+(defn job-service [{:keys [firestore request-store queue launcher worker clock
+                           daily-limit monthly-budget-cents
+                           render-reservation-cents]
+                    :or {clock (Clock/systemUTC)
+                         daily-limit lifecycle/max-daily-submissions
+                         monthly-budget-cents lifecycle/default-monthly-budget-cents
+                         render-reservation-cents
+                         lifecycle/default-render-reservation-cents}}]
+  (lifecycle/validate-admission-limits! daily-limit monthly-budget-cents
+                                        render-reservation-cents)
   (->FirestoreJobService
    (or firestore (.getService (FirestoreOptions/getDefaultInstance)))
-   request-store queue launcher worker clock))
+   request-store queue launcher worker clock daily-limit monthly-budget-cents
+   render-reservation-cents))
 
 (defn- env [name default]
   (get (System/getenv) name default))
+
+(defn- env-long [name default]
+  (or (parse-long (env name (str default)))
+      (throw (ex-info (str name " must be an integer")
+                      {:type ::invalid-environment :name name}))))
 
 (defn api-system []
   (let [project (env "GOOGLE_CLOUD_PROJECT" "animated-graph-cloud-jp")
@@ -508,7 +652,16 @@
                                  :dispatcher-service-account tasks-service-account})
              :launcher (run-launcher
                         (str "projects/" project "/locations/" region
-                             "/jobs/" (env "AGG_RENDERER_JOB" "agg-renderer")))})}]
+                             "/jobs/" (env "AGG_RENDERER_JOB" "agg-renderer")))
+             :daily-limit
+             (env-long "AGG_DAILY_SUBMISSION_LIMIT"
+                       lifecycle/max-daily-submissions)
+             :monthly-budget-cents
+             (env-long "AGG_MONTHLY_BUDGET_CENTS"
+                       lifecycle/default-monthly-budget-cents)
+             :render-reservation-cents
+             (env-long "AGG_RENDER_RESERVATION_CENTS"
+                       lifecycle/default-render-reservation-cents)})}]
       (if (= "true" (env "AGG_AUTH_ENABLED" "false"))
         (merge job-dependencies
                (auth-gcp/api-dependencies

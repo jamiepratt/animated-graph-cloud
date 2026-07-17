@@ -1,7 +1,7 @@
 (ns agg.jobs.lifecycle
   (:require [agg.contracts.render :as contract])
   (:import (java.security MessageDigest)
-           (java.time Clock Instant)
+           (java.time Clock Instant LocalDate YearMonth ZoneId ZoneOffset)
            (java.util HexFormat UUID)))
 
 (defprotocol JobService
@@ -14,6 +14,9 @@
 
 (defprotocol JobAccess
   (owns-job? [service job-id subject]))
+
+(defprotocol JobReconciler
+  (reconcile-jobs! [service]))
 
 (defprotocol JobLauncher
   (launch-job! [launcher job-id])
@@ -33,8 +36,20 @@
   (signed-upload [signer object-name content-type expires-seconds]))
 
 (def max-active-leases 5)
+(def max-daily-submissions 100)
+(def default-monthly-budget-cents 3000)
+(def default-render-reservation-cents 25)
 (def lease-seconds (* 65 60))
 (def max-output-bytes (* 18 1024 1024 1024))
+
+(defn validate-admission-limits!
+  [daily-limit monthly-budget-cents render-reservation-cents]
+  (when-not (every? #(and (integer? %) (pos? %))
+                    [daily-limit monthly-budget-cents
+                     render-reservation-cents])
+    (throw (ex-info "Admission limits must be positive integers"
+                    {:type ::invalid-admission-configuration})))
+  true)
 
 (defn- canonical [value]
   (cond
@@ -64,15 +79,58 @@
   (when-let [expires-at (get-in job [:lease :expires-at])]
     (.isAfter ^Instant expires-at now)))
 
+(defn- stale-lease? [now job]
+  (when-let [expires-at (get-in job [:lease :expires-at])]
+    (not (.isAfter ^Instant expires-at now))))
+
 (defn- cancelled-job [job now]
   (-> job
       (assoc :state :cancelled :updated-at now)
       (dissoc :lease :execution :failure)))
 
-(defrecord InMemoryJobService [state enqueued launcher worker ^Clock clock]
+(defn- utc-day [^Clock clock]
+  (str (LocalDate/now (.withZone clock ZoneOffset/UTC))))
+
+(defn- billing-month [^Clock clock]
+  (str (YearMonth/now (.withZone clock (ZoneId/of "America/Los_Angeles")))))
+
+(defrecord InMemoryJobService [state enqueued launcher worker ^Clock clock
+                               daily-limit monthly-budget-cents
+                               render-reservation-cents]
   JobAccess
   (owns-job? [_ job-id subject]
     (= subject (get-in @state [:jobs job-id :request :requesterSubject])))
+  JobReconciler
+  (reconcile-jobs! [_]
+    (let [now (Instant/now clock)]
+      (locking state
+        (let [stale-jobs (into {}
+                               (filter (fn [[_ job]] (stale-lease? now job)))
+                               (:jobs @state))
+              repairable-states #{:launching :running :cancellation-requested}
+              repaired-jobs (count (filter (fn [[_ job]]
+                                             (contains? repairable-states
+                                                        (:state job)))
+                                           stale-jobs))
+              repaired-state
+              (reduce-kv
+               (fn [current job-id job]
+                 (let [updated
+                       (case (:state job)
+                         :cancellation-requested (cancelled-job job now)
+                         (:launching :running)
+                         (-> job
+                             (assoc :state :failed
+                                    :failure "stale_lease"
+                                    :updated-at now)
+                             (dissoc :lease :execution :output))
+                         (dissoc job :lease :execution))]
+                   (assoc-in current [:jobs job-id] updated)))
+               @state
+               stale-jobs)]
+          (reset! state repaired-state)
+          {:repaired-jobs repaired-jobs
+           :released-leases (count stale-jobs)}))))
   JobService
   (submit-job! [_ idempotency-key request]
     (when-not (and (string? idempotency-key)
@@ -92,6 +150,22 @@
                 {:created? false :job (get-in @state [:jobs job-id])})
               (let [job-id (str (UUID/randomUUID))
                     now (Instant/now clock)
+                    day (utc-day clock)
+                    month (billing-month clock)
+                    submitted (get-in @state [:admission :daily day] 0)
+                    reserved (get-in @state [:admission :monthly month] 0)
+                    _ (when (>= (count (filter #(active-lease? now %)
+                                               (vals (:jobs @state))))
+                                max-active-leases)
+                        (throw (ex-info "All render leases are held"
+                                        {:type ::capacity-exhausted})))
+                    _ (when (>= submitted daily-limit)
+                        (throw (ex-info "Daily submission limit is exhausted"
+                                        {:type ::daily-submission-limit-exhausted})))
+                    _ (when (> (+ reserved render-reservation-cents)
+                               monthly-budget-cents)
+                        (throw (ex-info "Monthly compute budget is exhausted"
+                                        {:type ::monthly-budget-exhausted})))
                     job {:id job-id
                          :state :queued
                          :attempt 1
@@ -103,7 +177,12 @@
                                    (assoc-in [:jobs job-id] job)
                                    (assoc-in [:idempotency idempotency-key]
                                              {:job-id job-id
-                                              :digest request-digest}))))
+                                              :digest request-digest})
+                                   (assoc-in [:admission :daily day]
+                                             (inc submitted))
+                                   (assoc-in [:admission :monthly month]
+                                             (+ reserved
+                                                render-reservation-cents)))))
                 {:created? true :job job})))]
       (when (:created? result)
         (swap! enqueued conj {:job-id (get-in result [:job :id])
@@ -223,6 +302,7 @@
         (job-resource (:job result)))))
   (retry-job! [_ job-id]
     (let [now (Instant/now clock)
+          month (billing-month clock)
           retried
           (locking state
             (let [job (get-in @state [:jobs job-id])]
@@ -232,12 +312,28 @@
                 (throw (ex-info "Only failed or cancelled jobs can be retried"
                                 {:type ::invalid-transition
                                  :state (:state job)})))
-              (let [updated (-> job
+              (let [reserved (get-in @state [:admission :monthly month] 0)
+                    _ (when (>= (count (filter #(active-lease? now %)
+                                               (vals (:jobs @state))))
+                                max-active-leases)
+                        (throw (ex-info "All render leases are held"
+                                        {:type ::capacity-exhausted})))
+                    _ (when (> (+ reserved render-reservation-cents)
+                               monthly-budget-cents)
+                        (throw (ex-info "Monthly compute budget is exhausted"
+                                        {:type ::monthly-budget-exhausted})))
+                    updated (-> job
                                 (assoc :state :queued
                                        :attempt (inc (:attempt job))
                                        :updated-at now)
                                 (dissoc :lease :execution :failure :output))]
-                (swap! state assoc-in [:jobs job-id] updated)
+                (swap! state
+                       (fn [current]
+                         (-> current
+                             (assoc-in [:jobs job-id] updated)
+                             (assoc-in [:admission :monthly month]
+                                       (+ reserved
+                                          render-reservation-cents)))))
                 updated)))]
       (swap! enqueued conj {:job-id job-id :attempt (:attempt retried)})
       (job-resource retried)))
@@ -307,8 +403,14 @@
 
 (defn in-memory-system
   ([] (in-memory-system {}))
-  ([{:keys [clock launcher worker]
-     :or {clock (Clock/systemUTC)}}]
+  ([{:keys [clock launcher worker daily-limit monthly-budget-cents
+            render-reservation-cents]
+     :or {clock (Clock/systemUTC)
+          daily-limit max-daily-submissions
+          monthly-budget-cents default-monthly-budget-cents
+          render-reservation-cents default-render-reservation-cents}}]
+   (validate-admission-limits! daily-limit monthly-budget-cents
+                               render-reservation-cents)
    (let [state (atom {:jobs {} :idempotency {}})
          enqueued (atom [])
          launched (atom [])
@@ -318,7 +420,9 @@
                     (reify RenderWorker
                       (perform-render! [_ _ _]
                         (throw (ex-info "No render worker configured" {})))))]
-     {:service (->InMemoryJobService state enqueued launcher worker clock)
+     {:service (->InMemoryJobService state enqueued launcher worker clock
+                                     daily-limit monthly-budget-cents
+                                     render-reservation-cents)
       :state state
       :enqueued enqueued
       :launched launched

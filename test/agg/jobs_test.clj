@@ -6,7 +6,8 @@
             [clojure.test :refer [deftest is]])
   (:import (java.net ServerSocket URI)
            (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
-                          HttpResponse$BodyHandlers)))
+                          HttpResponse$BodyHandlers)
+           (java.time Instant)))
 
 (defn- available-port []
   (with-open [socket (ServerSocket. 0)]
@@ -52,6 +53,175 @@
   (request! port :post "/v1/jobs" (render-request)
             {"Content-Type" "application/json"
              "Idempotency-Key" key}))
+
+(defn- exception-type [f]
+  (try
+    (f)
+    nil
+    (catch clojure.lang.ExceptionInfo error
+      (:type (ex-data error)))))
+
+(deftest daily-admission-accepts-exactly-one-hundred-unique-submissions
+  (let [service (:service (jobs/in-memory-system))
+        request (render-request)]
+    (doseq [index (range 100)]
+      (is (:created? (jobs/submit-job! service (str "daily-" index) request))))
+    (is (false? (:created? (jobs/submit-job! service "daily-99" request)))
+        "an idempotent replay does not consume admission")
+    (is (= ::jobs/daily-submission-limit-exhausted
+           (exception-type
+            #(jobs/submit-job! service "daily-100" request))))))
+
+(deftest admission-limits-fail-closed-on-invalid-configuration
+  (doseq [options [{:daily-limit 0}
+                   {:monthly-budget-cents 0}
+                   {:render-reservation-cents 0}
+                   {:render-reservation-cents -1}]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"positive integers"
+                          (jobs/in-memory-system options)))))
+
+(deftest monthly-budget-admission-reserves-before-enqueue
+  (let [system (jobs/in-memory-system {:monthly-budget-cents 50
+                                       :render-reservation-cents 25})
+        service (:service system)
+        request (render-request)]
+    (is (:created? (jobs/submit-job! service "budget-1" request)))
+    (is (:created? (jobs/submit-job! service "budget-2" request)))
+    (is (false? (:created? (jobs/submit-job! service "budget-2" request))))
+    (is (= ::jobs/monthly-budget-exhausted
+           (exception-type
+            #(jobs/submit-job! service "budget-3" request))))
+    (is (= 2 (count @(:enqueued system)))
+        "rejected work never reaches the render queue")))
+
+(deftest explicit-retry-reserves-compute-before-requeue
+  (let [system (jobs/in-memory-system {:monthly-budget-cents 25
+                                       :render-reservation-cents 25})
+        service (:service system)
+        job-id (get-in (jobs/submit-job! service "retry-budget"
+                                         (render-request))
+                       [:job :id])]
+    (jobs/cancel-job! service job-id)
+    (is (= ::jobs/monthly-budget-exhausted
+           (exception-type #(jobs/retry-job! service job-id))))
+    (is (= 1 (count @(:enqueued system)))
+        "a rejected retry does not enqueue another execution")))
+
+(deftest submission-admission-rejects-while-five-renders-are-active
+  (let [service (:service (jobs/in-memory-system))
+        request (render-request)
+        active-job-ids
+        (mapv (fn [index]
+                (get-in (jobs/submit-job! service (str "active-" index) request)
+                        [:job :id]))
+              (range jobs/max-active-leases))]
+    (doseq [job-id active-job-ids]
+      (jobs/dispatch-job! service job-id))
+    (is (= ::jobs/capacity-exhausted
+           (exception-type
+            #(jobs/submit-job! service "active-overflow" request))))))
+
+(deftest admission-rejections-have-stable-http-errors
+  (letfn [(second-submission [options key-prefix]
+            (let [port (available-port)
+                  system (jobs/in-memory-system options)
+                  server (api/start! port {:job-service (:service system)})]
+              (try
+                (submit! port (str key-prefix "-1"))
+                (submit! port (str key-prefix "-2"))
+                (finally
+                  (.close ^java.lang.AutoCloseable server)))))]
+    (let [daily (second-submission {:daily-limit 1
+                                    :monthly-budget-cents 1000}
+                                   "daily-http")
+          budget (second-submission {:monthly-budget-cents 25
+                                     :render-reservation-cents 25}
+                                    "budget-http")]
+      (is (= 429 (.statusCode daily)))
+      (is (= {:error "daily_submission_limit_exhausted"}
+             (response-json daily)))
+      (is (= 429 (.statusCode budget)))
+      (is (= {:error "monthly_budget_exhausted"}
+             (response-json budget))))))
+
+(deftest reconciliation-repairs-a-render-abandoned-after-dispatch
+  (let [system (jobs/in-memory-system)
+        service (:service system)
+        job-id (get-in (jobs/submit-job! service "abandoned-render"
+                                         (render-request))
+                       [:job :id])]
+    (jobs/dispatch-job! service job-id)
+    (swap! (:state system)
+           (fn [state]
+             (-> state
+                 (assoc-in [:jobs job-id :lease :expires-at] Instant/EPOCH)
+                 (assoc-in [:jobs job-id :state] :running))))
+    (is (= {:repaired-jobs 1 :released-leases 1}
+           (jobs/reconcile-jobs! service)))
+    (is (= "failed" (:state (jobs/get-job service job-id))))
+    (is (= "stale_lease" (:failureCode (jobs/get-job service job-id))))
+    (is (= {:repaired-jobs 0 :released-leases 0}
+           (jobs/reconcile-jobs! service))
+        "reconciliation is idempotent")))
+
+(deftest scheduler-invokes-only-the-authenticated-reconciliation-route
+  (let [port (available-port)
+        system (jobs/in-memory-system)
+        service (:service system)
+        job-id (get-in (jobs/submit-job! service "scheduled-repair"
+                                         (render-request))
+                       [:job :id])
+        _ (jobs/dispatch-job! service job-id)
+        _ (swap! (:state system) assoc-in
+                 [:jobs job-id :lease :expires-at] Instant/EPOCH)
+        server (api/start! port {:job-service service})]
+    (try
+      (let [unauthenticated (request! port :post
+                                      "/internal/v1/jobs/reconcile" {} {})
+            reconciled (request! port :post "/internal/v1/jobs/reconcile" {}
+                                 {"X-CloudScheduler" "true"})]
+        (is (= 401 (.statusCode unauthenticated)))
+        (is (= {:error "authenticated_scheduler_required"}
+               (response-json unauthenticated)))
+        (is (= 200 (.statusCode reconciled)))
+        (is (= {:repairedJobs 1 :releasedLeases 1}
+               (response-json reconciled))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest operational-events-expose-only-bounded-aggregate-fields
+  (let [port (available-port)
+        events (atom [])
+        system (jobs/in-memory-system {:daily-limit 1})
+        service (:service system)
+        server (api/start! port {:job-service service
+                                 :event-sink
+                                 (fn [event fields]
+                                   (swap! events conj (assoc fields :event event)))})]
+    (try
+      (let [job-id (:id (response-json (submit! port "private-key")))]
+        (request! port :post (str "/internal/v1/jobs/" job-id "/dispatch") {}
+                  {"X-CloudTasks-TaskName" "private-task-name"})
+        (swap! (:state system) assoc-in
+               [:jobs job-id :lease :expires-at] Instant/EPOCH)
+        (request! port :post "/internal/v1/jobs/reconcile" {}
+                  {"X-CloudScheduler" "true"})
+        (submit! port "second-private-key"))
+      (is (= #{"render_dispatched" "reconciliation_complete"
+               "admission_rejected"}
+             (set (map :event @events))))
+      (is (nat-int? (:queueAgeMs
+                     (first (filter #(= "render_dispatched" (:event %))
+                                    @events)))))
+      (is (= "daily_submission_limit_exhausted"
+             (:reason (first (filter #(= "admission_rejected" (:event %))
+                                     @events)))))
+      (let [serialized (pr-str @events)]
+        (is (not (re-find #"private-key|private-task-name|timestamp|heart_rate"
+                          serialized))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
 
 (deftest submission-is-idempotent-and-returns-a-polling-resource
   (let [port (available-port)

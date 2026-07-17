@@ -235,6 +235,471 @@ resource "google_firestore_field" "job_expiry" {
   ttl_config {}
 }
 
+resource "google_cloud_scheduler_job" "reconcile" {
+  project = var.project_id
+  region  = var.region
+  name    = "agg-reconcile"
+
+  description      = "Repair stale render jobs and orphaned capacity leases"
+  schedule         = "*/5 * * * *"
+  time_zone        = "Etc/UTC"
+  attempt_deadline = "60s"
+
+  retry_config {
+    retry_count          = 3
+    min_backoff_duration = "10s"
+    max_backoff_duration = "60s"
+    max_doublings        = 2
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${var.api_service_url}/internal/v1/jobs/reconcile"
+    headers     = { "Content-Type" = "application/json" }
+
+    oidc_token {
+      service_account_email = google_service_account.tasks.email
+      audience              = var.api_service_url
+    }
+  }
+
+  depends_on = [google_project_service.required["cloudscheduler.googleapis.com"]]
+}
+
+resource "google_billing_budget" "development" {
+  billing_account = trimprefix(data.google_project.current.billing_account,
+  "billingAccounts/")
+  display_name    = "Animated Graph Cloud development"
+  deletion_policy = "ABANDON"
+
+  budget_filter {
+    calendar_period = "MONTH"
+    projects        = ["projects/${data.google_project.current.number}"]
+  }
+
+  amount {
+    specified_amount {
+      currency_code = "USD"
+      units         = tostring(var.monthly_budget_usd)
+    }
+  }
+
+  threshold_rules {
+    threshold_percent = 0.5
+  }
+
+  threshold_rules {
+    threshold_percent = 0.8
+  }
+
+  threshold_rules {
+    threshold_percent = 1.0
+  }
+
+  all_updates_rule {
+    monitoring_notification_channels = [
+      google_monitoring_notification_channel.owner_email.name,
+    ]
+    disable_default_iam_recipients = false
+  }
+
+  depends_on = [google_project_service.required["billingbudgets.googleapis.com"]]
+}
+
+resource "google_logging_metric" "queue_age_ms" {
+  project = var.project_id
+  name    = "animated_graph_cloud/queue_age_ms"
+
+  description     = "Queue age in milliseconds when a render is dispatched"
+  filter          = "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"render_dispatched\""
+  value_extractor = "EXTRACT(jsonPayload.queueAgeMs)"
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "DISTRIBUTION"
+    unit         = "ms"
+    display_name = "Animated Graph Cloud queue age"
+  }
+
+  bucket_options {
+    exponential_buckets {
+      num_finite_buckets = 12
+      growth_factor      = 2
+      scale              = 1000
+    }
+  }
+}
+
+resource "google_logging_metric" "render_failures" {
+  project = var.project_id
+  name    = "animated_graph_cloud/render_failures"
+
+  description = "Failed durable cloud renderer executions"
+  filter      = "(resource.type=\"cloud_run_job\" AND jsonPayload.event=\"cloud_render_failed\") OR (resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"job_failed\")"
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    display_name = "Animated Graph Cloud render failures"
+  }
+}
+
+resource "google_logging_metric" "stale_leases" {
+  project = var.project_id
+  name    = "animated_graph_cloud/stale_leases"
+
+  description = "Reconciliation runs that release stale or orphaned leases"
+  filter      = "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"reconciliation_complete\" AND jsonPayload.releasedLeases>0"
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    display_name = "Animated Graph Cloud stale leases"
+  }
+}
+
+resource "google_logging_metric" "drive_reauthorization" {
+  project = var.project_id
+  name    = "animated_graph_cloud/drive_reauthorization"
+
+  description = "Cloud renders blocked on a revoked Drive grant"
+  filter      = "resource.type=\"cloud_run_job\" AND jsonPayload.event=\"drive_reauthorization_required\""
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    display_name = "Animated Graph Cloud Drive reauthorization"
+  }
+}
+
+resource "google_logging_metric" "budget_admission_rejections" {
+  project = var.project_id
+  name    = "animated_graph_cloud/budget_admission_rejections"
+
+  description = "Submissions rejected by the monthly compute admission ceiling"
+  filter      = "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"admission_rejected\" AND jsonPayload.reason=\"monthly_budget_exhausted\""
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    display_name = "Animated Graph Cloud budget admission rejections"
+  }
+}
+
+resource "google_monitoring_notification_channel" "owner_email" {
+  project      = var.project_id
+  display_name = "Animated Graph Cloud owner email"
+  type         = "email"
+
+  labels = {
+    email_address = var.operations_alert_email
+  }
+
+  depends_on = [google_project_service.required["monitoring.googleapis.com"]]
+}
+
+resource "google_monitoring_alert_policy" "queue_age" {
+  project      = var.project_id
+  display_name = "Animated Graph Cloud queue age"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.owner_email.name,
+  ]
+
+  conditions {
+    display_name = "Queue age exceeds five minutes"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.queue_age_ms.name}\" AND resource.type=\"cloud_run_revision\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 300000
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_PERCENTILE_99"
+      }
+    }
+  }
+
+  documentation {
+    content   = "Inspect Cloud Tasks backlog and API dispatch errors."
+    mime_type = "text/markdown"
+  }
+}
+
+resource "google_monitoring_alert_policy" "render_failures" {
+  project      = var.project_id
+  display_name = "Animated Graph Cloud render failures"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.owner_email.name,
+  ]
+
+  conditions {
+    display_name = "A durable renderer execution failed"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.render_failures.name}\" AND resource.type=\"cloud_run_job\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  conditions {
+    display_name = "A renderer launch failed"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.render_failures.name}\" AND resource.type=\"cloud_run_revision\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  documentation {
+    content   = "Inspect the generic renderer failure event and durable job failure code."
+    mime_type = "text/markdown"
+  }
+}
+
+resource "google_monitoring_alert_policy" "memory_utilization" {
+  project      = var.project_id
+  display_name = "Animated Graph Cloud renderer memory"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.owner_email.name,
+  ]
+
+  conditions {
+    display_name = "Renderer memory utilization exceeds 90 percent"
+
+    condition_threshold {
+      filter          = "metric.type=\"run.googleapis.com/container/memory/utilizations\" AND resource.type=\"cloud_run_job\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0.9
+      duration        = "300s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_PERCENTILE_99"
+      }
+    }
+  }
+
+  documentation {
+    content   = "Inspect the durable renderer execution and the 32 GiB memory ceiling."
+    mime_type = "text/markdown"
+  }
+}
+
+resource "google_monitoring_alert_policy" "stale_leases" {
+  project      = var.project_id
+  display_name = "Animated Graph Cloud stale leases"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.owner_email.name,
+  ]
+
+  conditions {
+    display_name = "Reconciliation released stale capacity"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.stale_leases.name}\" AND resource.type=\"cloud_run_revision\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  documentation {
+    content   = "Inspect Cloud Run execution termination and the repaired Firestore job."
+    mime_type = "text/markdown"
+  }
+}
+
+resource "google_monitoring_alert_policy" "drive_reauthorization" {
+  project      = var.project_id
+  display_name = "Animated Graph Cloud Drive reauthorization"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.owner_email.name,
+  ]
+
+  conditions {
+    display_name = "A Drive grant requires reauthorization"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.drive_reauthorization.name}\" AND resource.type=\"cloud_run_job\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  documentation {
+    content   = "Ask the affected allowlisted user to reconnect Google Drive; logs contain no subject or token."
+    mime_type = "text/markdown"
+  }
+}
+
+resource "google_monitoring_alert_policy" "budget_admission" {
+  project      = var.project_id
+  display_name = "Animated Graph Cloud budget admission"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.owner_email.name,
+  ]
+
+  conditions {
+    display_name = "Application rejected work at the monthly ceiling"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.budget_admission_rejections.name}\" AND resource.type=\"cloud_run_revision\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  documentation {
+    content   = "Budget notifications are advisory; Firestore admission reservations enforce the ceiling."
+    mime_type = "text/markdown"
+  }
+}
+
+resource "google_monitoring_dashboard" "operations" {
+  project = var.project_id
+  dashboard_json = jsonencode({
+    displayName = "Animated Graph Cloud operations"
+    mosaicLayout = {
+      columns = 12
+      tiles = [
+        {
+          xPos = 0, yPos = 0, width = 6, height = 4
+          widget = {
+            title = "Queue age"
+            xyChart = {
+              dataSets = [{
+                timeSeriesQuery = { timeSeriesFilter = {
+                  filter      = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.queue_age_ms.name}\" AND resource.type=\"cloud_run_revision\""
+                  aggregation = { alignmentPeriod = "300s", perSeriesAligner = "ALIGN_PERCENTILE_99" }
+                } }
+              }]
+              yAxis = { label = "ms", scale = "LINEAR" }
+            }
+          }
+        },
+        {
+          xPos = 6, yPos = 0, width = 6, height = 4
+          widget = {
+            title = "Render failures"
+            xyChart = {
+              dataSets = [
+                {
+                  timeSeriesQuery = { timeSeriesFilter = {
+                    filter      = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.render_failures.name}\" AND resource.type=\"cloud_run_job\""
+                    aggregation = { alignmentPeriod = "300s", perSeriesAligner = "ALIGN_SUM" }
+                  } }
+                },
+                {
+                  timeSeriesQuery = { timeSeriesFilter = {
+                    filter      = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.render_failures.name}\" AND resource.type=\"cloud_run_revision\""
+                    aggregation = { alignmentPeriod = "300s", perSeriesAligner = "ALIGN_SUM" }
+                  } }
+                }
+              ]
+            }
+          }
+        },
+        {
+          xPos = 0, yPos = 4, width = 6, height = 4
+          widget = {
+            title = "Memory utilization"
+            xyChart = {
+              dataSets = [{
+                timeSeriesQuery = { timeSeriesFilter = {
+                  filter      = "metric.type=\"run.googleapis.com/container/memory/utilizations\" AND resource.type=\"cloud_run_job\""
+                  aggregation = { alignmentPeriod = "300s", perSeriesAligner = "ALIGN_PERCENTILE_99" }
+                } }
+              }]
+              yAxis = { label = "utilization", scale = "LINEAR" }
+            }
+          }
+        },
+        {
+          xPos = 6, yPos = 4, width = 6, height = 4
+          widget = {
+            title = "Stale leases"
+            xyChart = {
+              dataSets = [{
+                timeSeriesQuery = { timeSeriesFilter = {
+                  filter      = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.stale_leases.name}\" AND resource.type=\"cloud_run_revision\""
+                  aggregation = { alignmentPeriod = "300s", perSeriesAligner = "ALIGN_SUM" }
+                } }
+              }]
+            }
+          }
+        },
+        {
+          xPos = 0, yPos = 8, width = 6, height = 4
+          widget = {
+            title = "Drive reauthorization"
+            xyChart = {
+              dataSets = [{
+                timeSeriesQuery = { timeSeriesFilter = {
+                  filter      = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.drive_reauthorization.name}\" AND resource.type=\"cloud_run_job\""
+                  aggregation = { alignmentPeriod = "300s", perSeriesAligner = "ALIGN_SUM" }
+                } }
+              }]
+            }
+          }
+        },
+        {
+          xPos = 6, yPos = 8, width = 6, height = 4
+          widget = {
+            title = "Budget admission"
+            xyChart = {
+              dataSets = [{
+                timeSeriesQuery = { timeSeriesFilter = {
+                  filter      = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.budget_admission_rejections.name}\" AND resource.type=\"cloud_run_revision\""
+                  aggregation = { alignmentPeriod = "300s", perSeriesAligner = "ALIGN_SUM" }
+                } }
+              }]
+            }
+          }
+        }
+      ]
+    }
+  })
+}
+
 resource "google_storage_bucket_iam_member" "renderer_temporary_object_creator" {
   bucket = google_storage_bucket.temporary.name
   role   = "roles/storage.objectCreator"
@@ -344,6 +809,12 @@ resource "google_service_account_iam_member" "tasks_service_agent_mints_oidc" {
   service_account_id = google_service_account.tasks.name
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
+}
+
+resource "google_service_account_iam_member" "scheduler_service_agent_mints_oidc" {
+  service_account_id = google_service_account.tasks.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-cloudscheduler.iam.gserviceaccount.com"
 }
 
 resource "google_service_account_iam_member" "api_signs_uploads" {

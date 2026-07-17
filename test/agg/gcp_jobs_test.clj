@@ -6,7 +6,8 @@
   (:import (com.google.api.gax.rpc AlreadyExistsException StatusCode StatusCode$Code)
            (com.google.cloud.firestore FirestoreOptions)
            (com.google.cloud.storage StorageOptions)
-           (java.time Clock)))
+           (java.time Clock Instant ZoneOffset)
+           (java.util Date)))
 
 (deftest duplicate-task-delivery-is-idempotent
   (let [status (reify StatusCode
@@ -116,7 +117,144 @@
                      (jobs/dispatch-job! service (last more-job-ids))
                      nil
                      (catch clojure.lang.ExceptionInfo error
+                       (:type (ex-data error))))))
+            (is (= ::jobs/capacity-exhausted
+                   (try
+                     (jobs/submit-job! service "capacity-submit-overflow"
+                                       (fixture/render-request))
+                     nil
+                     (catch clojure.lang.ExceptionInfo error
                        (:type (ex-data error))))))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
+(deftest firestore-admission-load-enforces-daily-and-budget-boundaries
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId "animated-graph-cloud-admission-test")
+                        (.setEmulatorHost host)
+                        (.build)
+                        (.getService))
+          requests (atom {})
+          enqueued (atom [])
+          fixed-now (Instant/parse "2026-07-17T10:00:00Z")
+          clock (Clock/fixed fixed-now ZoneOffset/UTC)
+          request-store
+          (reify jobs/RequestStore
+            (save-request! [_ job-id request]
+              (let [object (str "jobs/" job-id "/request.json")]
+                (swap! requests assoc object request)
+                object))
+            (load-request [_ object] (get @requests object)))
+          queue (reify jobs/JobQueue
+                  (enqueue-job! [_ job-id attempt]
+                    (swap! enqueued conj [job-id attempt])))
+          service (fn [monthly-budget-cents]
+                    (gcp/job-service {:firestore firestore
+                                      :request-store request-store
+                                      :queue queue
+                                      :clock clock
+                                      :monthly-budget-cents monthly-budget-cents
+                                      :render-reservation-cents 25}))
+          exception-type (fn [f]
+                           (try
+                             (f)
+                             nil
+                             (catch clojure.lang.ExceptionInfo error
+                               (:type (ex-data error)))))]
+      (try
+        (doseq [collection ["jobs" "job-idempotency" "orchestration"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (let [daily-service (service 100000)
+              first-job (jobs/submit-job! daily-service "daily-load-0"
+                                          (fixture/render-request))
+              first-snapshot (.get
+                              (.get (.document (.collection firestore "jobs")
+                                               (get-in first-job [:job :id]))))]
+          (is (= (Date/from (.plusSeconds fixed-now (* 90 24 60 60)))
+                 (.getDate first-snapshot "expireAt")))
+          (doseq [index (range 1 100)]
+            (is (:created?
+                 (jobs/submit-job! daily-service (str "daily-load-" index)
+                                   (fixture/render-request)))))
+          (is (false? (:created?
+                       (jobs/submit-job! daily-service "daily-load-99"
+                                         (fixture/render-request)))))
+          (is (= ::jobs/daily-submission-limit-exhausted
+                 (exception-type
+                  #(jobs/submit-job! daily-service "daily-load-100"
+                                     (fixture/render-request))))))
+        (doseq [collection ["jobs" "job-idempotency" "orchestration"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (reset! enqueued [])
+        (let [budget-service (service 50)]
+          (let [first-job (jobs/submit-job! budget-service "budget-load-1"
+                                            (fixture/render-request))
+                second-job (jobs/submit-job! budget-service "budget-load-2"
+                                             (fixture/render-request))]
+            (is (:created? first-job))
+            (is (:created? second-job))
+            (jobs/cancel-job! budget-service (get-in first-job [:job :id]))
+            (is (= ::jobs/monthly-budget-exhausted
+                   (exception-type
+                    #(jobs/retry-job! budget-service
+                                      (get-in first-job [:job :id]))))))
+          (is (= ::jobs/monthly-budget-exhausted
+                 (exception-type
+                  #(jobs/submit-job! budget-service "budget-load-3"
+                                     (fixture/render-request)))))
+          (is (= 2 (count @enqueued))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
+(deftest firestore-reconciliation-repairs-stale-jobs-and-orphaned-leases
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId "animated-graph-cloud-reconcile-test")
+                        (.setEmulatorHost host)
+                        (.build)
+                        (.getService))
+          requests (atom {})
+          request-store
+          (reify jobs/RequestStore
+            (save-request! [_ job-id request]
+              (let [object (str "jobs/" job-id "/request.json")]
+                (swap! requests assoc object request)
+                object))
+            (load-request [_ object] (get @requests object)))
+          queue (reify jobs/JobQueue
+                  (enqueue-job! [_ _job-id _attempt]))
+          launcher (reify jobs/JobLauncher
+                     (launch-job! [_ job-id] (str "executions/" job-id))
+                     (cancel-execution! [_ _execution]))
+          service (gcp/job-service {:firestore firestore
+                                    :request-store request-store
+                                    :queue queue
+                                    :launcher launcher})]
+      (try
+        (doseq [collection ["jobs" "job-idempotency" "orchestration"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (let [job-id (get-in (jobs/submit-job! service "stale-emulator-job"
+                                               (fixture/render-request))
+                             [:job :id])
+              job-ref (.document (.collection firestore "jobs") job-id)
+              capacity-ref (.document (.collection firestore "orchestration")
+                                      "capacity")]
+          (jobs/dispatch-job! service job-id)
+          (.get (.update job-ref {"leaseExpiresAt" 0}))
+          (.get (.set capacity-ref
+                      {"leases" {job-id 0
+                                 "missing-job" 9999999999999}}))
+          (is (= {:repaired-jobs 1 :released-leases 2}
+                 (jobs/reconcile-jobs! service)))
+          (is (= "failed" (:state (jobs/get-job service job-id))))
+          (is (= "stale_lease" (:failureCode (jobs/get-job service job-id))))
+          (is (= {}
+                 (get (.getData (.get (.get capacity-ref))) "leases")))
+          (is (= {:repaired-jobs 0 :released-leases 0}
+                 (jobs/reconcile-jobs! service))))
         (finally
           (.close firestore))))
     (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
