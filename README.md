@@ -187,7 +187,9 @@ the separate `agg-tasks` identity. Before expiring a lease, reconciliation uses
 the exact job ID and attempt arguments to adopt an active Cloud Run execution
 that dispatch accepted but did not record. Adoption writes the execution name,
 repairs running/cancellation state, and renews capacity atomically; a pending
-cancellation then cancels that exact execution. Expired unmatched running or
+cancellation then cancels that exact execution. A failed external cancellation
+keeps the renewed lease and is retried by the next Scheduler run before any
+durable cancellation is recorded. Expired unmatched running or
 launching jobs become `failed` with `stale_lease`; expired cancellations become
 `cancelled`; stale, terminal, and missing-job capacity leases are removed
 atomically. Operational events contain only bounded reasons, durations, and

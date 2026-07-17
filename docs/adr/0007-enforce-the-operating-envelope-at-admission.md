@@ -31,7 +31,10 @@ ID and attempt arguments. The reconciler lists executions with a custom
 read-only role and adopts an active execution when Firestore still has an
 unrecorded `launching` or `cancellation-requested` attempt. Adoption records the
 execution, renews its capacity lease, and cancels it when cancellation was
-already requested. Completed or different attempts are never adopted. The
+already requested. If external cancellation fails, the exact recorded attempt
+and execution remain `cancellation-requested` with renewed capacity; every
+Scheduler run retries it, and completion uses an exact state/attempt/execution
+compare-and-set. Completed or different attempts are never adopted. The
 reconciler otherwise fails expired launching/running jobs with `stale_lease`,
 completes an expired cancellation as cancelled, and removes expired,
 mismatched, terminal, or missing-job capacity leases in the same transaction.

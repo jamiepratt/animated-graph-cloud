@@ -257,7 +257,7 @@
        (<= (:lease-expires-at job) now)))
 
 (defn- complete-cancellation! [^Firestore firestore launcher ^Clock clock
-                               job-ref capacity-ref job-id execution]
+                               job-ref capacity-ref job-id attempt execution]
   (lifecycle/cancel-execution! launcher execution)
   (public-job
    (transaction!
@@ -266,8 +266,9 @@
       (let [job (snapshot-job (transaction-snapshot transaction job-ref))
             capacity (transaction-snapshot transaction capacity-ref)
             now (now-ms clock)]
-        (if (contains? #{:launching :running :cancellation-requested}
-                       (:state job))
+        (if (and (= :cancellation-requested (:state job))
+                 (= attempt (:attempt job))
+                 (= execution (:execution job)))
           (let [cancelled (terminal-job job :cancelled now)]
             (.set ^Transaction transaction job-ref (job-doc cancelled))
             (.set ^Transaction transaction capacity-ref
@@ -366,16 +367,15 @@
                (keep snapshot-job)
                (filter #(stale-job? now %))
                vec)
-          unrecorded-job-candidates
+          recoverable-job-candidates
           (->> ["launching" "cancellation-requested"]
                (mapcat (fn [state]
                          (->> (await! (.get (.whereEqualTo jobs "state" state)))
                               .getDocuments
                               (keep snapshot-job))))
-               (filter #(nil? (:execution %)))
                vec)
           recovery-candidates
-          (->> (concat stale-job-candidates unrecorded-job-candidates)
+          (->> (concat stale-job-candidates recoverable-job-candidates)
                (map (juxt :id identity))
                (into {})
                vals)
@@ -426,10 +426,16 @@
                                        (contains? #{:launching
                                                     :cancellation-requested}
                                                   (:state job)))
+                                  retry-cancellation?
+                                  (and (= :cancellation-requested (:state job))
+                                       (:execution job))
                                   stale? (stale-job? now job)]
-                              (when (or recoverable-job? stale?)
+                              (when (or recoverable-job?
+                                        retry-cancellation?
+                                        stale?)
                                 [(:id job)
-                                 (if recoverable-job?
+                                 (cond
+                                   recoverable-job?
                                    (assoc job
                                           :state
                                           (if (= :cancellation-requested
@@ -439,10 +445,18 @@
                                           :execution execution
                                           :lease-expires-at renewed-until
                                           :updated-at now)
-                                   (if (= :cancellation-requested (:state job))
-                                     (terminal-job job :cancelled now)
-                                     (assoc (terminal-job job :failed now)
-                                            :failure "stale_lease")))]))))
+
+                                   retry-cancellation?
+                                   (assoc job
+                                          :lease-expires-at renewed-until
+                                          :updated-at now)
+
+                                   (= :cancellation-requested (:state job))
+                                   (terminal-job job :cancelled now)
+
+                                   :else
+                                   (assoc (terminal-job job :failed now)
+                                          :failure "stale_lease"))]))))
                          (vals jobs-by-id))
                    jobs-after-updates (merge jobs-by-id updates)
                    recovered-leases
@@ -474,6 +488,7 @@
                                               (:state job))
                                            (:execution job))
                                   {:job-id job-id
+                                   :attempt (:attempt job)
                                    :execution (:execution job)})))
                         vec)]
                (doseq [[job-id updated] updates]
@@ -488,10 +503,10 @@
                 (count (remove #(contains? retained-leases %)
                                (keys leases)))
                 :cancellations cancellations})))]
-      (doseq [{:keys [job-id execution]} (:cancellations result)]
+      (doseq [{:keys [job-id attempt execution]} (:cancellations result)]
         (complete-cancellation! firestore launcher clock
                                 (.document jobs job-id) capacity-ref
-                                job-id execution))
+                                job-id attempt execution))
       (-> result
           (update :released-leases + (count (:cancellations result)))
           (dissoc :cancellations))))
@@ -656,7 +671,8 @@
             {:started? true
              :job (if (= :cancellation-requested (:state running))
                     (complete-cancellation! firestore launcher clock
-                                            job-ref capacity-ref job-id execution)
+                                            job-ref capacity-ref job-id
+                                            (:attempt running) execution)
                     (public-job running))})
           (catch Throwable cause
             (transaction!
@@ -702,7 +718,7 @@
                                  {:type ::lifecycle/invalid-transition}))))))]
       (if-let [execution (:execution requested)]
         (complete-cancellation! firestore launcher clock job-ref capacity-ref
-                                job-id execution)
+                                job-id (:attempt requested) execution)
         (public-job requested))))
   (retry-job! [_ job-id]
     (let [job-ref (.document (.collection firestore "jobs") job-id)

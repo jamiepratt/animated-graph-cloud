@@ -459,6 +459,7 @@
           requests (atom {})
           launched (atom [])
           cancelled (atom [])
+          fail-next-cancellation? (atom false)
           request-store
           (reify jobs/RequestStore
             (save-request! [_ job-id request]
@@ -478,7 +479,9 @@
                                       :execution execution})
                 execution))
             (cancel-execution! [_ execution]
-              (swap! cancelled conj execution))
+              (swap! cancelled conj execution)
+              (when (compare-and-set! fail-next-cancellation? true false)
+                (throw (ex-info "simulated cancellation failure" {}))))
             jobs/RecoverableJobLauncher
             (launch-job-attempt! [_ job-id attempt]
               (let [execution (str "executions/" job-id "-attempt-" attempt)]
@@ -537,11 +540,22 @@
                           "leaseExpiresAt" future-lease}))
           (jobs/cancel-job! service job-id)
 
+          (reset! fail-next-cancellation? true)
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                                #"simulated cancellation failure"
+                                (jobs/reconcile-jobs! service)))
+          (is (= "cancellation-requested"
+                 (:state (jobs/get-job service job-id))))
+          (is (pos? (long (get-in (.getData (.get (.get capacity-ref)))
+                                  ["leases" job-id])))
+              "failed cancellation keeps capacity reserved")
           (is (= {:repaired-jobs 1 :released-leases 1}
                  (jobs/reconcile-jobs! service)))
           (is (= "cancelled" (:state (jobs/get-job service job-id))))
-          (is (= [execution] @cancelled)
-              "revocation-style cancellation reaches the orphan execution")
+          (is (= [execution execution] @cancelled)
+              "reconciliation retries the exact orphan execution")
+          (is (= 2 (count @launched))
+              "cancellation retry does not launch another renderer")
           (is (nil? (get-in (.getData (.get (.get capacity-ref)))
                             ["leases" job-id]))))
         (finally
