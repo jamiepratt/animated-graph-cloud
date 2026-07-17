@@ -35,6 +35,16 @@
            (.build request)
            (HttpResponse$BodyHandlers/ofString))))
 
+(defn- raw-post! [port path body headers]
+  (let [builder (HttpRequest/newBuilder
+                 (URI/create (str "http://127.0.0.1:" port path)))
+        _ (doseq [[name value] headers]
+            (.header builder name value))]
+    (.send (HttpClient/newHttpClient)
+           (.build (.POST builder
+                          (HttpRequest$BodyPublishers/ofString body)))
+           (HttpResponse$BodyHandlers/ofString))))
+
 (defn- response-json [response]
   (json/read-str (.body response) :key-fn keyword))
 
@@ -64,6 +74,59 @@
         (is (= (str "/v1/jobs/" (:id first-job)) (:statusUrl first-job)))
         (is (= first-job (response-json poll-response)))
         (is (= 1 (count @(:enqueued system)))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest invalid-job-submission-is-rejected-before-enqueue
+  (let [port (available-port)
+        system (jobs/in-memory-system)
+        server (api/start! port {:job-service (:service system)})]
+    (try
+      (let [response (request! port :post "/v1/jobs"
+                               (assoc (render-request) :preset "unknown")
+                               {"Content-Type" "application/json"
+                                "Idempotency-Key" "invalid-render"})]
+        (is (= 400 (.statusCode response)))
+        (is (= {:error "invalid_request"} (response-json response)))
+        (is (empty? @(:enqueued system))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest malformed-job-submission-is-an-invalid-request
+  (let [port (available-port)
+        system (jobs/in-memory-system)
+        server (api/start! port {:job-service (:service system)})]
+    (try
+      (let [response (raw-post! port "/v1/jobs" "{not-json"
+                                {"Content-Type" "application/json"
+                                 "Idempotency-Key" "malformed-render"})]
+        (is (= 400 (.statusCode response)))
+        (is (= {:error "invalid_request"} (response-json response)))
+        (is (empty? @(:enqueued system))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest job-submission-stores-the-original-request
+  (let [port (available-port)
+        received-request (promise)
+        worker (reify jobs/RenderWorker
+                 (perform-render! [_ _job-id request]
+                   (deliver received-request request)
+                   {:output-bytes 10
+                    :object "jobs/original/output.mov"}))
+        system (jobs/in-memory-system {:worker worker})
+        service (:service system)
+        server (api/start! port {:job-service service})
+        submitted-request (render-request)]
+    (try
+      (let [submission (request! port :post "/v1/jobs" submitted-request
+                                 {"Content-Type" "application/json"
+                                  "Idempotency-Key" "original-render"})
+            job-id (:id (response-json submission))]
+        (request! port :post (str "/internal/v1/jobs/" job-id "/dispatch") {}
+                  {"X-CloudTasks-TaskName" "tasks/original-render"})
+        (jobs/run-job! service job-id)
+        (is (= submitted-request @received-request)))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
@@ -105,6 +168,27 @@
                (:state (response-json
                         (request! port :get
                                   (str "/v1/jobs/" (last job-ids)) nil {}))))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest launch-failure-is-visible-in-the-polling-resource
+  (let [port (available-port)
+        launcher (reify jobs/JobLauncher
+                   (launch-job! [_ _job-id]
+                     (throw (ex-info "simulated launch failure" {})))
+                   (cancel-execution! [_ _execution]))
+        system (jobs/in-memory-system {:launcher launcher})
+        server (api/start! port {:job-service (:service system)})]
+    (try
+      (let [job-id (:id (response-json (submit! port "launch-failure")))
+            dispatch (request! port :post
+                               (str "/internal/v1/jobs/" job-id "/dispatch") {}
+                               {"X-CloudTasks-TaskName" "tasks/launch-failure"})
+            polled (response-json
+                    (request! port :get (str "/v1/jobs/" job-id) nil {}))]
+        (is (= 502 (.statusCode dispatch)))
+        (is (= "failed" (:state polled)))
+        (is (= "launch_failed" (:failureCode polled))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

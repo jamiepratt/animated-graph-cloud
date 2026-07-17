@@ -52,9 +52,11 @@
                       {:type ::request-too-large})))
     (json/read-str (String. bytes StandardCharsets/UTF_8) :key-fn keyword)))
 
-(defn- request-render-spec [exchange]
+(defn- request-render-request [exchange]
   (try
-    (contract/prepare (request-json exchange))
+    (let [request (request-json exchange)]
+      {:request request
+       :render-spec (contract/prepare request)})
     (catch clojure.lang.ExceptionInfo error
       (if (= ::request-too-large (:type (ex-data error)))
         (throw error)
@@ -65,6 +67,9 @@
       (throw (ex-info "Invalid render request"
                       {:type ::invalid-request}
                       error)))))
+
+(defn- request-render-spec [exchange]
+  (:render-spec (request-render-request exchange)))
 
 (defn- preview! [exchange frame-renderer]
   (let [render-spec (request-render-spec exchange)
@@ -91,8 +96,9 @@
 (defn- submit-job! [^HttpExchange exchange job-service]
   (let [idempotency-key (some-> exchange .getRequestHeaders
                                 (.getFirst "Idempotency-Key"))
+        request (:request (request-render-request exchange))
         {:keys [created? job]}
-        (jobs/submit-job! job-service idempotency-key (request-json exchange))]
+        (jobs/submit-job! job-service idempotency-key request)]
     (respond-json! exchange (if created? 202 200) job)))
 
 (defn- poll-job! [exchange job-service job-id]

@@ -172,7 +172,7 @@
                   (swap! state assoc-in [:jobs job-id]
                          (-> job
                              (assoc :state :failed
-                                    :error "launch_failed"
+                                    :failure "launch_failed"
                                     :updated-at (Instant/now clock))
                              (dissoc :lease))))))
             (throw (ex-info "Renderer launch failed"
