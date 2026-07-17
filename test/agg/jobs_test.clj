@@ -1,5 +1,6 @@
 (ns agg.jobs-test
-  (:require [agg.api.main :as api]
+  (:require [agg.admin.core :as admin]
+            [agg.api.main :as api]
             [agg.jobs.lifecycle :as jobs]
             [clojure.data.json :as json]
             [clojure.java.io :as io]
@@ -498,3 +499,62 @@
                (response-json conflict))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
+
+(deftest revocation-racing-submission-leaves-no-member-job-active
+  (let [{:keys [directory]} (admin/in-memory-system
+                             {:owner-email "owner@example.com"
+                              :initial-emails #{"member@example.com"}})
+        job-system (jobs/in-memory-system {:member-directory directory})
+        job-service (:service job-system)
+        events (atom [])
+        admin-service (admin/service {:directory directory
+                                      :job-administration job-service
+                                      :event-sink #(swap! events conj %)})
+        owner (admin/authorize-member! directory "owner@example.com"
+                                       "owner-subject")
+        member (admin/authorize-member! directory "member@example.com"
+                                        "member-subject")
+        member-request (assoc (render-request)
+                              :requesterSubject (:subject member)
+                              :requesterEmail (:email member)
+                              :requesterMembershipVersion
+                              (:membership-version member))
+        retry-id (get-in (jobs/submit-job! job-service "revoked-retry"
+                                           member-request)
+                         [:job :id])
+        _ (jobs/cancel-job! job-service retry-id)
+        start (promise)
+        submissions
+        (mapv (fn [index]
+                (future
+                  @start
+                  (try
+                    (jobs/submit-job! job-service (str "racing-" index)
+                                      member-request)
+                    (catch clojure.lang.ExceptionInfo error
+                      error))))
+              (range 30))
+        revocation (future
+                     @start
+                     (admin/revoke-member! admin-service owner
+                                           "member@example.com"))]
+    (deliver start true)
+    @revocation
+    (let [results (mapv deref submissions)
+          submitted (keep #(when (map? %) (get-in % [:job :id])) results)
+          rejected (keep #(when (instance? clojure.lang.ExceptionInfo %) %)
+                         results)]
+      (is (= 30 (+ (count submitted) (count rejected))))
+      (is (every? #(= ::jobs/member-not-allowlisted
+                      (:type (ex-data %)))
+                  rejected))
+      (is (every? #(= "cancelled" (:state (jobs/get-job job-service %)))
+                  submitted))
+      (is (= (count submitted)
+             (:jobsCancelled (last @events))))
+      (is (= ::jobs/member-not-allowlisted
+             (try
+               (jobs/retry-job! job-service retry-id)
+               nil
+               (catch clojure.lang.ExceptionInfo error
+                 (:type (ex-data error)))))))))

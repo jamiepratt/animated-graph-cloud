@@ -1,5 +1,6 @@
 (ns agg.jobs.gcp
-  (:require [agg.contracts.render :as contract]
+  (:require [agg.admin.core :as admin]
+            [agg.contracts.render :as contract]
             [agg.auth.gcp :as auth-gcp]
             [agg.jobs.lifecycle :as lifecycle]
             [clojure.data.json :as json])
@@ -61,7 +62,10 @@
     (:execution job) (assoc "execution" (:execution job))
     (:failure job) (assoc "failure" (:failure job))
     (:output job) (assoc "outputJson" (json/write-str (:output job)))
-    (:requester-subject job) (assoc "requesterSubject" (:requester-subject job))))
+    (:requester-subject job) (assoc "requesterSubject" (:requester-subject job))
+    (:requester-email job) (assoc "requesterEmail" (:requester-email job))
+    (:requester-membership-version job)
+    (assoc "requesterMembershipVersion" (:requester-membership-version job))))
 
 (defn- snapshot-job [^DocumentSnapshot snapshot]
   (when (.exists snapshot)
@@ -81,7 +85,12 @@
         (get data "outputJson")
         (assoc :output (json/read-str (get data "outputJson") :key-fn keyword))
         (get data "requesterSubject")
-        (assoc :requester-subject (get data "requesterSubject"))))))
+        (assoc :requester-subject (get data "requesterSubject"))
+        (get data "requesterEmail")
+        (assoc :requester-email (get data "requesterEmail"))
+        (get data "requesterMembershipVersion")
+        (assoc :requester-membership-version
+               (get data "requesterMembershipVersion"))))))
 
 (defn- public-job [job]
   (lifecycle/job-resource
@@ -238,9 +247,35 @@
             cancelled)
           job))))))
 
+(defn- member-identity [request]
+  {:subject (:requesterSubject request)
+   :email (:requesterEmail request)
+   :membership-version (:requesterMembershipVersion request)})
+
+(defn- job-member-identity [job]
+  {:subject (:requester-subject job)
+   :email (:requester-email job)
+   :membership-version (:requester-membership-version job)})
+
+(defn- require-transaction-member!
+  [member-directory transaction identity]
+  (when member-directory
+    (try
+      (admin/require-active-transaction! member-directory transaction identity)
+      (catch clojure.lang.ExceptionInfo error
+        (if (contains? #{::admin/not-allowlisted
+                         ::admin/invalid-email
+                         ::admin/invalid-subject}
+                       (:type (ex-data error)))
+          (throw (ex-info "Member is no longer allowlisted"
+                          {:type ::lifecycle/member-not-allowlisted}
+                          error))
+          (throw error))))))
+
 (defrecord FirestoreJobService [^Firestore firestore request-store queue launcher
                                 worker ^Clock clock daily-limit
-                                monthly-budget-cents render-reservation-cents]
+                                monthly-budget-cents render-reservation-cents
+                                member-directory]
   lifecycle/JobAccess
   (owns-job? [_ job-id subject]
     (= subject
@@ -324,13 +359,18 @@
           candidate {:id job-id :state :queued :attempt 1
                      :request-object request-object
                      :requester-subject (:requesterSubject request)
+                     :requester-email (:requesterEmail request)
+                     :requester-membership-version
+                     (:requesterMembershipVersion request)
                      :created-at now :updated-at now
                      :expires-at (+ now (* 90 24 60 60 1000))}
           result
           (transaction!
            firestore
            (fn [transaction]
-             (let [snapshot (transaction-snapshot transaction idempotency-ref)]
+             (let [_ (require-transaction-member!
+                      member-directory transaction (member-identity request))
+                   snapshot (transaction-snapshot transaction idempotency-ref)]
                (if (.exists ^DocumentSnapshot snapshot)
                  (let [data (.getData ^DocumentSnapshot snapshot)]
                    (when-not (= digest (get data "requestDigest"))
@@ -504,6 +544,8 @@
                         (transaction-snapshot transaction job-ref))]
                (when-not job
                  (throw (ex-info "Job does not exist" {:type ::lifecycle/job-not-found})))
+               (require-transaction-member! member-directory transaction
+                                            (job-member-identity job))
                (when-not (contains? #{:cancelled :failed} (:state job))
                  (throw (ex-info "Only failed or cancelled jobs can be retried"
                                  {:type ::lifecycle/invalid-transition})))
@@ -592,7 +634,28 @@
                      (released-capacity capacity job-id now)))))
           (throw (ex-info "Render worker failed"
                           {:type ::lifecycle/worker-failed :job-id job-id}
-                          cause)))))))
+                          cause))))))
+  admin/JobAdministration
+  (cancel-member-jobs! [this subject]
+    (let [job-ids
+          (->> (await! (.get (.whereEqualTo (.collection firestore "jobs")
+                                            "requesterSubject" subject)))
+               .getDocuments
+               (keep (fn [snapshot]
+                       (let [job (snapshot-job snapshot)]
+                         (when (and job
+                                    (contains? #{:queued :launching :running
+                                                 :cancellation-requested}
+                                               (:state job)))
+                           (:id job)))))
+               vec)]
+      (doseq [job-id job-ids]
+        (try
+          (lifecycle/cancel-job! this job-id)
+          (catch clojure.lang.ExceptionInfo error
+            (when-not (= ::lifecycle/invalid-transition (:type (ex-data error)))
+              (throw error)))))
+      (count job-ids))))
 
 (defn request-store [bucket]
   (->GcsRequestStore (.getService (StorageOptions/getDefaultInstance)) bucket nil))
@@ -607,7 +670,7 @@
 
 (defn job-service [{:keys [firestore request-store queue launcher worker clock
                            daily-limit monthly-budget-cents
-                           render-reservation-cents]
+                           render-reservation-cents member-directory]
                     :or {clock (Clock/systemUTC)
                          daily-limit lifecycle/max-daily-submissions
                          monthly-budget-cents lifecycle/default-monthly-budget-cents
@@ -618,7 +681,7 @@
   (->FirestoreJobService
    (or firestore (.getService (FirestoreOptions/getDefaultInstance)))
    request-store queue launcher worker clock daily-limit monthly-budget-cents
-   render-reservation-cents))
+   render-reservation-cents member-directory))
 
 (defn- env [name default]
   (get (System/getenv) name default))
@@ -644,45 +707,56 @@
                       {:type ::missing-dispatcher-url})))
     (let [store (request-store bucket)
           firestore (.getService (FirestoreOptions/getDefaultInstance))
-          job-dependencies
-          {:upload-signer store
-           :job-service
-           (job-service
-            {:firestore firestore
-             :request-store store
-             :queue (task-queue {:project project
-                                 :region region
-                                 :queue-name (env "AGG_TASKS_QUEUE" "agg-render")
-                                 :dispatcher-url dispatcher-url
-                                 :dispatcher-service-account tasks-service-account})
-             :launcher (run-launcher
-                        (str "projects/" project "/locations/" region
-                             "/jobs/" (env "AGG_RENDERER_JOB" "agg-renderer")))
-             :daily-limit
-             (env-long "AGG_DAILY_SUBMISSION_LIMIT"
-                       lifecycle/max-daily-submissions)
-             :monthly-budget-cents
-             (env-long "AGG_MONTHLY_BUDGET_CENTS"
-                       lifecycle/default-monthly-budget-cents)
-             :render-reservation-cents
-             (env-long "AGG_RENDER_RESERVATION_CENTS"
-                       lifecycle/default-render-reservation-cents)})}]
-      (if (= "true" (env "AGG_AUTH_ENABLED" "false"))
-        (merge job-dependencies
-               (auth-gcp/api-dependencies
-                {:firestore firestore
-                 :project project
-                 :region region
-                 :base-url (env "AGG_PUBLIC_BASE_URL" dispatcher-url)
-                 :allowed-emails (env "AGG_ALLOWED_EMAILS" nil)
-                 :session-secret (env "AGG_SESSION_KEY" nil)
-                 :oauth-client-credentials
-                 (env "AGG_OAUTH_CLIENT_CREDENTIALS" nil)
-                 :tasks-service-account tasks-service-account
-                 :scheduler-service-account scheduler-service-account
-                 :picker-api-key (env "AGG_PICKER_API_KEY" nil)
-                 :picker-app-id (env "AGG_PICKER_APP_ID" nil)
-                 :token-hash-secret (env "AGG_TOKEN_HASH_PEPPER" nil)}))
+          auth-enabled? (= "true" (env "AGG_AUTH_ENABLED" "false"))
+          auth-dependencies
+          (when auth-enabled?
+            (auth-gcp/api-dependencies
+             {:firestore firestore
+              :project project
+              :region region
+              :base-url (env "AGG_PUBLIC_BASE_URL" dispatcher-url)
+              :owner-email (env "AGG_OWNER_EMAIL" nil)
+              :session-secret (env "AGG_SESSION_KEY" nil)
+              :oauth-client-credentials
+              (env "AGG_OAUTH_CLIENT_CREDENTIALS" nil)
+              :tasks-service-account tasks-service-account
+              :scheduler-service-account scheduler-service-account
+              :picker-api-key (env "AGG_PICKER_API_KEY" nil)
+              :picker-app-id (env "AGG_PICKER_APP_ID" nil)
+              :token-hash-secret (env "AGG_TOKEN_HASH_PEPPER" nil)}))
+          service
+          (job-service
+           {:firestore firestore
+            :request-store store
+            :queue (task-queue {:project project
+                                :region region
+                                :queue-name (env "AGG_TASKS_QUEUE" "agg-render")
+                                :dispatcher-url dispatcher-url
+                                :dispatcher-service-account tasks-service-account})
+            :launcher (run-launcher
+                       (str "projects/" project "/locations/" region
+                            "/jobs/" (env "AGG_RENDERER_JOB" "agg-renderer")))
+            :daily-limit
+            (env-long "AGG_DAILY_SUBMISSION_LIMIT"
+                      lifecycle/max-daily-submissions)
+            :monthly-budget-cents
+            (env-long "AGG_MONTHLY_BUDGET_CENTS"
+                      lifecycle/default-monthly-budget-cents)
+            :render-reservation-cents
+            (env-long "AGG_RENDER_RESERVATION_CENTS"
+                      lifecycle/default-render-reservation-cents)
+            :member-directory (:member-directory auth-dependencies)})
+          job-dependencies {:upload-signer store :job-service service}]
+      (if auth-enabled?
+        (assoc (merge job-dependencies auth-dependencies)
+               :admin-service
+               (admin/service
+                {:directory (:member-directory auth-dependencies)
+                 :token-administration (:token-service auth-dependencies)
+                 :credential-administration
+                 (:credential-administration auth-dependencies)
+                 :job-administration service
+                 :event-sink #(println (json/write-str %))}))
         job-dependencies))))
 
 (defn api-job-service []

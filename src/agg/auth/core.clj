@@ -1,5 +1,6 @@
 (ns agg.auth.core
-  (:require [clojure.data.json :as json]
+  (:require [agg.admin.core :as admin]
+            [clojure.data.json :as json]
             [clojure.string :as str])
   (:import (java.net URLEncoder)
            (java.nio.charset StandardCharsets)
@@ -23,6 +24,9 @@
   (load-grant [store subject])
   (save-grant! [store subject grant])
   (revoke-grant! [store subject]))
+
+(defprotocol MemberGrantStore
+  (save-member-grant! [store identity grant]))
 
 (defprotocol DriveClient
   (ensure-output-folder! [client access-token existing-folder]))
@@ -119,7 +123,8 @@
 
 (defn system
   [{:keys [client-id client-secret base-url allowlist session-key oauth clock
-           authorization-endpoint cipher grant-store drive drive-token-client]
+           authorization-endpoint cipher grant-store drive drive-token-client
+           member-directory owner-email]
     :or {clock (Clock/systemUTC)
          authorization-endpoint "https://accounts.google.com/o/oauth2/v2/auth"}}]
   (when-not (and (not-empty client-id)
@@ -133,6 +138,8 @@
    :client-secret client-secret
    :base-url (str/replace base-url #"/$" "")
    :allowlist (into #{} (map str/lower-case) allowlist)
+   :member-directory member-directory
+   :owner-email (some-> owner-email str/lower-case)
    :session-key session-key
    :oauth oauth
    :cipher cipher
@@ -143,39 +150,89 @@
    :authorization-endpoint authorization-endpoint
    :flows (atom {})})
 
-(defn issue-session [{:keys [session-key clock]} {:keys [subject email]}]
-  (sign-json session-key
-             {:sub subject
-              :email (str/lower-case email)
-              :exp (.getEpochSecond
-                    (.plusSeconds (Instant/now clock) session-seconds))}))
-
-(defn session-user [{:keys [session-key clock allowlist]} token]
+(defn- translate-membership-error [action]
   (try
-    (let [{:keys [sub email exp]}
+    (action)
+    (catch clojure.lang.ExceptionInfo error
+      (if (contains? #{::admin/not-allowlisted
+                       ::admin/invalid-email
+                       ::admin/invalid-subject}
+                     (:type (ex-data error)))
+        (throw (ex-info "User is no longer allowlisted"
+                        {:type ::not-allowlisted}
+                        error))
+        (throw error)))))
+
+(defn- dynamic-member
+  [{:keys [member-directory]} {:keys [subject email membership-version] :as user}
+   authorize?]
+  (if-not member-directory
+    user
+    (translate-membership-error
+     #(if authorize?
+        (admin/authorize-member! member-directory email subject)
+        (admin/active-member member-directory
+                             {:subject subject
+                              :email email
+                              :membership-version membership-version})))))
+
+(defn issue-session [{:keys [session-key clock member-directory] :as system}
+                     {:keys [subject email] :as user}]
+  (let [member (dynamic-member system user
+                               (and member-directory
+                                    (nil? (:membership-version user))))]
+    (sign-json session-key
+               (cond-> {:sub subject
+                        :email (str/lower-case email)
+                        :exp (.getEpochSecond
+                              (.plusSeconds (Instant/now clock)
+                                            session-seconds))}
+                 (:membership-version member)
+                 (assoc :membershipVersion (:membership-version member))))))
+
+(defn session-user [{:keys [session-key clock allowlist member-directory
+                            owner-email]
+                     :as system}
+                    token]
+  (try
+    (let [{:keys [sub email exp membershipVersion]}
           (verify-json session-key token ::invalid-session)]
       (when (or (str/blank? sub)
                 (str/blank? email)
                 (not (number? exp))
                 (<= (long exp) (.getEpochSecond (Instant/now clock))))
         (throw (ex-info "Session is expired" {:type ::invalid-session})))
-      (when-not (contains? allowlist (str/lower-case email))
-        (throw (ex-info "Session user is no longer allowlisted"
-                        {:type ::not-allowlisted})))
-      {:subject sub :email email})
+      (if member-directory
+        (select-keys
+         (dynamic-member system {:subject sub
+                                 :email email
+                                 :membership-version membershipVersion}
+                         false)
+         [:subject :email :role :membership-version])
+        (do
+          (when-not (contains? allowlist (str/lower-case email))
+            (throw (ex-info "Session user is no longer allowlisted"
+                            {:type ::not-allowlisted})))
+          (cond-> {:subject sub :email email}
+            (= (str/lower-case email) owner-email) (assoc :role :owner)))))
     (catch clojure.lang.ExceptionInfo error
       (throw error))
     (catch Throwable error
       (throw (ex-info "Session is invalid" {:type ::invalid-session} error)))))
 
 (defn require-allowlisted!
-  [{:keys [allowlist]} {:keys [subject email] :as user}]
-  (when (or (str/blank? subject)
-            (str/blank? email)
-            (not (contains? allowlist (str/lower-case email))))
-    (throw (ex-info "User is no longer allowlisted"
-                    {:type ::not-allowlisted})))
-  user)
+  [{:keys [allowlist member-directory owner-email] :as system}
+   {:keys [subject email] :as user}]
+  (if member-directory
+    (dynamic-member system user false)
+    (do
+      (when (or (str/blank? subject)
+                (str/blank? email)
+                (not (contains? allowlist (str/lower-case email))))
+        (throw (ex-info "User is no longer allowlisted"
+                        {:type ::not-allowlisted})))
+      (cond-> user
+        (= (str/lower-case email) owner-email) (assoc :role :owner)))))
 
 (defn issue-csrf-token [{:keys [session-key clock]} {:keys [subject]}]
   (sign-json session-key
@@ -239,7 +296,7 @@
     {:flow flow :verifier verifier :user user}))
 
 (defn finish-login!
-  [{:keys [oauth allowlist] :as system}
+  [{:keys [oauth allowlist member-directory] :as system}
    {:keys [code state state-cookie]}]
   (when (str/blank? code)
     (throw (ex-info "OAuth code is required" {:type ::invalid-code})))
@@ -249,12 +306,19 @@
         email (some-> email str/lower-case)]
     (when-not (and email-verified?
                    (not (str/blank? subject))
-                   (contains? allowlist email))
+                   (not (str/blank? email)))
       (throw (ex-info "Google identity is not allowlisted"
                       {:type ::not-allowlisted})))
-    {:user {:subject subject :email email}
-     :identity identity
-     :session (issue-session system {:subject subject :email email})}))
+    (let [user (if member-directory
+                 (dynamic-member system {:subject subject :email email} true)
+                 (do
+                   (when-not (contains? allowlist email)
+                     (throw (ex-info "Google identity is not allowlisted"
+                                     {:type ::not-allowlisted})))
+                   {:subject subject :email email}))]
+      {:user (select-keys user [:subject :email :role :membership-version])
+       :identity identity
+       :session (issue-session system user)})))
 
 (defn finish-drive!
   [{:keys [oauth cipher grant-store drive] :as system}
@@ -274,7 +338,8 @@
     (when (or (str/blank? access-token) (str/blank? refresh-token))
       (throw (ex-info "Drive grant did not return offline access"
                       {:type ::missing-refresh-token})))
-    (let [subject (:subject user)
+    (let [user (require-allowlisted! system user)
+          subject (:subject user)
           existing (load-grant grant-store subject)
           folder-id (ensure-output-folder! drive access-token
                                            (:folder-id existing))
@@ -282,7 +347,10 @@
                  (encrypt-token! cipher refresh-token)
                  :folder-id folder-id
                  :revoked? false}]
-      (save-grant! grant-store subject grant)
+      (require-allowlisted! system user)
+      (if (satisfies? MemberGrantStore grant-store)
+        (save-member-grant! grant-store user grant)
+        (save-grant! grant-store subject grant))
       {:user user :folderId folder-id})))
 
 (defn drive-access!

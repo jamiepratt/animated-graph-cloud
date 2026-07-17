@@ -1,5 +1,7 @@
 (ns agg.gcp-jobs-test
-  (:require [agg.jobs.gcp :as gcp]
+  (:require [agg.admin.core :as admin]
+            [agg.admin.gcp :as admin-gcp]
+            [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
             [agg.jobs-test :as fixture]
             [clojure.test :refer [deftest is]])
@@ -432,6 +434,102 @@
             (is (= "cancelled" (:state @render-result)))
             (is (= "cancelled"
                    (:state (jobs/get-job worker-race-service job-id))))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
+(deftest firestore-member-revocation-races-submission-and-cancels-active-jobs
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId "animated-graph-cloud-member-job-test")
+                        (.setEmulatorHost host)
+                        (.build)
+                        (.getService))
+          requests (atom {})
+          queue (reify jobs/JobQueue
+                  (enqueue-job! [_ _job-id _attempt]))
+          cancelled (atom [])
+          launcher (reify jobs/JobLauncher
+                     (launch-job! [_ job-id] (str "executions/" job-id))
+                     (cancel-execution! [_ execution]
+                       (swap! cancelled conj execution)))
+          request-store
+          (reify jobs/RequestStore
+            (save-request! [_ job-id request]
+              (let [object (str "jobs/" job-id "/request.json")]
+                (swap! requests assoc object request)
+                object))
+            (load-request [_ object] (get @requests object)))
+          directory (admin-gcp/member-directory firestore "owner@example.com")
+          service (gcp/job-service {:firestore firestore
+                                    :request-store request-store
+                                    :queue queue
+                                    :launcher launcher
+                                    :member-directory directory})
+          administration (admin/service {:directory directory
+                                         :job-administration service})]
+      (try
+        (doseq [collection ["jobs" "job-idempotency" "orchestration"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (let [owner (admin/authorize-member! directory "owner@example.com"
+                                             "owner-subject")
+              _ (admin/add-member! administration owner "member@example.com")
+              member (admin/authorize-member! directory "member@example.com"
+                                              "member-subject")
+              request (assoc (fixture/render-request)
+                             :requesterSubject (:subject member)
+                             :requesterEmail (:email member)
+                             :requesterMembershipVersion
+                             (:membership-version member))
+              retry-id (get-in (jobs/submit-job! service "revoked-member-retry"
+                                                 request)
+                               [:job :id])
+              _ (jobs/cancel-job! service retry-id)
+              running-id (get-in (jobs/submit-job! service "running-member-job"
+                                                   request)
+                                 [:job :id])
+              _ (jobs/dispatch-job! service running-id)
+              start (promise)
+              submissions (mapv (fn [index]
+                                  (future
+                                    @start
+                                    (try
+                                      (jobs/submit-job! service
+                                                        (str "member-race-" index)
+                                                        request)
+                                      (catch clojure.lang.ExceptionInfo error
+                                        error))))
+                                (range 20))
+              revocation (future
+                           @start
+                           (admin/revoke-member! administration owner
+                                                 "member@example.com"))]
+          (deliver start true)
+          @revocation
+          (let [results (mapv deref submissions)
+                submitted (cons running-id
+                                (keep #(when (map? %) (get-in % [:job :id]))
+                                      results))
+                rejected (keep #(when (instance? clojure.lang.ExceptionInfo %) %)
+                               results)]
+            (is (every? #(= ::jobs/member-not-allowlisted
+                            (:type (ex-data %)))
+                        rejected))
+            (is (every? #(= "cancelled" (:state (jobs/get-job service %)))
+                        submitted))
+            (is (= [(str "executions/" running-id)] @cancelled))
+            (is (= ::jobs/member-not-allowlisted
+                   (try
+                     (jobs/submit-job! service "after-member-revocation" request)
+                     nil
+                     (catch clojure.lang.ExceptionInfo error
+                       (:type (ex-data error))))))
+            (is (= ::jobs/member-not-allowlisted
+                   (try
+                     (jobs/retry-job! service retry-id)
+                     nil
+                     (catch clojure.lang.ExceptionInfo error
+                       (:type (ex-data error))))))))
         (finally
           (.close firestore))))
     (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))

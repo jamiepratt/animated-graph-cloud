@@ -1,5 +1,6 @@
 (ns agg.jobs.lifecycle
-  (:require [agg.contracts.render :as contract])
+  (:require [agg.admin.core :as admin]
+            [agg.contracts.render :as contract])
   (:import (java.security MessageDigest)
            (java.time Clock Instant LocalDate YearMonth ZoneOffset)
            (java.util HexFormat UUID)))
@@ -95,9 +96,26 @@
 (defn- billing-month [^Clock clock]
   (str (YearMonth/now (.withZone clock billing-zone))))
 
+(defn- member-identity [request]
+  {:subject (:requesterSubject request)
+   :email (:requesterEmail request)
+   :membership-version (:requesterMembershipVersion request)})
+
+(defn- with-member-action [member-directory identity action]
+  (if-not member-directory
+    (action)
+    (try
+      (admin/with-active-member! member-directory identity action)
+      (catch clojure.lang.ExceptionInfo error
+        (if (= ::admin/not-allowlisted (:type (ex-data error)))
+          (throw (ex-info "Member is no longer allowlisted"
+                          {:type ::member-not-allowlisted}
+                          error))
+          (throw error))))))
+
 (defrecord InMemoryJobService [state enqueued launcher worker ^Clock clock
                                daily-limit monthly-budget-cents
-                               render-reservation-cents]
+                               render-reservation-cents member-directory]
   JobAccess
   (owns-job? [_ job-id subject]
     (= subject (get-in @state [:jobs job-id :request :requesterSubject])))
@@ -140,51 +158,57 @@
                       {:type ::invalid-idempotency-key})))
     (contract/prepare request)
     (let [request-digest (request-digest request)
-          result
-          (locking state
-            (if-let [job-id (get-in @state [:idempotency idempotency-key :job-id])]
-              (let [{stored-digest :digest}
-                    (get-in @state [:idempotency idempotency-key])]
-                (when-not (= stored-digest request-digest)
-                  (throw (ex-info "Idempotency key already belongs to another request"
-                                  {:type ::idempotency-conflict})))
-                {:created? false :job (get-in @state [:jobs job-id])})
-              (let [job-id (str (UUID/randomUUID))
-                    now (Instant/now clock)
-                    day (utc-day clock)
-                    month (billing-month clock)
-                    submitted (get-in @state [:admission :daily day] 0)
-                    reserved (get-in @state [:admission :monthly month] 0)
-                    _ (when (>= (count (filter #(active-lease? now %)
-                                               (vals (:jobs @state))))
-                                max-active-leases)
-                        (throw (ex-info "All render leases are held"
-                                        {:type ::capacity-exhausted})))
-                    _ (when (>= submitted daily-limit)
-                        (throw (ex-info "Daily submission limit is exhausted"
-                                        {:type ::daily-submission-limit-exhausted})))
-                    _ (when (> (+ reserved render-reservation-cents)
-                               monthly-budget-cents)
-                        (throw (ex-info "Monthly compute budget is exhausted"
-                                        {:type ::monthly-budget-exhausted})))
-                    job {:id job-id
-                         :state :queued
-                         :attempt 1
-                         :request request
-                         :created-at now
-                         :updated-at now}]
-                (swap! state (fn [current]
-                               (-> current
-                                   (assoc-in [:jobs job-id] job)
-                                   (assoc-in [:idempotency idempotency-key]
-                                             {:job-id job-id
-                                              :digest request-digest})
-                                   (assoc-in [:admission :daily day]
-                                             (inc submitted))
-                                   (assoc-in [:admission :monthly month]
-                                             (+ reserved
-                                                render-reservation-cents)))))
-                {:created? true :job job})))]
+          submit
+          (fn []
+            (locking state
+              (if-let [job-id (get-in @state [:idempotency idempotency-key
+                                              :job-id])]
+                (let [{stored-digest :digest}
+                      (get-in @state [:idempotency idempotency-key])]
+                  (when-not (= stored-digest request-digest)
+                    (throw (ex-info
+                            "Idempotency key already belongs to another request"
+                            {:type ::idempotency-conflict})))
+                  {:created? false :job (get-in @state [:jobs job-id])})
+                (let [job-id (str (UUID/randomUUID))
+                      now (Instant/now clock)
+                      day (utc-day clock)
+                      month (billing-month clock)
+                      submitted (get-in @state [:admission :daily day] 0)
+                      reserved (get-in @state [:admission :monthly month] 0)
+                      _ (when (>= (count (filter #(active-lease? now %)
+                                                 (vals (:jobs @state))))
+                                  max-active-leases)
+                          (throw (ex-info "All render leases are held"
+                                          {:type ::capacity-exhausted})))
+                      _ (when (>= submitted daily-limit)
+                          (throw (ex-info "Daily submission limit is exhausted"
+                                          {:type ::daily-submission-limit-exhausted})))
+                      _ (when (> (+ reserved render-reservation-cents)
+                                 monthly-budget-cents)
+                          (throw (ex-info "Monthly compute budget is exhausted"
+                                          {:type ::monthly-budget-exhausted})))
+                      job {:id job-id
+                           :state :queued
+                           :attempt 1
+                           :request request
+                           :created-at now
+                           :updated-at now}]
+                  (swap! state (fn [current]
+                                 (-> current
+                                     (assoc-in [:jobs job-id] job)
+                                     (assoc-in [:idempotency idempotency-key]
+                                               {:job-id job-id
+                                                :digest request-digest})
+                                     (assoc-in [:admission :daily day]
+                                               (inc submitted))
+                                     (assoc-in [:admission :monthly month]
+                                               (+ reserved
+                                                  render-reservation-cents)))))
+                  {:created? true :job job}))))
+          result (with-member-action member-directory
+                   (member-identity request)
+                   submit)]
       (when (:created? result)
         (swap! enqueued conj {:job-id (get-in result [:job :id])
                               :attempt 1}))
@@ -302,40 +326,44 @@
             (job-resource cancelled)))
         (job-resource (:job result)))))
   (retry-job! [_ job-id]
-    (let [now (Instant/now clock)
+    (let [job (locking state (get-in @state [:jobs job-id]))
+          _ (when-not job
+              (throw (ex-info "Job does not exist" {:type ::job-not-found})))
+          now (Instant/now clock)
           month (billing-month clock)
           retried
-          (locking state
-            (let [job (get-in @state [:jobs job-id])]
-              (when-not job
-                (throw (ex-info "Job does not exist" {:type ::job-not-found})))
-              (when-not (contains? #{:cancelled :failed} (:state job))
-                (throw (ex-info "Only failed or cancelled jobs can be retried"
-                                {:type ::invalid-transition
-                                 :state (:state job)})))
-              (let [reserved (get-in @state [:admission :monthly month] 0)
-                    _ (when (>= (count (filter #(active-lease? now %)
-                                               (vals (:jobs @state))))
-                                max-active-leases)
-                        (throw (ex-info "All render leases are held"
-                                        {:type ::capacity-exhausted})))
-                    _ (when (> (+ reserved render-reservation-cents)
-                               monthly-budget-cents)
-                        (throw (ex-info "Monthly compute budget is exhausted"
-                                        {:type ::monthly-budget-exhausted})))
-                    updated (-> job
-                                (assoc :state :queued
-                                       :attempt (inc (:attempt job))
-                                       :updated-at now)
-                                (dissoc :lease :execution :failure :output))]
-                (swap! state
-                       (fn [current]
-                         (-> current
-                             (assoc-in [:jobs job-id] updated)
-                             (assoc-in [:admission :monthly month]
-                                       (+ reserved
-                                          render-reservation-cents)))))
-                updated)))]
+          (with-member-action
+            member-directory (member-identity (:request job))
+            (fn []
+              (locking state
+                (let [job (get-in @state [:jobs job-id])]
+                  (when-not (contains? #{:cancelled :failed} (:state job))
+                    (throw (ex-info "Only failed or cancelled jobs can be retried"
+                                    {:type ::invalid-transition
+                                     :state (:state job)})))
+                  (let [reserved (get-in @state [:admission :monthly month] 0)
+                        _ (when (>= (count (filter #(active-lease? now %)
+                                                   (vals (:jobs @state))))
+                                    max-active-leases)
+                            (throw (ex-info "All render leases are held"
+                                            {:type ::capacity-exhausted})))
+                        _ (when (> (+ reserved render-reservation-cents)
+                                   monthly-budget-cents)
+                            (throw (ex-info "Monthly compute budget is exhausted"
+                                            {:type ::monthly-budget-exhausted})))
+                        updated (-> job
+                                    (assoc :state :queued
+                                           :attempt (inc (:attempt job))
+                                           :updated-at now)
+                                    (dissoc :lease :execution :failure :output))]
+                    (swap! state
+                           (fn [current]
+                             (-> current
+                                 (assoc-in [:jobs job-id] updated)
+                                 (assoc-in [:admission :monthly month]
+                                           (+ reserved
+                                              render-reservation-cents)))))
+                    updated)))))]
       (swap! enqueued conj {:job-id job-id :attempt (:attempt retried)})
       (job-resource retried)))
   (run-job! [_ job-id]
@@ -391,7 +419,23 @@
               (swap! state assoc-in [:jobs job-id] updated)))
           (throw (ex-info "Render worker failed"
                           {:type ::worker-failed :job-id job-id}
-                          cause)))))))
+                          cause))))))
+  admin/JobAdministration
+  (cancel-member-jobs! [this subject]
+    (let [job-ids
+          (locking state
+            (->> (:jobs @state)
+                 (keep (fn [[job-id job]]
+                         (when (and (= subject
+                                       (get-in job [:request :requesterSubject]))
+                                    (contains? #{:queued :launching :running
+                                                 :cancellation-requested}
+                                               (:state job)))
+                           job-id)))
+                 vec))]
+      (doseq [job-id job-ids]
+        (cancel-job! this job-id))
+      (count job-ids))))
 
 (defrecord InMemoryLauncher [launched cancelled]
   JobLauncher
@@ -405,7 +449,7 @@
 (defn in-memory-system
   ([] (in-memory-system {}))
   ([{:keys [clock launcher worker daily-limit monthly-budget-cents
-            render-reservation-cents]
+            render-reservation-cents member-directory]
      :or {clock (Clock/systemUTC)
           daily-limit max-daily-submissions
           monthly-budget-cents default-monthly-budget-cents
@@ -423,7 +467,7 @@
                         (throw (ex-info "No render worker configured" {})))))]
      {:service (->InMemoryJobService state enqueued launcher worker clock
                                      daily-limit monthly-budget-cents
-                                     render-reservation-cents)
+                                     render-reservation-cents member-directory)
       :state state
       :enqueued enqueued
       :launched launched

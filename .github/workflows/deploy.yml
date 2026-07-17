@@ -24,7 +24,7 @@ env:
   DEPLOYER_SERVICE_ACCOUNT: agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com
   API_SERVICE_ACCOUNT: agg-api@animated-graph-cloud-jp.iam.gserviceaccount.com
   RENDERER_SERVICE_ACCOUNT: agg-renderer@animated-graph-cloud-jp.iam.gserviceaccount.com
-  ALLOWED_EMAILS: me@jamiep.org
+  OWNER_EMAIL: me@jamiep.org
   DAILY_SUBMISSION_LIMIT: "100"
   MONTHLY_BUDGET_CENTS: "3000"
   RENDER_RESERVATION_CENTS: "25"
@@ -80,6 +80,7 @@ jobs:
             --memory 512Mi \
             --min 0 \
             --max 2 \
+            --update-env-vars "AGG_OWNER_EMAIL=$OWNER_EMAIL" \
             --update-secrets "AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
             --no-allow-unauthenticated \
             --quiet
@@ -119,7 +120,7 @@ jobs:
           gcloud run services update "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
-            --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=agg-renderer,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$CLOUD_RUN_SERVICE_URL,AGG_ALLOWED_EMAILS=$ALLOWED_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_CENTS=$MONTHLY_BUDGET_CENTS,AGG_RENDER_RESERVATION_CENTS=$RENDER_RESERVATION_CENTS" \
+            --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=agg-renderer,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$CLOUD_RUN_SERVICE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_CENTS=$MONTHLY_BUDGET_CENTS,AGG_RENDER_RESERVATION_CENTS=$RENDER_RESERVATION_CENTS" \
             --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
             --quiet
 

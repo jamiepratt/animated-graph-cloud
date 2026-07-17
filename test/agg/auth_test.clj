@@ -1,5 +1,6 @@
 (ns agg.auth-test
-  (:require [agg.auth.core :as auth]
+  (:require [agg.admin.core :as admin]
+            [agg.auth.core :as auth]
             [clojure.test :refer [deftest is testing]])
   (:import (java.time Clock Instant ZoneOffset)))
 
@@ -156,6 +157,50 @@
              nil
              (catch clojure.lang.ExceptionInfo error
                (:type (ex-data error))))))))
+
+(deftest revoked-members-need-a-new-allowlist-generation-and-oauth-session
+  (let [{:keys [directory service]}
+        (admin/in-memory-system {:owner-email "owner@example.com"
+                                 :initial-emails #{"member@example.com"}})
+        oauth (reify auth/OAuthClient
+                (exchange-code! [_ flow _ _ _]
+                  (is (= :login flow))
+                  {:subject "member-subject"
+                   :email "member@example.com"
+                   :email-verified? true}))
+        system (auth/system {:client-id "client-id"
+                             :client-secret "client-secret"
+                             :base-url "https://app.example.com"
+                             :member-directory directory
+                             :session-key (.getBytes "01234567890123456789012345678901")
+                             :oauth oauth})
+        login! (fn []
+                 (let [flow (auth/begin-flow! system :login nil)]
+                   (auth/finish-login! system {:code "code"
+                                               :state (:state flow)
+                                               :state-cookie (:stateCookie flow)})))
+        first-login (login!)
+        owner (admin/authorize-member! directory "owner@example.com"
+                                       "owner-subject")]
+    (is (= "member-subject"
+           (:subject (auth/session-user system (:session first-login)))))
+    (admin/revoke-member! service owner "member@example.com")
+    (is (= ::auth/not-allowlisted
+           (try
+             (auth/session-user system (:session first-login))
+             nil
+             (catch clojure.lang.ExceptionInfo error
+               (:type (ex-data error))))))
+    (admin/add-member! service owner "member@example.com")
+    (testing "re-adding does not resurrect the pre-revocation session"
+      (is (= ::auth/not-allowlisted
+             (try
+               (auth/session-user system (:session first-login))
+               nil
+               (catch clojure.lang.ExceptionInfo error
+                 (:type (ex-data error)))))))
+    (is (= "member-subject"
+           (:subject (auth/session-user system (:session (login!))))))))
 
 (deftest csrf-tokens-are-signed-expiring-and-bound-to-the-session-subject
   (let [{:keys [system]} (drive-fixture)

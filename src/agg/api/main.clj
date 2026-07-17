@@ -1,5 +1,6 @@
 (ns agg.api.main
-  (:require [agg.contracts.render :as contract]
+  (:require [agg.admin.core :as admin]
+            [agg.contracts.render :as contract]
             [agg.auth.core :as auth]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
@@ -195,7 +196,10 @@
   (let [idempotency-key (some-> exchange .getRequestHeaders
                                 (.getFirst "Idempotency-Key"))
         request (cond-> (:request (request-render-request exchange))
-                  user (assoc :requesterSubject (:subject user)))
+                  user (assoc :requesterSubject (:subject user)
+                              :requesterEmail (:email user)
+                              :requesterMembershipVersion
+                              (:membership-version user)))
         {:keys [created? job]}
         (jobs/submit-job! job-service idempotency-key request)]
     (respond-json! exchange (if created? 202 200) job)))
@@ -318,7 +322,7 @@
     (respond-redirect! exchange "/?drive=connected"
                        [(clear-oauth-cookie)])))
 
-(defn- landing! [^HttpExchange exchange auth-system token-service]
+(defn- landing! [^HttpExchange exchange auth-system token-service admin-service]
   (let [user (when-let [session (session-token exchange)]
                (auth/session-user auth-system session))
         body
@@ -327,7 +331,10 @@
                     :csrf (auth/issue-csrf-token auth-system user)
                     :tokens (when token-service
                               (tokens/list-tokens token-service
-                                                  (:subject user)))})
+                                                  (:subject user)))
+                    :members (when (and admin-service
+                                        (= :owner (:role user)))
+                               (admin/list-members admin-service user))})
           ui/anonymous-page)]
     (doto (.getResponseHeaders exchange)
       (.set "Cache-Control" "no-store")
@@ -410,6 +417,17 @@
   (respond-json! exchange 200
                  (tokens/revoke-token! token-service (:subject user) token-id)))
 
+(defn- list-members! [exchange admin-service user]
+  (respond-json! exchange 200 (admin/list-members admin-service user)))
+
+(defn- add-member! [exchange admin-service user]
+  (let [{:keys [email]} (request-json exchange)]
+    (respond-json! exchange 201 (admin/add-member! admin-service user email))))
+
+(defn- revoke-member! [exchange admin-service user]
+  (let [{:keys [email]} (request-json exchange)]
+    (respond-json! exchange 200 (admin/revoke-member! admin-service user email))))
+
 (defn- preview-ui! [exchange frame-renderer]
   (let [render-spec (:render-spec (ui-render-request exchange))
         output (ByteArrayOutputStream.)]
@@ -420,7 +438,10 @@
 
 (defn- submit-job-ui! [exchange job-service user]
   (let [request (assoc (:request (ui-render-request exchange))
-                       :requesterSubject (:subject user))
+                       :requesterSubject (:subject user)
+                       :requesterEmail (:email user)
+                       :requesterMembershipVersion
+                       (:membership-version user))
         {:keys [created? job]}
         (jobs/submit-job! job-service (str "ui-" (UUID/randomUUID)) request)]
     (respond! exchange (if created? 202 200) "text/html; charset=utf-8"
@@ -448,9 +469,21 @@
   (tokens/revoke-token! token-service (:subject user) token-id)
   (list-tokens-ui! exchange token-service user))
 
+(defn- members-ui! [exchange admin-service user]
+  (respond! exchange 200 "text/html; charset=utf-8"
+            (ui/member-panel (admin/list-members admin-service user))))
+
+(defn- add-member-ui! [exchange admin-service user]
+  (admin/add-member! admin-service user (get (request-form exchange) "email"))
+  (members-ui! exchange admin-service user))
+
+(defn- revoke-member-ui! [exchange admin-service user]
+  (admin/revoke-member! admin-service user (get (request-form exchange) "email"))
+  (members-ui! exchange admin-service user))
+
 (defn- route-handler [{:keys [frame-renderer video-encoder job-service
                               upload-signer auth-system picker-api-key
-                              picker-app-id token-service]
+                              picker-app-id token-service admin-service]
                        :as dependencies}]
   (reify HttpHandler
     (handle [_ exchange]
@@ -462,7 +495,7 @@
             (respond! exchange 200 "application/json; charset=utf-8" health-body)
 
             (and auth-system (= "GET" method) (= "/" path))
-            (landing! exchange auth-system token-service)
+            (landing! exchange auth-system token-service admin-service)
 
             (and auth-system (= "GET" method)
                  (= "/v1/auth/login/start" path))
@@ -539,6 +572,23 @@
               (require-csrf! exchange auth-system user)
               (revoke-token-ui! exchange token-service user token-id))
 
+            (and auth-system admin-service (= "GET" method)
+                 (= "/ui/admin/members" path))
+            (members-ui! exchange admin-service
+                         (require-session-user! exchange auth-system))
+
+            (and auth-system admin-service (= "POST" method)
+                 (= "/ui/admin/members" path))
+            (let [user (require-session-user! exchange auth-system)]
+              (require-csrf! exchange auth-system user)
+              (add-member-ui! exchange admin-service user))
+
+            (and auth-system admin-service (= "POST" method)
+                 (= "/ui/admin/members/revoke" path))
+            (let [user (require-session-user! exchange auth-system)]
+              (require-csrf! exchange auth-system user)
+              (revoke-member-ui! exchange admin-service user))
+
             (and (= "POST" method) (= "/v1/preview" path))
             (do (->> (authenticated-user! exchange auth-system token-service)
                      (require-csrf! exchange auth-system))
@@ -566,6 +616,23 @@
                   token-id (nth (.split path "/") 3)]
               (require-csrf! exchange auth-system user)
               (revoke-personal-token! exchange token-service user token-id))
+
+            (and auth-system admin-service (= "GET" method)
+                 (= "/v1/admin/members" path))
+            (list-members! exchange admin-service
+                           (require-session-user! exchange auth-system))
+
+            (and auth-system admin-service (= "POST" method)
+                 (= "/v1/admin/members" path))
+            (let [user (require-session-user! exchange auth-system)]
+              (require-csrf! exchange auth-system user)
+              (add-member! exchange admin-service user))
+
+            (and auth-system admin-service (= "POST" method)
+                 (= "/v1/admin/members/revoke" path))
+            (let [user (require-session-user! exchange auth-system)]
+              (require-csrf! exchange auth-system user)
+              (revoke-member! exchange admin-service user))
 
             (and job-service (= "POST" method) (= "/v1/jobs" path))
             (let [user (authenticated-user! exchange auth-system token-service)]
@@ -691,6 +758,21 @@
 
               ::tokens/token-not-found
               (respond-json! exchange 404 {:error "token_not_found"})
+
+              ::admin/owner-required
+              (respond-json! exchange 403 {:error "owner_required"})
+
+              ::admin/invalid-email
+              (respond-json! exchange 400 {:error "invalid_member_email"})
+
+              ::admin/member-not-found
+              (respond-json! exchange 404 {:error "member_not_found"})
+
+              ::admin/owner-cannot-be-revoked
+              (respond-json! exchange 409 {:error "owner_cannot_be_revoked"})
+
+              ::jobs/member-not-allowlisted
+              (respond-json! exchange 403 {:error "not_allowlisted"})
 
               (respond! exchange 500 "application/json; charset=utf-8"
                         "{\"error\":\"render_failed\"}")))

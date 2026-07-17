@@ -1,5 +1,6 @@
 (ns agg.tokens-test
-  (:require [agg.tokens.core :as tokens]
+  (:require [agg.admin.core :as admin]
+            [agg.tokens.core :as tokens]
             [clojure.test :refer [deftest is testing]])
   (:import (java.time Clock Instant ZoneOffset)))
 
@@ -42,3 +43,24 @@
              nil
              (catch clojure.lang.ExceptionInfo error
                (:type (ex-data error))))))))
+
+(deftest member-revocation-invalidates-all-personal-tokens
+  (let [{:keys [service]}
+        (tokens/in-memory-system {:pepper (.getBytes "01234567890123456789012345678901")
+                                  :clock fixed-clock})
+        first-token (tokens/create-token! service
+                                          {:subject "member-subject"
+                                           :email "member@example.com"}
+                                          "First")
+        second-token (tokens/create-token! service
+                                           {:subject "member-subject"
+                                            :email "member@example.com"}
+                                           "Second")]
+    (is (= 2 (admin/revoke-member-tokens! service "member-subject")))
+    (doseq [raw-token [(:token first-token) (:token second-token)]]
+      (is (= ::tokens/invalid-token
+             (try
+               (tokens/authenticate service raw-token)
+               nil
+               (catch clojure.lang.ExceptionInfo error
+                 (:type (ex-data error)))))))))

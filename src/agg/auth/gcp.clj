@@ -1,5 +1,7 @@
 (ns agg.auth.gcp
-  (:require [agg.auth.core :as auth]
+  (:require [agg.admin.core :as admin]
+            [agg.admin.gcp :as admin-gcp]
+            [agg.auth.core :as auth]
             [agg.drive.core :as drive]
             [agg.drive.gcp :as drive-gcp]
             [agg.tokens.core :as tokens]
@@ -10,13 +12,13 @@
            (com.google.api.client.http.javanet NetHttpTransport)
            (com.google.api.client.json.gson GsonFactory)
            (com.google.auth.oauth2 GoogleCredentials)
-           (com.google.cloud.firestore Firestore)
+           (com.google.cloud.firestore Firestore Transaction Transaction$Function)
            (java.net URI URLEncoder)
            (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
                           HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
            (java.util Base64 Collections)
-           (java.util.concurrent Future)))
+           (java.util.concurrent ExecutionException Future)))
 
 (defn- urlencode [value]
   (URLEncoder/encode (str value) StandardCharsets/UTF_8))
@@ -159,9 +161,20 @@
                        "https://oauth2.googleapis.com/token"))
 
 (defn- await! [^Future future]
-  (.get future))
+  (try
+    (.get future)
+    (catch ExecutionException error
+      (throw (.getCause error)))))
 
-(defrecord FirestoreGrantStore [^Firestore firestore]
+(defn- transaction! [^Firestore firestore action]
+  (await!
+   (.runTransaction
+    firestore
+    (reify Transaction$Function
+      (updateCallback [_ transaction]
+        (action transaction))))))
+
+(defrecord FirestoreGrantStore [^Firestore firestore member-directory]
   auth/GrantStore
   (load-grant [_ subject]
     (let [snapshot (await! (.get (.document (.collection firestore "drive-grants")
@@ -179,10 +192,40 @@
     grant)
   (revoke-grant! [_ subject]
     (await! (.update (.document (.collection firestore "drive-grants") subject)
-                     {"revoked" true}))))
+                     {"revoked" true})))
+  auth/MemberGrantStore
+  (save-member-grant! [_ identity grant]
+    (let [reference (.document (.collection firestore "drive-grants")
+                               (:subject identity))]
+      (try
+        (transaction!
+         firestore
+         (fn [^Transaction transaction]
+           (admin/require-active-transaction! member-directory transaction
+                                              identity)
+           (.set transaction reference
+                 {"refreshTokenCiphertext" (:refresh-token-ciphertext grant)
+                  "folderId" (:folder-id grant)
+                  "revoked" (boolean (:revoked? grant))})
+           grant))
+        (catch clojure.lang.ExceptionInfo error
+          (if (= ::admin/not-allowlisted (:type (ex-data error)))
+            (throw (ex-info "User is no longer allowlisted"
+                            {:type ::auth/not-allowlisted}
+                            error))
+            (throw error))))))
+  admin/CredentialAdministration
+  (delete-member-credentials! [this subject]
+    (let [reference (.document (.collection firestore "drive-grants") subject)
+          existed? (some? (auth/load-grant this subject))]
+      (await! (.delete reference))
+      existed?)))
 
-(defn grant-store [firestore]
-  (->FirestoreGrantStore firestore))
+(defn grant-store
+  ([firestore]
+   (->FirestoreGrantStore firestore nil))
+  ([firestore member-directory]
+   (->FirestoreGrantStore firestore member-directory)))
 
 (defn- cloud-credentials []
   (-> (GoogleCredentials/getApplicationDefault)
@@ -257,13 +300,14 @@
   (str "projects/" project "/locations/" region
        "/keyRings/application/cryptoKeys/drive-refresh-tokens"))
 
-(defn- drive-components [^Firestore firestore project region credentials-json]
+(defn- drive-components
+  [^Firestore firestore project region credentials-json member-directory]
   (let [credentials (parse-client-credentials
                      (required credentials-json
                                "AGG_OAUTH_CLIENT_CREDENTIALS"))
         oauth (oauth-client credentials)
         cipher (kms-cipher (crypto-key-name project region))
-        grants (grant-store firestore)
+        grants (grant-store firestore member-directory)
         gateway (drive-gcp/gateway)]
     {:credentials credentials
      :oauth oauth
@@ -272,45 +316,45 @@
      :gateway gateway}))
 
 (defn api-dependencies
-  [{:keys [firestore project region base-url allowed-emails session-secret
+  [{:keys [firestore project region base-url owner-email session-secret
            oauth-client-credentials tasks-service-account
            scheduler-service-account picker-api-key picker-app-id
            token-hash-secret]}]
-  (let [{:keys [credentials oauth cipher grant-store gateway]}
-        (drive-components firestore project region oauth-client-credentials)
-        allowlist (->> (str/split (or allowed-emails "") #",")
-                       (map str/trim)
-                       (remove str/blank?)
-                       set)
-        _ (when (empty? allowlist)
-            (throw (ex-info "AGG_ALLOWED_EMAILS must not be empty"
-                            {:type ::empty-allowlist})))
+  (let [owner-email (required owner-email "AGG_OWNER_EMAIL")
+        member-directory (admin-gcp/member-directory firestore owner-email)
+        {:keys [credentials oauth cipher grant-store gateway]}
+        (drive-components firestore project region oauth-client-credentials
+                          member-directory)
         auth-system (auth/system
                      {:client-id (:client-id credentials)
                       :client-secret (:client-secret credentials)
                       :base-url (required base-url "AGG_PUBLIC_BASE_URL")
-                      :allowlist allowlist
+                      :member-directory member-directory
+                      :owner-email owner-email
                       :session-key (session-key session-secret)
                       :oauth oauth
                       :cipher cipher
                       :grant-store grant-store
                       :drive gateway
-                      :drive-token-client oauth})]
+                      :drive-token-client oauth})
+        token-service
+        (tokens/service {:store (tokens-gcp/token-store firestore)
+                         :pepper (token-hash-pepper token-hash-secret)})]
     {:auth-system auth-system
+     :member-directory member-directory
+     :credential-administration grant-store
      :task-token-verifier (task-token-verifier base-url)
      :task-audience base-url
      :tasks-service-account tasks-service-account
      :scheduler-service-account scheduler-service-account
      :picker-api-key picker-api-key
      :picker-app-id picker-app-id
-     :token-service
-     (tokens/service {:store (tokens-gcp/token-store firestore)
-                      :pepper (token-hash-pepper token-hash-secret)})}))
+     :token-service token-service}))
 
 (defn renderer-delivery
   [{:keys [firestore project region oauth-client-credentials]}]
   (let [{:keys [oauth cipher grant-store gateway]}
-        (drive-components firestore project region oauth-client-credentials)
+        (drive-components firestore project region oauth-client-credentials nil)
         access-system {:cipher cipher
                        :grant-store grant-store
                        :drive-token-client oauth}]

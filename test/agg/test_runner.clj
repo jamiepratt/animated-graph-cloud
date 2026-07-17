@@ -1,5 +1,8 @@
 (ns agg.test-runner
   (:require [agg.auth-test]
+            [agg.admin-test]
+            [agg.admin-gcp-test]
+            [agg.api-admin-test]
             [agg.auth-gcp-test]
             [agg.api-auth-test]
             [agg.api-tokens-test]
@@ -24,6 +27,9 @@
 
 (defn -main [& _]
   (let [{:keys [error fail]} (test/run-tests 'agg.contracts-test
+                                             'agg.admin-test
+                                             'agg.admin-gcp-test
+                                             'agg.api-admin-test
                                              'agg.api-auth-test
                                              'agg.api-tokens-test
                                              'agg.api-ui-test

@@ -1,5 +1,6 @@
 (ns agg.tokens.core
-  (:require [clojure.string :as str])
+  (:require [agg.admin.core :as admin]
+            [clojure.string :as str])
   (:import (java.nio.charset StandardCharsets)
            (java.security MessageDigest SecureRandom)
            (java.time Clock Instant)
@@ -52,13 +53,14 @@
 
 (defn- token-identity [subject-or-user]
   (if (map? subject-or-user)
-    (select-keys subject-or-user [:subject :email])
+    (select-keys subject-or-user [:subject :email :membership-version])
     {:subject subject-or-user}))
 
 (defrecord HmacTokenService [store pepper ^Clock clock]
   TokenService
   (create-token! [_ subject-or-user token-name]
-    (let [{:keys [subject email]} (token-identity subject-or-user)]
+    (let [{:keys [subject email membership-version]}
+          (token-identity subject-or-user)]
       (when (str/blank? subject)
         (throw (ex-info "Token subject is required" {:type ::invalid-subject})))
       (let [id (str (UUID/randomUUID))
@@ -66,6 +68,7 @@
             token {:id id
                    :subject subject
                    :email email
+                   :membership-version membership-version
                    :name (require-token-name token-name)
                    :createdAt (str (Instant/now clock))
                    :revoked false
@@ -91,14 +94,22 @@
         (throw (ex-info "Personal token is invalid or revoked"
                         {:type ::invalid-token})))
       (cond-> {:subject (:subject stored)}
-        (not (str/blank? (:email stored))) (assoc :email (:email stored)))))
+        (not (str/blank? (:email stored))) (assoc :email (:email stored))
+        (:membership-version stored)
+        (assoc :membership-version (:membership-version stored)))))
   (revoke-token! [_ subject token-id]
     (let [stored (load-token store token-id)]
       (when-not (and stored (= subject (:subject stored)))
         (throw (ex-info "Personal token does not exist"
                         {:type ::token-not-found})))
       (mark-token-revoked! store token-id)
-      (public-token (assoc stored :revoked true)))))
+      (public-token (assoc stored :revoked true))))
+  admin/TokenAdministration
+  (revoke-member-tokens! [_ subject]
+    (let [active (remove :revoked (load-subject-tokens store subject))]
+      (doseq [{:keys [id]} active]
+        (mark-token-revoked! store id))
+      (count active))))
 
 (defrecord InMemoryTokenStore [records]
   TokenStore

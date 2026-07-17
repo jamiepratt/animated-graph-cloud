@@ -144,7 +144,7 @@
     (is (number? public-index))
     (is (< auth-index public-index))
     (is (str/includes? workflow "AGG_PUBLIC_BASE_URL=$CLOUD_RUN_SERVICE_URL"))
-    (is (str/includes? workflow "AGG_ALLOWED_EMAILS="))
+    (is (= 2 (count (re-seq #"AGG_OWNER_EMAIL=\$OWNER_EMAIL" workflow))))
     (is (str/includes? workflow "AGG_PICKER_APP_ID=$PROJECT_NUMBER"))))
 
 (deftest cloud-stage-reports-survive-an-uberjar-build-and-support-resume

@@ -39,6 +39,24 @@
                   "</li>")))
     "</ul></section>")))
 
+(defn member-panel [members]
+  (str
+   "<section id=\"members\"><h2>Member administration</h2>"
+   "<form hx-post=\"/ui/admin/members\" hx-target=\"#members\" hx-swap=\"outerHTML\">"
+   "<label>Member email <input type=\"email\" name=\"email\" maxlength=\"254\" required></label>"
+   "<button type=\"submit\">Add member</button></form><ul>"
+   (apply str
+          (for [{:keys [email role status]} members]
+            (str "<li><strong>" (escape-html email) "</strong> · "
+                 (escape-html role) " · " (escape-html status)
+                 (when (and (= "member" role) (= "active" status))
+                   (str " <form class=\"inline\" hx-post=\"/ui/admin/members/revoke\" "
+                        "hx-target=\"#members\" hx-swap=\"outerHTML\">"
+                        "<input type=\"hidden\" name=\"email\" value=\""
+                        (escape-html email) "\"><button type=\"submit\">Revoke</button></form>"))
+                 "</li>")))
+   "</ul></section>"))
+
 (defn job-fragment [{:keys [id state attempt failureCode output]}]
   (let [path (str "/ui/jobs/" id)
         polling? (contains? #{"queued" "launching" "running"
@@ -72,7 +90,7 @@
   (str "<figure id=\"preview-result\"><img alt=\"Midpoint preview\" src=\"data:image/png;base64,"
        base64-png "\"></figure>"))
 
-(defn page [{:keys [user csrf tokens]}]
+(defn page [{:keys [user csrf tokens members]}]
   (let [csrf-headers (escape-html
                       (str "{\"X-CSRF-Token\":\"" csrf "\"}"))]
     (str
@@ -84,7 +102,7 @@
      "crossorigin=\"anonymous\"></script>"
      "<style>body{font-family:system-ui;max-width:70rem;margin:2rem auto;padding:0 1rem}"
      "textarea{width:100%;min-height:18rem}section,article{margin:1.5rem 0}"
-     "button{margin:.4rem}.notice{border:2px solid #a66;padding:1rem;overflow-wrap:anywhere}</style>"
+     "button{margin:.4rem}.inline{display:inline}.notice{border:2px solid #a66;padding:1rem;overflow-wrap:anywhere}</style>"
      "</head><body hx-headers=\"" csrf-headers "\">"
      "<header><h1>Animated Graph Cloud</h1><p>Signed in as "
      (escape-html (:email user)) "</p></header>"
@@ -99,6 +117,8 @@
      "<button type=\"submit\">Submit render</button></form>"
      "<div id=\"preview-result\"></div><div id=\"job-result\"></div></section>"
      (token-panel tokens)
+     (when (= :owner (:role user))
+       (member-panel members))
      "<script>const selection=document.getElementById('picker-selection');"
      "document.getElementById('open-picker').addEventListener('click',()=>{"
      "window.open('/v1/drive/picker','agg-picker','popup,width=960,height=720');});"
