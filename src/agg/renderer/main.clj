@@ -1,5 +1,8 @@
 (ns agg.renderer.main
-  (:require [agg.render.audio :as audio]
+  (:require [agg.contracts.render :as contract]
+            [agg.jobs.gcp :as gcp]
+            [agg.jobs.lifecycle :as jobs]
+            [agg.render.audio :as audio]
             [agg.render.frames :as frames]
             [agg.render.media :as media]
             [agg.render.profile :as profile]
@@ -138,7 +141,11 @@
                      {:type ::invalid-upload-options})))
    (let [video-encoder (or video-encoder
                            media
-                           (media/ffmpeg-video-encoder ffmpeg ffprobe))
+                           (if (or ffmpeg ffprobe)
+                             (media/ffmpeg-video-encoder
+                              (or ffmpeg "ffmpeg")
+                              (or ffprobe "ffprobe"))
+                             (media/ffmpeg-video-encoder)))
          artifact-store (or artifact-store
                             (when bucket (storage/gcs-store bucket object-prefix)))
          completed? (atom false)]
@@ -177,21 +184,70 @@
                    :when candidate]
              (Files/deleteIfExists candidate))))))))
 
+(defrecord CloudRenderWorker [bucket]
+  jobs/RenderWorker
+  (perform-render! [_ job-id request]
+    (let [render-spec (contract/prepare request)
+          output-path (Files/createTempFile
+                       "agg-cloud-output-" ".mov"
+                       (make-array java.nio.file.attribute.FileAttribute 0))
+          report-path (Files/createTempFile
+                       "agg-cloud-report-" ".json"
+                       (make-array java.nio.file.attribute.FileAttribute 0))
+          object-prefix (str "jobs/" job-id "/output-"
+                             (java.util.UUID/randomUUID))]
+      (try
+        (let [result
+              (run-job! (assoc render-spec
+                               :output-path output-path
+                               :report-path report-path
+                               :profile? false
+                               :delete-local? true)
+                        {:artifact-store (storage/gcs-store bucket object-prefix)})]
+          {:output-bytes (:output-bytes result)
+           :object (get-in result [:objects :media :object])
+           :sha256 (:sha256 result)
+           :contentType "video/quicktime"})
+        (finally
+          (Files/deleteIfExists output-path)
+          (Files/deleteIfExists report-path))))))
+
+(defn run-cloud-job! [job-id]
+  (let [project (get (System/getenv) "GOOGLE_CLOUD_PROJECT"
+                     "animated-graph-cloud-jp")
+        bucket (get (System/getenv) "AGG_TEMPORARY_BUCKET"
+                    (str project "-temporary"))]
+    (jobs/run-job! (gcp/renderer-job-service (->CloudRenderWorker bucket))
+                   job-id)))
+
 (defn -main [& args]
-  (if (empty? args)
-    (println (str "{\"severity\":\"INFO\","
-                  "\"component\":\"renderer\","
-                  "\"event\":\"smoke_complete\","
-                  "\"message\":\"Renderer smoke job completed\"}"))
+  (if (= "--job-id" (first args))
     (try
-      (run-job! (parse-options args))
+      (run-cloud-job! (second args))
       (println (str "{\"severity\":\"INFO\","
                     "\"component\":\"renderer\","
-                    "\"event\":\"render_complete\","
-                    "\"message\":\"Renderer job completed\"}"))
+                    "\"event\":\"cloud_render_complete\","
+                    "\"message\":\"Cloud renderer job completed\"}"))
       (catch Throwable _
         (println (str "{\"severity\":\"ERROR\","
                       "\"component\":\"renderer\","
-                      "\"event\":\"render_failed\","
-                      "\"message\":\"Renderer job failed\"}"))
-        (System/exit 1)))))
+                      "\"event\":\"cloud_render_failed\","
+                      "\"message\":\"Cloud renderer job failed\"}"))
+        (System/exit 1)))
+    (if (empty? args)
+      (println (str "{\"severity\":\"INFO\","
+                    "\"component\":\"renderer\","
+                    "\"event\":\"smoke_complete\","
+                    "\"message\":\"Renderer smoke job completed\"}"))
+      (try
+        (run-job! (parse-options args))
+        (println (str "{\"severity\":\"INFO\","
+                      "\"component\":\"renderer\","
+                      "\"event\":\"render_complete\","
+                      "\"message\":\"Renderer job completed\"}"))
+        (catch Throwable _
+          (println (str "{\"severity\":\"ERROR\","
+                        "\"component\":\"renderer\","
+                        "\"event\":\"render_failed\","
+                        "\"message\":\"Renderer job failed\"}"))
+          (System/exit 1))))))

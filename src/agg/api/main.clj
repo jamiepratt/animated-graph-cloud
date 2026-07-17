@@ -1,5 +1,7 @@
 (ns agg.api.main
   (:require [agg.contracts.render :as contract]
+            [agg.jobs.gcp :as gcp]
+            [agg.jobs.lifecycle :as jobs]
             [agg.render.frames :as frames]
             [agg.render.media :as media]
             [agg.renderer.main :as renderer]
@@ -9,7 +11,9 @@
            (java.io ByteArrayOutputStream)
            (java.net InetSocketAddress)
            (java.nio.charset StandardCharsets)
-           (java.nio.file Files OpenOption Path)))
+           (java.nio.file Files OpenOption Path)
+           (java.time Instant)
+           (java.util UUID)))
 
 (def ^:private health-body "{\"status\":\"ok\"}")
 
@@ -27,6 +31,10 @@
                   status
                   content-type
                   (.getBytes ^String body StandardCharsets/UTF_8)))
+
+(defn- respond-json! [exchange status body]
+  (respond! exchange status "application/json; charset=utf-8"
+            (json/write-str body)))
 
 (defn- respond-path! [^HttpExchange exchange content-type ^Path path]
   (doto (.getResponseHeaders exchange)
@@ -80,7 +88,53 @@
       (finally
         (Files/deleteIfExists output-path)))))
 
-(defn- route-handler [{:keys [frame-renderer video-encoder]}]
+(defn- submit-job! [^HttpExchange exchange job-service]
+  (let [idempotency-key (some-> exchange .getRequestHeaders
+                                (.getFirst "Idempotency-Key"))
+        {:keys [created? job]}
+        (jobs/submit-job! job-service idempotency-key (request-json exchange))]
+    (respond-json! exchange (if created? 202 200) job)))
+
+(defn- poll-job! [exchange job-service job-id]
+  (if-let [job (jobs/get-job job-service job-id)]
+    (respond-json! exchange 200 job)
+    (respond-json! exchange 404 {:error "job_not_found"})))
+
+(defn- dispatch-job! [^HttpExchange exchange job-service job-id]
+  (if-not (some-> exchange .getRequestHeaders
+                  (.getFirst "X-CloudTasks-TaskName") not-empty)
+    (respond-json! exchange 401 {:error "authenticated_task_required"})
+    (let [{:keys [started? job]} (jobs/dispatch-job! job-service job-id)]
+      (respond-json! exchange (if started? 202 200) job))))
+
+(defn- cancel-job! [exchange job-service job-id]
+  (respond-json! exchange 200 (jobs/cancel-job! job-service job-id)))
+
+(defn- retry-job! [exchange job-service job-id]
+  (respond-json! exchange 202 (jobs/retry-job! job-service job-id)))
+
+(defn- issue-upload! [exchange upload-signer]
+  (let [{:keys [contentType contentLength]} (request-json exchange)]
+    (when-not (and (= "application/json" contentType)
+                   (integer? contentLength)
+                   (<= 1 contentLength max-request-bytes))
+      (throw (ex-info "Invalid upload request"
+                      {:type ::invalid-upload-request})))
+    (let [upload-id (str (UUID/randomUUID))
+          object-name (str "uploads/" upload-id "/request.json")
+          expires-at (.plusSeconds (Instant/now) 900)]
+      (respond-json!
+       exchange 201
+       {:id upload-id
+        :method "PUT"
+        :contentType contentType
+        :contentLength contentLength
+        :expiresAt (str expires-at)
+        :uploadUrl (jobs/signed-upload upload-signer object-name
+                                       contentType 900)}))))
+
+(defn- route-handler [{:keys [frame-renderer video-encoder job-service
+                              upload-signer]}]
   (reify HttpHandler
     (handle [_ exchange]
       (let [method (.getRequestMethod exchange)
@@ -96,6 +150,29 @@
             (and (= "POST" method) (= "/v1/overlay" path))
             (overlay! exchange frame-renderer video-encoder)
 
+            (and job-service (= "POST" method) (= "/v1/jobs" path))
+            (submit-job! exchange job-service)
+
+            (and upload-signer (= "POST" method) (= "/v1/uploads" path))
+            (issue-upload! exchange upload-signer)
+
+            (and job-service (= "GET" method)
+                 (re-matches #"/v1/jobs/[^/]+" path))
+            (poll-job! exchange job-service (last (.split path "/")))
+
+            (and job-service (= "POST" method)
+                 (re-matches #"/internal/v1/jobs/[^/]+/dispatch" path))
+            (dispatch-job! exchange job-service
+                           (nth (.split path "/") 4))
+
+            (and job-service (= "POST" method)
+                 (re-matches #"/v1/jobs/[^/]+/cancel" path))
+            (cancel-job! exchange job-service (nth (.split path "/") 3))
+
+            (and job-service (= "POST" method)
+                 (re-matches #"/v1/jobs/[^/]+/retry" path))
+            (retry-job! exchange job-service (nth (.split path "/") 3))
+
             :else
             (respond! exchange 404 "application/json; charset=utf-8"
                       "{\"error\":\"not_found\"}"))
@@ -108,6 +185,27 @@
               ::invalid-request
               (respond! exchange 400 "application/json; charset=utf-8"
                         "{\"error\":\"invalid_request\"}")
+
+              ::invalid-upload-request
+              (respond-json! exchange 400 {:error "invalid_upload_request"})
+
+              ::jobs/invalid-idempotency-key
+              (respond-json! exchange 400 {:error "invalid_idempotency_key"})
+
+              ::jobs/idempotency-conflict
+              (respond-json! exchange 409 {:error "idempotency_conflict"})
+
+              ::jobs/job-not-found
+              (respond-json! exchange 404 {:error "job_not_found"})
+
+              ::jobs/capacity-exhausted
+              (respond-json! exchange 503 {:error "capacity_exhausted"})
+
+              ::jobs/launch-failed
+              (respond-json! exchange 502 {:error "launch_failed"})
+
+              ::jobs/invalid-transition
+              (respond-json! exchange 409 {:error "invalid_job_transition"})
 
               (respond! exchange 500 "application/json; charset=utf-8"
                         "{\"error\":\"render_failed\"}")))
@@ -130,8 +228,12 @@
          (.stop server 0))))))
 
 (defn -main [& _]
-  (let [port (parse-long (get (System/getenv) "PORT" "8080"))]
-    (start! port)
+  (let [port (parse-long (get (System/getenv) "PORT" "8080"))
+        dependencies (if (= "true" (get (System/getenv)
+                                        "AGG_JOB_LIFECYCLE_ENABLED"))
+                       (gcp/api-system)
+                       {})]
+    (start! port dependencies)
     (println (str "{\"severity\":\"INFO\","
                   "\"component\":\"api\","
                   "\"event\":\"server_started\","

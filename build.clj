@@ -18,6 +18,6 @@
                   :src-dirs ["src"]})
   (b/uber {:basis @basis
            :class-dir class-dir
+           :exclude ["(?i)META-INF/license"]
            :uber-file uber-file})
   {:uber-file uber-file})
-

@@ -103,6 +103,45 @@ MOV use a fixed 40–220 bpm scale and a stable 30-second centered/clamped windo
 (or the whole section when shorter); heartbeat timing uses the same interpolated
 values. See ADR 0004 for the rendering decision.
 
+## Durable render jobs
+
+`POST /v1/jobs` accepts the same validated render JSON as `/v1/overlay` and
+requires an `Idempotency-Key` header of 1–128 characters. A new request returns
+`202`; replaying the same key and body returns `200` with the same job ID.
+Reusing a key for different content returns `409`.
+
+The response documents its polling and command resources:
+
+```json
+{
+  "id": "0c33c3cc-3696-4a55-b4c8-9a953819cceb",
+  "state": "queued",
+  "attempt": 1,
+  "statusUrl": "/v1/jobs/0c33c3cc-3696-4a55-b4c8-9a953819cceb",
+  "cancelUrl": "/v1/jobs/0c33c3cc-3696-4a55-b4c8-9a953819cceb/cancel",
+  "retryUrl": "/v1/jobs/0c33c3cc-3696-4a55-b4c8-9a953819cceb/retry"
+}
+```
+
+Poll with `GET statusUrl`; cancel or retry with `POST` to the corresponding
+resource. State progresses through `queued`, `launching`, and `running` to
+`succeeded`, `failed`, or `cancelled`; a running cancellation may briefly show
+`cancellation-requested`. Only failed and cancelled jobs accept an explicit
+retry. Successful polls include the private temporary object name, SHA-256, and
+content type. Failed polls include a bounded `failureCode` and never a signed
+URL, telemetry value, or filename.
+
+Firestore transactions bind idempotency and cap active render leases at five.
+Cloud Tasks calls only the private authenticated dispatcher. Each Cloud Run Job
+receives only a job ID and has zero automatic render retries. Request and output
+objects expire after one day; Firestore job metadata expires after 90 days.
+
+Run the owned Firestore transaction contract against the emulator:
+
+```sh
+script/test_firestore_emulator.sh
+```
+
 Infrastructure targets project `animated-graph-cloud-jp` in Warsaw (`europe-central2`). Application Default Credentials provide local authentication; do not create service-account key files or commit credentials.
 
 Pushes to `main` authenticate through GitHub Workload Identity Federation,

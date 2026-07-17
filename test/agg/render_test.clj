@@ -237,3 +237,26 @@
         (is (= "4444" (get-in result [:media :video :profile]))))
       (finally
         (Files/deleteIfExists output)))))
+
+(deftest render-job-defaults-to-path-ffmpeg-tools
+  (let [output (Files/createTempFile "agg-default-tools-" ".mov"
+                                     (make-array java.nio.file.attribute.FileAttribute 0))
+        report (Files/createTempFile "agg-default-tools-" ".json"
+                                     (make-array java.nio.file.attribute.FileAttribute 0))
+        constructor-args (atom ::not-called)]
+    (try
+      (with-redefs [media/ffmpeg-video-encoder
+                    (fn [& args]
+                      (reset! constructor-args (vec args))
+                      ::encoder)
+                    renderer/render!
+                    (fn [_request {:keys [video-encoder]}]
+                      (is (= ::encoder video-encoder))
+                      {:output-bytes 1 :sha256 "digest"})]
+        (renderer/run-job! {:output-path output
+                            :report-path report
+                            :profile? false}))
+      (is (= [] @constructor-args))
+      (finally
+        (Files/deleteIfExists output)
+        (Files/deleteIfExists report)))))

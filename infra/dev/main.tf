@@ -134,6 +134,12 @@ resource "google_service_account" "renderer" {
   display_name = "Animated Graph Cloud renderer"
 }
 
+resource "google_service_account" "tasks" {
+  project      = var.project_id
+  account_id   = "agg-tasks"
+  display_name = "Animated Graph Cloud task dispatcher"
+}
+
 resource "google_service_account" "deployer" {
   project      = var.project_id
   account_id   = "agg-github-deployer"
@@ -160,6 +166,11 @@ resource "google_cloud_run_v2_job" "renderer" {
         image = var.renderer_image
         args  = ["clojure.main", "-m", "agg.renderer.main"]
 
+        env {
+          name  = "AGG_TEMPORARY_BUCKET"
+          value = google_storage_bucket.temporary.name
+        }
+
         resources {
           limits = {
             cpu    = "8"
@@ -173,10 +184,106 @@ resource "google_cloud_run_v2_job" "renderer" {
   depends_on = [google_project_service.required["run.googleapis.com"]]
 }
 
+resource "google_cloud_tasks_queue" "render" {
+  project  = var.project_id
+  location = var.region
+  name     = "agg-render"
+
+  rate_limits {
+    max_concurrent_dispatches = 5
+    max_dispatches_per_second = 5
+  }
+
+  retry_config {
+    max_attempts       = 100
+    max_retry_duration = "3600s"
+    min_backoff        = "5s"
+    max_backoff        = "300s"
+    max_doublings      = 5
+  }
+
+  depends_on = [google_project_service.required["cloudtasks.googleapis.com"]]
+}
+
+resource "google_firestore_field" "job_expiry" {
+  project    = var.project_id
+  database   = google_firestore_database.default.name
+  collection = "jobs"
+  field      = "expireAt"
+
+  ttl_config {}
+}
+
 resource "google_storage_bucket_iam_member" "renderer_temporary_object_creator" {
   bucket = google_storage_bucket.temporary.name
   role   = "roles/storage.objectCreator"
   member = "serviceAccount:${google_service_account.renderer.email}"
+}
+
+resource "google_storage_bucket_iam_member" "renderer_temporary_object_viewer" {
+  bucket = google_storage_bucket.temporary.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.renderer.email}"
+}
+
+resource "google_storage_bucket_iam_member" "api_temporary_object_creator" {
+  bucket = google_storage_bucket.temporary.name
+  role   = "roles/storage.objectCreator"
+  member = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_storage_bucket_iam_member" "api_temporary_object_viewer" {
+  bucket = google_storage_bucket.temporary.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_project_iam_member" "api_firestore_user" {
+  project = var.project_id
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_project_iam_member" "renderer_firestore_user" {
+  project = var.project_id
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${google_service_account.renderer.email}"
+}
+
+resource "google_project_iam_member" "api_tasks_enqueuer" {
+  project = var.project_id
+  role    = "roles/cloudtasks.enqueuer"
+  member  = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_project_iam_member" "api_run_invoker" {
+  project = var.project_id
+  role    = "roles/run.jobsExecutorWithOverrides"
+  member  = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_project_iam_member" "tasks_run_invoker" {
+  project = var.project_id
+  role    = "roles/run.invoker"
+  member  = "serviceAccount:${google_service_account.tasks.email}"
+}
+
+resource "google_service_account_iam_member" "api_uses_tasks_identity" {
+  service_account_id = google_service_account.tasks.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_service_account_iam_member" "tasks_service_agent_mints_oidc" {
+  service_account_id = google_service_account.tasks.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
+}
+
+resource "google_service_account_iam_member" "api_signs_uploads" {
+  service_account_id = google_service_account.api.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.api.email}"
 }
 
 resource "google_storage_bucket_iam_member" "deployer_temporary_object_viewer" {

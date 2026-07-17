@@ -12,6 +12,14 @@ one Warsaw generation-2 task, 8 vCPU, 32 GiB, zero retries, and a 60-minute
 timeout. `renderer_image` must be an immutable Artifact Registry digest. No GPU
 is attached.
 
+The durable render path uses the Warsaw `agg-render` Cloud Tasks queue. Its
+dispatch concurrency is five, and every request carries an OIDC token for the
+dedicated `agg-tasks` identity and private API audience. Firestore owns job and
+capacity-lease state, with TTL enabled on `jobs.expireAt`. API and renderer
+identities receive only their required Firestore, queue, Run invocation, and
+temporary-object roles. The renderer remains one task with zero retries; task
+redelivery can retry admission but cannot duplicate a non-queued execution.
+
 ```sh
 terraform -chdir=infra/dev init
 terraform -chdir=infra/dev plan -out=dev.tfplan

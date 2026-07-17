@@ -107,6 +107,16 @@ jobs:
             --format 'value(status.url)')"
           echo "url=$service_url" >>"$GITHUB_OUTPUT"
 
+      - name: Enable durable job lifecycle
+        env:
+          CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
+        run: |
+          gcloud run services update "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=agg-renderer,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL" \
+            --quiet
+
       - id: health-auth
         name: Mint private API identity token through WIF
         uses: google-github-actions/auth@v3
