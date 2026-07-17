@@ -1,0 +1,20 @@
+{
+  "telemetryFormat": "oxiwear-hr-csv",
+  "telemetry": "reading_time,pulse_rate\n2026-07-17T23:59:59+02:00,120\n2026-07-18T00:00:01+02:00,128\n",
+  "spo2": {
+    "format": "oxiwear-spo2-csv",
+    "telemetry": "reading_time,spo2\n2026-07-17T23:59:59+02:00,97\n2026-07-18T00:00:01+02:00,93\n"
+  },
+  "preset": "1080p25",
+  "telemetrySyncAt": "2026-07-17T21:59:59Z",
+  "cameraSyncAt": "2026-07-17T23:59:59+02:00",
+  "sectionStartAt": "2026-07-17T23:59:59+02:00",
+  "sectionEndAt": "2026-07-18T00:00:00+02:00",
+  "timer": {
+    "startAt": "2026-07-17T23:59:59.200+02:00",
+    "endAt": "2026-07-17T23:59:59.800+02:00"
+  },
+  "watermark": {
+    "contentBase64": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFklEQVR4XmP4z8DwHwgbGIC0A5BgAAA3IQS9e9pLiQAAAABJRU5ErkJggg=="
+  }
+}

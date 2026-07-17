@@ -1,6 +1,7 @@
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.12.5"}
         org.clojure/data.json {:mvn/version "2.5.1"}
+        com.garmin/fit {:mvn/version "21.205.0"}
         com.fasterxml.jackson.core/jackson-databind {:mvn/version "2.18.8"}
         com.google.cloud/google-cloud-firestore {:mvn/version "3.44.0"}
         com.google.cloud/google-cloud-run {:mvn/version "0.94.0"}

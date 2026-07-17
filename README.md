@@ -71,7 +71,7 @@ summaries; structured logs omit filenames and synthetic telemetry values.
 The retained maximum MOVs are inputs to the manual DaVinci Resolve check in
 GitHub issue #3.
 
-## Polar preview and overlay API
+## Telemetry preview and overlay API
 
 `POST /v1/preview` returns `image/png`; `POST /v1/overlay` returns a seekable
 `video/quicktime` ProRes 4444 overlay with AAC heartbeat audio. Both accept the
@@ -102,6 +102,43 @@ Heart rate is linearly interpolated on one shared section timeline. Preview and
 MOV use a fixed 40–220 bpm scale and a stable 30-second centered/clamped window
 (or the whole section when shorter); heartbeat timing uses the same interpolated
 values. See ADR 0004 for the rendering decision.
+
+The same `telemetry` field also accepts these locked formats:
+
+- `garmin-fit`: base64-encoded binary FIT content. Record messages must contain
+  absolute timestamps and heart rate; decoding uses Garmin's Java FIT SDK.
+- `oxiwear-hr-csv`: comma- or semicolon-delimited `reading_time,pulse_rate`.
+  `reading_time` must include `Z` or an explicit UTC offset.
+
+Optional inputs extend the same JSON body:
+
+```json
+{
+  "spo2": {
+    "format": "oxiwear-spo2-csv",
+    "telemetry": "reading_time,spo2\n2026-07-17T10:00:00Z,97\n..."
+  },
+  "timer": {
+    "startAt": "2026-07-17T09:00:00.200Z",
+    "endAt": "2026-07-17T09:00:01.800Z"
+  },
+  "watermark": {"contentBase64": "iVBORw0KGgo..."}
+}
+```
+
+SpO2 must cover the requested section and is linearly interpolated on the same
+camera-aligned timeline. Timer bounds must remain inside the section; the timer
+shows zero before its start and its final elapsed value after its end. A
+watermark must decode as PNG, be at most 2 MiB, no larger than 1024 by 1024, and
+contain at most 1,048,576 pixels. It is decoded once and composited without
+creating frame collections.
+
+All timestamps are absolute instants, so timezone offsets and local-midnight
+crossings normalize deterministically. Missing one-second samples interpolate;
+blank, non-finite, out-of-range, unordered, or timezone-ambiguous records fail
+validation. CSV parsing is line-oriented, FIT decoding is streaming, every
+input has a byte ceiling, and normalized series have a 900,000-sample ceiling.
+See ADR 0006.
 
 ## Durable render jobs
 

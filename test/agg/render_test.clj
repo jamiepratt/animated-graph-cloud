@@ -4,7 +4,9 @@
             [agg.render.frames :as frames]
             [agg.render.media :as media]
             [agg.render.spec :as spec]
+            [agg.render.watermark :as watermark]
             [agg.renderer.main :as renderer]
+            [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]])
@@ -133,6 +135,48 @@
     (testing "the production-shaped overlay keeps both clear and visible pixels"
       (is (some zero? alpha))
       (is (some pos? alpha)))))
+
+(deftest optional-spo2-timer-and-watermark-compose-into-streamed-frames
+  (let [encoded-watermark
+        (str/trim (slurp (io/resource "fixtures/watermark/tiny.png.b64")))
+        {:keys [rgba]}
+        (streamed-rgba
+         {:width 64
+          :height 36
+          :fps 1
+          :duration-seconds 2
+          :telemetry [{:seconds 0.0 :heart-rate 120.0}
+                      {:seconds 2.0 :heart-rate 128.0}]
+          :spo2 [{:seconds 0.0 :spo2 97.0}
+                 {:seconds 2.0 :spo2 93.0}]
+          :timer {:start-seconds 0.5 :end-seconds 1.5}
+          :watermark (watermark/decode-base64 encoded-watermark)})
+        pixels (partition 4 rgba)
+        unsigned (fn [pixel] (mapv #(bit-and 0xff %) pixel))
+        colors (map unsigned pixels)]
+    (testing "the SpO2 series has its own cyan trace"
+      (is (some #(= [52 200 235] (subvec % 0 3)) colors)))
+    (testing "timer glyphs render in white"
+      (is (some #(= [255 255 255] (subvec % 0 3)) colors)))
+    (testing "the uploaded watermark retains its PNG color"
+      (is (some #(= [255 0 0 255] %) colors)))))
+
+(deftest both-locked-presets-have-golden-complete-previews
+  (doseq [preset-id ["1080p25" "2.7k25"]]
+    (let [request (json/read-str
+                   (slurp (io/resource
+                           (str "fixtures/complete/" preset-id ".json")))
+                   :key-fn keyword)
+          render-spec (contract/prepare request)
+          output (ByteArrayOutputStream.)]
+      (frames/render-preview! frames/java2d-frame-renderer render-spec output)
+      (is (= (str/trim
+              (slurp (io/resource
+                      (str "fixtures/golden/complete-"
+                           preset-id
+                           "-preview.sha256"))))
+             (sha256-bytes (.toByteArray output)))
+          preset-id))))
 
 (deftest frames-stream-only-a-full-frame-heart-rate-trace
   (let [width 64

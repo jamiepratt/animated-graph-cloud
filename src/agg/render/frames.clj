@@ -12,6 +12,24 @@
    :heart-rate-min 40.0
    :heart-rate-max 220.0})
 
+(def spo2-contract
+  {:minimum 70.0
+   :maximum 100.0
+   :color [52 200 235 255]})
+
+(def ^:private timer-glyphs
+  {\0 ["111" "101" "101" "101" "111"]
+   \1 ["010" "110" "010" "010" "111"]
+   \2 ["111" "001" "111" "100" "111"]
+   \3 ["111" "001" "111" "001" "111"]
+   \4 ["101" "101" "111" "001" "001"]
+   \5 ["111" "100" "111" "001" "111"]
+   \6 ["111" "100" "111" "101" "111"]
+   \7 ["111" "001" "010" "010" "010"]
+   \8 ["111" "101" "111" "101" "111"]
+   \9 ["111" "101" "111" "001" "111"]
+   \: ["0" "1" "0" "1" "0"]})
+
 (defprotocol FrameRenderer
   (stream-frames! [renderer render-spec output]
     "Streams RGBA frames without retaining a frame collection.")
@@ -78,6 +96,56 @@
          :minimum (apply min (map :heart-rate samples))
          :maximum (apply max (map :heart-rate samples))}))))
 
+(defn- spo2-samples [{:keys [spo2 duration-seconds]} seconds
+                     graph-left graph-right]
+  (when (seq spo2)
+    (let [sample-count (max 8 (min 160 (inc (- graph-right graph-left))))
+          [window-start window-end] (window-bounds duration-seconds seconds)]
+      (mapv (fn [point]
+              (let [ratio (/ (double point) (double (dec sample-count)))
+                    sample-time (+ window-start
+                                   (* ratio (- window-end window-start)))]
+                {:x (+ graph-left
+                       (int (* ratio (- graph-right graph-left))))
+                 :value (timeline/value-at-seconds spo2 :spo2 sample-time)}))
+            (range sample-count)))))
+
+(defn- draw-series! [graphics samples y-for]
+  (loop [[previous current & remaining] samples]
+    (when current
+      (.drawLine graphics
+                 (:x previous)
+                 (y-for previous)
+                 (:x current)
+                 (y-for current))
+      (recur (cons current remaining)))))
+
+(defn- timer-text [{:keys [start-seconds end-seconds]} seconds]
+  (let [elapsed (-> (- seconds start-seconds)
+                    (max 0.0)
+                    (min (- end-seconds start-seconds)))
+        elapsed-seconds (long (Math/floor elapsed))]
+    (format "%02d:%02d"
+            (quot elapsed-seconds 60)
+            (rem elapsed-seconds 60))))
+
+(defn- draw-timer! [graphics timer seconds x y scale]
+  (loop [characters (seq (timer-text timer seconds))
+         cursor x]
+    (when-let [character (first characters)]
+      (let [glyph (get timer-glyphs character)
+            columns (count (first glyph))]
+        (doseq [row (range (count glyph))
+                column (range columns)
+                :when (= \1 (nth (nth glyph row) column))]
+          (.fillRect graphics
+                     (+ cursor (* column scale))
+                     (+ y (* row scale))
+                     scale
+                     scale))
+        (recur (next characters)
+               (+ cursor (* (inc columns) scale)))))))
+
 (defn- render-frame! [^BufferedImage image render-spec seconds]
   (let [g (.createGraphics image)
         width (.getWidth image)
@@ -109,14 +177,30 @@
       (.setStroke g (BasicStroke. (float (max 1.5 (* height 0.0032)))
                                   BasicStroke/CAP_ROUND
                                   BasicStroke/JOIN_ROUND))
-      (loop [[previous current & remaining] samples]
-        (when current
-          (.drawLine g
-                     (:x previous)
-                     (y-for (:heart-rate previous))
-                     (:x current)
-                     (y-for (:heart-rate current)))
-          (recur (cons current remaining))))
+      (draw-series! g samples #(y-for (:heart-rate %)))
+      (when-let [oxygen-samples
+                 (spo2-samples render-spec seconds graph-left graph-right)]
+        (let [minimum (:minimum spo2-contract)
+              maximum (:maximum spo2-contract)
+              y-for-spo2
+              (fn [{:keys [value]}]
+                (let [bounded (-> value (max minimum) (min maximum))]
+                  (int (- graph-bottom
+                          (* (/ (- bounded minimum) (- maximum minimum))
+                             (- graph-bottom graph-top))))))]
+          (let [[red green blue alpha] (:color spo2-contract)]
+            (.setColor g (Color. red green blue alpha)))
+          (draw-series! g oxygen-samples y-for-spo2)))
+      (when-let [timer (:timer render-spec)]
+        (let [scale (max 1 (int (Math/round (* height 0.004))))]
+          (.setColor g Color/WHITE)
+          (draw-timer! g timer seconds horizontal-margin vertical-margin scale)))
+      (when-let [{:keys [image] :as watermark} (:watermark render-spec)]
+        (.drawImage g
+                    image
+                    (- width horizontal-margin (:width watermark))
+                    vertical-margin
+                    nil))
       (finally
         (.dispose g)))))
 

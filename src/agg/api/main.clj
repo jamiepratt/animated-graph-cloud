@@ -17,7 +17,7 @@
 
 (def ^:private health-body "{\"status\":\"ok\"}")
 
-(def max-request-bytes (+ contract/max-telemetry-bytes (* 64 1024)))
+(def max-request-bytes contract/max-render-request-bytes)
 
 (defn- respond-bytes! [^HttpExchange exchange status content-type bytes]
   (doto (.getResponseHeaders exchange)
