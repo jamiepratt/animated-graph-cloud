@@ -91,6 +91,29 @@
                           #"positive integers"
                           (jobs/in-memory-system options)))))
 
+(deftest member-cleanup-cancels-only-its-generation-and-legacy-jobs
+  (let [service (:service (jobs/in-memory-system))
+        request (assoc (render-request)
+                       :requesterSubject "member-subject"
+                       :requesterEmail "member@example.com")
+        submit (fn [key membership-version]
+                 (get-in (jobs/submit-job!
+                          service key
+                          (cond-> request
+                            membership-version
+                            (assoc :requesterMembershipVersion
+                                   membership-version)))
+                         [:job :id]))
+        old-id (submit "old-generation-job" "old-generation")
+        legacy-id (submit "legacy-generation-job" nil)
+        new-id (submit "new-generation-job" "new-generation")]
+    (is (= 2 (admin/cancel-member-jobs!
+              service {:subject "member-subject"
+                       :membership-version "old-generation"})))
+    (is (= "cancelled" (:state (jobs/get-job service old-id))))
+    (is (= "cancelled" (:state (jobs/get-job service legacy-id))))
+    (is (= "queued" (:state (jobs/get-job service new-id))))))
+
 (deftest monthly-budget-admission-reserves-before-enqueue
   (let [system (jobs/in-memory-system {:monthly-budget-cents 50
                                        :render-reservation-cents 25})

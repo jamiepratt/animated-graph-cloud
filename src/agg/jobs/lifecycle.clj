@@ -421,13 +421,18 @@
                           {:type ::worker-failed :job-id job-id}
                           cause))))))
   admin/JobAdministration
-  (cancel-member-jobs! [this subject]
+  (cancel-member-jobs! [this {:keys [subject] :as cleanup-identity}]
     (let [job-ids
           (locking state
             (->> (:jobs @state)
                  (keep (fn [[job-id job]]
                          (when (and (= subject
                                        (get-in job [:request :requesterSubject]))
+                                    (admin/cleanup-generation?
+                                     cleanup-identity
+                                     (get-in job
+                                             [:request
+                                              :requesterMembershipVersion]))
                                     (contains? #{:queued :launching :running
                                                  :cancellation-requested}
                                                (:state job)))

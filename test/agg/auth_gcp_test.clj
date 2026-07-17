@@ -1,5 +1,6 @@
 (ns agg.auth-gcp-test
-  (:require [agg.auth.core :as auth]
+  (:require [agg.admin.core :as admin]
+            [agg.auth.core :as auth]
             [agg.auth.gcp :as gcp]
             [clojure.data.json :as json]
             [clojure.test :refer [deftest is]])
@@ -115,6 +116,39 @@
                 :folder-id "folder-1"
                 :revoked? true}
                (auth/load-grant store subject)))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
+(deftest firestore-grant-cleanup-is-generation-scoped-and-includes-legacy
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId
+                         "animated-graph-cloud-grant-generation-test")
+                        (.setEmulatorHost host)
+                        .build
+                        .getService)
+          member-directory
+          (reify admin/TransactionalMembership
+            (require-active-transaction! [_ _ identity] identity))
+          store (gcp/grant-store firestore member-directory)
+          old-identity {:subject "member-subject"
+                        :membership-version "old-generation"}
+          new-identity {:subject "member-subject"
+                        :membership-version "new-generation"}
+          grant {:refresh-token-ciphertext "kms-ciphertext"
+                 :folder-id "folder-1"
+                 :revoked? false}]
+      (try
+        (.get (.recursiveDelete firestore (.collection firestore "drive-grants")))
+        (auth/save-member-grant! store new-identity grant)
+        (is (false? (admin/delete-member-credentials! store old-identity)))
+        (is (= grant (auth/load-grant store (:subject new-identity))))
+        (is (true? (admin/delete-member-credentials! store new-identity)))
+        (is (nil? (auth/load-grant store (:subject new-identity))))
+        (auth/save-grant! store (:subject old-identity) grant)
+        (is (true? (admin/delete-member-credentials! store old-identity)))
+        (is (nil? (auth/load-grant store (:subject old-identity))))
         (finally
           (.close firestore))))
     (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))

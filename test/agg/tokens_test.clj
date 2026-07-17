@@ -44,23 +44,28 @@
              (catch clojure.lang.ExceptionInfo error
                (:type (ex-data error))))))))
 
-(deftest member-revocation-invalidates-all-personal-tokens
+(deftest member-revocation-invalidates-only-its-generation-and-legacy-tokens
   (let [{:keys [service]}
         (tokens/in-memory-system {:pepper (.getBytes "01234567890123456789012345678901")
                                   :clock fixed-clock})
-        first-token (tokens/create-token! service
-                                          {:subject "member-subject"
-                                           :email "member@example.com"}
-                                          "First")
-        second-token (tokens/create-token! service
-                                           {:subject "member-subject"
-                                            :email "member@example.com"}
-                                           "Second")]
-    (is (= 2 (admin/revoke-member-tokens! service "member-subject")))
-    (doseq [raw-token [(:token first-token) (:token second-token)]]
+        old-identity {:subject "member-subject"
+                      :email "member@example.com"
+                      :membership-version "old-generation"}
+        old-token (tokens/create-token! service old-identity "Old")
+        legacy-token (tokens/create-token! service
+                                           "member-subject" "Legacy")
+        new-identity (assoc old-identity
+                            :membership-version "new-generation")
+        new-token (tokens/create-token! service new-identity "New")]
+    (is (= 2 (admin/revoke-member-tokens!
+              service (select-keys old-identity
+                                   [:subject :membership-version]))))
+    (doseq [raw-token [(:token old-token) (:token legacy-token)]]
       (is (= ::tokens/invalid-token
              (try
                (tokens/authenticate service raw-token)
                nil
                (catch clojure.lang.ExceptionInfo error
-                 (:type (ex-data error)))))))))
+                 (:type (ex-data error)))))))
+    (is (= new-identity
+           (tokens/authenticate service (:token new-token))))))

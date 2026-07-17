@@ -742,3 +742,131 @@
         (finally
           (.close firestore))))
     (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
+(deftest delayed-owner-cleanup-cannot-destroy-a-new-membership-generation
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId
+                         "animated-graph-cloud-stale-owner-cleanup-test")
+                        (.setEmulatorHost host)
+                        .build
+                        .getService)
+          requests (atom {})
+          queue (reify jobs/JobQueue
+                  (enqueue-job! [_ _job-id _attempt]))
+          launcher (reify jobs/JobLauncher
+                     (launch-job! [_ job-id] (str "executions/" job-id))
+                     (cancel-execution! [_ _execution]))
+          request-store
+          (reify jobs/RequestStore
+            (save-request! [_ job-id request]
+              (let [object (str "jobs/" job-id "/request.json")]
+                (swap! requests assoc object request)
+                object))
+            (load-request [_ object] (get @requests object)))]
+      (try
+        (doseq [collection ["members" "administration" "owner-revocations"
+                            "personal-tokens" "drive-grants" "jobs"
+                            "job-idempotency" "orchestration"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (let [directory-a (admin-gcp/member-directory
+                           firestore "owner-a@example.com")
+              token-service (tokens/service
+                             {:store (tokens-gcp/token-store firestore)
+                              :pepper (byte-array 32)})
+              grant-store (auth-gcp/grant-store firestore directory-a)
+              job-service (gcp/job-service {:firestore firestore
+                                            :request-store request-store
+                                            :queue queue
+                                            :launcher launcher
+                                            :member-directory directory-a})
+              owner-a (admin/authorize-member! directory-a
+                                               "owner-a@example.com"
+                                               "owner-a-subject")
+              old-token (tokens/create-token! token-service owner-a
+                                              "Old generation")
+              old-grant {:refresh-token-ciphertext "old-ciphertext"
+                         :folder-id "old-folder"
+                         :revoked? false}
+              _ (auth/save-member-grant! grant-store owner-a old-grant)
+              request-for
+              (fn [identity]
+                (assoc (fixture/render-request)
+                       :requesterSubject (:subject identity)
+                       :requesterEmail (:email identity)
+                       :requesterMembershipVersion
+                       (:membership-version identity)))
+              old-job-id
+              (get-in (jobs/submit-job! job-service "old-generation-job"
+                                        (request-for owner-a))
+                      [:job :id])
+              directory-b (admin-gcp/member-directory
+                           firestore "owner-b@example.com")
+              owner-b (admin/authorize-member! directory-b
+                                               "owner-b@example.com"
+                                               "owner-b-subject")
+              delayed-entered (promise)
+              release-delayed (promise)
+              delayed-token-administration
+              (reify admin/TokenAdministration
+                (revoke-member-tokens! [_ cleanup-identity]
+                  (deliver delayed-entered true)
+                  @release-delayed
+                  (admin/revoke-member-tokens! token-service
+                                               cleanup-identity)))
+              events (atom [])
+              delayed-startup
+              (future
+                (admin/service
+                 {:directory directory-b
+                  :token-administration delayed-token-administration
+                  :credential-administration grant-store
+                  :job-administration job-service
+                  :event-sink #(swap! events conj %)}))]
+          (is (= true (deref delayed-entered 10000 ::timeout)))
+          (let [winning-service
+                (admin/service
+                 {:directory directory-b
+                  :token-administration token-service
+                  :credential-administration grant-store
+                  :job-administration job-service
+                  :event-sink #(swap! events conj %)})]
+            (admin/add-member! winning-service owner-b (:email owner-a))
+            (let [new-owner-a
+                  (admin/authorize-member! directory-b
+                                           (:email owner-a)
+                                           (:subject owner-a))
+                  new-token (tokens/create-token! token-service new-owner-a
+                                                  "New generation")
+                  new-grant {:refresh-token-ciphertext "new-ciphertext"
+                             :folder-id "new-folder"
+                             :revoked? false}
+                  _ (auth/save-member-grant! grant-store new-owner-a new-grant)
+                  new-job-id
+                  (get-in (jobs/submit-job! job-service "new-generation-job"
+                                            (request-for new-owner-a))
+                          [:job :id])]
+              (deliver release-delayed true)
+              (is (not= ::timeout (deref delayed-startup 10000 ::timeout)))
+              (is (= ::tokens/invalid-token
+                     (try
+                       (tokens/authenticate token-service (:token old-token))
+                       nil
+                       (catch clojure.lang.ExceptionInfo error
+                         (:type (ex-data error))))))
+              (is (= {:subject (:subject new-owner-a)
+                      :email (:email new-owner-a)
+                      :membership-version (:membership-version new-owner-a)}
+                     (tokens/authenticate token-service (:token new-token))))
+              (is (= new-grant
+                     (auth/load-grant grant-store (:subject new-owner-a))))
+              (is (= "cancelled"
+                     (:state (jobs/get-job job-service old-job-id))))
+              (is (= "queued"
+                     (:state (jobs/get-job job-service new-job-id))))
+              (is (= 1 (count (filter #(= "owner_rotation_cleanup_complete"
+                                          (:event %))
+                                      @events)))))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))

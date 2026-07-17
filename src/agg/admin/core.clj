@@ -21,13 +21,13 @@
   (revoke-member! [service actor email]))
 
 (defprotocol TokenAdministration
-  (revoke-member-tokens! [administration subject]))
+  (revoke-member-tokens! [administration cleanup-identity]))
 
 (defprotocol CredentialAdministration
-  (delete-member-credentials! [administration subject]))
+  (delete-member-credentials! [administration cleanup-identity]))
 
 (defprotocol JobAdministration
-  (cancel-member-jobs! [administration subject]))
+  (cancel-member-jobs! [administration cleanup-identity]))
 
 (defprotocol OwnerRotationCleanup
   (pending-owner-rotation-cleanups [directory])
@@ -57,6 +57,14 @@
     (throw (ex-info "A Google subject is required"
                     {:type ::invalid-subject})))
   subject)
+
+(defn cleanup-generation?
+  [{:keys [membership-version]} resource-membership-version]
+  (or (nil? resource-membership-version)
+      (= membership-version resource-membership-version)))
+
+(defn- cleanup-identity [member]
+  (select-keys member [:subject :membership-version]))
 
 (defn- membership-version []
   (str (UUID/randomUUID)))
@@ -159,19 +167,19 @@
 (defn- reconcile-owner-rotation!
   [directory token-administration credential-administration
    job-administration event-sink cleanup]
-  (let [subject (:subject cleanup)
+  (let [identity (cleanup-identity cleanup)
         token-result
         (required-cleanup-result
          "tokens" 0 token-administration
-         #(revoke-member-tokens! % subject))
+         #(revoke-member-tokens! % identity))
         credential-result
         (required-cleanup-result
          "credentials" false credential-administration
-         #(boolean (delete-member-credentials! % subject)))
+         #(boolean (delete-member-credentials! % identity)))
         job-result
         (required-cleanup-result
          "jobs" 0 job-administration
-         #(cancel-member-jobs! % subject))
+         #(cancel-member-jobs! % identity))
         errors (->> [token-result credential-result job-result]
                     (keep :error)
                     vec)
@@ -242,22 +250,23 @@
     (require-active-owner! directory actor)
     (let [member (revoke-member-record! directory email)
           subject (:subject member)
+          identity (cleanup-identity member)
           token-result
           (cleanup-result
            "tokens" 0
            (when (and subject token-administration)
-             #(revoke-member-tokens! token-administration subject)))
+             #(revoke-member-tokens! token-administration identity)))
           credential-result
           (cleanup-result
            "credentials" false
            (when (and subject credential-administration)
              #(boolean (delete-member-credentials!
-                        credential-administration subject))))
+                        credential-administration identity))))
           job-result
           (cleanup-result
            "jobs" 0
            (when (and subject job-administration)
-             #(cancel-member-jobs! job-administration subject)))
+             #(cancel-member-jobs! job-administration identity)))
           errors (->> [token-result credential-result job-result]
                       (keep :error)
                       vec)

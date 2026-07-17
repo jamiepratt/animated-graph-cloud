@@ -105,8 +105,12 @@
       (mark-token-revoked! store token-id)
       (public-token (assoc stored :revoked true))))
   admin/TokenAdministration
-  (revoke-member-tokens! [_ subject]
-    (let [active (remove :revoked (load-subject-tokens store subject))]
+  (revoke-member-tokens! [_ {:keys [subject] :as cleanup-identity}]
+    (let [active (->> (load-subject-tokens store subject)
+                      (remove :revoked)
+                      (filter #(admin/cleanup-generation?
+                                cleanup-identity
+                                (:membership-version %))))]
       (doseq [{:keys [id]} active]
         (mark-token-revoked! store id))
       (count active))))

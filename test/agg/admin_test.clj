@@ -34,16 +34,16 @@
         cancelled-jobs (atom [])
         events (atom [])
         token-admin (reify admin/TokenAdministration
-                      (revoke-member-tokens! [_ subject]
-                        (swap! revoked-tokens conj subject)
+                      (revoke-member-tokens! [_ identity]
+                        (swap! revoked-tokens conj identity)
                         2))
         credential-admin (reify admin/CredentialAdministration
-                           (delete-member-credentials! [_ subject]
-                             (swap! deleted-credentials conj subject)
+                           (delete-member-credentials! [_ identity]
+                             (swap! deleted-credentials conj identity)
                              true))
         job-admin (reify admin/JobAdministration
-                    (cancel-member-jobs! [_ subject]
-                      (swap! cancelled-jobs conj subject)
+                    (cancel-member-jobs! [_ identity]
+                      (swap! cancelled-jobs conj identity)
                       2))
         {:keys [directory service]}
         (admin/in-memory-system
@@ -55,12 +55,13 @@
           :event-sink #(swap! events conj %)})
         owner (admin/authorize-member! directory "owner@example.com"
                                        "owner-subject")
-        _ (admin/authorize-member! directory "member@example.com"
-                                   "member-subject")]
+        member (admin/authorize-member! directory "member@example.com"
+                                        "member-subject")
+        cleanup-identity (select-keys member [:subject :membership-version])]
     (admin/revoke-member! service owner "member@example.com")
-    (is (= ["member-subject"] @revoked-tokens))
-    (is (= ["member-subject"] @deleted-credentials))
-    (is (= ["member-subject"] @cancelled-jobs))
+    (is (= [cleanup-identity] @revoked-tokens))
+    (is (= [cleanup-identity] @deleted-credentials))
+    (is (= [cleanup-identity] @cancelled-jobs))
     (is (= [{:severity "NOTICE"
              :component "security"
              :event "member_revoked"

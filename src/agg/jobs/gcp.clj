@@ -705,7 +705,7 @@
                           {:type ::lifecycle/worker-failed :job-id job-id}
                           cause))))))
   admin/JobAdministration
-  (cancel-member-jobs! [this subject]
+  (cancel-member-jobs! [this {:keys [subject] :as cleanup-identity}]
     (let [job-ids
           (->> (await! (.get (.whereEqualTo (.collection firestore "jobs")
                                             "requesterSubject" subject)))
@@ -713,6 +713,9 @@
                (keep (fn [snapshot]
                        (let [job (snapshot-job snapshot)]
                          (when (and job
+                                    (admin/cleanup-generation?
+                                     cleanup-identity
+                                     (:requester-membership-version job))
                                     (contains? #{:queued :launching :running
                                                  :cancellation-requested}
                                                (:state job)))

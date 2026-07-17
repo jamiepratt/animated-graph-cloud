@@ -206,7 +206,8 @@
            (.set transaction reference
                  {"refreshTokenCiphertext" (:refresh-token-ciphertext grant)
                   "folderId" (:folder-id grant)
-                  "revoked" (boolean (:revoked? grant))})
+                  "revoked" (boolean (:revoked? grant))
+                  "membershipVersion" (:membership-version identity)})
            grant))
         (catch clojure.lang.ExceptionInfo error
           (if (= ::admin/not-allowlisted (:type (ex-data error)))
@@ -215,11 +216,21 @@
                             error))
             (throw error))))))
   admin/CredentialAdministration
-  (delete-member-credentials! [this subject]
-    (let [reference (.document (.collection firestore "drive-grants") subject)
-          existed? (some? (auth/load-grant this subject))]
-      (await! (.delete reference))
-      existed?)))
+  (delete-member-credentials! [_ {:keys [subject] :as cleanup-identity}]
+    (let [reference (.document (.collection firestore "drive-grants") subject)]
+      (transaction!
+       firestore
+       (fn [^Transaction transaction]
+         (let [snapshot (await! (.get transaction reference))
+               stored-version (when (.exists snapshot)
+                                (get (.getData snapshot)
+                                     "membershipVersion"))]
+           (if (and (.exists snapshot)
+                    (admin/cleanup-generation? cleanup-identity stored-version))
+             (do
+               (.delete transaction reference)
+               true)
+             false)))))))
 
 (defn grant-store
   ([firestore]
