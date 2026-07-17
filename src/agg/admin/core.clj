@@ -29,6 +29,10 @@
 (defprotocol JobAdministration
   (cancel-member-jobs! [administration subject]))
 
+(defprotocol OwnerRotationCleanup
+  (pending-owner-rotation-cleanups [directory])
+  (complete-owner-rotation-cleanup! [directory cleanup]))
+
 (defn normalize-email [email]
   (some-> email str/trim str/lower-case))
 
@@ -143,6 +147,81 @@
       (catch Throwable _
         {:value fallback :error component}))))
 
+(defn- required-cleanup-result [component fallback administration action]
+  (cleanup-result
+   component fallback
+   #(if administration
+      (action administration)
+      (throw (ex-info "Owner rotation cleanup dependency is unavailable"
+                      {:type ::invalid-configuration
+                       :component component})))))
+
+(defn- reconcile-owner-rotation!
+  [directory token-administration credential-administration
+   job-administration event-sink cleanup]
+  (let [subject (:subject cleanup)
+        token-result
+        (required-cleanup-result
+         "tokens" 0 token-administration
+         #(revoke-member-tokens! % subject))
+        credential-result
+        (required-cleanup-result
+         "credentials" false credential-administration
+         #(boolean (delete-member-credentials! % subject)))
+        job-result
+        (required-cleanup-result
+         "jobs" 0 job-administration
+         #(cancel-member-jobs! % subject))
+        errors (->> [token-result credential-result job-result]
+                    (keep :error)
+                    vec)
+        base-event {:component "security"
+                    :targetMemberId (:member-id cleanup)}]
+    (if (seq errors)
+      (do
+        (emit! event-sink
+               (assoc base-event
+                      :severity "ERROR"
+                      :event "owner_rotation_cleanup_failed"
+                      :cleanupErrors errors))
+        {:errors errors})
+      (try
+        (when (complete-owner-rotation-cleanup! directory cleanup)
+          (emit! event-sink
+                 (assoc base-event
+                        :severity "NOTICE"
+                        :event "owner_rotation_cleanup_complete"
+                        :tokensRevoked (:value token-result)
+                        :credentialsDeleted (:value credential-result)
+                        :jobsCancelled (:value job-result))))
+        {}
+        (catch Throwable _
+          (emit! event-sink
+                 (assoc base-event
+                        :severity "ERROR"
+                        :event "owner_rotation_cleanup_failed"
+                        :cleanupErrors ["membership"]))
+          {:errors ["membership"]})))))
+
+(defn- reconcile-owner-rotations!
+  [directory token-administration credential-administration
+   job-administration event-sink]
+  (when (satisfies? OwnerRotationCleanup directory)
+    (let [failures
+          (->> (pending-owner-rotation-cleanups directory)
+               (mapv #(reconcile-owner-rotation!
+                       directory token-administration
+                       credential-administration job-administration
+                       event-sink %))
+               (keep :errors)
+               (apply concat)
+               distinct
+               vec)]
+      (when (seq failures)
+        (throw (ex-info "Owner rotation cleanup is incomplete"
+                        {:type ::revocation-incomplete
+                         :components failures}))))))
+
 (defrecord AdminService [directory token-administration
                          credential-administration job-administration
                          event-sink]
@@ -202,6 +281,9 @@
 (defn service [{:keys [directory token-administration
                        credential-administration job-administration
                        event-sink]}]
+  (reconcile-owner-rotations! directory token-administration
+                              credential-administration job-administration
+                              event-sink)
   (->AdminService directory token-administration credential-administration
                   job-administration event-sink))
 

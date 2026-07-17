@@ -17,10 +17,23 @@ leave new work active.
 `AGG_OWNER_EMAIL` transactionally bootstraps exactly one active owner record.
 Startup serializes owner changes through a fixed administration record. When
 the configured email changes, every previous owner is atomically demoted to a
-revoked member and its bound subject is removed; unrelated members are left
-unchanged. Re-adding a former owner therefore creates a new membership
-generation and requires a new Google login. Restarting with the same configured
-owner preserves its current generation and subject.
+revoked member; unrelated members are left unchanged. A bound former owner
+retains its subject only as durable cleanup identity, accompanied by a pending
+revocation record keyed by its membership generation. The revoked membership
+immediately invalidates sessions and authenticated writes. Reactivation and
+owner bootstrap reject that generation until cleanup is complete.
+
+After token, Drive credential, and job components exist, startup reconciles
+every pending owner rotation before returning application dependencies. It
+revokes tokens, deletes the Drive grant, and cancels active jobs, then uses a
+Firestore compare-and-set to remove both the pending record and the subject only
+if the same revoked generation is still current. A cleanup failure leaves both
+durable records intact and fails startup closed. Repeated or concurrent startup
+is safe: cleanup operations are idempotent, only the compare-and-set winner
+emits success, and a racing re-add cannot clobber cleanup identity. Re-adding a
+former owner after cleanup creates a new membership generation and requires a
+new Google login. Restarting with the same configured owner preserves its
+current generation and subject.
 
 The owner manages member records through session- and CSRF-protected JSON or
 HTMX routes. Each activation has a random membership generation. Google login
@@ -54,5 +67,6 @@ sessions and personal tokens. Deploying this decision invalidates legacy
 credentials that do not contain a membership generation. Revoked members can
 return only after an owner action followed by fresh Google login and, for Drive
 delivery, a fresh `drive.file` authorization. Changing `AGG_OWNER_EMAIL`
-immediately invalidates the former owner's membership-bound sessions and tokens
-without disturbing ordinary active members.
+immediately invalidates the former owner's membership-bound sessions without
+disturbing ordinary active members; startup does not serve traffic until its
+tokens, Drive grant, and active jobs have also been cleaned up.

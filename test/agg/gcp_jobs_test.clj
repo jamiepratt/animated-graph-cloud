@@ -1,9 +1,13 @@
 (ns agg.gcp-jobs-test
   (:require [agg.admin.core :as admin]
             [agg.admin.gcp :as admin-gcp]
+            [agg.auth.core :as auth]
+            [agg.auth.gcp :as auth-gcp]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
             [agg.jobs-test :as fixture]
+            [agg.tokens.core :as tokens]
+            [agg.tokens.gcp :as tokens-gcp]
             [clojure.test :refer [deftest is]])
   (:import (com.google.api.gax.rpc AbortedException AlreadyExistsException
                                    StatusCode StatusCode$Code)
@@ -632,6 +636,109 @@
                      nil
                      (catch clojure.lang.ExceptionInfo error
                        (:type (ex-data error))))))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
+(deftest owner-rotation-startup-revokes-access-grants-and-active-work
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId
+                         "animated-graph-cloud-owner-cleanup-test")
+                        (.setEmulatorHost host)
+                        .build
+                        .getService)
+          requests (atom {})
+          queue (reify jobs/JobQueue
+                  (enqueue-job! [_ _job-id _attempt]))
+          cancelled (atom [])
+          launcher (reify jobs/JobLauncher
+                     (launch-job! [_ job-id] (str "executions/" job-id))
+                     (cancel-execution! [_ execution]
+                       (swap! cancelled conj execution)))
+          request-store
+          (reify jobs/RequestStore
+            (save-request! [_ job-id request]
+              (let [object (str "jobs/" job-id "/request.json")]
+                (swap! requests assoc object request)
+                object))
+            (load-request [_ object] (get @requests object)))]
+      (try
+        (doseq [collection ["members" "administration" "owner-revocations"
+                            "personal-tokens" "drive-grants" "jobs"
+                            "job-idempotency" "orchestration"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (let [directory-a (admin-gcp/member-directory
+                           firestore "owner-a@example.com")
+              token-service (tokens/service
+                             {:store (tokens-gcp/token-store firestore)
+                              :pepper (byte-array 32)})
+              grant-store (auth-gcp/grant-store firestore directory-a)
+              job-service (gcp/job-service {:firestore firestore
+                                            :request-store request-store
+                                            :queue queue
+                                            :launcher launcher
+                                            :member-directory directory-a})
+              owner-a (admin/authorize-member! directory-a
+                                               "owner-a@example.com"
+                                               "owner-a-subject")
+              personal-token (tokens/create-token! token-service owner-a
+                                                   "Owner automation")
+              _ (auth/save-member-grant!
+                 grant-store owner-a
+                 {:refresh-token-ciphertext "kms-ciphertext"
+                  :folder-id "drive-folder"
+                  :revoked? false})
+              request (assoc (fixture/render-request)
+                             :requesterSubject (:subject owner-a)
+                             :requesterEmail (:email owner-a)
+                             :requesterMembershipVersion
+                             (:membership-version owner-a))
+              queued-id (get-in (jobs/submit-job! job-service
+                                                  "rotated-owner-queued" request)
+                                [:job :id])
+              running-id (get-in (jobs/submit-job! job-service
+                                                   "rotated-owner-running" request)
+                                 [:job :id])
+              _ (jobs/dispatch-job! job-service running-id)
+              directory-b (admin-gcp/member-directory
+                           firestore "owner-b@example.com")
+              owner-b (admin/authorize-member! directory-b
+                                               "owner-b@example.com"
+                                               "owner-b-subject")
+              events (atom [])
+              startup-admin (admin/service
+                             {:directory directory-b
+                              :token-administration token-service
+                              :credential-administration grant-store
+                              :job-administration job-service
+                              :event-sink #(swap! events conj %)})
+              token-error (try
+                            (tokens/authenticate token-service
+                                                 (:token personal-token))
+                            nil
+                            (catch clojure.lang.ExceptionInfo error
+                              (:type (ex-data error))))]
+          (is (= ::tokens/invalid-token token-error))
+          (is (nil? (auth/load-grant grant-store (:subject owner-a))))
+          (is (= "cancelled" (:state (jobs/get-job job-service queued-id))))
+          (is (= "cancelled" (:state (jobs/get-job job-service running-id))))
+          (is (= [(str "executions/" running-id)] @cancelled))
+          (is (= 1 (count (filter #(= "owner_rotation_cleanup_complete"
+                                      (:event %))
+                                  @events))))
+          (admin/add-member! startup-admin owner-b (:email owner-a))
+          (let [new-member-a (admin/authorize-member! directory-b
+                                                      (:email owner-a)
+                                                      (:subject owner-a))]
+            (is (not= (:membership-version owner-a)
+                      (:membership-version new-member-a)))
+            (is (nil? (auth/load-grant grant-store (:subject new-member-a))))
+            (is (= "cancelled" (:state (jobs/get-job job-service queued-id))))
+            (is (= "cancelled" (:state (jobs/get-job job-service running-id)))))
+          (is (every? #(not-any? (fn [key] (contains? % key))
+                                 [:email :subject :token :credential :job-id])
+                      @events)))
         (finally
           (.close firestore))))
     (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))

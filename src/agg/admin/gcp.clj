@@ -41,6 +41,34 @@
            "updatedAt" (str (Instant/now))}
     (:subject member) (assoc "subject" (:subject member))))
 
+(defn- snapshot-owner-revocation [^DocumentSnapshot snapshot]
+  (when (.exists snapshot)
+    (let [data (.getData snapshot)
+          revocation {:id (.getId snapshot)
+                      :member-id (get data "memberId")
+                      :membership-version (get data "membershipVersion")
+                      :subject (get data "subject")}]
+      (when-not (and (= "pending" (get data "state"))
+                     (string? (:membership-version revocation))
+                     (= (:id revocation) (:membership-version revocation))
+                     (string? (:member-id revocation))
+                     (re-matches #"[0-9a-f]{64}" (:member-id revocation))
+                     (string? (:subject revocation))
+                     (not-empty (:subject revocation)))
+        (throw (ex-info "Owner rotation cleanup record is invalid"
+                        {:type ::admin/revocation-incomplete})))
+      revocation)))
+
+(defn- owner-revocation-document [member]
+  {"memberId" (admin/member-id (:email member))
+   "membershipVersion" (:membership-version member)
+   "subject" (:subject member)
+   "state" "pending"
+   "createdAt" (str (Instant/now))})
+
+(defn- owner-revocation-reference [firestore membership-version]
+  (.document (.collection firestore "owner-revocations") membership-version))
+
 (defn- active? [member {:keys [email subject membership-version]}]
   (and member
        (= :active (:status member))
@@ -94,6 +122,18 @@
        firestore
        (fn [^Transaction transaction]
          (let [existing (snapshot-member (await! (.get transaction reference)))
+               pending
+               (when (and existing
+                          (= :revoked (:status existing))
+                          (:membership-version existing))
+                 (some-> (owner-revocation-reference
+                          firestore (:membership-version existing))
+                         (#(.get transaction %))
+                         await!
+                         snapshot-owner-revocation))
+               _ (when pending
+                   (throw (ex-info "Owner rotation cleanup is incomplete"
+                                   {:type ::admin/revocation-incomplete})))
                member (if (= :active (:status existing))
                         existing
                         {:email email
@@ -130,7 +170,44 @@
       (when-not (active? member identity)
         (throw (ex-info "Member is not allowlisted"
                         {:type ::admin/not-allowlisted})))
-      member)))
+      member))
+  admin/OwnerRotationCleanup
+  (pending-owner-rotation-cleanups [_]
+    (->> (await! (.get (.collection firestore "owner-revocations")))
+         .getDocuments
+         (keep snapshot-owner-revocation)
+         vec))
+  (complete-owner-rotation-cleanup! [_ cleanup]
+    (let [pending-reference
+          (owner-revocation-reference firestore (:id cleanup))
+          member-reference
+          (.document (.collection firestore "members") (:member-id cleanup))]
+      (transaction!
+       firestore
+       (fn [^Transaction transaction]
+         (let [pending (snapshot-owner-revocation
+                        (await! (.get transaction pending-reference)))]
+           (if-not pending
+             false
+             (let [member (snapshot-member
+                           (await! (.get transaction member-reference)))]
+               (when-not (and (= (select-keys cleanup
+                                              [:id :member-id
+                                               :membership-version :subject])
+                                 (select-keys pending
+                                              [:id :member-id
+                                               :membership-version :subject]))
+                              (= :revoked (:status member))
+                              (= (:membership-version cleanup)
+                                 (:membership-version member))
+                              (= (:subject cleanup) (:subject member)))
+                 (throw (ex-info "Revoked owner generation changed during cleanup"
+                                 {:type ::admin/revocation-incomplete})))
+               (.set transaction member-reference
+                     (member-document (dissoc member :subject)))
+               (.delete transaction pending-reference)
+               true))))
+       20))))
 
 (defn member-directory [firestore owner-email]
   (let [owner-email (admin/require-email owner-email)
@@ -149,6 +226,18 @@
                   .getDocuments
                   (keep snapshot-member))
              existing (snapshot-member (await! (.get transaction reference)))
+             pending
+             (when (and existing
+                        (= :revoked (:status existing))
+                        (:membership-version existing))
+               (some-> (owner-revocation-reference
+                        firestore (:membership-version existing))
+                       (#(.get transaction %))
+                       await!
+                       snapshot-owner-revocation))
+             _ (when pending
+                 (throw (ex-info "Owner rotation cleanup is incomplete"
+                                 {:type ::admin/revocation-incomplete})))
              owner (if (= :active (:status existing))
                      (assoc existing :role :owner)
                      {:email owner-email
@@ -159,9 +248,13 @@
                  :when (not= owner-email (:email previous))]
            (.set transaction
                  (.document members (admin/member-id (:email previous)))
-                 (member-document (-> previous
-                                      (assoc :role :member :status :revoked)
-                                      (dissoc :subject)))))
+                 (member-document (assoc previous
+                                         :role :member :status :revoked)))
+           (when (:subject previous)
+             (.set transaction
+                   (owner-revocation-reference
+                    firestore (:membership-version previous))
+                   (owner-revocation-document previous))))
          (.set transaction reference (member-document owner))
          (.set transaction owner-reference
                {"memberId" (admin/member-id owner-email)

@@ -16,9 +16,19 @@
                         .build
                         .getService)]
       (try
-        (doseq [collection ["members" "administration"]]
+        (doseq [collection ["members" "administration"
+                            "owner-revocations"]]
           (.get (.recursiveDelete firestore (.collection firestore collection))))
-        (let [directory-a (gcp/member-directory firestore "owner-a@example.com")
+        (let [token-administration
+              (reify admin/TokenAdministration
+                (revoke-member-tokens! [_ _] 0))
+              credential-administration
+              (reify admin/CredentialAdministration
+                (delete-member-credentials! [_ _] false))
+              job-administration
+              (reify admin/JobAdministration
+                (cancel-member-jobs! [_ _] 0))
+              directory-a (gcp/member-directory firestore "owner-a@example.com")
               service-a (admin/service {:directory directory-a})
               owner-a (admin/authorize-member! directory-a
                                                "owner-a@example.com"
@@ -34,7 +44,11 @@
               owner-b (admin/authorize-member! directory-b
                                                "owner-b@example.com"
                                                "owner-b-subject")
-              service-b (admin/service {:directory directory-b})
+              service-b (admin/service
+                         {:directory directory-b
+                          :token-administration token-administration
+                          :credential-administration credential-administration
+                          :job-administration job-administration})
               error-type (fn [action]
                            (try
                              (action)
@@ -80,6 +94,133 @@
                 "Re-adding a former owner requires a fresh identity generation")
             (is (= ::admin/not-allowlisted
                    (error-type #(admin/active-member directory-b owner-a))))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
+(deftest owner-rotation-cleanup-fails-closed-and-is-concurrent-startup-safe
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId
+                         "animated-graph-cloud-owner-cleanup-retry-test")
+                        (.setEmulatorHost host)
+                        .build
+                        .getService)]
+      (try
+        (doseq [collection ["members" "administration"
+                            "owner-revocations"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (let [directory-a (gcp/member-directory firestore "owner-a@example.com")
+              owner-a (admin/authorize-member! directory-a
+                                               "owner-a@example.com"
+                                               "owner-a-subject")
+              directory-b (gcp/member-directory firestore "owner-b@example.com")
+              events (atom [])
+              failed-calls (atom [])
+              error-type
+              (fn [action]
+                (try
+                  (action)
+                  nil
+                  (catch clojure.lang.ExceptionInfo error
+                    (:type (ex-data error)))))
+              failed-startup
+              (error-type
+               (fn []
+                 (admin/service
+                  {:directory directory-b
+                   :token-administration
+                   (reify admin/TokenAdministration
+                     (revoke-member-tokens! [_ _]
+                       (swap! failed-calls conj :tokens)
+                       (throw (ex-info "unavailable" {}))))
+                   :credential-administration
+                   (reify admin/CredentialAdministration
+                     (delete-member-credentials! [_ _]
+                       (swap! failed-calls conj :credentials)
+                       false))
+                   :job-administration
+                   (reify admin/JobAdministration
+                     (cancel-member-jobs! [_ _]
+                       (swap! failed-calls conj :jobs)
+                       0))
+                   :event-sink #(swap! events conj %)})))]
+          (is (= ::admin/revocation-incomplete failed-startup))
+          (is (= #{:tokens :credentials :jobs} (set @failed-calls))
+              "A failed startup still attempts every cleanup component")
+          (is (= 1 (count (admin/pending-owner-rotation-cleanups directory-b))))
+          (is (= (:subject owner-a)
+                 (:subject
+                  (first (filter #(= (:email owner-a) (:email %))
+                                 (admin/list-member-records directory-b)))))
+              "Cleanup identity remains durable after a failed startup")
+          (is (= ::admin/revocation-incomplete
+                 (error-type #(admin/add-member-record! directory-b
+                                                        (:email owner-a))))
+              "A pending generation cannot be reactivated")
+          (let [calls (atom {:tokens 0 :credentials 0 :jobs 0})
+                both-entered (promise)
+                release (promise)
+                options
+                {:directory directory-b
+                 :token-administration
+                 (reify admin/TokenAdministration
+                   (revoke-member-tokens! [_ _]
+                     (swap! calls update :tokens inc)
+                     0))
+                 :credential-administration
+                 (reify admin/CredentialAdministration
+                   (delete-member-credentials! [_ _]
+                     (swap! calls update :credentials inc)
+                     false))
+                 :job-administration
+                 (reify admin/JobAdministration
+                   (cancel-member-jobs! [_ _]
+                     (let [updated (swap! calls update :jobs inc)]
+                       (when (= 2 (:jobs updated))
+                         (deliver both-entered true)))
+                     @release
+                     0))
+                 :event-sink #(swap! events conj %)}
+                startups (mapv (fn [_] (future (admin/service options)))
+                               (range 2))]
+            (is (= true (deref both-entered 10000 ::timeout))
+                "Both startup reconcilers read the pending generation")
+            (is (= ::admin/revocation-incomplete
+                   (error-type #(admin/add-member-record! directory-b
+                                                          (:email owner-a))))
+                "A racing re-add cannot clobber cleanup identity")
+            (deliver release true)
+            (is (every? #(not= ::timeout (deref % 10000 ::timeout)) startups))
+            (is (empty? (admin/pending-owner-rotation-cleanups directory-b)))
+            (let [former-owner
+                  (first (filter #(= (:email owner-a) (:email %))
+                                 (admin/list-member-records directory-b)))
+                  calls-after-cleanup @calls
+                  success-count
+                  (fn []
+                    (count (filter #(= "owner_rotation_cleanup_complete"
+                                       (:event %))
+                                   @events)))]
+              (is (nil? (:subject former-owner)))
+              (is (= 1 (success-count))
+                  "Only the generation CAS winner emits success")
+              (admin/service options)
+              (is (= calls-after-cleanup @calls)
+                  "Repeated startup does not repeat completed cleanup")
+              (is (= 1 (success-count)))
+              (let [new-member (admin/add-member-record! directory-b
+                                                         (:email owner-a))]
+                (is (not= (:membership-version owner-a)
+                          (:membership-version new-member)))
+                (is (= (:subject owner-a)
+                       (:subject
+                        (admin/authorize-member! directory-b
+                                                 (:email owner-a)
+                                                 (:subject owner-a))))))))
+          (is (every? #(not-any? (fn [key] (contains? % key))
+                                 [:email :subject :token :credential :job-id])
+                      @events)))
         (finally
           (.close firestore))))
     (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
