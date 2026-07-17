@@ -71,6 +71,38 @@ summaries; structured logs omit filenames and synthetic telemetry values.
 The retained maximum MOVs are inputs to the manual DaVinci Resolve check in
 GitHub issue #3.
 
+## Polar preview and overlay API
+
+`POST /v1/preview` returns `image/png`; `POST /v1/overlay` returns a seekable
+`video/quicktime` ProRes 4444 overlay with AAC heartbeat audio. Both accept the
+same JSON body:
+
+```json
+{
+  "telemetryFormat": "polar-csv",
+  "telemetry": "timestamp,heart_rate\n2026-07-17T10:00:00Z,120\n...",
+  "preset": "1080p25",
+  "telemetrySyncAt": "2026-07-17T10:00:00Z",
+  "cameraSyncAt": "2026-07-17T09:00:00Z",
+  "sectionStartAt": "2026-07-17T09:00:00Z",
+  "sectionEndAt": "2026-07-17T09:00:02Z"
+}
+```
+
+Timestamps are ISO-8601 instants. `cameraSyncAt` must not follow the section;
+section end must follow section start by a whole number of seconds. The anchor
+offset maps the camera section onto Polar time, and Polar telemetry must cover
+both mapped boundaries. The selected preset supplies size, 25 fps, and maximum
+duration. Telemetry is limited to 10 MiB and the JSON envelope to 10 MiB plus
+64 KiB. Accepted Polar CSV uses comma or semicolon delimiters, an absolute
+`timestamp`/`datetime` column, and `heart_rate`, `heart rate`, `HR`, or
+`HR (bpm)` values between 20 and 260 bpm.
+
+Heart rate is linearly interpolated on one shared section timeline. Preview and
+MOV use a fixed 40–220 bpm scale and a stable 30-second centered/clamped window
+(or the whole section when shorter); heartbeat timing uses the same interpolated
+values. See ADR 0004 for the rendering decision.
+
 Infrastructure targets project `animated-graph-cloud-jp` in Warsaw (`europe-central2`). Application Default Credentials provide local authentication; do not create service-account key files or commit credentials.
 
 Pushes to `main` authenticate through GitHub Workload Identity Federation,

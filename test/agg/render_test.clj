@@ -1,12 +1,21 @@
 (ns agg.render-test
   (:require [agg.render.audio :as audio]
+            [agg.contracts.render :as contract]
             [agg.render.frames :as frames]
             [agg.render.media :as media]
             [agg.render.spec :as spec]
             [agg.renderer.main :as renderer]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]])
   (:import (java.io ByteArrayOutputStream OutputStream)
-           (java.nio.file Files OpenOption)))
+           (java.nio.file Files OpenOption)
+           (java.security MessageDigest)
+           (java.util HexFormat)))
+
+(defn- sha256-bytes [value]
+  (.formatHex (HexFormat/of)
+              (.digest (MessageDigest/getInstance "SHA-256") value)))
 
 (defn- streamed-rgba [render-spec]
   (let [output (ByteArrayOutputStream.)]
@@ -83,6 +92,34 @@
           :target-bitrate "192k"
           :target-bitrate-bps 192000}
          media/aac-lc-contract)))
+
+(deftest rendering-boundaries-are-protocol-backed
+  (is (satisfies? frames/FrameRenderer frames/java2d-frame-renderer))
+  (is (satisfies? media/VideoEncoder (media/ffmpeg-video-encoder))))
+
+(deftest polar-midpoint-preview-matches-the-golden-render
+  (let [telemetry (slurp (io/resource "fixtures/polar/valid.csv"))
+        render-spec (contract/prepare
+                     {:telemetryFormat "polar-csv"
+                      :telemetry telemetry
+                      :preset "1080p25"
+                      :telemetrySyncAt "2026-07-17T10:00:00Z"
+                      :cameraSyncAt "2026-07-17T09:00:00Z"
+                      :sectionStartAt "2026-07-17T09:00:00Z"
+                      :sectionEndAt "2026-07-17T09:00:02Z"})
+        first-output (ByteArrayOutputStream.)
+        second-output (ByteArrayOutputStream.)]
+    (is (= {:window-seconds 30.0
+            :heart-rate-min 40.0
+            :heart-rate-max 220.0}
+           frames/trace-contract))
+    (frames/render-preview! frames/java2d-frame-renderer render-spec first-output)
+    (frames/render-preview! frames/java2d-frame-renderer render-spec second-output)
+    (is (java.util.Arrays/equals (.toByteArray first-output)
+                                 (.toByteArray second-output)))
+    (is (= (str/trim
+            (slurp (io/resource "fixtures/golden/polar-preview.sha256")))
+           (sha256-bytes (.toByteArray first-output))))))
 
 (deftest frames-stream-as-rgba-with-transparency
   (let [{:keys [result rgba]} (streamed-rgba {:width 64
@@ -162,11 +199,18 @@
                     (and (= (aget wav offset) (aget wav (+ offset 2)))
                          (= (aget wav (inc offset)) (aget wav (+ offset 3))))))))))
 
+(deftest heartbeat-timing-follows-the-interpolated-polar-timeline
+  (is (= [0 24000]
+         (audio/beat-sample-indices
+          {:duration-seconds 1
+           :telemetry [{:seconds 0.0 :heart-rate 120.0}
+                       {:seconds 1.0 :heart-rate 120.0}]}))))
+
 (deftest render-job-completes-through-the-public-interface
   (let [output (Files/createTempFile "agg-render-test-" ".mov"
                                      (make-array java.nio.file.attribute.FileAttribute 0))
         fake-media
-        (reify media/Media
+        (reify media/VideoEncoder
           (encode! [_ _ _ output-path write-frames!]
             (with-open [frames-output (OutputStream/nullOutputStream)]
               (write-frames! frames-output))
@@ -193,3 +237,48 @@
         (is (= "4444" (get-in result [:media :video :profile]))))
       (finally
         (Files/deleteIfExists output)))))
+
+(deftest fixed-polar-input-produces-a-deterministic-ffprobe-verified-mov
+  (let [first-output (Files/createTempFile
+                      "agg-polar-first-"
+                      ".mov"
+                      (make-array java.nio.file.attribute.FileAttribute 0))
+        second-output (Files/createTempFile
+                       "agg-polar-second-"
+                       ".mov"
+                       (make-array java.nio.file.attribute.FileAttribute 0))
+        render-spec {:id "test-polar"
+                     :width 320
+                     :height 180
+                     :fps 25
+                     :duration-seconds 1
+                     :profile? false
+                     :telemetry [{:seconds 0.0 :heart-rate 120.0}
+                                 {:seconds 1.0 :heart-rate 128.0}]}
+        encoder (media/ffmpeg-video-encoder)]
+    (try
+      (let [first-result (renderer/render! (assoc render-spec
+                                                  :output-path first-output)
+                                           {:video-encoder encoder})
+            second-result (renderer/render! (assoc render-spec
+                                                   :output-path second-output)
+                                            {:video-encoder encoder})]
+        (is (= (:sha256 first-result) (:sha256 second-result)))
+        (is (= {:codec "prores"
+                :profile "4444"
+                :encoder-input-pixel-format "yuva444p10le"
+                :pixel-format "yuva444p12le"
+                :alpha-bits 16
+                :alpha true
+                :width 320
+                :height 180
+                :fps 25.0}
+               (get-in first-result [:media :video])))
+        (is (= {:format "mov"
+                :duration-seconds 1.0
+                :seekable true
+                :fragmented false}
+               (get-in first-result [:media :container]))))
+      (finally
+        (Files/deleteIfExists first-output)
+        (Files/deleteIfExists second-output)))))

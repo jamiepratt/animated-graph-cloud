@@ -5,6 +5,7 @@
  {:api {:main-opts ["-m" "agg.api.main"]}
   :renderer {:main-opts ["-m" "agg.renderer.main"]}
   :test {:extra-paths ["test"]
+         :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}}
          :main-opts ["-m" "agg.test-runner"]}
   :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
           :ns-default build}}}

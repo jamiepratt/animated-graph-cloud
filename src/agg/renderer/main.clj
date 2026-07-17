@@ -23,9 +23,12 @@
     (.formatHex (HexFormat/of) (.digest digest))))
 
 (defn render!
-  "Runs one bounded synthetic render and returns its validated media report."
-  [{:keys [output-path profile? jfr-path] :as render-spec} {:keys [media]}]
-  (let [audio-path (Files/createTempFile "agg-audio-" ".wav"
+  "Runs one bounded render and returns its validated media report."
+  [{:keys [output-path profile? jfr-path] :as render-spec}
+   {:keys [media video-encoder frame-renderer]}]
+  (let [video-encoder (or video-encoder media)
+        frame-renderer (or frame-renderer frames/java2d-frame-renderer)
+        audio-path (Files/createTempFile "agg-audio-" ".wav"
                                          (make-array java.nio.file.attribute.FileAttribute 0))
         started (System/nanoTime)
         frame-result (atom nil)
@@ -34,14 +37,17 @@
     (try
       (with-open [audio-output (Files/newOutputStream audio-path (make-array OpenOption 0))]
         (audio/write-wav! render-spec audio-output))
-      (let [encode-result (media/encode! media
+      (let [encode-result (media/encode! video-encoder
                                          render-spec
                                          audio-path
                                          output-path
                                          (fn [output]
                                            (reset! frame-result
-                                                   (frames/stream! render-spec output))))
-            verified (media/verify! media render-spec output-path)
+                                                   (frames/stream-frames!
+                                                    frame-renderer
+                                                    render-spec
+                                                    output))))
+            verified (media/verify! video-encoder render-spec output-path)
             wall-seconds (/ (- (System/nanoTime) started) 1000000000.0)
             frame-count (:frame-count @frame-result)
             jfr-summary (when recording
@@ -126,16 +132,18 @@
   ([{:keys [output-path report-path jfr-path bucket object-prefix delete-local?
             ffmpeg ffprobe]
      :as request}
-    {:keys [media artifact-store]}]
+    {:keys [media video-encoder artifact-store]}]
    (when (not= (some? bucket) (some? object-prefix))
      (throw (ex-info "Bucket and object prefix must be supplied together"
                      {:type ::invalid-upload-options})))
-   (let [media (or media (media/ffmpeg-media ffmpeg ffprobe))
+   (let [video-encoder (or video-encoder
+                           media
+                           (media/ffmpeg-video-encoder ffmpeg ffprobe))
          artifact-store (or artifact-store
                             (when bucket (storage/gcs-store bucket object-prefix)))
          completed? (atom false)]
      (try
-       (let [result (render! request {:media media})
+       (let [result (render! request {:video-encoder video-encoder})
              report-json (json/write-str (dissoc result :objects))]
          (Files/writeString report-path
                             report-json

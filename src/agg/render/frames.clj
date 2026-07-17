@@ -1,9 +1,22 @@
 (ns agg.render.frames
-  (:require [agg.render.spec :as spec])
+  (:require [agg.render.spec :as spec]
+            [agg.telemetry.timeline :as timeline])
   (:import (java.awt AlphaComposite BasicStroke Color RenderingHints Transparency)
            (java.awt.color ColorSpace)
            (java.awt.image BufferedImage ComponentColorModel DataBuffer DataBufferByte Raster)
-           (java.io OutputStream)))
+           (java.io OutputStream)
+           (javax.imageio ImageIO)))
+
+(def trace-contract
+  {:window-seconds 30.0
+   :heart-rate-min 40.0
+   :heart-rate-max 220.0})
+
+(defprotocol FrameRenderer
+  (stream-frames! [renderer render-spec output]
+    "Streams RGBA frames without retaining a frame collection.")
+  (render-preview! [renderer render-spec output]
+    "Writes the section midpoint as one deterministic PNG."))
 
 (defn- rgba-surface [width height]
   (let [rgba (byte-array (* width height 4))
@@ -28,7 +41,44 @@
      (* 19.0 (Math/sin (* seconds 0.073)))
      (* 7.0 (Math/sin (* seconds 0.019)))))
 
-(defn- render-frame! [^BufferedImage image frame-index fps]
+(defn- window-bounds [duration-seconds seconds]
+  (let [window (:window-seconds trace-contract)]
+    (if (<= duration-seconds window)
+      [0.0 (double duration-seconds)]
+      (let [start (-> (- seconds (/ window 2.0))
+                      (max 0.0)
+                      (min (- duration-seconds window)))]
+        [start (+ start window)]))))
+
+(defn- trace-samples [{:keys [telemetry duration-seconds]} seconds
+                      graph-left graph-right]
+  (let [sample-count (max 8 (min 160 (inc (- graph-right graph-left))))]
+    (if (seq telemetry)
+      (let [[window-start window-end] (window-bounds duration-seconds seconds)]
+        {:samples (mapv (fn [point]
+                          (let [ratio (/ (double point) (double (dec sample-count)))
+                                sample-time (+ window-start
+                                               (* ratio (- window-end window-start)))]
+                            {:x (+ graph-left
+                                   (int (* ratio (- graph-right graph-left))))
+                             :heart-rate (timeline/heart-rate-at-seconds
+                                          telemetry
+                                          sample-time)}))
+                        (range sample-count))
+         :minimum (:heart-rate-min trace-contract)
+         :maximum (:heart-rate-max trace-contract)})
+      (let [samples (mapv (fn [point]
+                            (let [ratio (/ (double point) (double (dec sample-count)))
+                                  sample-time (+ (- seconds 8.0) (* ratio 8.0))]
+                              {:x (+ graph-left
+                                     (int (* ratio (- graph-right graph-left))))
+                               :heart-rate (synthetic-heart-rate sample-time)}))
+                          (range sample-count))]
+        {:samples samples
+         :minimum (apply min (map :heart-rate samples))
+         :maximum (apply max (map :heart-rate samples))}))))
+
+(defn- render-frame! [^BufferedImage image render-spec seconds]
   (let [g (.createGraphics image)
         width (.getWidth image)
         height (.getHeight image)
@@ -38,22 +88,18 @@
         graph-right (- width horizontal-margin 1)
         graph-top vertical-margin
         graph-bottom (- height vertical-margin 1)
-        seconds (/ (double frame-index) (double fps))
-        sample-count (max 8 (min 160 (inc (- graph-right graph-left))))
-        samples (mapv (fn [point]
-                        (let [ratio (/ (double point) (double (dec sample-count)))
-                              sample-time (+ (- seconds 8.0) (* ratio 8.0))]
-                          {:x (+ graph-left
-                                 (int (* ratio (- graph-right graph-left))))
-                           :heart-rate (synthetic-heart-rate sample-time)}))
-                      (range sample-count))
-        minimum-heart-rate (apply min (map :heart-rate samples))
-        maximum-heart-rate (apply max (map :heart-rate samples))
+        {:keys [samples minimum maximum]}
+        (trace-samples render-spec seconds graph-left graph-right)
+        minimum-heart-rate minimum
+        maximum-heart-rate maximum
         heart-rate-range (max 1.0 (- maximum-heart-rate minimum-heart-rate))
         y-for (fn [heart-rate]
-                (int (- graph-bottom
-                        (* (/ (- heart-rate minimum-heart-rate) heart-rate-range)
-                           (- graph-bottom graph-top)))))]
+                (let [bounded (-> heart-rate
+                                  (max minimum-heart-rate)
+                                  (min maximum-heart-rate))]
+                  (int (- graph-bottom
+                          (* (/ (- bounded minimum-heart-rate) heart-rate-range)
+                             (- graph-bottom graph-top))))))]
     (try
       (.setComposite g AlphaComposite/Clear)
       (.fillRect g 0 0 width height)
@@ -74,14 +120,30 @@
       (finally
         (.dispose g)))))
 
+(defrecord Java2dFrameRenderer []
+  FrameRenderer
+  (stream-frames! [_ {:keys [width height fps] :as render-spec} output]
+    (let [{:keys [image rgba]} (rgba-surface width height)
+          frames (spec/frame-count render-spec)]
+      (dotimes [frame-index frames]
+        (render-frame! image render-spec (/ (double frame-index) fps))
+        (.write output ^bytes rgba 0 (alength ^bytes rgba)))
+      (.flush output)
+      {:frame-count frames
+       :buffer-count 1}))
+  (render-preview! [_ {:keys [width height duration-seconds] :as render-spec}
+                    output]
+    (let [{:keys [image]} (rgba-surface width height)
+          midpoint (/ (double duration-seconds) 2.0)]
+      (render-frame! image render-spec midpoint)
+      (when-not (ImageIO/write image "png" output)
+        (throw (ex-info "PNG encoder unavailable" {:type ::png-unavailable})))
+      (.flush ^OutputStream output)
+      {:width width :height height :at-seconds midpoint})))
+
+(def java2d-frame-renderer (->Java2dFrameRenderer))
+
 (defn stream!
-  "Streams exactly one reusable RGBA frame buffer at a time to output."
-  [{:keys [width height fps] :as render-spec} ^OutputStream output]
-  (let [{:keys [image rgba]} (rgba-surface width height)
-        frames (spec/frame-count render-spec)]
-    (dotimes [frame-index frames]
-      (render-frame! image frame-index fps)
-      (.write output ^bytes rgba 0 (alength ^bytes rgba)))
-    (.flush output)
-    {:frame-count frames
-     :buffer-count 1}))
+  "Streams through the default bounded Java2D frame renderer."
+  [render-spec output]
+  (stream-frames! java2d-frame-renderer render-spec output))

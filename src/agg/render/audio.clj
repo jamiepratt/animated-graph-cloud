@@ -1,4 +1,5 @@
 (ns agg.render.audio
+  (:require [agg.telemetry.timeline :as timeline])
   (:import (java.io OutputStream)))
 
 (def ^:private sample-rate 48000)
@@ -50,16 +51,29 @@
         (aset-short pulse index (short sample))))
     pulse))
 
-(defn- beat-interval [sample-index]
+(defn- beat-interval [render-spec sample-index]
   (let [seconds (/ (double sample-index) sample-rate)
-        bpm (+ 126.0
-               (* 19.0 (Math/sin (* seconds 0.073)))
-               (* 7.0 (Math/sin (* seconds 0.019))))]
+        bpm (if (seq (:telemetry render-spec))
+              (timeline/heart-rate-at-seconds (:telemetry render-spec) seconds)
+              (+ 126.0
+                 (* 19.0 (Math/sin (* seconds 0.073)))
+                 (* 7.0 (Math/sin (* seconds 0.019)))))]
     (long (Math/round (/ (* sample-rate 60.0) bpm)))))
+
+(defn beat-sample-indices
+  "Returns deterministic heartbeat onsets for a render contract."
+  [{:keys [duration-seconds] :as render-spec}]
+  (let [sample-count (* sample-rate duration-seconds)]
+    (loop [beat-at 0
+           beats []]
+      (if (< beat-at sample-count)
+        (recur (+ beat-at (beat-interval render-spec beat-at))
+               (conj beats beat-at))
+        beats))))
 
 (defn write-wav!
   "Writes deterministic stereo PCM heartbeat audio suitable as FFmpeg input."
-  [{:keys [duration-seconds]} ^OutputStream output]
+  [{:keys [duration-seconds] :as render-spec} ^OutputStream output]
   (let [sample-count (* sample-rate duration-seconds)
         pulse (pulse-waveform)
         pulse-length (alength pulse)
@@ -80,7 +94,7 @@
                   (let [absolute (+ sample-index offset)
                         starts-beat (>= absolute beat-at)
                         beat-at' (if starts-beat
-                                   (+ absolute (beat-interval absolute))
+                                   (+ absolute (beat-interval render-spec absolute))
                                    beat-at)
                         age' (if starts-beat 0 age)
                         sample (if (< age' pulse-length)

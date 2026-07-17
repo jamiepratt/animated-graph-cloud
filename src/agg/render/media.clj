@@ -4,9 +4,9 @@
   (:import (java.io RandomAccessFile)
            (java.nio.file Path)))
 
-(defprotocol Media
-  (encode! [media render-spec audio-path output-path write-frames!])
-  (verify! [media render-spec output-path]))
+(defprotocol VideoEncoder
+  (encode! [encoder render-spec audio-path output-path write-frames!])
+  (verify! [encoder render-spec output-path]))
 
 (def prores-4444-contract
   {:encoder "prores_ks"
@@ -176,8 +176,8 @@
                  :fragmented false}
      :ffprobe probe}))
 
-(defrecord FfmpegMedia [ffmpeg ffprobe]
-  Media
+(defrecord FfmpegVideoEncoder [ffmpeg ffprobe]
+  VideoEncoder
   (encode! [_ render-spec audio-path output-path write-frames!]
     (encode-with-ffmpeg! ffmpeg render-spec audio-path output-path write-frames!))
   (verify! [_ render-spec output-path]
@@ -193,7 +193,12 @@
           probe (json/read-str probe-output :key-fn keyword)]
       (verified-media render-spec probe (top-level-atoms output-path)))))
 
-(defn ffmpeg-media
-  ([] (ffmpeg-media "ffmpeg" "ffprobe"))
+(defn ffmpeg-video-encoder
+  ([] (ffmpeg-video-encoder "ffmpeg" "ffprobe"))
   ([ffmpeg ffprobe]
-   (->FfmpegMedia ffmpeg ffprobe)))
+   (->FfmpegVideoEncoder ffmpeg ffprobe)))
+
+(defn ffmpeg-media
+  "Compatibility constructor; prefer ffmpeg-video-encoder."
+  ([] (ffmpeg-video-encoder))
+  ([ffmpeg ffprobe] (ffmpeg-video-encoder ffmpeg ffprobe)))
