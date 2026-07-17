@@ -107,6 +107,12 @@
   (is (str/includes? terraform "duration        = \"300s\""))
   (is (str/includes? terraform "title = \"Cloud Tasks backlog depth\"")))
 
+(deftest operations-dashboard-matches-monitoring-canonical-json
+  (is (= 8 (count (re-seq #"plotType\s*=\s*\"LINE\"" terraform))))
+  (is (= 8 (count (re-seq #"targetAxis\s*=\s*\"Y1\"" terraform))))
+  (is (zero? (count (re-seq #"xPos\s*=\s*0" terraform))))
+  (is (zero? (count (re-seq #"yPos\s*=\s*0" terraform)))))
+
 (deftest delivery-enables-the-api-with-its-own-authenticated-task-audience
   (is (str/includes? workflow "AGG_JOB_LIFECYCLE_ENABLED=true"))
   (is (str/includes? workflow

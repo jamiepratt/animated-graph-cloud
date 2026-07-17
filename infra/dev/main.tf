@@ -638,11 +638,13 @@ resource "google_monitoring_dashboard" "operations" {
       columns = 12
       tiles = [
         {
-          xPos = 0, yPos = 0, width = 6, height = 4
+          width = 6, height = 4
           widget = {
             title = "Queue age"
             xyChart = {
               dataSets = [{
+                plotType   = "LINE"
+                targetAxis = "Y1"
                 timeSeriesQuery = { timeSeriesFilter = {
                   filter      = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.queue_age_ms.name}\" AND resource.type=\"cloud_run_revision\""
                   aggregation = { alignmentPeriod = "300s", perSeriesAligner = "ALIGN_PERCENTILE_99" }
@@ -653,18 +655,22 @@ resource "google_monitoring_dashboard" "operations" {
           }
         },
         {
-          xPos = 6, yPos = 0, width = 6, height = 4
+          xPos = 6, width = 6, height = 4
           widget = {
             title = "Render failures"
             xyChart = {
               dataSets = [
                 {
+                  plotType   = "LINE"
+                  targetAxis = "Y1"
                   timeSeriesQuery = { timeSeriesFilter = {
                     filter      = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.render_failures.name}\" AND resource.type=\"cloud_run_job\""
                     aggregation = { alignmentPeriod = "300s", perSeriesAligner = "ALIGN_SUM" }
                   } }
                 },
                 {
+                  plotType   = "LINE"
+                  targetAxis = "Y1"
                   timeSeriesQuery = { timeSeriesFilter = {
                     filter      = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.render_failures.name}\" AND resource.type=\"cloud_run_revision\""
                     aggregation = { alignmentPeriod = "300s", perSeriesAligner = "ALIGN_SUM" }
@@ -675,11 +681,13 @@ resource "google_monitoring_dashboard" "operations" {
           }
         },
         {
-          xPos = 0, yPos = 4, width = 6, height = 4
+          yPos = 4, width = 6, height = 4
           widget = {
             title = "Memory utilization"
             xyChart = {
               dataSets = [{
+                plotType   = "LINE"
+                targetAxis = "Y1"
                 timeSeriesQuery = { timeSeriesFilter = {
                   filter      = "metric.type=\"run.googleapis.com/container/memory/utilizations\" AND resource.type=\"cloud_run_job\""
                   aggregation = { alignmentPeriod = "300s", perSeriesAligner = "ALIGN_PERCENTILE_99" }
@@ -695,6 +703,8 @@ resource "google_monitoring_dashboard" "operations" {
             title = "Stale leases"
             xyChart = {
               dataSets = [{
+                plotType   = "LINE"
+                targetAxis = "Y1"
                 timeSeriesQuery = { timeSeriesFilter = {
                   filter      = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.stale_leases.name}\" AND resource.type=\"cloud_run_revision\""
                   aggregation = { alignmentPeriod = "300s", perSeriesAligner = "ALIGN_SUM" }
@@ -704,11 +714,13 @@ resource "google_monitoring_dashboard" "operations" {
           }
         },
         {
-          xPos = 0, yPos = 8, width = 6, height = 4
+          yPos = 8, width = 6, height = 4
           widget = {
             title = "Drive reauthorization"
             xyChart = {
               dataSets = [{
+                plotType   = "LINE"
+                targetAxis = "Y1"
                 timeSeriesQuery = { timeSeriesFilter = {
                   filter      = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.drive_reauthorization.name}\" AND resource.type=\"cloud_run_job\""
                   aggregation = { alignmentPeriod = "300s", perSeriesAligner = "ALIGN_SUM" }
@@ -723,6 +735,8 @@ resource "google_monitoring_dashboard" "operations" {
             title = "Budget admission"
             xyChart = {
               dataSets = [{
+                plotType   = "LINE"
+                targetAxis = "Y1"
                 timeSeriesQuery = { timeSeriesFilter = {
                   filter      = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.budget_admission_rejections.name}\" AND resource.type=\"cloud_run_revision\""
                   aggregation = { alignmentPeriod = "300s", perSeriesAligner = "ALIGN_SUM" }
@@ -732,11 +746,13 @@ resource "google_monitoring_dashboard" "operations" {
           }
         },
         {
-          xPos = 0, yPos = 12, width = 6, height = 4
+          yPos = 12, width = 6, height = 4
           widget = {
             title = "Cloud Tasks backlog depth"
             xyChart = {
               dataSets = [{
+                plotType   = "LINE"
+                targetAxis = "Y1"
                 timeSeriesQuery = { timeSeriesFilter = {
                   filter      = "metric.type=\"cloudtasks.googleapis.com/queue/depth\" AND resource.type=\"cloud_tasks_queue\" AND resource.label.queue_id=\"agg-render\""
                   aggregation = { alignmentPeriod = "60s", perSeriesAligner = "ALIGN_MAX" }
