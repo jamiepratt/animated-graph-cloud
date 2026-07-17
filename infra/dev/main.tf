@@ -285,8 +285,8 @@ resource "google_billing_budget" "development" {
 
   amount {
     specified_amount {
-      currency_code = "USD"
-      units         = tostring(var.monthly_budget_usd)
+      currency_code = "PLN"
+      units         = tostring(var.monthly_budget_pln)
     }
   }
 

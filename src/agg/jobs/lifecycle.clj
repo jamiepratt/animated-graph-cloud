@@ -42,17 +42,17 @@
 
 (def max-active-leases 5)
 (def max-daily-submissions 100)
-(def default-monthly-budget-cents 3000)
-(def default-render-reservation-cents 25)
+(def default-monthly-budget-minor-units 40000)
+(def default-render-reservation-minor-units 125)
 (def ^:private billing-zone (ZoneOffset/ofHours -8))
 (def lease-seconds (* 65 60))
 (def max-output-bytes (* 18 1024 1024 1024))
 
 (defn validate-admission-limits!
-  [daily-limit monthly-budget-cents render-reservation-cents]
+  [daily-limit monthly-budget-minor-units render-reservation-minor-units]
   (when-not (every? #(and (integer? %) (pos? %))
-                    [daily-limit monthly-budget-cents
-                     render-reservation-cents])
+                    [daily-limit monthly-budget-minor-units
+                     render-reservation-minor-units])
     (throw (ex-info "Admission limits must be positive integers"
                     {:type ::invalid-admission-configuration})))
   true)
@@ -118,8 +118,8 @@
           (throw error))))))
 
 (defrecord InMemoryJobService [state enqueued launcher worker ^Clock clock
-                               daily-limit monthly-budget-cents
-                               render-reservation-cents member-directory]
+                               daily-limit monthly-budget-minor-units
+                               render-reservation-minor-units member-directory]
   JobAccess
   (owns-job? [_ job-id subject]
     (= subject (get-in @state [:jobs job-id :request :requesterSubject])))
@@ -188,8 +188,8 @@
                       _ (when (>= submitted daily-limit)
                           (throw (ex-info "Daily submission limit is exhausted"
                                           {:type ::daily-submission-limit-exhausted})))
-                      _ (when (> (+ reserved render-reservation-cents)
-                                 monthly-budget-cents)
+                      _ (when (> (+ reserved render-reservation-minor-units)
+                                 monthly-budget-minor-units)
                           (throw (ex-info "Monthly compute budget is exhausted"
                                           {:type ::monthly-budget-exhausted})))
                       job {:id job-id
@@ -208,7 +208,7 @@
                                                (inc submitted))
                                      (assoc-in [:admission :monthly month]
                                                (+ reserved
-                                                  render-reservation-cents)))))
+                                                  render-reservation-minor-units)))))
                   {:created? true :job job}))))
           result (with-member-action member-directory
                    (member-identity request)
@@ -351,8 +351,8 @@
                                     max-active-leases)
                             (throw (ex-info "All render leases are held"
                                             {:type ::capacity-exhausted})))
-                        _ (when (> (+ reserved render-reservation-cents)
-                                   monthly-budget-cents)
+                        _ (when (> (+ reserved render-reservation-minor-units)
+                                   monthly-budget-minor-units)
                             (throw (ex-info "Monthly compute budget is exhausted"
                                             {:type ::monthly-budget-exhausted})))
                         updated (-> job
@@ -366,7 +366,7 @@
                                  (assoc-in [:jobs job-id] updated)
                                  (assoc-in [:admission :monthly month]
                                            (+ reserved
-                                              render-reservation-cents)))))
+                                              render-reservation-minor-units)))))
                     updated)))))]
       (swap! enqueued conj {:job-id job-id :attempt (:attempt retried)})
       (job-resource retried)))
@@ -457,14 +457,16 @@
 
 (defn in-memory-system
   ([] (in-memory-system {}))
-  ([{:keys [clock launcher worker daily-limit monthly-budget-cents
-            render-reservation-cents member-directory]
+  ([{:keys [clock launcher worker daily-limit monthly-budget-minor-units
+            render-reservation-minor-units member-directory]
      :or {clock (Clock/systemUTC)
           daily-limit max-daily-submissions
-          monthly-budget-cents default-monthly-budget-cents
-          render-reservation-cents default-render-reservation-cents}}]
-   (validate-admission-limits! daily-limit monthly-budget-cents
-                               render-reservation-cents)
+          monthly-budget-minor-units
+          default-monthly-budget-minor-units
+          render-reservation-minor-units
+          default-render-reservation-minor-units}}]
+   (validate-admission-limits! daily-limit monthly-budget-minor-units
+                               render-reservation-minor-units)
    (let [state (atom {:jobs {} :idempotency {}})
          enqueued (atom [])
          launched (atom [])
@@ -475,8 +477,8 @@
                       (perform-render! [_ _ _]
                         (throw (ex-info "No render worker configured" {})))))]
      {:service (->InMemoryJobService state enqueued launcher worker clock
-                                     daily-limit monthly-budget-cents
-                                     render-reservation-cents member-directory)
+                                     daily-limit monthly-budget-minor-units
+                                     render-reservation-minor-units member-directory)
       :state state
       :enqueued enqueued
       :launched launched

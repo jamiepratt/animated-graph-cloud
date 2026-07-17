@@ -84,12 +84,16 @@
 
 (deftest admission-limits-fail-closed-on-invalid-configuration
   (doseq [options [{:daily-limit 0}
-                   {:monthly-budget-cents 0}
-                   {:render-reservation-cents 0}
-                   {:render-reservation-cents -1}]]
+                   {:monthly-budget-minor-units 0}
+                   {:render-reservation-minor-units 0}
+                   {:render-reservation-minor-units -1}]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"positive integers"
                           (jobs/in-memory-system options)))))
+
+(deftest default-admission-policy-is-pln-minor-units
+  (is (= 40000 jobs/default-monthly-budget-minor-units))
+  (is (= 125 jobs/default-render-reservation-minor-units)))
 
 (deftest member-cleanup-cancels-only-its-generation-and-legacy-jobs
   (let [service (:service (jobs/in-memory-system))
@@ -115,8 +119,8 @@
     (is (= "queued" (:state (jobs/get-job service new-id))))))
 
 (deftest monthly-budget-admission-reserves-before-enqueue
-  (let [system (jobs/in-memory-system {:monthly-budget-cents 50
-                                       :render-reservation-cents 25})
+  (let [system (jobs/in-memory-system {:monthly-budget-minor-units 50
+                                       :render-reservation-minor-units 25})
         service (:service system)
         request (render-request)]
     (is (:created? (jobs/submit-job! service "budget-1" request)))
@@ -128,13 +132,26 @@
     (is (= 2 (count @(:enqueued system)))
         "rejected work never reaches the render queue")))
 
+(deftest monthly-admission-configuration-uses-currency-minor-units
+  (let [system (jobs/in-memory-system
+                {:monthly-budget-minor-units 250
+                 :render-reservation-minor-units 125})
+        service (:service system)
+        request (render-request)]
+    (is (:created? (jobs/submit-job! service "minor-unit-budget-1" request)))
+    (is (:created? (jobs/submit-job! service "minor-unit-budget-2" request)))
+    (is (= ::jobs/monthly-budget-exhausted
+           (exception-type
+            #(jobs/submit-job! service "minor-unit-budget-3" request))))
+    (is (= 2 (count @(:enqueued system))))))
+
 (deftest billing-month-resets-at-fixed-utc-minus-eight
   (let [now (atom (Instant/parse "2026-07-31T23:00:00Z"))
         service (:service
                  (jobs/in-memory-system
                   {:clock (mutable-clock now)
-                   :monthly-budget-cents 25
-                   :render-reservation-cents 25}))]
+                   :monthly-budget-minor-units 25
+                   :render-reservation-minor-units 25}))]
     (is (:created? (jobs/submit-job! service "july-budget"
                                      (render-request))))
     (reset! now (Instant/parse "2026-08-01T07:30:00Z"))
@@ -146,8 +163,8 @@
                                      (render-request))))))
 
 (deftest explicit-retry-reserves-compute-before-requeue
-  (let [system (jobs/in-memory-system {:monthly-budget-cents 25
-                                       :render-reservation-cents 25})
+  (let [system (jobs/in-memory-system {:monthly-budget-minor-units 25
+                                       :render-reservation-minor-units 25})
         service (:service system)
         job-id (get-in (jobs/submit-job! service "retry-budget"
                                          (render-request))
@@ -183,10 +200,10 @@
                 (finally
                   (.close ^java.lang.AutoCloseable server)))))]
     (let [daily (second-submission {:daily-limit 1
-                                    :monthly-budget-cents 1000}
+                                    :monthly-budget-minor-units 1000}
                                    "daily-http")
-          budget (second-submission {:monthly-budget-cents 25
-                                     :render-reservation-cents 25}
+          budget (second-submission {:monthly-budget-minor-units 25
+                                     :render-reservation-minor-units 25}
                                     "budget-http")]
       (is (= 429 (.statusCode daily)))
       (is (= {:error "daily_submission_limit_exhausted"}

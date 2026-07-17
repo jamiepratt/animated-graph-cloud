@@ -291,13 +291,13 @@
           queue (reify jobs/JobQueue
                   (enqueue-job! [_ job-id attempt]
                     (swap! enqueued conj [job-id attempt])))
-          service (fn [monthly-budget-cents]
+          service (fn [monthly-budget-minor-units]
                     (gcp/job-service {:firestore firestore
                                       :request-store request-store
                                       :queue queue
                                       :clock clock
-                                      :monthly-budget-cents monthly-budget-cents
-                                      :render-reservation-cents 25}))
+                                      :monthly-budget-minor-units monthly-budget-minor-units
+                                      :render-reservation-minor-units 25}))
           exception-type (fn [f]
                            (try
                              (f)
@@ -333,9 +333,16 @@
           (let [first-job (jobs/submit-job! budget-service "budget-load-1"
                                             (fixture/render-request))
                 second-job (jobs/submit-job! budget-service "budget-load-2"
-                                             (fixture/render-request))]
+                                             (fixture/render-request))
+                budget-snapshot
+                (.get (.get (.document (.collection firestore "orchestration")
+                                       "budget-2026-07")))]
             (is (:created? first-job))
             (is (:created? second-job))
+            (is (= 50 (.getLong budget-snapshot "reservedMinorUnits")))
+            (is (= 50 (.getLong budget-snapshot "limitMinorUnits")))
+            (is (= 25 (.getLong budget-snapshot "reservationMinorUnits")))
+            (is (= "PLN" (.getString budget-snapshot "currency")))
             (jobs/cancel-job! budget-service (get-in first-job [:job :id]))
             (is (= ::jobs/monthly-budget-exhausted
                    (exception-type
@@ -373,8 +380,8 @@
                     :request-store request-store
                     :queue queue
                     :clock (mutable-clock now)
-                    :monthly-budget-cents 25
-                    :render-reservation-cents 25})
+                    :monthly-budget-minor-units 25
+                    :render-reservation-minor-units 25})
           exception-type
           (fn [f]
             (try

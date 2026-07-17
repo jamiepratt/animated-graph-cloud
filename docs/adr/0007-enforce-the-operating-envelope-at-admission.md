@@ -16,9 +16,10 @@ job IDs, filenames, telemetry, tokens, or signed URLs in logs.
 One Firestore transaction admits each new idempotency key. It rejects when the
 UTC-day counter has reached 100, when five unexpired capacity leases exist, or
 when another conservative compute reservation would exceed the monthly ceiling.
-The development ceiling is USD 30 and each attempt reserves 25 cents, above the
-measured maximum-render compute cost. Its month resets at Cloud Billing's fixed
-midnight UTC−8 boundary rather than daylight-saving-aware Pacific local time.
+The development ceiling is PLN 400 and each attempt reserves 125 grosz
+(PLN 1.25), above the measured maximum-render compute cost. Its month resets at
+Cloud Billing's fixed midnight UTC−8 boundary rather than daylight-saving-aware
+Pacific local time.
 Explicit retries reserve again; duplicate
 submissions do not. Stable errors are `daily_submission_limit_exhausted`,
 `capacity_exhausted`, and `monthly_budget_exhausted`. Existing executions are
@@ -55,4 +56,4 @@ Firestore, not API instance memory or billing alerts, is the admission source of
 truth. Reservations are intentionally conservative and are not refunded after
 failure or cancellation, so the application can stop early but cannot silently
 overspend its configured compute envelope. Operators must update the Terraform
-budget and deployment admission cents together when the ceiling changes.
+budget and deployment admission minor units together when the ceiling changes.

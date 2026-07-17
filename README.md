@@ -175,9 +175,9 @@ retries. Request and output objects expire after one day; Firestore job metadata
 expires after 90 days.
 
 New jobs are admitted atomically against a global 100-submission UTC-day limit,
-the five live leases, and a conservative 25-cent reservation from the USD 30
-monthly development ceiling using Cloud Billing's fixed UTC−8 calendar month.
-Explicit retries reserve compute again. Rejections
+the five live leases, and a conservative 125-grosz (PLN 1.25) reservation from
+the PLN 400 monthly development ceiling using Cloud Billing's fixed UTC−8
+calendar month. Explicit retries reserve compute again. Rejections
 use stable `daily_submission_limit_exhausted`, `capacity_exhausted`, and
 `monthly_budget_exhausted` error codes; already-running work may finish.
 

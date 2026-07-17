@@ -43,14 +43,14 @@ variable "api_service_url" {
   }
 }
 
-variable "monthly_budget_usd" {
-  description = "Monthly development billing budget mirrored by application admission."
+variable "monthly_budget_pln" {
+  description = "Monthly development billing budget in PLN, mirrored by application admission."
   type        = number
-  default     = 30
+  default     = 400
 
   validation {
-    condition     = var.monthly_budget_usd > 0 && floor(var.monthly_budget_usd) == var.monthly_budget_usd
-    error_message = "The monthly budget must be a positive whole-dollar amount."
+    condition     = var.monthly_budget_pln > 0 && floor(var.monthly_budget_pln) == var.monthly_budget_pln
+    error_message = "The monthly budget must be a positive whole-zloty amount."
   }
 }
 

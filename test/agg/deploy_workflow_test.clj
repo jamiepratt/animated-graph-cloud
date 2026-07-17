@@ -76,12 +76,25 @@
 (deftest configured-budget-is-both-alerted-and-enforced-at-admission
   (is (str/includes? terraform
                      "resource \"google_billing_budget\" \"development\""))
+  (is (str/includes? terraform "currency_code = \"PLN\""))
+  (is (str/includes? terraform "tostring(var.monthly_budget_pln)"))
+  (is (str/includes? terraform-variables "variable \"monthly_budget_pln\""))
+  (is (re-find #"variable \"monthly_budget_pln\"[\s\S]*?default\s*=\s*400"
+               terraform-variables))
   (doseq [threshold ["threshold_percent = 0.5"
                      "threshold_percent = 0.8"
                      "threshold_percent = 1.0"]]
     (is (str/includes? terraform threshold)))
-  (is (str/includes? workflow "AGG_MONTHLY_BUDGET_CENTS=$MONTHLY_BUDGET_CENTS"))
-  (is (str/includes? workflow "AGG_RENDER_RESERVATION_CENTS=$RENDER_RESERVATION_CENTS")))
+  (is (str/includes? workflow "MONTHLY_BUDGET_MINOR_UNITS: \"40000\""))
+  (is (str/includes? workflow "RENDER_RESERVATION_MINOR_UNITS: \"125\""))
+  (is (str/includes? workflow
+                     "--set-env-vars \"AGG_JOB_LIFECYCLE_ENABLED=true"))
+  (is (str/includes? workflow
+                     "AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS"))
+  (is (str/includes? workflow
+                     "AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS"))
+  (is (not (str/includes? terraform-variables "monthly_budget_usd")))
+  (is (not (str/includes? workflow "_CENTS"))))
 
 (deftest logs-metrics-dashboard-and-alerts-cover-the-operating-envelope
   (doseq [metric ["queue_age_ms" "render_failures" "stale_leases"

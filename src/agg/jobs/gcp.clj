@@ -347,7 +347,8 @@
 
 (defrecord FirestoreJobService [^Firestore firestore request-store queue launcher
                                 worker ^Clock clock daily-limit
-                                monthly-budget-cents render-reservation-cents
+                                monthly-budget-minor-units
+                                render-reservation-minor-units
                                 member-directory]
   lifecycle/JobAccess
   (owns-job? [_ job-id subject]
@@ -567,7 +568,7 @@
                          reserved
                          (long (or (some-> ^DocumentSnapshot budget-snapshot
                                            .getData
-                                           (get "reservedCents"))
+                                           (get "reservedMinorUnits"))
                                    0))]
                      (require-transaction-member!
                       member-directory transaction (member-identity request))
@@ -580,8 +581,8 @@
                                "Daily submission limit is exhausted"
                                {:type
                                 ::lifecycle/daily-submission-limit-exhausted})))
-                     (when (> (+ reserved render-reservation-cents)
-                              monthly-budget-cents)
+                     (when (> (+ reserved render-reservation-minor-units)
+                              monthly-budget-minor-units)
                        (throw (ex-info "Monthly compute budget is exhausted"
                                        {:type
                                         ::lifecycle/monthly-budget-exhausted})))
@@ -595,9 +596,12 @@
                             "updatedAt" now})
                      (.set ^Transaction transaction budget-ref
                            {"month" month
-                            "reservedCents" (+ reserved render-reservation-cents)
-                            "limitCents" monthly-budget-cents
-                            "reservationCents" render-reservation-cents
+                            "reservedMinorUnits"
+                            (+ reserved render-reservation-minor-units)
+                            "limitMinorUnits" monthly-budget-minor-units
+                            "reservationMinorUnits"
+                            render-reservation-minor-units
+                            "currency" "PLN"
                             "updatedAt" now})
                      {:created? true :job candidate})))))
             (catch Throwable error
@@ -743,7 +747,7 @@
                        identity (job-member-identity job)
                        reserved (long (or (some-> ^DocumentSnapshot budget
                                                   .getData
-                                                  (get "reservedCents"))
+                                                  (get "reservedMinorUnits"))
                                           0))]
                    (reset! retry-identity identity)
                    (require-transaction-member! member-directory transaction
@@ -756,8 +760,8 @@
                              lifecycle/max-active-leases)
                      (throw (ex-info "All render leases are held"
                                      {:type ::lifecycle/capacity-exhausted})))
-                   (when (> (+ reserved render-reservation-cents)
-                            monthly-budget-cents)
+                   (when (> (+ reserved render-reservation-minor-units)
+                            monthly-budget-minor-units)
                      (throw (ex-info "Monthly compute budget is exhausted"
                                      {:type
                                       ::lifecycle/monthly-budget-exhausted})))
@@ -770,9 +774,12 @@
                      (.set ^Transaction transaction job-ref (job-doc updated))
                      (.set ^Transaction transaction budget-ref
                            {"month" month
-                            "reservedCents" (+ reserved render-reservation-cents)
-                            "limitCents" monthly-budget-cents
-                            "reservationCents" render-reservation-cents
+                            "reservedMinorUnits"
+                            (+ reserved render-reservation-minor-units)
+                            "limitMinorUnits" monthly-budget-minor-units
+                            "reservationMinorUnits"
+                            render-reservation-minor-units
+                            "currency" "PLN"
                             "updatedAt" now})
                      updated)))))
             (catch Throwable error
@@ -873,19 +880,21 @@
   (->CloudRunLauncher (JobsClient/create) (ExecutionsClient/create) renderer-job))
 
 (defn job-service [{:keys [firestore request-store queue launcher worker clock
-                           daily-limit monthly-budget-cents
-                           render-reservation-cents member-directory]
+                           daily-limit monthly-budget-minor-units
+                           render-reservation-minor-units member-directory]
                     :or {clock (Clock/systemUTC)
                          daily-limit lifecycle/max-daily-submissions
-                         monthly-budget-cents lifecycle/default-monthly-budget-cents
-                         render-reservation-cents
-                         lifecycle/default-render-reservation-cents}}]
-  (lifecycle/validate-admission-limits! daily-limit monthly-budget-cents
-                                        render-reservation-cents)
+                         monthly-budget-minor-units
+                         lifecycle/default-monthly-budget-minor-units
+                         render-reservation-minor-units
+                         lifecycle/default-render-reservation-minor-units}}]
+  (lifecycle/validate-admission-limits! daily-limit monthly-budget-minor-units
+                                        render-reservation-minor-units)
   (->FirestoreJobService
    (or firestore (.getService (FirestoreOptions/getDefaultInstance)))
-   request-store queue launcher worker clock daily-limit monthly-budget-cents
-   render-reservation-cents member-directory))
+   request-store queue launcher worker clock daily-limit
+   monthly-budget-minor-units
+   render-reservation-minor-units member-directory))
 
 (defn- env [name default]
   (get (System/getenv) name default))
@@ -943,12 +952,12 @@
             :daily-limit
             (env-long "AGG_DAILY_SUBMISSION_LIMIT"
                       lifecycle/max-daily-submissions)
-            :monthly-budget-cents
-            (env-long "AGG_MONTHLY_BUDGET_CENTS"
-                      lifecycle/default-monthly-budget-cents)
-            :render-reservation-cents
-            (env-long "AGG_RENDER_RESERVATION_CENTS"
-                      lifecycle/default-render-reservation-cents)
+            :monthly-budget-minor-units
+            (env-long "AGG_MONTHLY_BUDGET_MINOR_UNITS"
+                      lifecycle/default-monthly-budget-minor-units)
+            :render-reservation-minor-units
+            (env-long "AGG_RENDER_RESERVATION_MINOR_UNITS"
+                      lifecycle/default-render-reservation-minor-units)
             :member-directory (:member-directory auth-dependencies)})
           job-dependencies {:upload-signer store :job-service service}]
       (if auth-enabled?
