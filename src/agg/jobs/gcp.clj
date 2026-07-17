@@ -5,7 +5,8 @@
             [agg.jobs.lifecycle :as lifecycle]
             [clojure.data.json :as json])
   (:import (com.google.api.gax.rpc ApiException StatusCode$Code)
-           (com.google.cloud.firestore DocumentSnapshot Firestore FirestoreOptions
+           (com.google.cloud.firestore DocumentSnapshot Firestore
+                                       FirestoreException FirestoreOptions
                                        Transaction Transaction$Function)
            (com.google.cloud.run.v2 ExecutionsClient JobsClient RunJobRequest
                                     RunJobRequest$Overrides
@@ -272,6 +273,50 @@
                           error))
           (throw error))))))
 
+(defn- transaction-contention? [error]
+  (loop [cause error]
+    (cond
+      (nil? cause) false
+      (and (instance? FirestoreException cause)
+           (= io.grpc.Status$Code/ABORTED
+              (some-> ^FirestoreException cause .getStatus .getCode))) true
+      (and (instance? ApiException cause)
+           (= StatusCode$Code/ABORTED
+              (some-> ^ApiException cause .getStatusCode .getCode))) true
+      (and (instance? io.grpc.StatusRuntimeException cause)
+           (= io.grpc.Status$Code/ABORTED
+              (some-> ^io.grpc.StatusRuntimeException cause
+                      .getStatus
+                      .getCode))) true
+      :else (recur (.getCause ^Throwable cause)))))
+
+(defn- membership-denied? [error]
+  (and (instance? clojure.lang.ExceptionInfo error)
+       (contains? #{::admin/not-allowlisted
+                    ::admin/invalid-email
+                    ::admin/invalid-subject}
+                  (:type (ex-data error)))))
+
+(defn- rethrow-transaction-contention!
+  [member-directory identity error]
+  (when-not (transaction-contention? error)
+    (throw error))
+  (let [membership-error
+        (when (and member-directory identity)
+          (try
+            (admin/active-member member-directory identity)
+            nil
+            (catch Throwable recheck-error
+              recheck-error)))]
+    (if (membership-denied? membership-error)
+      (throw (ex-info "Member is no longer allowlisted"
+                      {:type ::lifecycle/member-not-allowlisted}
+                      error))
+      (throw (ex-info "Firestore transaction contention"
+                      {:type ::lifecycle/transaction-contention
+                       :retryable true}
+                      error)))))
+
 (defrecord FirestoreJobService [^Firestore firestore request-store queue launcher
                                 worker ^Clock clock daily-limit
                                 monthly-budget-cents render-reservation-cents
@@ -365,58 +410,72 @@
                      :created-at now :updated-at now
                      :expires-at (+ now (* 90 24 60 60 1000))}
           result
-          (transaction!
-           firestore
-           (fn [transaction]
-             (let [_ (require-transaction-member!
-                      member-directory transaction (member-identity request))
-                   snapshot (transaction-snapshot transaction idempotency-ref)]
-               (if (.exists ^DocumentSnapshot snapshot)
-                 (let [data (.getData ^DocumentSnapshot snapshot)]
-                   (when-not (= digest (get data "requestDigest"))
-                     (throw (ex-info "Idempotency key already belongs to another request"
-                                     {:type ::lifecycle/idempotency-conflict})))
-                   {:created? false
-                    :job (snapshot-job
+          (try
+            (transaction!
+             firestore
+             (fn [transaction]
+               (let [snapshot (transaction-snapshot transaction idempotency-ref)]
+                 (if (.exists ^DocumentSnapshot snapshot)
+                   (let [data (.getData ^DocumentSnapshot snapshot)
+                         stored-job
+                         (snapshot-job
                           (transaction-snapshot
-                           transaction (.document jobs (get data "jobId"))))})
-                 (let [capacity (transaction-snapshot transaction capacity-ref)
-                       day-snapshot (transaction-snapshot transaction day-ref)
-                       budget-snapshot (transaction-snapshot transaction budget-ref)
-                       submitted (long (or (some-> ^DocumentSnapshot day-snapshot
-                                                   .getData
-                                                   (get "submissionCount"))
-                                           0))
-                       reserved (long (or (some-> ^DocumentSnapshot budget-snapshot
-                                                  .getData
-                                                  (get "reservedCents"))
-                                          0))]
-                   (when (>= (count (capacity-leases capacity now))
-                             lifecycle/max-active-leases)
-                     (throw (ex-info "All render leases are held"
-                                     {:type ::lifecycle/capacity-exhausted})))
-                   (when (>= submitted daily-limit)
-                     (throw (ex-info "Daily submission limit is exhausted"
-                                     {:type ::lifecycle/daily-submission-limit-exhausted})))
-                   (when (> (+ reserved render-reservation-cents)
-                            monthly-budget-cents)
-                     (throw (ex-info "Monthly compute budget is exhausted"
-                                     {:type ::lifecycle/monthly-budget-exhausted})))
-                   (.set ^Transaction transaction (.document jobs job-id)
-                         (job-doc candidate))
-                   (.set ^Transaction transaction idempotency-ref
-                         {"jobId" job-id "requestDigest" digest})
-                   (.set ^Transaction transaction day-ref
-                         {"day" day
-                          "submissionCount" (inc submitted)
-                          "updatedAt" now})
-                   (.set ^Transaction transaction budget-ref
-                         {"month" month
-                          "reservedCents" (+ reserved render-reservation-cents)
-                          "limitCents" monthly-budget-cents
-                          "reservationCents" render-reservation-cents
-                          "updatedAt" now})
-                   {:created? true :job candidate})))))]
+                           transaction (.document jobs (get data "jobId"))))]
+                     (require-transaction-member!
+                      member-directory transaction (member-identity request))
+                     (when-not (= digest (get data "requestDigest"))
+                       (throw (ex-info
+                               "Idempotency key already belongs to another request"
+                               {:type ::lifecycle/idempotency-conflict})))
+                     {:created? false :job stored-job})
+                   (let [capacity (transaction-snapshot transaction capacity-ref)
+                         day-snapshot (transaction-snapshot transaction day-ref)
+                         budget-snapshot
+                         (transaction-snapshot transaction budget-ref)
+                         submitted
+                         (long (or (some-> ^DocumentSnapshot day-snapshot
+                                           .getData
+                                           (get "submissionCount"))
+                                   0))
+                         reserved
+                         (long (or (some-> ^DocumentSnapshot budget-snapshot
+                                           .getData
+                                           (get "reservedCents"))
+                                   0))]
+                     (require-transaction-member!
+                      member-directory transaction (member-identity request))
+                     (when (>= (count (capacity-leases capacity now))
+                               lifecycle/max-active-leases)
+                       (throw (ex-info "All render leases are held"
+                                       {:type ::lifecycle/capacity-exhausted})))
+                     (when (>= submitted daily-limit)
+                       (throw (ex-info
+                               "Daily submission limit is exhausted"
+                               {:type
+                                ::lifecycle/daily-submission-limit-exhausted})))
+                     (when (> (+ reserved render-reservation-cents)
+                              monthly-budget-cents)
+                       (throw (ex-info "Monthly compute budget is exhausted"
+                                       {:type
+                                        ::lifecycle/monthly-budget-exhausted})))
+                     (.set ^Transaction transaction (.document jobs job-id)
+                           (job-doc candidate))
+                     (.set ^Transaction transaction idempotency-ref
+                           {"jobId" job-id "requestDigest" digest})
+                     (.set ^Transaction transaction day-ref
+                           {"day" day
+                            "submissionCount" (inc submitted)
+                            "updatedAt" now})
+                     (.set ^Transaction transaction budget-ref
+                           {"month" month
+                            "reservedCents" (+ reserved render-reservation-cents)
+                            "limitCents" monthly-budget-cents
+                            "reservationCents" render-reservation-cents
+                            "updatedAt" now})
+                     {:created? true :job candidate})))))
+            (catch Throwable error
+              (rethrow-transaction-contention!
+               member-directory (member-identity request) error)))]
       (when (= :queued (get-in result [:job :state]))
         (lifecycle/enqueue-job! queue
                                 (get-in result [:job :id])
@@ -536,47 +595,57 @@
           month (billing-month clock)
           budget-ref (.document orchestration (str "budget-" month))
           now (now-ms clock)
+          retry-identity (atom nil)
           retried
-          (transaction!
-           firestore
-           (fn [transaction]
-             (let [job (snapshot-job
-                        (transaction-snapshot transaction job-ref))]
-               (when-not job
-                 (throw (ex-info "Job does not exist" {:type ::lifecycle/job-not-found})))
-               (require-transaction-member! member-directory transaction
-                                            (job-member-identity job))
-               (when-not (contains? #{:cancelled :failed} (:state job))
-                 (throw (ex-info "Only failed or cancelled jobs can be retried"
-                                 {:type ::lifecycle/invalid-transition})))
-               (let [capacity (transaction-snapshot transaction capacity-ref)
-                     budget (transaction-snapshot transaction budget-ref)
-                     reserved (long (or (some-> ^DocumentSnapshot budget
-                                                .getData
-                                                (get "reservedCents"))
-                                        0))
-                     _ (when (>= (count (capacity-leases capacity now))
-                                 lifecycle/max-active-leases)
-                         (throw (ex-info "All render leases are held"
-                                         {:type ::lifecycle/capacity-exhausted})))
-                     _ (when (> (+ reserved render-reservation-cents)
-                                monthly-budget-cents)
-                         (throw (ex-info "Monthly compute budget is exhausted"
-                                         {:type ::lifecycle/monthly-budget-exhausted})))
-                     updated (-> job
-                                 (assoc :state :queued
-                                        :attempt (inc (:attempt job))
-                                        :updated-at now)
-                                 (dissoc :failure :output :execution
-                                         :lease-token :lease-expires-at))]
-                 (.set ^Transaction transaction job-ref (job-doc updated))
-                 (.set ^Transaction transaction budget-ref
-                       {"month" month
-                        "reservedCents" (+ reserved render-reservation-cents)
-                        "limitCents" monthly-budget-cents
-                        "reservationCents" render-reservation-cents
-                        "updatedAt" now})
-                 updated))))]
+          (try
+            (transaction!
+             firestore
+             (fn [transaction]
+               (let [job (snapshot-job
+                          (transaction-snapshot transaction job-ref))]
+                 (when-not job
+                   (throw (ex-info "Job does not exist"
+                                   {:type ::lifecycle/job-not-found})))
+                 (let [capacity (transaction-snapshot transaction capacity-ref)
+                       budget (transaction-snapshot transaction budget-ref)
+                       identity (job-member-identity job)
+                       reserved (long (or (some-> ^DocumentSnapshot budget
+                                                  .getData
+                                                  (get "reservedCents"))
+                                          0))]
+                   (reset! retry-identity identity)
+                   (require-transaction-member! member-directory transaction
+                                                identity)
+                   (when-not (contains? #{:cancelled :failed} (:state job))
+                     (throw (ex-info
+                             "Only failed or cancelled jobs can be retried"
+                             {:type ::lifecycle/invalid-transition})))
+                   (when (>= (count (capacity-leases capacity now))
+                             lifecycle/max-active-leases)
+                     (throw (ex-info "All render leases are held"
+                                     {:type ::lifecycle/capacity-exhausted})))
+                   (when (> (+ reserved render-reservation-cents)
+                            monthly-budget-cents)
+                     (throw (ex-info "Monthly compute budget is exhausted"
+                                     {:type
+                                      ::lifecycle/monthly-budget-exhausted})))
+                   (let [updated (-> job
+                                     (assoc :state :queued
+                                            :attempt (inc (:attempt job))
+                                            :updated-at now)
+                                     (dissoc :failure :output :execution
+                                             :lease-token :lease-expires-at))]
+                     (.set ^Transaction transaction job-ref (job-doc updated))
+                     (.set ^Transaction transaction budget-ref
+                           {"month" month
+                            "reservedCents" (+ reserved render-reservation-cents)
+                            "limitCents" monthly-budget-cents
+                            "reservationCents" render-reservation-cents
+                            "updatedAt" now})
+                     updated)))))
+            (catch Throwable error
+              (rethrow-transaction-contention!
+               member-directory @retry-identity error)))]
       (lifecycle/enqueue-job! queue job-id (:attempt retried))
       (public-job retried)))
   (run-job! [_ job-id]

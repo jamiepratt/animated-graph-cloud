@@ -5,11 +5,14 @@
             [agg.jobs.lifecycle :as jobs]
             [agg.jobs-test :as fixture]
             [clojure.test :refer [deftest is]])
-  (:import (com.google.api.gax.rpc AlreadyExistsException StatusCode StatusCode$Code)
-           (com.google.cloud.firestore FirestoreOptions)
+  (:import (com.google.api.gax.rpc AbortedException AlreadyExistsException
+                                   StatusCode StatusCode$Code)
+           (com.google.cloud.firestore FirestoreException FirestoreOptions)
            (com.google.cloud.storage StorageOptions)
+           (io.grpc Status)
            (java.time Clock Instant ZoneOffset)
-           (java.util Date)))
+           (java.util Date)
+           (java.util.concurrent ExecutionException)))
 
 (deftest duplicate-task-delivery-is-idempotent
   (let [status (reify StatusCode
@@ -17,6 +20,82 @@
                  (getTransportCode [_] nil))
         error (AlreadyExistsException. "duplicate task" nil status false)]
     (is (#'gcp/duplicate-task? error))))
+
+(defn- nested-transaction-failure [cause]
+  (let [firestore-error
+        (FirestoreException/forServerRejection
+         Status/UNKNOWN cause "transaction failed" (object-array 0))]
+    (ExecutionException. firestore-error)))
+
+(defn- gax-aborted-failure []
+  (let [status-code (reify StatusCode
+                      (getCode [_] StatusCode$Code/ABORTED)
+                      (getTransportCode [_] Status/ABORTED))]
+    (nested-transaction-failure
+     (AbortedException. "transaction contention"
+                        (.asRuntimeException Status/ABORTED)
+                        status-code false))))
+
+(deftest nested-transaction-contention-is-classified-through-job-submission
+  (let [{:keys [directory]} (admin/in-memory-system
+                             {:owner-email "owner@example.com"
+                              :initial-emails #{"member@example.com"}})
+        member (admin/authorize-member! directory "member@example.com"
+                                        "member-subject")
+        firestore (-> (FirestoreOptions/newBuilder)
+                      (.setProjectId "nested-contention-test")
+                      .build
+                      .getService)
+        request-store (reify jobs/RequestStore
+                        (save-request! [_ job-id _request]
+                          (str "jobs/" job-id "/request.json"))
+                        (load-request [_ _object] nil))
+        queue (reify jobs/JobQueue
+                (enqueue-job! [_ _job-id _attempt]))
+        service (gcp/job-service {:firestore firestore
+                                  :request-store request-store
+                                  :queue queue
+                                  :member-directory directory})
+        request (assoc (fixture/render-request)
+                       :requesterSubject (:subject member)
+                       :requesterEmail (:email member)
+                       :requesterMembershipVersion
+                       (:membership-version member))
+        gax-contention (gax-aborted-failure)
+        grpc-contention
+        (nested-transaction-failure (.asRuntimeException Status/ABORTED))
+        submit-error
+        (fn [idempotency-key failure]
+          (with-redefs-fn
+            {#'gcp/transaction! (fn [_firestore _callback]
+                                  (throw failure))}
+            #(try
+               (jobs/submit-job! service idempotency-key request)
+               nil
+               (catch Throwable error
+                 error))))]
+    (try
+      (is (= ::jobs/transaction-contention
+             (some-> (submit-error "nested-gax-contention" gax-contention)
+                     ex-data
+                     :type)))
+      (is (= ::jobs/transaction-contention
+             (some-> (submit-error "nested-grpc-contention" grpc-contention)
+                     ex-data
+                     :type)))
+      (admin/revoke-member-record! directory "member@example.com")
+      (is (= ::jobs/member-not-allowlisted
+             (some-> (submit-error "nested-revoked-contention" gax-contention)
+                     ex-data
+                     :type)))
+      (let [unrelated
+            (nested-transaction-failure
+             (.asRuntimeException Status/UNAVAILABLE))]
+        (is (identical? unrelated
+                        (submit-error "nested-unrelated-failure" unrelated))
+            "An unrelated nested transaction failure passes through"))
+      (finally
+        (.close firestore)))))
 
 (defn- mutable-clock [now]
   (letfn [(clock-for [zone]
@@ -497,7 +576,7 @@
                                       (jobs/submit-job! service
                                                         (str "member-race-" index)
                                                         request)
-                                      (catch clojure.lang.ExceptionInfo error
+                                      (catch Throwable error
                                         error))))
                                 (range 20))
               revocation (future
@@ -507,14 +586,23 @@
           (deliver start true)
           @revocation
           (let [results (mapv deref submissions)
+                successful (filterv map? results)
                 submitted (cons running-id
-                                (keep #(when (map? %) (get-in % [:job :id]))
-                                      results))
-                rejected (keep #(when (instance? clojure.lang.ExceptionInfo %) %)
-                               results)]
-            (is (every? #(= ::jobs/member-not-allowlisted
-                            (:type (ex-data %)))
+                                (map #(get-in % [:job :id]) successful))
+                rejected (remove map? results)
+                job-count (-> (.collection firestore "jobs")
+                              .get .get .getDocuments count)
+                idempotency-count (-> (.collection firestore "job-idempotency")
+                                      .get .get .getDocuments count)]
+            (is (every? #(and (instance? clojure.lang.ExceptionInfo %)
+                              (contains? #{::jobs/member-not-allowlisted
+                                           ::jobs/transaction-contention}
+                                         (:type (ex-data %))))
                         rejected))
+            (is (= (+ 2 (count successful)) job-count)
+                "A rejected submit never writes a job document")
+            (is (= (+ 2 (count successful)) idempotency-count)
+                "A rejected submit never writes an idempotency document")
             (is (every? #(= "cancelled" (:state (jobs/get-job service %)))
                         submitted))
             (is (= [(str "executions/" running-id)] @cancelled))

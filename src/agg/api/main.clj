@@ -731,6 +731,13 @@
                 (respond-json! exchange 429
                                {:error "monthly_budget_exhausted"}))
 
+              ::jobs/transaction-contention
+              (do
+                (.set (.getResponseHeaders exchange) "Retry-After" "1")
+                (respond-json! exchange 503
+                               {:error "transaction_contention"
+                                :retryable true}))
+
               ::jobs/job-not-found
               (respond-json! exchange 404 {:error "job_not_found"})
 

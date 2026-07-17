@@ -1,7 +1,7 @@
 (ns agg.admin.gcp
   (:require [agg.admin.core :as admin])
   (:import (com.google.cloud.firestore DocumentSnapshot Firestore Transaction
-                                       Transaction$Function)
+                                       Transaction$Function TransactionOptions)
            (java.time Instant)
            (java.util UUID)
            (java.util.concurrent ExecutionException Future)))
@@ -12,13 +12,17 @@
     (catch ExecutionException error
       (throw (.getCause error)))))
 
-(defn- transaction! [^Firestore firestore action]
-  (await!
-   (.runTransaction
-    firestore
-    (reify Transaction$Function
-      (updateCallback [_ transaction]
-        (action transaction))))))
+(defn- transaction!
+  ([firestore action]
+   (transaction! firestore action nil))
+  ([^Firestore firestore action attempts]
+   (let [callback (reify Transaction$Function
+                    (updateCallback [_ transaction]
+                      (action transaction)))]
+     (await!
+      (if attempts
+        (.runTransaction firestore callback (TransactionOptions/create attempts))
+        (.runTransaction firestore callback))))))
 
 (defn- snapshot-member [^DocumentSnapshot snapshot]
   (when (.exists snapshot)
@@ -114,7 +118,8 @@
                              {:type ::admin/owner-cannot-be-revoked})))
            (let [revoked (assoc member :status :revoked)]
              (.set transaction reference (member-document revoked))
-             revoked))))))
+             revoked)))
+       20)))
   admin/TransactionalMembership
   (require-active-transaction! [_ transaction identity]
     (let [email (admin/require-email (:email identity))

@@ -172,6 +172,31 @@
       (is (= {:error "monthly_budget_exhausted"}
              (response-json budget))))))
 
+(deftest transaction-contention-is-a-stable-retryable-http-error
+  (let [port (available-port)
+        service
+        (reify jobs/JobService
+          (submit-job! [_ _ _]
+            (throw (ex-info "contention"
+                            {:type ::jobs/transaction-contention
+                             :retryable true})))
+          (get-job [_ _] nil)
+          (dispatch-job! [_ _] nil)
+          (cancel-job! [_ _] nil)
+          (retry-job! [_ _] nil)
+          (run-job! [_ _] nil))
+        server (api/start! port {:job-service service})]
+    (try
+      (let [response (submit! port "transaction-contention")]
+        (is (= 503 (.statusCode response)))
+        (is (= "1" (some-> response .headers
+                           (.firstValue "Retry-After")
+                           (.orElse nil))))
+        (is (= {:error "transaction_contention" :retryable true}
+               (response-json response))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest reconciliation-repairs-a-render-abandoned-after-dispatch
   (let [system (jobs/in-memory-system)
         service (:service system)
