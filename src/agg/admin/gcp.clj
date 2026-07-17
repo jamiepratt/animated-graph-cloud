@@ -135,21 +135,37 @@
 (defn member-directory [firestore owner-email]
   (let [owner-email (admin/require-email owner-email)
         directory (->FirestoreMemberDirectory firestore)
-        reference (.document (.collection firestore "members")
-                             (admin/member-id owner-email))]
+        members (.collection firestore "members")
+        reference (.document members (admin/member-id owner-email))
+        owner-reference (.document (.collection firestore "administration")
+                                   "current-owner")]
     (transaction!
      firestore
      (fn [^Transaction transaction]
-       (let [existing (snapshot-member (await! (.get transaction reference)))
-             owner (or existing
-                       {:email owner-email
-                        :role :owner
-                        :status :active
-                        :membership-version (str (UUID/randomUUID))})]
-         (when-not (and (= :owner (:role owner))
-                        (= :active (:status owner)))
-           (throw (ex-info "Configured owner membership is invalid"
-                           {:type ::invalid-owner})))
+       (await! (.get transaction owner-reference))
+       (let [previous-owners
+             (->> (await! (.get transaction (.whereEqualTo members
+                                                           "role" "owner")))
+                  .getDocuments
+                  (keep snapshot-member))
+             existing (snapshot-member (await! (.get transaction reference)))
+             owner (if (= :active (:status existing))
+                     (assoc existing :role :owner)
+                     {:email owner-email
+                      :role :owner
+                      :status :active
+                      :membership-version (str (UUID/randomUUID))})]
+         (doseq [previous previous-owners
+                 :when (not= owner-email (:email previous))]
+           (.set transaction
+                 (.document members (admin/member-id (:email previous)))
+                 (member-document (-> previous
+                                      (assoc :role :member :status :revoked)
+                                      (dissoc :subject)))))
          (.set transaction reference (member-document owner))
-         owner)))
+         (.set transaction owner-reference
+               {"memberId" (admin/member-id owner-email)
+                "updatedAt" (str (Instant/now))})
+         owner))
+     20)
     directory))

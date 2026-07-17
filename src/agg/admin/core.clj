@@ -67,6 +67,10 @@
     (throw (ex-info "Owner access is required" {:type ::owner-required})))
   actor)
 
+(defn- require-active-owner! [directory actor]
+  (require-owner! actor)
+  (require-owner! (active-member directory actor)))
+
 (defn- require-active [records {:keys [email subject membership-version]}]
   (let [member (get records (normalize-email email))]
     (when-not (and member
@@ -144,10 +148,10 @@
                          event-sink]
   Administration
   (list-members [_ actor]
-    (require-owner! actor)
+    (require-active-owner! directory actor)
     (mapv public-member (list-member-records directory)))
   (add-member! [_ actor email]
-    (require-owner! actor)
+    (require-active-owner! directory actor)
     (let [member (add-member-record! directory email)]
       (emit! event-sink
              {:severity "NOTICE"
@@ -156,7 +160,7 @@
               :targetMemberId (member-id (:email member))})
       (public-member member)))
   (revoke-member! [_ actor email]
-    (require-owner! actor)
+    (require-active-owner! directory actor)
     (let [member (revoke-member-record! directory email)
           subject (:subject member)
           token-result

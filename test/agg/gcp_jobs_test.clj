@@ -97,6 +97,19 @@
       (finally
         (.close firestore)))))
 
+(defn- retry-transaction-contention [action]
+  (loop [remaining 20]
+    (let [result (try
+                   {:value (action)}
+                   (catch clojure.lang.ExceptionInfo error
+                     {:error error}))]
+      (if-let [error (:error result)]
+        (if (and (< 1 remaining)
+                 (= ::jobs/transaction-contention (:type (ex-data error))))
+          (recur (dec remaining))
+          (throw error))
+        (:value result)))))
+
 (defn- mutable-clock [now]
   (letfn [(clock-for [zone]
             (proxy [Clock] []
@@ -180,9 +193,10 @@
         (let [submissions (->> (range 10)
                                (mapv (fn [_]
                                        (future
-                                         (jobs/submit-job!
-                                          service "emulator-idempotency"
-                                          (fixture/render-request)))))
+                                         (retry-transaction-contention
+                                          #(jobs/submit-job!
+                                            service "emulator-idempotency"
+                                            (fixture/render-request))))))
                                (mapv deref))
               job-id (get-in (first submissions) [:job :id])]
           (is (= 1 (count (set (map #(get-in % [:job :id]) submissions)))))

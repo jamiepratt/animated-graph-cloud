@@ -8,6 +8,117 @@
             [clojure.test :refer [deftest is]])
   (:import (com.google.cloud.firestore FirestoreOptions)))
 
+(deftest configured-owner-rotation-invalidates-the-former-owner
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId "animated-graph-cloud-owner-rotation-test")
+                        (.setEmulatorHost host)
+                        .build
+                        .getService)]
+      (try
+        (doseq [collection ["members" "administration"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (let [directory-a (gcp/member-directory firestore "owner-a@example.com")
+              service-a (admin/service {:directory directory-a})
+              owner-a (admin/authorize-member! directory-a
+                                               "owner-a@example.com"
+                                               "owner-a-subject")
+              _ (admin/add-member! service-a owner-a "member@example.com")
+              member (admin/authorize-member! directory-a
+                                              "member@example.com"
+                                              "member-subject")
+              same-owner-directory
+              (gcp/member-directory firestore "OWNER-A@example.com")
+              same-owner (admin/active-member same-owner-directory owner-a)
+              directory-b (gcp/member-directory firestore "owner-b@example.com")
+              owner-b (admin/authorize-member! directory-b
+                                               "owner-b@example.com"
+                                               "owner-b-subject")
+              service-b (admin/service {:directory directory-b})
+              error-type (fn [action]
+                           (try
+                             (action)
+                             nil
+                             (catch clojure.lang.ExceptionInfo error
+                               (:type (ex-data error)))))]
+          (is (= owner-a same-owner)
+              "Restarting with the same owner preserves its generation")
+          (is (= member (admin/active-member directory-b member))
+              "Owner rotation preserves unrelated active members")
+          (is (= ::admin/not-allowlisted
+                 (error-type #(admin/active-member directory-b owner-a))))
+          (is (= ::admin/not-allowlisted
+                 (error-type #(admin/list-members service-b owner-a)))
+              "A stale owner role cannot bypass live membership")
+          (is (= ::admin/not-allowlisted
+                 (error-type
+                  #(admin/with-active-member!
+                     directory-b owner-a
+                     (fn [] (admin/list-members service-b owner-a))))))
+          (is (= [{:email "member@example.com"
+                   :role "member"
+                   :status "active"}
+                  {:email "owner-a@example.com"
+                   :role "member"
+                   :status "revoked"}
+                  {:email "owner-b@example.com"
+                   :role "owner"
+                   :status "active"}]
+                 (admin/list-members service-b owner-b)))
+          (let [same-owner-directory
+                (gcp/member-directory firestore "owner-b@example.com")
+                same-owner (admin/active-member same-owner-directory owner-b)
+                _ (admin/add-member! service-b owner-b "owner-a@example.com")
+                new-member-a
+                (admin/authorize-member! directory-b "owner-a@example.com"
+                                         "owner-a-new-subject")]
+            (is (= owner-b same-owner)
+                "Restarting after rotation preserves the new owner generation")
+            (is (= :member (:role new-member-a)))
+            (is (not= (:membership-version owner-a)
+                      (:membership-version new-member-a))
+                "Re-adding a former owner requires a fresh identity generation")
+            (is (= ::admin/not-allowlisted
+                   (error-type #(admin/active-member directory-b owner-a))))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
+(deftest concurrent-configured-owner-bootstraps-leave-one-active-owner
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId
+                         "animated-graph-cloud-concurrent-owner-bootstrap-test")
+                        (.setEmulatorHost host)
+                        .build
+                        .getService)]
+      (try
+        (doseq [collection ["members" "administration"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (let [start (promise)
+              bootstraps
+              (mapv (fn [email]
+                      (future
+                        @start
+                        (gcp/member-directory firestore email)))
+                    ["owner-a@example.com" "owner-b@example.com"])]
+          (deliver start true)
+          (let [directories (mapv deref bootstraps)
+                records (admin/list-member-records (first directories))
+                active-owners (filter #(and (= :owner (:role %))
+                                            (= :active (:status %)))
+                                      records)
+                retired-owners (filter #(and (= :member (:role %))
+                                             (= :revoked (:status %)))
+                                       records)]
+            (is (= 1 (count active-owners)))
+            (is (= 1 (count retired-owners)))
+            (is (= #{"owner-a@example.com" "owner-b@example.com"}
+                   (set (map :email records))))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
 (deftest firestore-membership-revocation-deletes-drive-credentials-and-tokens
   (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
     (let [firestore (-> (FirestoreOptions/newBuilder)
