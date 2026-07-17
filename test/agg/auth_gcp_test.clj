@@ -2,7 +2,8 @@
   (:require [agg.auth.core :as auth]
             [agg.auth.gcp :as gcp]
             [clojure.data.json :as json]
-            [clojure.test :refer [deftest is]]))
+            [clojure.test :refer [deftest is]])
+  (:import (com.google.cloud.firestore FirestoreOptions)))
 
 (deftest google-oauth-exchanges-login-drive-and-refresh-without-scope-mixing
   (let [requests (atom [])
@@ -93,3 +94,27 @@
          (gcp/parse-client-credentials
           (json/write-str {:web {:client_id "secret-client-id"
                                  :client_secret "secret-client-secret"}})))))
+
+(deftest firestore-revokes-a-real-encrypted-grant
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId "animated-graph-cloud-auth-test")
+                        (.setEmulatorHost host)
+                        (.build)
+                        (.getService))
+          store (gcp/grant-store firestore)
+          subject "firestore-revoked-subject"]
+      (try
+        (.get (.recursiveDelete firestore (.collection firestore "drive-grants")))
+        (auth/save-grant! store subject
+                          {:refresh-token-ciphertext "kms-ciphertext"
+                           :folder-id "folder-1"
+                           :revoked? false})
+        (auth/revoke-grant! store subject)
+        (is (= {:refresh-token-ciphertext "kms-ciphertext"
+                :folder-id "folder-1"
+                :revoked? true}
+               (auth/load-grant store subject)))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))

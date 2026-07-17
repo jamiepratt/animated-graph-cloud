@@ -261,7 +261,7 @@
             (throw error))))))
   (save-upload-session! [this job-id session-uri]
     (await! (.update (.document (.collection firestore "drive-deliveries") job-id)
-                     "sessionUri" session-uri))
+                     {"sessionUri" session-uri}))
     (drive/load-delivery this job-id))
   (complete-delivery! [this job-id result]
     (await! (.update (.document (.collection firestore "drive-deliveries") job-id)

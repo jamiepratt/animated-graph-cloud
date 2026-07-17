@@ -177,7 +177,7 @@
     grant)
   (revoke-grant! [_ subject]
     (await! (.update (.document (.collection firestore "drive-grants") subject)
-                     "revoked" true))))
+                     {"revoked" true}))))
 
 (defn grant-store [firestore]
   (->FirestoreGrantStore firestore))

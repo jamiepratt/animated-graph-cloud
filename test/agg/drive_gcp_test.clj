@@ -5,6 +5,7 @@
             [clojure.data.json :as json]
             [clojure.test :refer [deftest is testing]])
   (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
+           (com.google.cloud.firestore FirestoreOptions)
            (java.net InetSocketAddress)
            (java.nio.charset StandardCharsets)
            (java.nio.file Files OpenOption)))
@@ -199,3 +200,39 @@
                               :size 5})))
     (is (= {:id "file-1" :name "output.mov" :parents ["folder-1"]}
            (json/read-str (:body (second @requests)) :key-fn keyword)))))
+
+(deftest firestore-recovers-one-reserved-output-and-upload-session
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId "animated-graph-cloud-drive-test")
+                        (.setEmulatorHost host)
+                        (.build)
+                        (.getService))
+          store (gcp/delivery-store firestore)
+          job-id "firestore-resumable-job"
+          reservation {:file-id "file-1" :folder-id "folder-1"}]
+      (try
+        (.get (.recursiveDelete firestore
+                                (.collection firestore "drive-deliveries")))
+        (is (= reservation
+               (drive/reserve-output! store job-id reservation)))
+        (is (= {:file-id "file-1"
+                :folder-id "folder-1"
+                :complete? false
+                :session-uri "https://upload.example/session-1"}
+               (drive/save-upload-session!
+                store job-id "https://upload.example/session-1")))
+        (let [recovered-store (gcp/delivery-store firestore)]
+          (is (= {:file-id "file-1"
+                  :folder-id "folder-1"
+                  :complete? false
+                  :session-uri "https://upload.example/session-1"}
+                 (drive/load-delivery recovered-store job-id)))
+          (is (= "file-1"
+                 (:file-id
+                  (drive/reserve-output! recovered-store job-id
+                                         {:file-id "file-2"
+                                          :folder-id "folder-1"})))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))

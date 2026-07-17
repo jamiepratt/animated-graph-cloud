@@ -218,7 +218,9 @@ Register both Cloud Run callbacks on that web client:
 
 The runtime mounts `oauth-client-secret`, `session-key`, and `picker-api-key`
 from Secret Manager. Never place their values in Terraform, workflow YAML,
-logs, or command arguments. The Picker key must allow only the service origin
-and `picker.googleapis.com`.
+logs, or command arguments. Store the Picker key as its exact bytes with no
+trailing newline. The key is API-restricted solely to `picker.googleapis.com`:
+browser-referrer restrictions are incompatible because Picker validates the
+developer key from its `docs.google.com` iframe.
 
 Implementation work is tracked in GitHub Issues.
