@@ -58,7 +58,7 @@
     (is (= "folder-new"
            (auth/ensure-output-folder! gateway "access-token" nil)))
     (is (= :post (:method (first @requests))))
-    (is (= {:name "Animated Graph Cloud"
+    (is (= {:name "Alpha Compose"
             :mimeType "application/vnd.google-apps.folder"}
            (json/read-str (:body (first @requests)) :key-fn keyword)))))
 

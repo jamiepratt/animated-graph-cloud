@@ -1,6 +1,6 @@
 # Project context
 
-Animated Graph Cloud accepts private telemetry inputs, renders overlay-only ProRes 4444 MOV files, and writes completed outputs to the requesting user's Google Drive.
+Alpha Compose is the public product. The `animated-graph-cloud` service accepts private telemetry inputs, renders overlay-only ProRes 4444 MOV files, and writes completed outputs to the requesting user's Google Drive.
 
 ## Invariants
 
@@ -19,6 +19,7 @@ Animated Graph Cloud accepts private telemetry inputs, renders overlay-only ProR
 ## Current cloud identity
 
 - Development project: `animated-graph-cloud-jp` (`891643499444`).
+- Production project: `animated-graph-cloud-prod-jp` (`488013150738`).
 - Organization: `jamiep.org` (`567378404662`).
 - Region: `europe-central2`.
 - GitHub repository: `jamiepratt/animated-graph-cloud`.

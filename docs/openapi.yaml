@@ -1,0 +1,519 @@
+openapi: 3.1.0
+info:
+  title: Alpha Compose API
+  version: 1.0.0
+  description: |
+    Create transparent ProRes 4444 telemetry overlays for short videos.
+    Alpha Compose never uploads or composites source video. Browser sessions
+    require `X-CSRF-Token` on writes; personal bearer tokens do not. Google
+    Drive delivery uses only the `drive.file` scope.
+  contact:
+    email: me@jamiep.org
+  license:
+    name: All rights reserved
+    url: https://alphacompose.com/terms
+servers:
+  - url: https://alphacompose.com
+    description: Production
+security:
+  - bearerAuth: []
+  - sessionCookie: []
+tags:
+  - name: Rendering
+    description: Synchronous preview and overlay creation.
+  - name: Jobs
+    description: Durable render submission and lifecycle.
+  - name: Tokens
+    description: Personal API token management.
+  - name: Administration
+    description: Owner-only membership management.
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Check service health.
+      security: []
+      responses:
+        "200":
+          description: Service is ready.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    const: ok
+  /v1/preview:
+    post:
+      operationId: createPreview
+      tags: [Rendering]
+      summary: Render a midpoint PNG preview.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        $ref: "#/components/requestBodies/RenderRequest"
+      responses:
+        "200":
+          description: Transparent PNG preview.
+          headers:
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            image/png:
+              schema: {type: string, contentEncoding: binary}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "413": {$ref: "#/components/responses/PayloadTooLarge"}
+  /v1/overlay:
+    post:
+      operationId: createOverlay
+      tags: [Rendering]
+      summary: Render an overlay synchronously.
+      description: Prefer durable jobs for production-size renders.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        $ref: "#/components/requestBodies/RenderRequest"
+      responses:
+        "200":
+          description: Seekable ProRes 4444 MOV with transparent video and heartbeat audio.
+          headers:
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            video/quicktime:
+              schema: {type: string, contentEncoding: binary}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "413": {$ref: "#/components/responses/PayloadTooLarge"}
+  /v1/jobs:
+    post:
+      operationId: submitJob
+      tags: [Jobs]
+      summary: Submit an idempotent durable render.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        $ref: "#/components/requestBodies/RenderRequest"
+      responses:
+        "200":
+          description: Existing job returned for an idempotent replay.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Job"}
+        "202":
+          description: Job accepted.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Job"}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/AdmissionRejected"}
+        "503": {$ref: "#/components/responses/CapacityUnavailable"}
+  /v1/jobs/{jobId}:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      operationId: getJob
+      tags: [Jobs]
+      summary: Get an owned render job.
+      responses:
+        "200":
+          description: Owned job state.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Job"}
+        "404": {$ref: "#/components/responses/NotFound"}
+  /v1/jobs/{jobId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    post:
+      operationId: cancelJob
+      tags: [Jobs]
+      summary: Cancel an owned render job.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "200":
+          description: Cancellation recorded or requested.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Job"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+  /v1/jobs/{jobId}/retry:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    post:
+      operationId: retryJob
+      tags: [Jobs]
+      summary: Retry an owned failed or cancelled render job.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "202":
+          description: A failed or cancelled job was queued as its next attempt.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Job"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/AdmissionRejected"}
+  /v1/uploads:
+    post:
+      operationId: createUpload
+      tags: [Jobs]
+      summary: Create a 15-minute signed request upload.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [contentType, contentLength]
+              properties:
+                contentType: {const: application/json}
+                contentLength: {type: integer, minimum: 1, maximum: 10551296}
+      responses:
+        "201":
+          description: Signed upload command.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, method, contentType, contentLength, expiresAt, uploadUrl]
+                properties:
+                  id: {type: string, format: uuid}
+                  method: {const: PUT}
+                  contentType: {const: application/json}
+                  contentLength: {type: integer}
+                  expiresAt: {type: string, format: date-time}
+                  uploadUrl: {type: string, format: uri}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+  /v1/tokens:
+    get:
+      operationId: listTokens
+      tags: [Tokens]
+      summary: List personal token metadata.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Token metadata; secrets and hashes are never returned.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/Token"}
+    post:
+      operationId: createToken
+      tags: [Tokens]
+      summary: Create a personal API token.
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 80}
+      responses:
+        "201":
+          description: Token metadata and the one-time token secret.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Token"
+                  - type: object
+                    required: [token]
+                    properties:
+                      token: {type: string, writeOnly: true}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+  /v1/tokens/{tokenId}/revoke:
+    parameters:
+      - $ref: "#/components/parameters/TokenId"
+    post:
+      operationId: revokeToken
+      tags: [Tokens]
+      summary: Revoke a personal API token.
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "200":
+          description: Revoked token metadata.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Token"}
+        "404": {$ref: "#/components/responses/NotFound"}
+  /v1/admin/members:
+    get:
+      operationId: listMembers
+      tags: [Administration]
+      summary: List owner-managed memberships.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Owner-managed memberships.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/Member"}
+        "403": {$ref: "#/components/responses/OwnerRequired"}
+    post:
+      operationId: addMember
+      tags: [Administration]
+      summary: Add or reactivate a member.
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        $ref: "#/components/requestBodies/MemberEmail"
+      responses:
+        "201":
+          description: Membership added or reactivated with a new generation.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Member"}
+        "403": {$ref: "#/components/responses/OwnerRequired"}
+  /v1/admin/members/revoke:
+    post:
+      operationId: revokeMember
+      tags: [Administration]
+      summary: Revoke a member and every access path.
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        $ref: "#/components/requestBodies/MemberEmail"
+      responses:
+        "200":
+          description: Membership, sessions, tokens, Drive grant, and active work revoked.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Member"}
+        "403": {$ref: "#/components/responses/OwnerRequired"}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Alpha Compose personal token
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: agg_session
+  parameters:
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: false
+      description: Required for writes authenticated by session cookie; omit for bearer authentication.
+      schema: {type: string}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 128}
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    TokenId:
+      name: tokenId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+  requestBodies:
+    RenderRequest:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/RenderRequest"}
+    MemberEmail:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [email]
+            properties:
+              email: {type: string, format: email, maxLength: 254}
+  responses:
+    InvalidRequest:
+      description: Invalid request.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    AuthenticationRequired:
+      description: Authentication or a valid Drive grant is required.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    PayloadTooLarge:
+      description: Request exceeded a configured byte limit.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Conflict:
+      description: Idempotency conflict or invalid state transition.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    AdmissionRejected:
+      description: Daily or monthly admission limit reached.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    CapacityUnavailable:
+      description: Render capacity is full or a transaction should be retried.
+      headers:
+        Retry-After:
+          schema: {type: integer, minimum: 1}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    NotFound:
+      description: The owned resource does not exist.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    OwnerRequired:
+      description: Owner session required.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+  schemas:
+    RenderRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - telemetryFormat
+        - telemetry
+        - preset
+        - telemetrySyncAt
+        - cameraSyncAt
+        - sectionStartAt
+        - sectionEndAt
+      properties:
+        telemetryFormat:
+          type: string
+          enum: [polar-csv, garmin-fit, oxiwear-hr-csv]
+        telemetry:
+          type: string
+          maxLength: 10485760
+          description: CSV text or base64-encoded Garmin FIT content.
+        preset:
+          type: string
+          enum: [1080p25, 2.7k25]
+        telemetrySyncAt: {$ref: "#/components/schemas/Instant"}
+        cameraSyncAt: {$ref: "#/components/schemas/Instant"}
+        sectionStartAt: {$ref: "#/components/schemas/Instant"}
+        sectionEndAt: {$ref: "#/components/schemas/Instant"}
+        spo2:
+          type: object
+          additionalProperties: false
+          required: [format, telemetry]
+          properties:
+            format: {const: oxiwear-spo2-csv}
+            telemetry: {type: string, maxLength: 10485760}
+        timer:
+          type: object
+          additionalProperties: false
+          required: [startAt, endAt]
+          properties:
+            startAt: {$ref: "#/components/schemas/Instant"}
+            endAt: {$ref: "#/components/schemas/Instant"}
+        watermark:
+          type: object
+          additionalProperties: false
+          required: [contentBase64]
+          properties:
+            contentBase64:
+              type: string
+              contentEncoding: base64
+              maxLength: 2796204
+              description: PNG up to 2 MiB and 1024×1024 pixels.
+    Instant:
+      type: string
+      format: date-time
+      description: ISO-8601 instant with `Z` or an explicit UTC offset.
+    Job:
+      type: object
+      required: [id, state, attempt, statusUrl, cancelUrl, retryUrl]
+      properties:
+        id: {type: string, format: uuid}
+        state:
+          type: string
+          enum: [queued, launching, running, cancellation-requested, succeeded, failed, cancelled]
+        attempt: {type: integer, minimum: 1}
+        statusUrl: {type: string}
+        cancelUrl: {type: string}
+        retryUrl: {type: string}
+        failureCode: {type: string}
+        output:
+          type: object
+          properties:
+            objectName: {type: string}
+            sha256: {type: string, pattern: "^[0-9a-f]{64}$"}
+            contentType: {const: video/quicktime}
+            driveFileId: {type: string}
+            driveWebViewLink: {type: string, format: uri}
+    Token:
+      type: object
+      required: [id, name, createdAt, revoked]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        createdAt: {type: string, format: date-time}
+        revoked: {type: boolean}
+    Member:
+      type: object
+      required: [email, role, status]
+      properties:
+        email: {type: string, format: email}
+        role: {type: string, enum: [owner, member]}
+        status: {type: string, enum: [active, revoked]}
+        membershipVersion: {type: integer, minimum: 1}
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum:
+            - invalid_request
+            - payload_too_large
+            - authentication_required
+            - not_allowlisted
+            - csrf_required
+            - drive_grant_required
+            - invalid_idempotency_key
+            - idempotency_conflict
+            - daily_submission_limit_exhausted
+            - monthly_budget_exhausted
+            - capacity_exhausted
+            - transaction_contention
+            - job_not_found
+            - invalid_job_transition
+            - token_not_found
+            - owner_required

@@ -2,6 +2,14 @@
 
 Terraform state for development is stored in `gs://animated-graph-cloud-jp-tfstate` with object versioning and public access prevention. The state bucket is the only manually bootstrapped resource because Terraform cannot create its own backend.
 
+Production is a separate root module in `infra/prod`, with state in
+`gs://animated-graph-cloud-prod-jp-tfstate` under prefix `prod`. It reuses the
+same resource module with production-specific project, WIF subject, budget,
+Firestore creation, and optional Firebase Hosting permissions. Secret
+containers are shared configuration; payloads and OAuth clients are always
+environment-specific. Follow `docs/production-runbook.md`; Firebase activation,
+DNS, OAuth publication, and production applies are owner checkpoints.
+
 `infra/dev` adopts the existing default Firestore database, manages required APIs, and creates foundational development resources. Secret containers intentionally have no versions; secret values are added only through a secure operator workflow.
 
 Terraform grants the keyless GitHub deployer only the roles needed to push
@@ -54,4 +62,13 @@ to Drive.
 terraform -chdir=infra/dev init
 terraform -chdir=infra/dev plan -out=dev.tfplan
 terraform -chdir=infra/dev apply dev.tfplan
+```
+
+Repository-only validation never contacts either backend:
+
+```sh
+terraform -chdir=infra/dev init -backend=false -input=false
+terraform -chdir=infra/dev validate
+terraform -chdir=infra/prod init -backend=false -input=false
+terraform -chdir=infra/prod validate
 ```

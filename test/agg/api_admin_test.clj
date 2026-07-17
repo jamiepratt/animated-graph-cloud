@@ -12,6 +12,8 @@
 (defn- available-port []
   (with-open [socket (ServerSocket. 0)] (.getLocalPort socket)))
 
+(def ^:private http-client (HttpClient/newHttpClient))
+
 (defn- request! [port method path body headers]
   (let [builder (HttpRequest/newBuilder
                  (URI/create (str "http://127.0.0.1:" port path)))
@@ -23,7 +25,7 @@
         request (case method
                   :get (.GET builder)
                   :post (.POST builder publisher))]
-    (.send (HttpClient/newHttpClient) (.build request)
+    (.send http-client (.build request)
            (HttpResponse$BodyHandlers/ofString))))
 
 (defn- form-post! [port path body headers]
@@ -31,7 +33,7 @@
                  (URI/create (str "http://127.0.0.1:" port path)))]
     (doseq [[name value] headers]
       (.header builder name value))
-    (.send (HttpClient/newHttpClient)
+    (.send http-client
            (.build (.POST builder (HttpRequest$BodyPublishers/ofString body)))
            (HttpResponse$BodyHandlers/ofString))))
 

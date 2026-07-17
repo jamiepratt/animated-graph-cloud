@@ -14,6 +14,8 @@
   (with-open [socket (ServerSocket. 0)]
     (.getLocalPort socket)))
 
+(def ^:private http-client (HttpClient/newHttpClient))
+
 (defn render-request []
   {:telemetryFormat "polar-csv"
    :telemetry (slurp (io/resource "fixtures/polar/valid.csv"))
@@ -33,7 +35,7 @@
                   :post (.POST builder
                                (HttpRequest$BodyPublishers/ofString
                                 (json/write-str body))))]
-    (.send (HttpClient/newHttpClient)
+    (.send http-client
            (.build request)
            (HttpResponse$BodyHandlers/ofString))))
 
@@ -42,7 +44,7 @@
                  (URI/create (str "http://127.0.0.1:" port path)))
         _ (doseq [[name value] headers]
             (.header builder name value))]
-    (.send (HttpClient/newHttpClient)
+    (.send http-client
            (.build (.POST builder
                           (HttpRequest$BodyPublishers/ofString body)))
            (HttpResponse$BodyHandlers/ofString))))

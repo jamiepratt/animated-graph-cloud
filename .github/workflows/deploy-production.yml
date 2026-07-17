@@ -1,0 +1,219 @@
+name: Release Alpha Compose production
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: "Git commit, tag, or full SHA to release"
+        required: true
+        default: main
+        type: string
+      confirmation:
+        description: "Type: RELEASE ALPHA COMPOSE TO OWNER ONLY"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: animated-graph-cloud-prod-jp
+  PROJECT_NUMBER: "488013150738"
+  REGION: europe-central2
+  REPOSITORY: containers
+  SERVICE: agg-api
+  DURABLE_JOB: agg-renderer
+  SMOKE_JOB: agg-renderer-smoke
+  DEPLOYER_SERVICE_ACCOUNT: agg-github-deployer@animated-graph-cloud-prod-jp.iam.gserviceaccount.com
+  API_SERVICE_ACCOUNT: agg-api@animated-graph-cloud-prod-jp.iam.gserviceaccount.com
+  RENDERER_SERVICE_ACCOUNT: agg-renderer@animated-graph-cloud-prod-jp.iam.gserviceaccount.com
+  OWNER_EMAIL: me@jamiep.org
+  PUBLIC_BASE_URL: https://alphacompose.com
+  DAILY_SUBMISSION_LIMIT: "100"
+  MONTHLY_BUDGET_MINOR_UNITS: "40000"
+  RENDER_RESERVATION_MINOR_UNITS: "125"
+
+jobs:
+  release:
+    if: github.event.inputs.confirmation == 'RELEASE ALPHA COMPOSE TO OWNER ONLY'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_ref }}
+
+      - id: source
+        name: Resolve checked-out release commit
+        run: |
+          commit="$(git rev-parse HEAD)"
+          test -n "$commit"
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+
+      - name: Build immutable release candidate
+        env:
+          IMAGE_TAG: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/animated-graph-cloud:${{ steps.source.outputs.commit }}
+        run: |
+          docker build --tag "$IMAGE_TAG" .
+          test/container_smoke.sh "$IMAGE_TAG"
+
+      - name: Scan release candidate
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/animated-graph-cloud:${{ steps.source.outputs.commit }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - id: auth
+        name: Authenticate through production WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud
+          service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: ">= 541.0.0"
+
+      - id: image
+        name: Push and resolve immutable image digest
+        env:
+          IMAGE_TAG: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/animated-graph-cloud:${{ steps.source.outputs.commit }}
+        run: |
+          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+          docker push "$IMAGE_TAG"
+          digest="$(gcloud artifacts docker images describe "$IMAGE_TAG" --format='value(image_summary.digest)')"
+          test -n "$digest"
+          echo "uri=$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/animated-graph-cloud@$digest" >>"$GITHUB_OUTPUT"
+
+      - name: Deploy private API candidate
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE_DIGEST" \
+            --service-account "$API_SERVICE_ACCOUNT" \
+            --port 8080 \
+            --cpu 1 \
+            --memory 512Mi \
+            --min 0 \
+            --max 2 \
+            --no-allow-unauthenticated \
+            --quiet
+
+      - name: Execute isolated renderer smoke
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+        run: |
+          gcloud run jobs deploy "$SMOKE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE_DIGEST" \
+            --service-account "$RENDERER_SERVICE_ACCOUNT" \
+            --args clojure.main,-m,agg.renderer.main \
+            --tasks 1 \
+            --max-retries 0 \
+            --task-timeout 5m \
+            --cpu 1 \
+            --memory 512Mi \
+            --quiet
+          gcloud run jobs execute "$SMOKE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --wait
+
+      - id: service-url
+        name: Discover private API origin
+        run: |
+          service_url="$(gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(status.url)')"
+          test -n "$service_url"
+          echo "url=$service_url" >>"$GITHUB_OUTPUT"
+
+      - name: Configure owner-only production runtime
+        env:
+          CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
+        run: |
+          gcloud run services update "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --remove-env-vars "AGG_MONTHLY_BUDGET_CENTS,AGG_RENDER_RESERVATION_CENTS" \
+            --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=$DURABLE_JOB,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
+            --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
+            --quiet
+
+      - id: health-auth
+        name: Mint origin identity token through WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud
+          service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service-url.outputs.url }}
+          id_token_include_email: true
+
+      - name: Verify private candidate before opening ingress
+        env:
+          CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
+          CLOUD_RUN_ID_TOKEN: ${{ steps.health-auth.outputs.id_token }}
+        run: |
+          health="$(curl --fail --silent --show-error \
+            --retry 5 --retry-all-errors \
+            --header "Authorization: Bearer $CLOUD_RUN_ID_TOKEN" \
+            "$CLOUD_RUN_SERVICE_URL/health")"
+          test "$health" = '{"status":"ok"}'
+          gcloud run services add-iam-policy-binding "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --member=allUsers \
+            --role=roles/run.invoker \
+            --quiet
+
+      - name: Publish pinned Firebase Hosting route
+        run: >-
+          npx --yes firebase-tools@15.24.0 deploy
+          --only hosting
+          --project "$PROJECT_ID"
+          --non-interactive
+
+      - name: Promote durable renderer and verify public release
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+        run: |
+          gcloud run jobs update "$DURABLE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE_DIGEST" \
+            --quiet
+          test "$(curl --fail --silent --show-error --retry 5 --retry-all-errors "$PUBLIC_BASE_URL/health")" = '{"status":"ok"}'
+          curl --fail --silent --show-error "$PUBLIC_BASE_URL/privacy" | grep -q 'Privacy policy'
+          curl --fail --silent --show-error "$PUBLIC_BASE_URL/terms" | grep -q 'Terms of service'
+
+      - name: Record release summary
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+        run: |
+          {
+            echo "## Alpha Compose owner-only production release"
+            echo
+            echo "- Ref: ${{ inputs.release_ref }}"
+            echo "- Commit: ${{ steps.source.outputs.commit }}"
+            echo "- Image: $IMAGE_DIGEST"
+            echo "- Domain: $PUBLIC_BASE_URL"
+            echo "- Audience: owner only; no member was added by this workflow"
+            echo "- Manual acceptance remains recorded separately"
+          } >>"$GITHUB_STEP_SUMMARY"

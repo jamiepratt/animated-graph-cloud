@@ -17,6 +17,8 @@
   (with-open [socket (ServerSocket. 0)]
     (.getLocalPort socket)))
 
+(def ^:private http-client (HttpClient/newHttpClient))
+
 (deftest api-health-is-served-over-http
   (let [port (available-port)
         server (api/start! port)]
@@ -25,7 +27,7 @@
                         (.uri (URI/create (str "http://127.0.0.1:" port "/health")))
                         (.GET)
                         (.build))
-            response (.send (HttpClient/newHttpClient)
+            response (.send http-client
                             request
                             (HttpResponse$BodyHandlers/ofString))]
         (is (= 200 (.statusCode response)))
@@ -61,7 +63,7 @@
                         (.header "Content-Type" "application/json")
                         (.POST (HttpRequest$BodyPublishers/ofString body))
                         (.build))
-            response (.send (HttpClient/newHttpClient)
+            response (.send http-client
                             request
                             (HttpResponse$BodyHandlers/ofByteArray))
             png (.body response)]
@@ -113,7 +115,7 @@
                         (.header "Content-Type" "application/json")
                         (.POST (HttpRequest$BodyPublishers/ofString body))
                         (.build))
-            response (.send (HttpClient/newHttpClient)
+            response (.send http-client
                             request
                             (HttpResponse$BodyHandlers/ofByteArray))]
         (is (= 200 (.statusCode response)))

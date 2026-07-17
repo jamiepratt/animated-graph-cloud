@@ -62,7 +62,7 @@
                  {:method :post
                   :url "https://www.googleapis.com/drive/v3/files?fields=id"
                   :headers {"Content-Type" "application/json"}
-                  :body (json/write-str {:name "Animated Graph Cloud"
+                  :body (json/write-str {:name "Alpha Compose"
                                          :mimeType folder-mime-type})}
                  access-token))
          ::folder-create-failed)]

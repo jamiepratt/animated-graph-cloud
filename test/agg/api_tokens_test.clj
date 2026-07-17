@@ -13,6 +13,8 @@
 (defn- available-port []
   (with-open [socket (ServerSocket. 0)] (.getLocalPort socket)))
 
+(def ^:private http-client (HttpClient/newHttpClient))
+
 (defn- request! [port method path body headers]
   (let [builder (HttpRequest/newBuilder
                  (URI/create (str "http://127.0.0.1:" port path)))
@@ -24,7 +26,7 @@
         request (case method
                   :get (.GET builder)
                   :post (.POST builder publisher))]
-    (.send (HttpClient/newHttpClient)
+    (.send http-client
            (.build request)
            (HttpResponse$BodyHandlers/ofString))))
 

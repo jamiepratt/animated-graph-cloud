@@ -12,12 +12,14 @@
 (defn- available-port []
   (with-open [socket (ServerSocket. 0)] (.getLocalPort socket)))
 
+(def ^:private http-client (HttpClient/newHttpClient))
+
 (defn- post! [port path body headers]
   (let [builder (HttpRequest/newBuilder
                  (URI/create (str "http://127.0.0.1:" port path)))]
     (doseq [[name value] headers]
       (.header builder name value))
-    (.send (HttpClient/newHttpClient)
+    (.send http-client
            (.build (.POST builder
                           (HttpRequest$BodyPublishers/ofString
                            (json/write-str body))))
@@ -28,7 +30,7 @@
                  (URI/create (str "http://127.0.0.1:" port path)))]
     (doseq [[name value] headers]
       (.header builder name value))
-    (.send (HttpClient/newHttpClient)
+    (.send http-client
            (.build (.GET builder))
            (HttpResponse$BodyHandlers/ofString))))
 

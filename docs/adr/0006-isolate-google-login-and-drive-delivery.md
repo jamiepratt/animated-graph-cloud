@@ -30,7 +30,7 @@ identities receive only secret access and KMS encrypt/decrypt permissions they
 need. An expired or revoked refresh token marks the stored grant revoked and
 requires the user to reconnect Drive.
 
-The first Drive grant creates `Animated Graph Cloud` and stores its ID; later
+The first Drive grant creates the public product folder `Alpha Compose` and stores its ID; later
 grants verify and reuse it. The Picker bridge receives a short-lived refreshed
 access token in a no-store page and uses the same `drive.file` grant. Its
 same-origin entrypoint receives selected file metadata from the popup, while a

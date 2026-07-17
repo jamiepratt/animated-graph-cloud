@@ -1,6 +1,10 @@
-# Animated Graph Cloud
+# Alpha Compose
 
-Private Clojure service for generating telemetry graph overlays. This is a clean-room implementation; the reference TypeScript renderer is behavioral evidence only and none of its source or assets belong here.
+Private Clojure service for generating telemetry graph overlays. The deployable
+artifact and repository retain the `animated-graph-cloud` technical name; the
+public product and domain are Alpha Compose and `https://alphacompose.com`.
+This is a clean-room implementation; the reference TypeScript renderer is
+behavioral evidence only and none of its source or assets belong here.
 
 ## Local verification
 
@@ -204,7 +208,12 @@ Run the owned Firestore transaction contract against the emulator:
 script/test_firestore_emulator.sh
 ```
 
-Infrastructure targets project `animated-graph-cloud-jp` in Warsaw (`europe-central2`). Application Default Credentials provide local authentication; do not create service-account key files or commit credentials.
+Development infrastructure targets `animated-graph-cloud-jp`; isolated
+production infrastructure targets `animated-graph-cloud-prod-jp`. Both keep
+application resources in Warsaw (`europe-central2`). Application Default
+Credentials provide local authentication; do not create service-account key
+files or commit credentials. See `docs/production-runbook.md` for production
+checkpoints and `docs/release-acceptance.md` for the evidence matrix.
 
 Pushes to `main` authenticate through GitHub Workload Identity Federation,
 scan and push an immutable commit-tagged image, deploy the private `agg-api`
@@ -219,7 +228,7 @@ rechecks the active Firestore membership generation on every authenticated
 request. `AGG_OWNER_EMAIL` bootstraps the non-revocable owner. Drive is connected
 separately at `GET /v1/auth/drive/start` with only `drive.file`; the callback
 encrypts the refresh token with the Warsaw KMS key and creates or reuses the
-user's `Animated Graph Cloud` folder. `GET /v1/drive/picker` opens a no-store
+user's `Alpha Compose` folder. `GET /v1/drive/picker` opens a no-store
 Google Picker bridge for the same restricted grant. The authenticated `/`
 entrypoint opens that bridge in a popup and accepts selected CSV, FIT-like
 binary, or PNG metadata only from the same origin. A directly opened Picker
@@ -266,10 +275,16 @@ The OAuth web-client JSON has this Secret Manager shape:
 {"web":{"client_id":"…","client_secret":"…"}}
 ```
 
-Register both Cloud Run callbacks on that web client:
+For development, register both Cloud Run callbacks on the development web
+client:
 
 - `https://SERVICE_URL/v1/auth/login/callback`
 - `https://SERVICE_URL/v1/auth/drive/callback`
+
+Production uses a separate web client with
+`https://alphacompose.com/v1/auth/login/callback` and
+`https://alphacompose.com/v1/auth/drive/callback`. Never reuse the development
+client JSON.
 
 The runtime mounts `oauth-client-secret`, `session-key`, `picker-api-key`, and
 `token-hash-pepper` from Secret Manager. Never place their values in Terraform,

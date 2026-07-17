@@ -15,6 +15,8 @@
 (defn- available-port []
   (with-open [socket (ServerSocket. 0)] (.getLocalPort socket)))
 
+(def ^:private http-client (HttpClient/newHttpClient))
+
 (defn- request! [port method path body headers]
   (let [builder (HttpRequest/newBuilder
                  (URI/create (str "http://127.0.0.1:" port path)))
@@ -24,7 +26,7 @@
         request (case method
                   :get (.GET builder)
                   :post (.POST builder publisher))]
-    (.send (HttpClient/newHttpClient)
+    (.send http-client
            (.build request)
            (HttpResponse$BodyHandlers/ofString))))
 
@@ -58,6 +60,29 @@
 
 (def form-content-type
   {"Content-Type" "application/x-www-form-urlencoded"})
+
+(deftest public-product-and-legal-pages-identify-alpha-compose
+  (let [port (available-port)
+        {:keys [auth-system]} (fixture)
+        server (api/start! port {:auth-system auth-system})]
+    (try
+      (let [homepage (request! port :get "/" nil {})
+            privacy (request! port :get "/privacy" nil {})
+            terms (request! port :get "/terms" nil {})]
+        (is (= 200 (.statusCode homepage)))
+        (is (str/includes? (.body homepage) "Alpha Compose"))
+        (is (str/includes? (.body homepage) "href=\"/privacy\""))
+        (is (str/includes? (.body homepage) "href=\"/terms\""))
+        (is (= 200 (.statusCode privacy)))
+        (is (str/includes? (.body privacy) "Privacy policy"))
+        (is (str/includes? (.body privacy) "Google Drive"))
+        (is (str/includes? (.body privacy) "Google API Services User Data Policy"))
+        (is (str/includes? (.body privacy) "Limited Use"))
+        (is (= 200 (.statusCode terms)))
+        (is (str/includes? (.body terms) "Terms of service"))
+        (is (str/includes? (.body terms) "me@jamiep.org")))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
 
 (deftest htmx-owner-workflow-previews-submits-polls-cancels-and-retries
   (let [port (available-port)

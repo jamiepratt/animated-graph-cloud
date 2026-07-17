@@ -1,0 +1,31 @@
+{
+  "release": {
+    "commit": null,
+    "imageDigest": null,
+    "productionWorkflowRun": null,
+    "recordedAt": null,
+    "recorder": null
+  },
+  "automated": {
+    "repositoryAcceptance": {
+      "status": "not-run",
+      "command": "script/release_acceptance.sh",
+      "evidence": null
+    }
+  },
+  "manualExternal": {
+    "firebaseActivationAndTerms": {"status": "not-run", "evidence": null},
+    "dnsAndTls": {"status": "not-run", "evidence": null},
+    "legalCopyApproval": {"status": "not-run", "evidence": null},
+    "oauthBrandAndPublication": {"status": "not-run", "evidence": null},
+    "ownerOnlySmoke": {"status": "not-run", "evidence": null},
+    "allInputFormats": {"status": "not-run", "evidence": null},
+    "maximumRenders": {"status": "not-run", "evidence": null},
+    "davinciResolve": {"status": "not-run", "evidence": null},
+    "driveDelivery": {"status": "not-run", "evidence": null},
+    "concurrencyAndAdmission": {"status": "not-run", "evidence": null},
+    "cancelRetryRevocationRecovery": {"status": "not-run", "evidence": null},
+    "monitoringAndRollback": {"status": "not-run", "evidence": null}
+  },
+  "notes": []
+}

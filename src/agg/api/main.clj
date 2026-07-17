@@ -497,6 +497,12 @@
             (and auth-system (= "GET" method) (= "/" path))
             (landing! exchange auth-system token-service admin-service)
 
+            (and (= "GET" method) (= "/privacy" path))
+            (respond! exchange 200 "text/html; charset=utf-8" ui/privacy-page)
+
+            (and (= "GET" method) (= "/terms" path))
+            (respond! exchange 200 "text/html; charset=utf-8" ui/terms-page)
+
             (and auth-system (= "GET" method)
                  (= "/v1/auth/login/start" path))
             (begin-auth! exchange auth-system :login)

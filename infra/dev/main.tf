@@ -1,5 +1,5 @@
 locals {
-  required_services = toset([
+  required_services = setunion(toset([
     "artifactregistry.googleapis.com",
     "billingbudgets.googleapis.com",
     "cloudbilling.googleapis.com",
@@ -22,7 +22,10 @@ locals {
     "serviceusage.googleapis.com",
     "storage.googleapis.com",
     "sts.googleapis.com",
-  ])
+    ]), var.enable_firebase_hosting ? toset([
+    "firebase.googleapis.com",
+    "firebasehosting.googleapis.com",
+  ]) : toset([]))
 
   secret_ids = toset([
     "oauth-client-secret",
@@ -56,8 +59,10 @@ resource "google_firestore_database" "default" {
 }
 
 import {
+  for_each = var.import_default_firestore ? toset([var.project_id]) : toset([])
+
   to = google_firestore_database.default
-  id = "projects/animated-graph-cloud-jp/databases/(default)"
+  id = "projects/${each.value}/databases/(default)"
 }
 
 resource "google_artifact_registry_repository" "containers" {
@@ -242,6 +247,8 @@ resource "google_firestore_field" "job_expiry" {
 }
 
 resource "google_cloud_scheduler_job" "reconcile" {
+  count = var.api_service_url == "" ? 0 : 1
+
   project = var.project_id
   region  = var.region
   name    = "agg-reconcile"
@@ -275,7 +282,7 @@ resource "google_cloud_scheduler_job" "reconcile" {
 resource "google_billing_budget" "development" {
   billing_account = trimprefix(data.google_project.current.billing_account,
   "billingAccounts/")
-  display_name    = "Animated Graph Cloud development"
+  display_name    = "Alpha Compose ${var.environment_name}"
   deletion_policy = "ABANDON"
 
   budget_filter {
@@ -930,7 +937,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "attribute.ref"        = "assertion.ref"
   }
 
-  attribute_condition = "assertion.repository == '${var.github_repository}'"
+  attribute_condition = var.github_subject == "" ? "assertion.repository == '${var.github_repository}'" : "assertion.repository == '${var.github_repository}' && assertion.sub == '${var.github_subject}'"
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
@@ -958,6 +965,14 @@ resource "google_project_iam_member" "deployer_run_admin" {
 resource "google_project_iam_member" "deployer_log_viewer" {
   project = var.project_id
   role    = "roles/logging.viewer"
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_project_iam_member" "deployer_firebase_hosting_admin" {
+  count = var.enable_firebase_hosting ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/firebasehosting.admin"
   member  = "serviceAccount:${google_service_account.deployer.email}"
 }
 

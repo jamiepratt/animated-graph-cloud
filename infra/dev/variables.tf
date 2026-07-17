@@ -1,5 +1,5 @@
 variable "project_id" {
-  description = "Development Google Cloud project ID."
+  description = "Google Cloud project ID for this isolated environment."
   type        = string
   default     = "animated-graph-cloud-jp"
 }
@@ -11,7 +11,7 @@ variable "region" {
 
   validation {
     condition     = var.region == "europe-central2"
-    error_message = "Development resources must remain in Warsaw (europe-central2)."
+    error_message = "Application resources must remain in Warsaw (europe-central2)."
   }
 }
 
@@ -33,18 +33,18 @@ variable "renderer_image" {
 }
 
 variable "api_service_url" {
-  description = "Stable public URL of the authenticated API service used by Scheduler."
+  description = "Cloud Run origin used by Scheduler; empty during first bootstrap."
   type        = string
   default     = "https://agg-api-zzosxhcrza-lm.a.run.app"
 
   validation {
-    condition     = can(regex("^https://[^/]+\\.run\\.app$", var.api_service_url))
-    error_message = "The API service URL must be an HTTPS run.app origin without a path."
+    condition     = var.api_service_url == "" || can(regex("^https://[^/]+\\.run\\.app$", var.api_service_url))
+    error_message = "The API service URL must be empty or an HTTPS run.app origin without a path."
   }
 }
 
 variable "monthly_budget_pln" {
-  description = "Monthly development billing budget in PLN, mirrored by application admission."
+  description = "Monthly environment billing budget in PLN, mirrored by application admission."
   type        = number
   default     = 400
 
@@ -63,4 +63,28 @@ variable "operations_alert_email" {
     condition     = can(regex("^[^@[:space:]]+@[^@[:space:]]+$", var.operations_alert_email))
     error_message = "The operations alert recipient must be an email address."
   }
+}
+
+variable "environment_name" {
+  description = "Human-readable isolated environment name."
+  type        = string
+  default     = "development"
+}
+
+variable "import_default_firestore" {
+  description = "Import a pre-existing default Firestore database instead of creating it."
+  type        = bool
+  default     = true
+}
+
+variable "enable_firebase_hosting" {
+  description = "Enable Firebase APIs and grant the deployer Hosting administration."
+  type        = bool
+  default     = false
+}
+
+variable "github_subject" {
+  description = "Optional exact GitHub OIDC subject, used to bind production to an environment."
+  type        = string
+  default     = ""
 }
