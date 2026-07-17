@@ -24,7 +24,7 @@ variable "github_repository" {
 variable "renderer_image" {
   description = "Immutable application image used by the durable renderer job."
   type        = string
-  default     = "europe-central2-docker.pkg.dev/animated-graph-cloud-jp/containers/animated-graph-cloud@sha256:cfecbf6da754386fb47189e9b4fa426416bbb97d241a170207e94aeec6886304"
+  default     = "europe-central2-docker.pkg.dev/animated-graph-cloud-jp/containers/animated-graph-cloud@sha256:631b90121a0305da8a835fd3f7709b5a0befea469c4f1d8ad9e9920db0afbd4d"
 
   validation {
     condition     = can(regex("@sha256:[0-9a-f]{64}$", var.renderer_image))
