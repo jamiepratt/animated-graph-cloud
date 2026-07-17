@@ -23,14 +23,10 @@
                         :body (String. (.readAllBytes (.getRequestBody exchange))
                                        StandardCharsets/UTF_8)}]
            (swap! requests conj request)
-           (if (= 1 (count @requests))
-             (do
-               (.set (.getResponseHeaders exchange) "Range" "bytes=0-1")
-               (.sendResponseHeaders exchange 308 -1))
-             (let [body (.getBytes (json/write-str {:id "file-1"})
-                                   StandardCharsets/UTF_8)]
-               (.sendResponseHeaders exchange 200 (alength body))
-               (.write (.getResponseBody exchange) body)))
+           (let [body (.getBytes (json/write-str {:id "file-1"})
+                                 StandardCharsets/UTF_8)]
+             (.sendResponseHeaders exchange 200 (alength body))
+             (.write (.getResponseBody exchange) body))
            (.close exchange)))))
     (.start server)
     server))
@@ -66,7 +62,7 @@
             :mimeType "application/vnd.google-apps.folder"}
            (json/read-str (:body (first @requests)) :key-fn keyword)))))
 
-(deftest resumable-upload-queries-offset-and-continues-with-a-bounded-chunk
+(deftest recovered-resumable-upload-queries-offset-and-continues-with-a-bounded-chunk
   (let [requests (atom [])
         responses (atom [{:status 308 :headers {"range" "bytes=0-1"} :body ""}
                          {:status 200 :headers {} :body (json/write-str {:id "file-1"})}])
@@ -82,7 +78,7 @@
     (try
       (Files/writeString path "movie" (make-array OpenOption 0))
       (is (= {:status :complete :file-id "file-1"}
-             (drive/upload-resumable! gateway "access" "https://upload/session"
+             (drive/resume-resumable! gateway "access" "https://upload/session"
                                       path 5)))
       (is (= "*/5" (get-in @requests [0 :headers "Content-Range"])))
       (is (= "bytes 2-4/5" (get-in @requests [1 :headers "Content-Range"])))
@@ -90,7 +86,7 @@
       (finally
         (Files/deleteIfExists path)))))
 
-(deftest java-http-client-sends-drive-resumable-headers-on-the-wire
+(deftest java-http-client-starts-fresh-session-with-data
   (let [requests (atom [])
         server (local-upload-server requests)
         path (Files/createTempFile "real-resumable" ".mov"
@@ -102,8 +98,9 @@
       (Files/writeString path "movie" (make-array OpenOption 0))
       (is (= {:status :complete :file-id "file-1"}
              (drive/upload-resumable! gateway "access" session-uri path 5)))
-      (is (= [{:content-length "0" :content-range "*/5" :body ""}
-              {:content-length "3" :content-range "bytes 2-4/5" :body "vie"}]
+      (is (= [{:content-length "5"
+               :content-range "bytes 0-4/5"
+               :body "movie"}]
              @requests))
       (finally
         (.stop server 0)
@@ -111,8 +108,7 @@
 
 (deftest resumable-continuation-obeys-partial-acknowledgements
   (let [requests (atom [])
-        responses (atom [{:status 308 :headers {} :body ""}
-                         {:status 308 :headers {"range" "bytes=0-1"} :body ""}
+        responses (atom [{:status 308 :headers {"range" "bytes=0-1"} :body ""}
                          {:status 200 :headers {}
                           :body (json/write-str {:id "file-1"})}])
         gateway (gcp/->RestDriveGateway
@@ -129,11 +125,11 @@
       (is (= {:status :complete :file-id "file-1"}
              (drive/upload-resumable! gateway "access" "https://upload/session"
                                       path 10)))
-      (is (= ["*/10" "bytes 0-4/10" "bytes 2-6/10"]
+      (is (= ["bytes 0-4/10" "bytes 2-6/10"]
              (mapv #(get-in % [:headers "Content-Range"]) @requests)))
       (is (= ["01234" "23456"]
              (mapv #(String. ^bytes (:body-bytes %) StandardCharsets/UTF_8)
-                   (rest @requests))))
+                   @requests)))
       (finally
         (Files/deleteIfExists path)))))
 
@@ -147,8 +143,7 @@
                ["acknowledgement beyond sent bytes"
                 {:status 308 :headers {"range" "bytes=0-8"} :body ""}]]]
         (testing label
-          (let [responses (atom [{:status 308 :headers {} :body ""}
-                                 response])
+          (let [responses (atom [response])
                 gateway (gcp/->RestDriveGateway
                          (fn [_]
                            (let [next-response (first @responses)]
@@ -173,8 +168,27 @@
                                    (make-array java.nio.file.attribute.FileAttribute 0))]
     (try
       (is (= {:status :session-expired}
-             (drive/upload-resumable! gateway "access" "https://upload/expired"
+             (drive/resume-resumable! gateway "access" "https://upload/expired"
                                       path 0)))
+      (finally
+        (Files/deleteIfExists path)))))
+
+(deftest recovered-session-treats-a-drive-400-probe-as-expired
+  (let [requests (atom [])
+        gateway (gcp/->RestDriveGateway
+                 (fn [request]
+                   (swap! requests conj request)
+                   {:status 400 :headers {} :body "invalid session"})
+                 (* 8 1024 1024))
+        path (Files/createTempFile "invalid-resumable" ".mov"
+                                   (make-array java.nio.file.attribute.FileAttribute 0))]
+    (try
+      (Files/writeString path "movie" (make-array OpenOption 0))
+      (is (= {:status :session-expired}
+             (drive/resume-resumable! gateway "access" "https://upload/invalid"
+                                      path 5)))
+      (is (= ["*/5"]
+             (mapv #(get-in % [:headers "Content-Range"]) @requests)))
       (finally
         (Files/deleteIfExists path)))))
 

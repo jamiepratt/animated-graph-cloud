@@ -44,8 +44,10 @@ without a trailing newline.
 Before a renderer uploads bytes, it asks Drive for one generated file ID and
 atomically reserves that ID in Firestore under the job ID. The resumable session
 URI and completion state are durable. Retries query the saved session offset;
-an expired session is replaced while retaining the preallocated file ID, and a
-completed delivery is a no-op. The local MOV is delivered before cleanup.
+a fresh session instead sends byte zero immediately because probing a new Drive
+session can invalidate it. An invalid or expired recovered session is replaced
+while retaining the preallocated file ID, and a completed delivery is a no-op.
+The local MOV is delivered before cleanup.
 
 Browser ingress becomes public only after the authenticated application
 revision and secrets are configured. User routes require a signed session.

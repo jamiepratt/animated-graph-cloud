@@ -113,6 +113,36 @@
           (recur buffer))))
     bytes))
 
+(defn- upload-from!
+  [send! chunk-size access-token session-uri path size initial]
+  (loop [offset initial]
+    (let [length (int (min (long chunk-size) (- (long size) offset)))
+          end (dec (+ offset length))
+          response
+          (send! (authorized
+                  {:method :put
+                   :url session-uri
+                   :headers {"Content-Type" "video/quicktime"
+                             "Content-Range"
+                             (str "bytes " offset "-" end "/" size)}
+                   :body-bytes (read-chunk path offset length)}
+                  access-token))]
+      (cond
+        (contains? #{404 410} (:status response))
+        {:status :session-expired}
+
+        (<= 200 (:status response) 299)
+        {:status :complete :file-id (:id (parse-json (:body response)))}
+
+        (= 308 (:status response))
+        (recur (continued-offset (get-in response [:headers "range"])
+                                 offset end size))
+
+        :else
+        (throw (ex-info "Drive resumable upload failed"
+                        {:type ::resumable-upload-failed
+                         :status (:status response)}))))))
+
 (defrecord RestDriveGateway [send! chunk-size]
   auth/DriveClient
   (ensure-output-folder! [_ access-token existing-folder]
@@ -171,6 +201,8 @@
           (throw (ex-info "Drive returned no resumable session"
                           {:type ::resumable-start-failed})))))
   (upload-resumable! [_ access-token session-uri path size]
+    (upload-from! send! chunk-size access-token session-uri path size 0))
+  (resume-resumable! [_ access-token session-uri path size]
     (let [query-response
           (send! (authorized
                   {:method :put
@@ -178,42 +210,16 @@
                    :headers {"Content-Range" (str "*/" size)}}
                   access-token))]
       (cond
-        (contains? #{404 410} (:status query-response))
+        (contains? #{400 404 410} (:status query-response))
         {:status :session-expired}
 
         (<= 200 (:status query-response) 299)
         {:status :complete :file-id (:id (parse-json (:body query-response)))}
 
         (= 308 (:status query-response))
-        (loop [offset (initial-offset
-                       (get-in query-response [:headers "range"])
-                       size)]
-          (let [length (int (min (long chunk-size) (- (long size) offset)))
-                end (dec (+ offset length))
-                response
-                (send! (authorized
-                        {:method :put
-                         :url session-uri
-                         :headers {"Content-Type" "video/quicktime"
-                                   "Content-Range"
-                                   (str "bytes " offset "-" end "/" size)}
-                         :body-bytes (read-chunk path offset length)}
-                        access-token))]
-            (cond
-              (contains? #{404 410} (:status response))
-              {:status :session-expired}
-
-              (<= 200 (:status response) 299)
-              {:status :complete :file-id (:id (parse-json (:body response)))}
-
-              (= 308 (:status response))
-              (recur (continued-offset (get-in response [:headers "range"])
-                                       offset end size))
-
-              :else
-              (throw (ex-info "Drive resumable upload failed"
-                              {:type ::resumable-upload-failed
-                               :status (:status response)})))))
+        (upload-from! send! chunk-size access-token session-uri path size
+                      (initial-offset (get-in query-response [:headers "range"])
+                                      size))
 
         :else
         (throw (ex-info "Drive resumable status query failed"

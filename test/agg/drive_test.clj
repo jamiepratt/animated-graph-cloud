@@ -17,12 +17,12 @@
     (get (swap! records update job-id merge result {:complete? true}) job-id)))
 
 (deftest resumable-recovery-reuses-one-preallocated-output-id
-  (let [records (atom {})
+  (let [records (atom {"job-1" {:file-id "drive-output-1"
+                                :folder-id "folder-1"
+                                :session-uri "https://upload.example/recovered"}})
         generated (atom [])
         sessions (atom [])
         uploads (atom [])
-        responses (atom [{:status :session-expired}
-                         {:status :complete :file-id "drive-output-1"}])
         gateway
         (reify drive/DriveGateway
           (generate-output-id! [_ access-token]
@@ -35,13 +35,19 @@
                                           :session-uri session))
               session))
           (upload-resumable! [_ access-token session-uri path size]
-            (swap! uploads conj {:access-token access-token
+            (swap! uploads conj {:mode :fresh
+                                 :access-token access-token
                                  :session-uri session-uri
                                  :size size
                                  :bytes (Files/readString path)})
-            (let [response (first @responses)]
-              (swap! responses subvec 1)
-              response)))
+            {:status :complete :file-id "drive-output-1"})
+          (resume-resumable! [_ access-token session-uri path size]
+            (swap! uploads conj {:mode :recovered
+                                 :access-token access-token
+                                 :session-uri session-uri
+                                 :size size
+                                 :bytes (Files/readString path)})
+            {:status :session-expired}))
         delivery (drive/delivery
                   {:store (->MemoryDeliveryStore records)
                    :gateway gateway
@@ -56,17 +62,19 @@
       (is (= {:fileId "drive-output-1"
               :webViewLink "https://drive.google.com/file/d/drive-output-1/view"}
              (drive/deliver! delivery "job-1" "google-subject-1" output)))
-      (is (= 1 (count @generated)))
-      (is (= ["drive-output-1" "drive-output-1"]
+      (is (empty? @generated))
+      (is (= ["drive-output-1"]
              (mapv :file-id @sessions)))
-      (is (= ["https://upload.example/1" "https://upload.example/2"]
+      (is (= [:recovered :fresh] (mapv :mode @uploads)))
+      (is (= ["https://upload.example/recovered"
+              "https://upload.example/1"]
              (mapv :session-uri @uploads)))
       (is (= true (get-in @records ["job-1" :complete?])))
       (is (= "drive-output-1" (get-in @records ["job-1" :file-id])))
       (is (= {:fileId "drive-output-1"
               :webViewLink "https://drive.google.com/file/d/drive-output-1/view"}
              (drive/deliver! delivery "job-1" "google-subject-1" output)))
-      (is (= 1 (count @generated)))
+      (is (empty? @generated))
       (is (= 2 (count @uploads)))
       (finally
         (Files/deleteIfExists output)))))

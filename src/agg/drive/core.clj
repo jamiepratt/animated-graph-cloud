@@ -10,7 +10,8 @@
 (defprotocol DriveGateway
   (generate-output-id! [gateway access-token])
   (begin-resumable-upload! [gateway access-token request])
-  (upload-resumable! [gateway access-token session-uri path size]))
+  (upload-resumable! [gateway access-token session-uri path size])
+  (resume-resumable! [gateway access-token session-uri path size]))
 
 (defprotocol OutputDelivery
   (deliver-output! [delivery job-id subject path]))
@@ -66,9 +67,11 @@
         (loop [session-uri (or (:session-uri reservation)
                                (begin-session! delivery job-id access-token
                                                reservation size))
+               recovered? (some? (:session-uri reservation))
                restarts 0]
           (let [{:keys [status file-id]}
-                (upload-resumable! gateway access-token session-uri path size)]
+                ((if recovered? resume-resumable! upload-resumable!)
+                 gateway access-token session-uri path size)]
             (case status
               :complete
               (let [expected-id (:file-id reservation)]
@@ -82,6 +85,7 @@
               (if (< restarts 2)
                 (recur (begin-session! delivery job-id access-token
                                        reservation size)
+                       false
                        (inc restarts))
                 (throw (ex-info "Drive resumable session repeatedly expired"
                                 {:type ::resumable-session-expired})))
