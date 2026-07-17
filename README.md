@@ -186,4 +186,35 @@ scan and push an immutable commit-tagged image, deploy the private `agg-api`
 service, and execute `agg-renderer-smoke`. The workflow verifies the health
 response, runtime identities, and the renderer's structured completion log.
 
+## Google login and Drive delivery
+
+When `AGG_AUTH_ENABLED=true`, browser users start login at
+`GET /v1/auth/login/start`. Login requests only `openid email profile` and
+rechecks `AGG_ALLOWED_EMAILS` on every authenticated request. Drive is connected
+separately at `GET /v1/auth/drive/start` with only `drive.file`; the callback
+encrypts the refresh token with the Warsaw KMS key and creates or reuses the
+user's `Animated Graph Cloud` folder. `GET /v1/drive/picker` opens a no-store
+Google Picker bridge for the same restricted grant.
+
+Completed cloud jobs upload their local MOV to a preallocated Drive file ID.
+Firestore retains the ID and resumable session so worker retries resume the
+same file rather than creating duplicates. Polling success includes
+`driveFileId` and `driveWebViewLink`.
+
+The OAuth web-client JSON has this Secret Manager shape:
+
+```json
+{"web":{"client_id":"…","client_secret":"…"}}
+```
+
+Register both Cloud Run callbacks on that web client:
+
+- `https://SERVICE_URL/v1/auth/login/callback`
+- `https://SERVICE_URL/v1/auth/drive/callback`
+
+The runtime mounts `oauth-client-secret`, `session-key`, and `picker-api-key`
+from Secret Manager. Never place their values in Terraform, workflow YAML,
+logs, or command arguments. The Picker key must allow only the service origin
+and `picker.googleapis.com`.
+
 Implementation work is tracked in GitHub Issues.

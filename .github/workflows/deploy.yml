@@ -24,6 +24,7 @@ env:
   DEPLOYER_SERVICE_ACCOUNT: agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com
   API_SERVICE_ACCOUNT: agg-api@animated-graph-cloud-jp.iam.gserviceaccount.com
   RENDERER_SERVICE_ACCOUNT: agg-renderer@animated-graph-cloud-jp.iam.gserviceaccount.com
+  ALLOWED_EMAILS: me@jamiep.org
 
 jobs:
   deploy:
@@ -107,14 +108,24 @@ jobs:
             --format 'value(status.url)')"
           echo "url=$service_url" >>"$GITHUB_OUTPUT"
 
-      - name: Enable durable job lifecycle
+      - name: Enable authenticated durable job lifecycle
         env:
           CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
         run: |
           gcloud run services update "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
-            --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=agg-renderer,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL" \
+            --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=agg-renderer,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$CLOUD_RUN_SERVICE_URL,AGG_ALLOWED_EMAILS=$ALLOWED_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER" \
+            --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest" \
+            --quiet
+
+      - name: Open ingress after application authentication is configured
+        run: |
+          gcloud run services add-iam-policy-binding "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --member=allUsers \
+            --role=roles/run.invoker \
             --quiet
 
       - id: health-auth

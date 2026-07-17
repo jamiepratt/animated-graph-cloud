@@ -12,6 +12,9 @@
   (retry-job! [service job-id])
   (run-job! [service job-id]))
 
+(defprotocol JobAccess
+  (owns-job? [service job-id subject]))
+
 (defprotocol JobLauncher
   (launch-job! [launcher job-id])
   (cancel-execution! [launcher execution]))
@@ -67,6 +70,9 @@
       (dissoc :lease :execution :failure)))
 
 (defrecord InMemoryJobService [state enqueued launcher worker ^Clock clock]
+  JobAccess
+  (owns-job? [_ job-id subject]
+    (= subject (get-in @state [:jobs job-id :request :requesterSubject])))
   JobService
   (submit-job! [_ idempotency-key request]
     (when-not (and (string? idempotency-key)

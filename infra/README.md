@@ -20,6 +20,14 @@ identities receive only their required Firestore, queue, Run invocation, and
 temporary-object roles. The renderer remains one task with zero retries; task
 redelivery can retry admission but cannot duplicate a non-queued execution.
 
+Google OAuth runtime values are operator-managed Secret Manager versions:
+`oauth-client-secret` contains the downloaded web-client JSON, `session-key`
+contains at least 32 random bytes, and `picker-api-key` contains a browser key
+restricted to the API origin and Picker API. Terraform manages only the secret
+containers, least-privilege secret access, and KMS access. It never reads or
+stores secret payloads. The durable renderer mounts the OAuth client secret so
+it can refresh an encrypted user grant and upload the completed MOV to Drive.
+
 ```sh
 terraform -chdir=infra/dev init
 terraform -chdir=infra/dev plan -out=dev.tfplan

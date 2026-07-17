@@ -1,0 +1,180 @@
+(ns agg.api-auth-test
+  (:require [agg.api.main :as api]
+            [agg.auth.core :as auth]
+            [agg.jobs-test :as fixture]
+            [agg.jobs.lifecycle :as jobs]
+            [clojure.data.json :as json]
+            [clojure.test :refer [deftest is]])
+  (:import (java.net ServerSocket URI)
+           (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
+                          HttpResponse$BodyHandlers)))
+
+(defn- available-port []
+  (with-open [socket (ServerSocket. 0)] (.getLocalPort socket)))
+
+(defn- post! [port path body headers]
+  (let [builder (HttpRequest/newBuilder
+                 (URI/create (str "http://127.0.0.1:" port path)))]
+    (doseq [[name value] headers]
+      (.header builder name value))
+    (.send (HttpClient/newHttpClient)
+           (.build (.POST builder
+                          (HttpRequest$BodyPublishers/ofString
+                           (json/write-str body))))
+           (HttpResponse$BodyHandlers/ofString))))
+
+(defn- get! [port path headers]
+  (let [builder (HttpRequest/newBuilder
+                 (URI/create (str "http://127.0.0.1:" port path)))]
+    (doseq [[name value] headers]
+      (.header builder name value))
+    (.send (HttpClient/newHttpClient)
+           (.build (.GET builder))
+           (HttpResponse$BodyHandlers/ofString))))
+
+(defn- auth-fixture []
+  (let [oauth (reify auth/OAuthClient
+                (exchange-code! [_ _ _ _ _]
+                  (throw (UnsupportedOperationException.))))
+        system (auth/system {:client-id "client-id"
+                             :client-secret "client-secret"
+                             :base-url "https://app.example.com"
+                             :allowlist #{"owner@example.com"}
+                             :session-key (.getBytes "01234567890123456789012345678901")
+                             :oauth oauth})]
+    {:system system
+     :session (auth/issue-session system {:subject "google-subject-1"
+                                          :email "owner@example.com"})}))
+
+(deftest configured-user-routes-require-an-allowlisted-session
+  (let [port (available-port)
+        lifecycle (jobs/in-memory-system)
+        {:keys [system session]} (auth-fixture)
+        server (api/start! port {:job-service (:service lifecycle)
+                                 :auth-system system
+                                 :task-audience "https://app.example.com"
+                                 :tasks-service-account "tasks@example.com"})]
+    (try
+      (let [headers {"Content-Type" "application/json"
+                     "Idempotency-Key" "secure-job"}
+            denied (post! port "/v1/jobs" (fixture/render-request) headers)
+            admitted (post! port "/v1/jobs" (fixture/render-request)
+                            (assoc headers "Cookie" (str "agg_session=" session)))]
+        (is (= 401 (.statusCode denied)))
+        (is (= {"error" "authentication_required"}
+               (json/read-str (.body denied))))
+        (is (= 202 (.statusCode admitted)))
+        (is (= "google-subject-1"
+               (get-in @(:state lifecycle)
+                       [:jobs (get (json/read-str (.body admitted)) "id")
+                        :request :requesterSubject]))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest forged-task-header-is-rejected-before-dispatch
+  (let [port (available-port)
+        lifecycle (jobs/in-memory-system)
+        {:keys [system session]} (auth-fixture)
+        verifier (reify auth/TaskTokenVerifier
+                   (verify-task-token! [_ token]
+                     (when (= "signed-task-token" token)
+                       {:issuer "https://accounts.google.com"
+                        :audience "https://app.example.com"
+                        :email "tasks@example.com"
+                        :email-verified? true})))
+        server (api/start! port {:job-service (:service lifecycle)
+                                 :auth-system system
+                                 :task-token-verifier verifier
+                                 :task-audience "https://app.example.com"
+                                 :tasks-service-account "tasks@example.com"})]
+    (try
+      (let [submission (post! port "/v1/jobs" (fixture/render-request)
+                              {"Content-Type" "application/json"
+                               "Idempotency-Key" "task-auth-job"
+                               "Cookie" (str "agg_session=" session)})
+            job-id (get (json/read-str (.body submission)) "id")
+            path (str "/internal/v1/jobs/" job-id "/dispatch")
+            forged (post! port path {}
+                          {"X-CloudTasks-TaskName" "tasks/forged"})
+            wrong-claims (post! port path {}
+                                {"X-CloudTasks-TaskName" "tasks/wrong"
+                                 "Authorization" "Bearer wrong-token"})
+            valid (post! port path {}
+                         {"X-CloudTasks-TaskName" "tasks/valid"
+                          "Authorization" "Bearer signed-task-token"})]
+        (is (= 401 (.statusCode forged)))
+        (is (= 401 (.statusCode wrong-claims)))
+        (is (= 202 (.statusCode valid)))
+        (is (= 1 (count @(:launched lifecycle)))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest picker-bridge-requires-session-and-uses-the-isolated-drive-grant
+  (let [port (available-port)
+        {:keys [system session]} (auth-fixture)
+        grants (reify auth/GrantStore
+                 (load-grant [_ _]
+                   {:refresh-token-ciphertext "kms:refresh"
+                    :folder-id "folder-1"})
+                 (save-grant! [_ _ grant] grant)
+                 (revoke-grant! [_ _]))
+        cipher (reify auth/TokenCipher
+                 (encrypt-token! [_ value] (str "kms:" value))
+                 (decrypt-token! [_ value] (subs value 4)))
+        token-client (reify auth/DriveTokenClient
+                       (refresh-drive-token! [_ token]
+                         (is (= "refresh" token))
+                         {:access-token "picker-access-token"}))
+        auth-system (assoc system
+                           :grant-store grants
+                           :cipher cipher
+                           :drive-token-client token-client)
+        server (api/start! port {:auth-system auth-system
+                                 :picker-api-key "picker-key"
+                                 :picker-app-id "891643499444"})]
+    (try
+      (let [denied (get! port "/v1/drive/picker" {})
+            response (get! port "/v1/drive/picker"
+                           {"Cookie" (str "agg_session=" session)})]
+        (is (= 401 (.statusCode denied)))
+        (is (= 200 (.statusCode response)))
+        (is (= "text/html; charset=utf-8"
+               (some-> response .headers (.firstValue "content-type")
+                       (.orElse nil))))
+        (is (re-find #"google\.picker\.PickerBuilder" (.body response)))
+        (is (re-find #"picker-access-token" (.body response)))
+        (is (re-find #"picker-key" (.body response)))
+        (is (re-find #"891643499444" (.body response))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest allowlisted-members-cannot-read-another-users-job
+  (let [port (available-port)
+        lifecycle (jobs/in-memory-system)
+        {:keys [system]} (auth-fixture)
+        auth-system (assoc system :allowlist #{"owner@example.com"
+                                               "member@example.com"})
+        owner-session (auth/issue-session auth-system
+                                          {:subject "owner-subject"
+                                           :email "owner@example.com"})
+        member-session (auth/issue-session auth-system
+                                           {:subject "member-subject"
+                                            :email "member@example.com"})
+        server (api/start! port {:job-service (:service lifecycle)
+                                 :auth-system auth-system})]
+    (try
+      (let [submission (post! port "/v1/jobs" (fixture/render-request)
+                              {"Content-Type" "application/json"
+                               "Idempotency-Key" "owner-job"
+                               "Cookie" (str "agg_session=" owner-session)})
+            job-id (get (json/read-str (.body submission)) "id")
+            owner-poll (get! port (str "/v1/jobs/" job-id)
+                             {"Cookie" (str "agg_session=" owner-session)})
+            member-poll (get! port (str "/v1/jobs/" job-id)
+                              {"Cookie" (str "agg_session=" member-session)})]
+        (is (= 200 (.statusCode owner-poll)))
+        (is (= 404 (.statusCode member-poll)))
+        (is (= {"error" "job_not_found"}
+               (json/read-str (.body member-poll)))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))

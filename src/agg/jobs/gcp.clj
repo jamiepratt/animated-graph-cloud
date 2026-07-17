@@ -1,5 +1,6 @@
 (ns agg.jobs.gcp
   (:require [agg.contracts.render :as contract]
+            [agg.auth.gcp :as auth-gcp]
             [agg.jobs.lifecycle :as lifecycle]
             [clojure.data.json :as json])
   (:import (com.google.api.gax.rpc ApiException StatusCode$Code)
@@ -51,7 +52,8 @@
     (:lease-expires-at job) (assoc "leaseExpiresAt" (long (:lease-expires-at job)))
     (:execution job) (assoc "execution" (:execution job))
     (:failure job) (assoc "failure" (:failure job))
-    (:output job) (assoc "outputJson" (json/write-str (:output job)))))
+    (:output job) (assoc "outputJson" (json/write-str (:output job)))
+    (:requester-subject job) (assoc "requesterSubject" (:requester-subject job))))
 
 (defn- snapshot-job [^DocumentSnapshot snapshot]
   (when (.exists snapshot)
@@ -69,7 +71,9 @@
         (get data "execution") (assoc :execution (get data "execution"))
         (get data "failure") (assoc :failure (get data "failure"))
         (get data "outputJson")
-        (assoc :output (json/read-str (get data "outputJson") :key-fn keyword))))))
+        (assoc :output (json/read-str (get data "outputJson") :key-fn keyword))
+        (get data "requesterSubject")
+        (assoc :requester-subject (get data "requesterSubject"))))))
 
 (defn- public-job [job]
   (lifecycle/job-resource
@@ -223,6 +227,12 @@
 
 (defrecord FirestoreJobService [^Firestore firestore request-store queue launcher
                                 worker ^Clock clock]
+  lifecycle/JobAccess
+  (owns-job? [_ job-id subject]
+    (= subject
+       (:requester-subject
+        (snapshot-job
+         (await! (.get (.document (.collection firestore "jobs") job-id)))))))
   lifecycle/JobService
   (submit-job! [_ idempotency-key request]
     (require-idempotency-key! idempotency-key)
@@ -237,6 +247,7 @@
                                      (lifecycle/request-digest idempotency-key))
           candidate {:id job-id :state :queued :attempt 1
                      :request-object request-object
+                     :requester-subject (:requesterSubject request)
                      :created-at now :updated-at now
                      :expires-at (+ now (* 90 24 60 60 1000))}
           result
@@ -482,19 +493,37 @@
     (when-not dispatcher-url
       (throw (ex-info "AGG_DISPATCHER_URL is required"
                       {:type ::missing-dispatcher-url})))
-    (let [store (request-store bucket)]
-      {:upload-signer store
-       :job-service
-       (job-service
-        {:request-store store
-         :queue (task-queue {:project project
-                             :region region
-                             :queue-name (env "AGG_TASKS_QUEUE" "agg-render")
-                             :dispatcher-url dispatcher-url
-                             :dispatcher-service-account tasks-service-account})
-         :launcher (run-launcher
-                    (str "projects/" project "/locations/" region
-                         "/jobs/" (env "AGG_RENDERER_JOB" "agg-renderer")))})})))
+    (let [store (request-store bucket)
+          firestore (.getService (FirestoreOptions/getDefaultInstance))
+          job-dependencies
+          {:upload-signer store
+           :job-service
+           (job-service
+            {:firestore firestore
+             :request-store store
+             :queue (task-queue {:project project
+                                 :region region
+                                 :queue-name (env "AGG_TASKS_QUEUE" "agg-render")
+                                 :dispatcher-url dispatcher-url
+                                 :dispatcher-service-account tasks-service-account})
+             :launcher (run-launcher
+                        (str "projects/" project "/locations/" region
+                             "/jobs/" (env "AGG_RENDERER_JOB" "agg-renderer")))})}]
+      (if (= "true" (env "AGG_AUTH_ENABLED" "false"))
+        (merge job-dependencies
+               (auth-gcp/api-dependencies
+                {:firestore firestore
+                 :project project
+                 :region region
+                 :base-url (env "AGG_PUBLIC_BASE_URL" dispatcher-url)
+                 :allowed-emails (env "AGG_ALLOWED_EMAILS" nil)
+                 :session-secret (env "AGG_SESSION_KEY" nil)
+                 :oauth-client-credentials
+                 (env "AGG_OAUTH_CLIENT_CREDENTIALS" nil)
+                 :tasks-service-account tasks-service-account
+                 :picker-api-key (env "AGG_PICKER_API_KEY" nil)
+                 :picker-app-id (env "AGG_PICKER_APP_ID" nil)}))
+        job-dependencies))))
 
 (defn api-job-service []
   (:job-service (api-system)))

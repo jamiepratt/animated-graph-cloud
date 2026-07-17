@@ -41,6 +41,28 @@
                      "AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL"))
   (is (str/includes? workflow "AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@")))
 
+(deftest oauth-and-drive-runtime-use-kms-and-secret-manager-with-least-privilege
+  (is (str/includes? terraform "roles/cloudkms.cryptoKeyEncrypterDecrypter"))
+  (is (= 2 (count (re-seq #"roles/cloudkms\.cryptoKeyEncrypterDecrypter"
+                          terraform))))
+  (is (str/includes? terraform "roles/secretmanager.secretAccessor"))
+  (is (str/includes? terraform "AGG_OAUTH_CLIENT_CREDENTIALS"))
+  (is (str/includes? terraform "AGG_DRIVE_DELIVERY_ENABLED"))
+  (is (str/includes? workflow
+                     "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest"))
+  (is (str/includes? workflow "AGG_SESSION_KEY=session-key:latest"))
+  (is (str/includes? workflow "AGG_PICKER_API_KEY=picker-api-key:latest")))
+
+(deftest public-ingress-is-enabled-only-after-app-and-task-auth-configuration
+  (let [auth-index (str/index-of workflow "AGG_AUTH_ENABLED=true")
+        public-index (str/index-of workflow "--member=allUsers")]
+    (is (number? auth-index))
+    (is (number? public-index))
+    (is (< auth-index public-index))
+    (is (str/includes? workflow "AGG_PUBLIC_BASE_URL=$CLOUD_RUN_SERVICE_URL"))
+    (is (str/includes? workflow "AGG_ALLOWED_EMAILS="))
+    (is (str/includes? workflow "AGG_PICKER_APP_ID=$PROJECT_NUMBER"))))
+
 (deftest cloud-stage-reports-survive-an-uberjar-build-and-support-resume
   (is (str/includes? cloud-spike ".spike/cloud/$run_id"))
   (is (not (str/includes? cloud-spike "target/spike")))

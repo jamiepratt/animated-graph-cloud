@@ -26,6 +26,7 @@ locals {
 
   secret_ids = toset([
     "oauth-client-secret",
+    "picker-api-key",
     "session-key",
     "token-hash-pepper",
   ])
@@ -171,6 +172,26 @@ resource "google_cloud_run_v2_job" "renderer" {
           value = google_storage_bucket.temporary.name
         }
 
+        env {
+          name  = "AGG_REGION"
+          value = var.region
+        }
+
+        env {
+          name  = "AGG_DRIVE_DELIVERY_ENABLED"
+          value = "true"
+        }
+
+        env {
+          name = "AGG_OAUTH_CLIENT_CREDENTIALS"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.application["oauth-client-secret"].secret_id
+              version = "latest"
+            }
+          }
+        }
+
         resources {
           limits = {
             cpu    = "8"
@@ -248,6 +269,44 @@ resource "google_project_iam_member" "renderer_firestore_user" {
   project = var.project_id
   role    = "roles/datastore.user"
   member  = "serviceAccount:${google_service_account.renderer.email}"
+}
+
+resource "google_kms_crypto_key_iam_member" "api_drive_token_cipher" {
+  crypto_key_id = google_kms_crypto_key.drive_tokens.id
+  role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+  member        = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_kms_crypto_key_iam_member" "renderer_drive_token_cipher" {
+  crypto_key_id = google_kms_crypto_key.drive_tokens.id
+  role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+  member        = "serviceAccount:${google_service_account.renderer.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "oauth_runtime_access" {
+  for_each = toset([
+    google_service_account.api.email,
+    google_service_account.renderer.email,
+  ])
+
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.application["oauth-client-secret"].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${each.value}"
+}
+
+resource "google_secret_manager_secret_iam_member" "api_session_access" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.application["session-key"].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "api_picker_access" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.application["picker-api-key"].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.api.email}"
 }
 
 resource "google_project_iam_member" "api_tasks_enqueuer" {

@@ -1,5 +1,7 @@
 (ns agg.renderer.main
   (:require [agg.contracts.render :as contract]
+            [agg.auth.gcp :as auth-gcp]
+            [agg.drive.core :as drive]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
             [agg.render.audio :as audio]
@@ -11,6 +13,7 @@
             [clojure.data.json :as json])
   (:gen-class)
   (:import (java.nio.file Files OpenOption Path StandardOpenOption)
+           (com.google.cloud.firestore FirestoreOptions)
            (java.security MessageDigest)
            (java.util HexFormat)))
 
@@ -184,10 +187,11 @@
                    :when candidate]
              (Files/deleteIfExists candidate))))))))
 
-(defrecord CloudRenderWorker [bucket]
+(defrecord CloudRenderWorker [bucket drive-delivery render-cloud!]
   jobs/RenderWorker
   (perform-render! [_ job-id request]
-    (let [render-spec (contract/prepare request)
+    (let [subject (:requesterSubject request)
+          render-spec (contract/prepare request)
           output-path (Files/createTempFile
                        "agg-cloud-output-" ".mov"
                        (make-array java.nio.file.attribute.FileAttribute 0))
@@ -198,16 +202,25 @@
                              (java.util.UUID/randomUUID))]
       (try
         (let [result
-              (run-job! (assoc render-spec
-                               :output-path output-path
-                               :report-path report-path
-                               :profile? false
-                               :delete-local? true)
-                        {:artifact-store (storage/gcs-store bucket object-prefix)})]
-          {:output-bytes (:output-bytes result)
-           :object (get-in result [:objects :media :object])
-           :sha256 (:sha256 result)
-           :contentType "video/quicktime"})
+              ((or render-cloud! run-job!)
+               (assoc render-spec
+                      :output-path output-path
+                      :report-path report-path
+                      :profile? false
+                      :delete-local? false)
+               {:artifact-store (storage/gcs-store bucket object-prefix)})
+              delivered
+              (when drive-delivery
+                (when-not subject
+                  (throw (ex-info "Drive delivery requires a requester"
+                                  {:type ::missing-requester})))
+                (drive/deliver-output! drive-delivery job-id subject output-path))]
+          (cond-> {:output-bytes (:output-bytes result)
+                   :object (get-in result [:objects :media :object])
+                   :sha256 (:sha256 result)
+                   :contentType "video/quicktime"}
+            delivered (assoc :driveFileId (:fileId delivered)
+                             :driveWebViewLink (:webViewLink delivered))))
         (finally
           (Files/deleteIfExists output-path)
           (Files/deleteIfExists report-path))))))
@@ -215,9 +228,19 @@
 (defn run-cloud-job! [job-id]
   (let [project (get (System/getenv) "GOOGLE_CLOUD_PROJECT"
                      "animated-graph-cloud-jp")
+        region (get (System/getenv) "AGG_REGION" "europe-central2")
         bucket (get (System/getenv) "AGG_TEMPORARY_BUCKET"
-                    (str project "-temporary"))]
-    (jobs/run-job! (gcp/renderer-job-service (->CloudRenderWorker bucket))
+                    (str project "-temporary"))
+        drive-delivery
+        (when (= "true" (get (System/getenv) "AGG_DRIVE_DELIVERY_ENABLED"))
+          (auth-gcp/renderer-delivery
+           {:firestore (.getService (FirestoreOptions/getDefaultInstance))
+            :project project
+            :region region
+            :oauth-client-credentials
+            (get (System/getenv) "AGG_OAUTH_CLIENT_CREDENTIALS")}))]
+    (jobs/run-job! (gcp/renderer-job-service
+                    (->CloudRenderWorker bucket drive-delivery run-job!))
                    job-id)))
 
 (defn -main [& args]

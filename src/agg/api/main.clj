@@ -1,5 +1,6 @@
 (ns agg.api.main
   (:require [agg.contracts.render :as contract]
+            [agg.auth.core :as auth]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
             [agg.render.frames :as frames]
@@ -9,7 +10,7 @@
   (:gen-class)
   (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
            (java.io ByteArrayOutputStream)
-           (java.net InetSocketAddress)
+           (java.net InetSocketAddress URLDecoder)
            (java.nio.charset StandardCharsets)
            (java.nio.file Files OpenOption Path)
            (java.time Instant)
@@ -35,6 +36,53 @@
 (defn- respond-json! [exchange status body]
   (respond! exchange status "application/json; charset=utf-8"
             (json/write-str body)))
+
+(defn- respond-redirect! [^HttpExchange exchange location cookies]
+  (doto (.getResponseHeaders exchange)
+    (.set "Location" location))
+  (doseq [cookie cookies]
+    (.add (.getResponseHeaders exchange) "Set-Cookie" cookie))
+  (.sendResponseHeaders exchange 302 -1)
+  (.close (.getResponseBody exchange)))
+
+(defn- cookies [^HttpExchange exchange]
+  (->> (some-> exchange .getRequestHeaders (.getFirst "Cookie"))
+       (#(or % ""))
+       (#(.split ^String % ";"))
+       (keep (fn [part]
+               (let [[key value] (.split (.trim ^String part) "=" 2)]
+                 (when (and key value) [key value]))))
+       (into {})))
+
+(defn- query-params [^HttpExchange exchange]
+  (->> (some-> exchange .getRequestURI .getRawQuery)
+       (#(or % ""))
+       (#(.split ^String % "&"))
+       (keep (fn [part]
+               (when-not (.isBlank ^String part)
+                 (let [[key value] (.split ^String part "=" 2)]
+                   [(URLDecoder/decode key StandardCharsets/UTF_8)
+                    (URLDecoder/decode (or value "")
+                                       StandardCharsets/UTF_8)]))))
+       (into {})))
+
+(defn- session-token [exchange]
+  (get (cookies exchange) "agg_session"))
+
+(defn- require-user! [exchange auth-system]
+  (when auth-system
+    (auth/session-user auth-system (session-token exchange))))
+
+(defn- oauth-state-cookie [value]
+  (str "agg_oauth_state=" value
+       "; Max-Age=600; Path=/v1/auth; Secure; HttpOnly; SameSite=Lax"))
+
+(defn- session-cookie [value]
+  (str "agg_session=" value
+       "; Max-Age=43200; Path=/; Secure; HttpOnly; SameSite=Lax"))
+
+(defn- clear-oauth-cookie []
+  "agg_oauth_state=; Max-Age=0; Path=/v1/auth; Secure; HttpOnly; SameSite=Lax")
 
 (defn- respond-path! [^HttpExchange exchange content-type ^Path path]
   (doto (.getResponseHeaders exchange)
@@ -93,10 +141,11 @@
       (finally
         (Files/deleteIfExists output-path)))))
 
-(defn- submit-job! [^HttpExchange exchange job-service]
+(defn- submit-job! [^HttpExchange exchange job-service user]
   (let [idempotency-key (some-> exchange .getRequestHeaders
                                 (.getFirst "Idempotency-Key"))
-        request (:request (request-render-request exchange))
+        request (cond-> (:request (request-render-request exchange))
+                  user (assoc :requesterSubject (:subject user)))
         {:keys [created? job]}
         (jobs/submit-job! job-service idempotency-key request)]
     (respond-json! exchange (if created? 202 200) job)))
@@ -106,12 +155,102 @@
     (respond-json! exchange 200 job)
     (respond-json! exchange 404 {:error "job_not_found"})))
 
-(defn- dispatch-job! [^HttpExchange exchange job-service job-id]
-  (if-not (some-> exchange .getRequestHeaders
-                  (.getFirst "X-CloudTasks-TaskName") not-empty)
+(defn- require-job-owner! [job-service user job-id]
+  (when (and user
+             (not (jobs/owns-job? job-service job-id (:subject user))))
+    (throw (ex-info "Job does not exist" {:type ::jobs/job-not-found}))))
+
+(defn- bearer-token [^HttpExchange exchange]
+  (some-> exchange .getRequestHeaders (.getFirst "Authorization")
+          (#(when (and % (.startsWith ^String % "Bearer "))
+              (subs % 7)))
+          not-empty))
+
+(defn- verified-task?
+  [exchange {:keys [auth-system task-token-verifier task-audience
+                    tasks-service-account]}]
+  (and (some-> exchange .getRequestHeaders
+               (.getFirst "X-CloudTasks-TaskName") not-empty)
+       (if-not auth-system
+         true
+         (when-let [token (bearer-token exchange)]
+           (try
+             (let [{:keys [issuer audience email email-verified?]}
+                   (auth/verify-task-token! task-token-verifier token)]
+               (and (contains? #{"accounts.google.com"
+                                 "https://accounts.google.com"}
+                               issuer)
+                    (= task-audience audience)
+                    (= tasks-service-account email)
+                    email-verified?))
+             (catch Throwable _ false))))))
+
+(defn- dispatch-job! [exchange dependencies job-id]
+  (if-not (verified-task? exchange dependencies)
     (respond-json! exchange 401 {:error "authenticated_task_required"})
-    (let [{:keys [started? job]} (jobs/dispatch-job! job-service job-id)]
+    (let [{:keys [started? job]}
+          (jobs/dispatch-job! (:job-service dependencies) job-id)]
       (respond-json! exchange (if started? 202 200) job))))
+
+(defn- begin-auth! [exchange auth-system flow]
+  (let [started (auth/begin-flow! auth-system flow
+                                  (when (= :drive flow)
+                                    (session-token exchange)))]
+    (respond-redirect! exchange (:authorizationUrl started)
+                       [(oauth-state-cookie (:stateCookie started))])))
+
+(defn- finish-login! [exchange auth-system]
+  (let [params (query-params exchange)
+        result (auth/finish-login! auth-system
+                                   {:code (get params "code")
+                                    :state (get params "state")
+                                    :state-cookie (get (cookies exchange)
+                                                       "agg_oauth_state")})]
+    (respond-redirect! exchange "/"
+                       [(session-cookie (:session result))
+                        (clear-oauth-cookie)])))
+
+(defn- finish-drive! [exchange auth-system]
+  (let [params (query-params exchange)
+        _ (auth/finish-drive! auth-system
+                              {:code (get params "code")
+                               :state (get params "state")
+                               :state-cookie (get (cookies exchange)
+                                                  "agg_oauth_state")})]
+    (respond-redirect! exchange "/?drive=connected"
+                       [(clear-oauth-cookie)])))
+
+(defn- picker! [^HttpExchange exchange auth-system picker-api-key picker-app-id]
+  (let [user (require-user! exchange auth-system)
+        {:keys [access-token]} (auth/drive-access! auth-system (:subject user))]
+    (when-not (and (not-empty picker-api-key) (not-empty picker-app-id))
+      (throw (ex-info "Google Picker is not configured"
+                      {:type ::picker-not-configured})))
+    (let [token (json/write-str access-token)
+          api-key (json/write-str picker-api-key)
+          app-id (json/write-str picker-app-id)
+          html
+          (str "<!doctype html><html><head><meta charset=\"utf-8\">"
+               "<title>Select Drive input</title>"
+               "<script src=\"https://apis.google.com/js/api.js\"></script>"
+               "</head><body><p>Opening Google Drive Picker…</p><script>"
+               "function pickerCallback(data){"
+               "if(data.action===google.picker.Action.PICKED){"
+               "const files=data.docs.map(d=>({id:d.id,name:d.name,mimeType:d.mimeType}));"
+               "if(window.opener){window.opener.postMessage({type:'agg-picker',files},location.origin);}}}"
+               "function openPicker(){gapi.load('picker',()=>{"
+               "const view=new google.picker.DocsView().setIncludeFolders(false);"
+               "new google.picker.PickerBuilder().addView(view)"
+               ".setOAuthToken(" token ").setDeveloperKey(" api-key ")"
+               ".setAppId(" app-id ").setOrigin(location.origin)"
+               ".setCallback(pickerCallback).build().setVisible(true);});}"
+               "openPicker();</script></body></html>")]
+      (doto (.getResponseHeaders exchange)
+        (.set "Cache-Control" "no-store")
+        (.set "Referrer-Policy" "no-referrer")
+        (.set "Content-Security-Policy"
+              "default-src 'none'; script-src 'unsafe-inline' https://apis.google.com https://www.gstatic.com; frame-src https://docs.google.com https://accounts.google.com; style-src 'unsafe-inline'; connect-src https://www.googleapis.com"))
+      (respond! exchange 200 "text/html; charset=utf-8" html))))
 
 (defn- cancel-job! [exchange job-service job-id]
   (respond-json! exchange 200 (jobs/cancel-job! job-service job-id)))
@@ -140,7 +279,9 @@
                                        contentType 900)}))))
 
 (defn- route-handler [{:keys [frame-renderer video-encoder job-service
-                              upload-signer]}]
+                              upload-signer auth-system picker-api-key
+                              picker-app-id]
+                       :as dependencies}]
   (reify HttpHandler
     (handle [_ exchange]
       (let [method (.getRequestMethod exchange)
@@ -150,34 +291,67 @@
             (and (= "GET" method) (= "/health" path))
             (respond! exchange 200 "application/json; charset=utf-8" health-body)
 
+            (and auth-system (= "GET" method)
+                 (= "/v1/auth/login/start" path))
+            (begin-auth! exchange auth-system :login)
+
+            (and auth-system (= "GET" method)
+                 (= "/v1/auth/login/callback" path))
+            (finish-login! exchange auth-system)
+
+            (and auth-system (= "GET" method)
+                 (= "/v1/auth/drive/start" path))
+            (do (require-user! exchange auth-system)
+                (begin-auth! exchange auth-system :drive))
+
+            (and auth-system (= "GET" method)
+                 (= "/v1/auth/drive/callback" path))
+            (finish-drive! exchange auth-system)
+
+            (and auth-system (= "GET" method)
+                 (= "/v1/drive/picker" path))
+            (picker! exchange auth-system picker-api-key picker-app-id)
+
             (and (= "POST" method) (= "/v1/preview" path))
-            (preview! exchange frame-renderer)
+            (do (require-user! exchange auth-system)
+                (preview! exchange frame-renderer))
 
             (and (= "POST" method) (= "/v1/overlay" path))
-            (overlay! exchange frame-renderer video-encoder)
+            (do (require-user! exchange auth-system)
+                (overlay! exchange frame-renderer video-encoder))
 
             (and job-service (= "POST" method) (= "/v1/jobs" path))
-            (submit-job! exchange job-service)
+            (submit-job! exchange job-service
+                         (require-user! exchange auth-system))
 
             (and upload-signer (= "POST" method) (= "/v1/uploads" path))
-            (issue-upload! exchange upload-signer)
+            (do (require-user! exchange auth-system)
+                (issue-upload! exchange upload-signer))
 
             (and job-service (= "GET" method)
                  (re-matches #"/v1/jobs/[^/]+" path))
-            (poll-job! exchange job-service (last (.split path "/")))
+            (let [user (require-user! exchange auth-system)
+                  job-id (last (.split path "/"))]
+              (require-job-owner! job-service user job-id)
+              (poll-job! exchange job-service (last (.split path "/"))))
 
             (and job-service (= "POST" method)
                  (re-matches #"/internal/v1/jobs/[^/]+/dispatch" path))
-            (dispatch-job! exchange job-service
-                           (nth (.split path "/") 4))
+            (dispatch-job! exchange dependencies (nth (.split path "/") 4))
 
             (and job-service (= "POST" method)
                  (re-matches #"/v1/jobs/[^/]+/cancel" path))
-            (cancel-job! exchange job-service (nth (.split path "/") 3))
+            (let [user (require-user! exchange auth-system)
+                  job-id (nth (.split path "/") 3)]
+              (require-job-owner! job-service user job-id)
+              (cancel-job! exchange job-service job-id))
 
             (and job-service (= "POST" method)
                  (re-matches #"/v1/jobs/[^/]+/retry" path))
-            (retry-job! exchange job-service (nth (.split path "/") 3))
+            (let [user (require-user! exchange auth-system)
+                  job-id (nth (.split path "/") 3)]
+              (require-job-owner! job-service user job-id)
+              (retry-job! exchange job-service job-id))
 
             :else
             (respond! exchange 404 "application/json; charset=utf-8"
@@ -194,6 +368,21 @@
 
               ::invalid-upload-request
               (respond-json! exchange 400 {:error "invalid_upload_request"})
+
+              ::auth/invalid-session
+              (respond-json! exchange 401 {:error "authentication_required"})
+
+              ::auth/not-allowlisted
+              (respond-json! exchange 403 {:error "not_allowlisted"})
+
+              ::auth/invalid-state
+              (respond-json! exchange 400 {:error "invalid_oauth_state"})
+
+              ::auth/drive-grant-required
+              (respond-json! exchange 401 {:error "drive_grant_required"})
+
+              ::picker-not-configured
+              (respond-json! exchange 503 {:error "picker_not_configured"})
 
               ::jobs/invalid-idempotency-key
               (respond-json! exchange 400 {:error "invalid_idempotency_key"})
