@@ -40,6 +40,24 @@ The repository contains no secret values and no long-lived JSON credential file.
 ambient operator credentials locally and GitHub Workload Identity Federation in
 CI.
 
+## Local operator quota project
+
+In every new operator shell, set the production quota project before any local
+Terraform or Firebase CLI command in this runbook:
+
+```sh
+export GOOGLE_CLOUD_QUOTA_PROJECT=animated-graph-cloud-prod-jp
+```
+
+Application Default Credentials can retain the Google Cloud CLI OAuth client's
+project for client-based API quota and billing attribution, even after
+`gcloud auth application-default set-quota-project`. The explicit environment
+variable keeps Terraform, Firebase CLI, and related Google tooling attributed
+to the production project. Keep it exported for the whole operator session;
+re-export it in each new shell. This is not needed by the GitHub production
+workflow, which uses Workload Identity Federation and passes project IDs
+explicitly.
+
 ## Firebase and domain
 
 After accepting the irreversible checkpoint, add the existing Google Cloud

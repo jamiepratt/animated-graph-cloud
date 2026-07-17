@@ -168,6 +168,11 @@
       (testing checkpoint (is (str/includes? runbook checkpoint))))
     (is (str/includes? runbook "gcloud secrets versions add"))
     (is (str/includes? runbook "--data-file=-"))
+    (is (str/includes? runbook
+                       "export GOOGLE_CLOUD_QUOTA_PROJECT=animated-graph-cloud-prod-jp"))
+    (is (str/includes? runbook "Application Default Credentials"))
+    (is (re-find #"before any local\s+Terraform or Firebase CLI command"
+                 runbook))
     (is (str/includes? runbook "40-character lowercase commit SHA"))
     (is (not (str/includes? runbook "branch or tag")))
     (is (not (str/includes? runbook ".firebaserc")))
