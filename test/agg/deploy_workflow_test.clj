@@ -4,6 +4,7 @@
 
 (def ^:private workflow (slurp ".github/workflows/deploy.yml"))
 (def ^:private terraform (slurp "infra/dev/main.tf"))
+(def ^:private terraform-variables (slurp "infra/dev/variables.tf"))
 (def ^:private cloud-spike (slurp "script/run_cloud_spike.sh"))
 
 (deftest private-health-probe-uses-an-audience-correct-wif-id-token
@@ -23,6 +24,11 @@
   (is (str/includes? terraform "timeout               = \"3600s\""))
   (is (str/includes? terraform
                      "execution_environment = \"EXECUTION_ENVIRONMENT_GEN2\"")))
+
+(deftest durable-renderer-pins-the-deployed-operations-image
+  (is (str/includes?
+       terraform-variables
+       "europe-central2-docker.pkg.dev/animated-graph-cloud-jp/containers/animated-graph-cloud@sha256:1f6a8532e432502af5d9a4eb72f48d07abf79634334dd52d1ef38227f9bfa3f7")))
 
 (deftest terraform-locks-durable-dispatch-and-retention
   (is (str/includes? terraform
