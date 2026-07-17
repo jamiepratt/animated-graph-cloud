@@ -3,6 +3,7 @@
 set -eu
 
 image="${1:-animated-graph-cloud:smoke-test}"
+root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 expected_health='{"status":"ok"}'
 expected_renderer='{"severity":"INFO","component":"renderer","event":"smoke_complete","message":"Renderer smoke job completed"}'
 
@@ -36,10 +37,12 @@ if [ "$render_output" != '{"severity":"INFO","component":"renderer","event":"ren
 fi
 
 health_file="$(mktemp)"
+first_polar_media="$(mktemp)"
+second_polar_media="$(mktemp)"
 container_id="$(docker run --rm -d -p 127.0.0.1::8080 "$image")"
 cleanup() {
   docker rm -f "$container_id" >/dev/null 2>&1 || true
-  rm -f "$health_file"
+  rm -f "$health_file" "$first_polar_media" "$second_polar_media"
 }
 trap cleanup EXIT INT TERM
 
@@ -58,5 +61,21 @@ health_body="$(cat "$health_file")"
 if [ "$health_body" != "$expected_health" ]; then
   echo "unexpected health response: $health_body" >&2
   docker logs "$container_id" >&2
+  exit 1
+fi
+
+for output in "$first_polar_media" "$second_polar_media"; do
+  curl --fail --silent --show-error \
+    --header 'Content-Type: application/json' \
+    --data-binary "@$root/test/fixtures/polar/request.json" \
+    "http://127.0.0.1:$host_port/v1/overlay" \
+    --output "$output"
+  test -s "$output"
+done
+
+first_sha="$(shasum -a 256 "$first_polar_media" | awk '{print $1}')"
+second_sha="$(shasum -a 256 "$second_polar_media" | awk '{print $1}')"
+if [ "$first_sha" != "$second_sha" ]; then
+  echo "fixed Polar input produced different MOV bytes" >&2
   exit 1
 fi
