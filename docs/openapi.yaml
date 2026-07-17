@@ -27,6 +27,8 @@ tags:
     description: Personal API token management.
   - name: Administration
     description: Owner-only membership management.
+  - name: Browser authorization
+    description: Google login, optional Drive authorization, and Drive Picker browser redirects.
 paths:
   /health:
     get:
@@ -44,6 +46,104 @@ paths:
                 properties:
                   status:
                     const: ok
+  /v1/auth/login/start:
+    get:
+      operationId: startGoogleLogin
+      tags: [Browser authorization]
+      summary: Start approved-user Google sign-in.
+      description: Starts a PKCE-protected login flow and stores signed OAuth state in an HttpOnly cookie.
+      security: []
+      responses:
+        "302":
+          description: Redirect to Google OAuth authorization.
+          headers:
+            Location:
+              description: Google OAuth authorization URL requesting `openid email profile`.
+              schema: {type: string, format: uri}
+            Set-Cookie:
+              description: Short-lived signed `agg_oauth_state` cookie.
+              schema: {type: string}
+  /v1/auth/login/callback:
+    get:
+      operationId: finishGoogleLogin
+      tags: [Browser authorization]
+      summary: Finish approved-user Google sign-in.
+      description: Validates the query state against the signed OAuth state cookie and allowlists the Google identity.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/OAuthCode"
+        - $ref: "#/components/parameters/OAuthState"
+      responses:
+        "302":
+          description: Redirect to the signed-in homepage.
+          headers:
+            Location:
+              schema: {type: string, const: /}
+            Set-Cookie:
+              description: Signed `agg_session` cookie plus expiration of `agg_oauth_state`.
+              schema: {type: string}
+        "400": {$ref: "#/components/responses/InvalidOAuthState"}
+        "403": {$ref: "#/components/responses/NotAllowlisted"}
+  /v1/auth/drive/start:
+    get:
+      operationId: startGoogleDriveAuthorization
+      tags: [Browser authorization]
+      summary: Start optional Google Drive authorization.
+      description: Starts a consent flow requesting only `drive.file`, with offline access for selected inputs and created outputs.
+      security:
+        - sessionCookie: []
+      responses:
+        "302":
+          description: Redirect to Google OAuth authorization.
+          headers:
+            Location:
+              description: Google OAuth authorization URL requesting only `drive.file`.
+              schema: {type: string, format: uri}
+            Set-Cookie:
+              description: Short-lived signed `agg_oauth_state` cookie tied to the signed-in user.
+              schema: {type: string}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+  /v1/auth/drive/callback:
+    get:
+      operationId: finishGoogleDriveAuthorization
+      tags: [Browser authorization]
+      summary: Finish optional Google Drive authorization.
+      description: Validates OAuth state, requires exactly `drive.file`, encrypts the refresh token, and ensures the output folder.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/OAuthCode"
+        - $ref: "#/components/parameters/OAuthState"
+      responses:
+        "302":
+          description: Redirect to the homepage with Drive connected.
+          headers:
+            Location:
+              schema: {type: string, const: "/?drive=connected"}
+            Set-Cookie:
+              description: Expiration of the `agg_oauth_state` cookie.
+              schema: {type: string}
+        "400": {$ref: "#/components/responses/InvalidOAuthState"}
+        "403": {$ref: "#/components/responses/NotAllowlisted"}
+  /v1/drive/picker:
+    get:
+      operationId: showGoogleDrivePicker
+      tags: [Browser authorization]
+      summary: Open Google Drive Picker for the signed-in user.
+      description: Refreshes the user's optional Drive grant and returns a no-store HTML Picker page for supported input files.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Google Drive Picker HTML.
+          content:
+            text/html:
+              schema: {type: string}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "503":
+          description: Picker API key or application ID is not configured.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
   /v1/preview:
     post:
       operationId: createPreview
@@ -342,6 +442,18 @@ components:
       in: path
       required: true
       schema: {type: string, format: uuid}
+    OAuthCode:
+      name: code
+      in: query
+      required: true
+      description: One-time Google OAuth authorization code.
+      schema: {type: string, minLength: 1}
+    OAuthState:
+      name: state
+      in: query
+      required: true
+      description: OAuth state value that must match the signed state cookie.
+      schema: {type: string, minLength: 1}
   requestBodies:
     RenderRequest:
       required: true
@@ -399,6 +511,16 @@ components:
           schema: {$ref: "#/components/schemas/Error"}
     OwnerRequired:
       description: Owner session required.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    InvalidOAuthState:
+      description: OAuth state is missing, invalid, expired, or for another flow.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    NotAllowlisted:
+      description: Google identity is not an approved user.
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -505,8 +627,10 @@ components:
             - payload_too_large
             - authentication_required
             - not_allowlisted
+            - invalid_oauth_state
             - csrf_required
             - drive_grant_required
+            - picker_not_configured
             - invalid_idempotency_key
             - idempotency_conflict
             - daily_submission_limit_exhausted

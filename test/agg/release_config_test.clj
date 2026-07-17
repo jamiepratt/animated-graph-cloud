@@ -30,8 +30,7 @@
 (deftest firebase-hosting-routes-the-public-domain-to-warsaw-cloud-run
   (let [{:keys [hosting]} (read-json "firebase.json")
         production (slurp "infra/prod/main.tf")]
-    (is (= "animated-graph-cloud-prod-jp"
-           (get-in (read-json ".firebaserc") [:projects :default])))
+    (is (not (.exists (java.io.File. ".firebaserc"))))
     (is (= [{:source "**"
              :run {:serviceId "agg-api"
                    :region "europe-central2"
@@ -50,6 +49,10 @@
     (is (str/includes? workflow "PROJECT_ID: animated-graph-cloud-prod-jp"))
     (is (str/includes? workflow "PROJECT_NUMBER: \"488013150738\""))
     (is (str/includes? workflow "PUBLIC_BASE_URL: https://alphacompose.com"))
+    (is (str/includes? workflow "full 40-character lowercase commit SHA"))
+    (is (not (str/includes? workflow "default: main")))
+    (is (str/includes? workflow "^\u005b0-9a-f\u005d{40}$"))
+    (is (str/includes? workflow "ref: ${{ inputs.release_ref }}"))
     (is (str/includes? workflow "echo \"commit=$commit\""))
     (is (str/includes? workflow "${{ steps.source.outputs.commit }}"))
     (is (not (str/includes? workflow "animated-graph-cloud:${{ github.sha }}")))
@@ -59,7 +62,14 @@
     (is (str/includes? workflow "--only hosting"))
     (is (str/includes? workflow "--update-secrets"))
     (is (not (str/includes? workflow "client_secret")))
-    (is (not (str/includes? workflow "service-account-key")))))
+    (is (not (str/includes? workflow "service-account-key")))
+    (doseq [reference
+            ["actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7"
+             "google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3"
+             "google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3"]]
+      (testing reference (is (str/includes? workflow reference))))
+    (is (not (re-find #"uses: (?:actions/checkout|google-github-actions/(?:auth|setup-gcloud))@v\u005cd+"
+                      workflow)))))
 
 (deftest continuous-integration-validates-both-environments-and-api-contract
   (let [workflow (slurp ".github/workflows/ci.yml")]
@@ -80,12 +90,24 @@
                   "/v1/jobs/{jobId}:" "/v1/jobs/{jobId}/cancel:"
                   "/v1/jobs/{jobId}/retry:" "/v1/uploads:" "/v1/tokens:"
                   "/v1/tokens/{tokenId}/revoke:" "/v1/admin/members:"
-                  "/v1/admin/members/revoke:"]]
+                  "/v1/admin/members/revoke:" "/v1/auth/login/start:"
+                  "/v1/auth/login/callback:" "/v1/auth/drive/start:"
+                  "/v1/auth/drive/callback:" "/v1/drive/picker:"]]
       (testing path (is (str/includes? openapi path))))
     (doseq [contract ["RenderRequest:" "Job:" "Error:" "bearerAuth:"
                       "sessionCookie:" "Idempotency-Key"]]
       (testing contract (is (str/includes? openapi contract))))
     (is (str/includes? openapi "drive.file"))
+    (doseq [behavior ["operationId: startGoogleLogin"
+                      "operationId: finishGoogleLogin"
+                      "operationId: startGoogleDriveAuthorization"
+                      "operationId: finishGoogleDriveAuthorization"
+                      "operationId: showGoogleDrivePicker"
+                      "name: code" "name: state" "security: []"
+                      "description: Redirect to Google OAuth authorization."
+                      "description: Redirect to the signed-in homepage."
+                      "description: Redirect to the homepage with Drive connected."]]
+      (testing behavior (is (str/includes? openapi behavior))))
     (is (not (str/includes? openapi "client_secret")))))
 
 (deftest release-acceptance-separates-automation-from-human-evidence
@@ -101,6 +123,11 @@
     (is (not (str/includes? automation "firebase deploy")))
     (is (str/includes? load-test "ALPHA_COMPOSE_ALLOW_COSTED_LOAD_TEST"))
     (is (str/includes? load-test "MAX_CONCURRENCY=5"))
+    (is (str/includes? load-test "ALPHA_COMPOSE_LOAD_RESULTS_DIR"))
+    (is (str/includes? load-test "chmod 700"))
+    (is (str/includes? load-test "Response evidence:"))
+    (is (not (str/includes? load-test "rm -rf -- \"$results_dir\"")))
+    (is (str/includes? load-test "rm -f -- \"$auth_config\""))
     (doseq [manual ["DaVinci Resolve" "Google Drive" "owner-only production smoke"
                     "OAuth brand verification" "legal approval"]]
       (testing manual (is (str/includes? acceptance manual))))
@@ -123,6 +150,9 @@
       (testing checkpoint (is (str/includes? runbook checkpoint))))
     (is (str/includes? runbook "gcloud secrets versions add"))
     (is (str/includes? runbook "--data-file=-"))
+    (is (str/includes? runbook "40-character lowercase commit SHA"))
+    (is (not (str/includes? runbook "branch or tag")))
+    (is (not (str/includes? runbook ".firebaserc")))
     (is (not (str/includes? runbook "service account key")))))
 
 (deftest production-release-decision-is-contextual-and-discoverable

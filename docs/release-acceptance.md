@@ -48,8 +48,11 @@ and authenticated owner check complete.
 `script/production_load_test.sh` submits at most five owner requests in parallel.
 It refuses to run without an explicit cost acknowledgement, an owner personal
 token, and a reviewed request JSON. Run it separately for each intended fixture;
-it does not poll, validate output media, test the sixth-request rejection, or
-write evidence automatically.
+it preserves each submission response as private JSON in a newly created
+results directory, or in `ALPHA_COMPOSE_LOAD_RESULTS_DIR` when supplied. The
+temporary curl configuration containing the bearer token is deleted on exit.
+The helper does not poll, validate output media, or test the sixth-request
+rejection; retain and augment the printed response-evidence directory manually.
 
 ## Release decision
 

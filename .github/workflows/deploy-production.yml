@@ -4,9 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       release_ref:
-        description: "Git commit, tag, or full SHA to release"
+        description: "Exact reviewed full 40-character lowercase commit SHA"
         required: true
-        default: main
         type: string
       confirmation:
         description: "Type: RELEASE ALPHA COMPOSE TO OWNER ONLY"
@@ -44,16 +43,27 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v7
+      - id: source
+        name: Validate reviewed release commit
+        env:
+          RELEASE_COMMIT: ${{ inputs.release_ref }}
+        run: |
+          if [[ ! "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release_ref must be an exact full 40-character lowercase commit SHA." >&2
+            exit 2
+          fi
+          commit="$RELEASE_COMMIT"
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ inputs.release_ref }}
 
-      - id: source
-        name: Resolve checked-out release commit
+      - name: Verify checked-out release commit
+        env:
+          RELEASE_COMMIT: ${{ steps.source.outputs.commit }}
         run: |
-          commit="$(git rev-parse HEAD)"
-          test -n "$commit"
-          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
 
       - name: Build immutable release candidate
         env:
@@ -74,13 +84,13 @@ jobs:
 
       - id: auth
         name: Authenticate through production WIF
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           project_id: ${{ env.PROJECT_ID }}
           workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud
           service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
 
-      - uses: google-github-actions/setup-gcloud@v3
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
         with:
           version: ">= 541.0.0"
 
@@ -157,7 +167,7 @@ jobs:
 
       - id: health-auth
         name: Mint origin identity token through WIF
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           project_id: ${{ env.PROJECT_ID }}
           workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud

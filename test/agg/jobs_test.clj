@@ -1,20 +1,15 @@
 (ns agg.jobs-test
   (:require [agg.admin.core :as admin]
             [agg.api.main :as api]
+            [agg.http-test-support :as test-http]
             [agg.jobs.lifecycle :as jobs]
             [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is]])
-  (:import (java.net ServerSocket URI)
-           (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
-                          HttpResponse$BodyHandlers)
-           (java.time Clock Instant ZoneOffset)))
+  (:import (java.time Clock Instant ZoneOffset)))
 
 (defn- available-port []
-  (with-open [socket (ServerSocket. 0)]
-    (.getLocalPort socket)))
-
-(def ^:private http-client (HttpClient/newHttpClient))
+  (test-http/available-port))
 
 (defn render-request []
   {:telemetryFormat "polar-csv"
@@ -26,28 +21,12 @@
    :sectionEndAt "2026-07-17T09:00:02Z"})
 
 (defn- request! [port method path body headers]
-  (let [builder (HttpRequest/newBuilder
-                 (URI/create (str "http://127.0.0.1:" port path)))
-        _ (doseq [[name value] headers]
-            (.header builder name value))
-        request (case method
-                  :get (.GET builder)
-                  :post (.POST builder
-                               (HttpRequest$BodyPublishers/ofString
-                                (json/write-str body))))]
-    (.send http-client
-           (.build request)
-           (HttpResponse$BodyHandlers/ofString))))
+  (test-http/send-string! method (str "http://127.0.0.1:" port path)
+                          (when (= :post method) (json/write-str body)) headers))
 
 (defn- raw-post! [port path body headers]
-  (let [builder (HttpRequest/newBuilder
-                 (URI/create (str "http://127.0.0.1:" port path)))
-        _ (doseq [[name value] headers]
-            (.header builder name value))]
-    (.send http-client
-           (.build (.POST builder
-                          (HttpRequest$BodyPublishers/ofString body)))
-           (HttpResponse$BodyHandlers/ofString))))
+  (test-http/send-string! :post (str "http://127.0.0.1:" port path)
+                          body headers))
 
 (defn- response-json [response]
   (json/read-str (.body response) :key-fn keyword))

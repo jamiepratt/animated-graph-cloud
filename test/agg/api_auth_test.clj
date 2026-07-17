@@ -1,38 +1,22 @@
 (ns agg.api-auth-test
   (:require [agg.api.main :as api]
             [agg.auth.core :as auth]
+            [agg.http-test-support :as test-http]
             [agg.jobs-test :as fixture]
             [agg.jobs.lifecycle :as jobs]
             [clojure.data.json :as json]
-            [clojure.test :refer [deftest is]])
-  (:import (java.net ServerSocket URI)
-           (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
-                          HttpResponse$BodyHandlers)))
+            [clojure.test :refer [deftest is]]))
 
 (defn- available-port []
-  (with-open [socket (ServerSocket. 0)] (.getLocalPort socket)))
-
-(def ^:private http-client (HttpClient/newHttpClient))
+  (test-http/available-port))
 
 (defn- post! [port path body headers]
-  (let [builder (HttpRequest/newBuilder
-                 (URI/create (str "http://127.0.0.1:" port path)))]
-    (doseq [[name value] headers]
-      (.header builder name value))
-    (.send http-client
-           (.build (.POST builder
-                          (HttpRequest$BodyPublishers/ofString
-                           (json/write-str body))))
-           (HttpResponse$BodyHandlers/ofString))))
+  (test-http/send-string! :post (str "http://127.0.0.1:" port path)
+                          (json/write-str body) headers))
 
 (defn- get! [port path headers]
-  (let [builder (HttpRequest/newBuilder
-                 (URI/create (str "http://127.0.0.1:" port path)))]
-    (doseq [[name value] headers]
-      (.header builder name value))
-    (.send http-client
-           (.build (.GET builder))
-           (HttpResponse$BodyHandlers/ofString))))
+  (test-http/send-string! :get (str "http://127.0.0.1:" port path)
+                          nil headers))
 
 (defn- auth-fixture []
   (let [oauth (reify auth/OAuthClient

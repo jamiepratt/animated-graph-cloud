@@ -1,34 +1,19 @@
 (ns agg.api-tokens-test
   (:require [agg.api.main :as api]
             [agg.auth.core :as auth]
+            [agg.http-test-support :as test-http]
             [agg.jobs-test :as fixture]
             [agg.jobs.lifecycle :as jobs]
             [agg.tokens.core :as tokens]
             [clojure.data.json :as json]
-            [clojure.test :refer [deftest is testing]])
-  (:import (java.net ServerSocket URI)
-           (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
-                          HttpResponse$BodyHandlers)))
+            [clojure.test :refer [deftest is testing]]))
 
 (defn- available-port []
-  (with-open [socket (ServerSocket. 0)] (.getLocalPort socket)))
-
-(def ^:private http-client (HttpClient/newHttpClient))
+  (test-http/available-port))
 
 (defn- request! [port method path body headers]
-  (let [builder (HttpRequest/newBuilder
-                 (URI/create (str "http://127.0.0.1:" port path)))
-        _ (doseq [[name value] headers]
-            (.header builder name value))
-        publisher (if (nil? body)
-                    (HttpRequest$BodyPublishers/noBody)
-                    (HttpRequest$BodyPublishers/ofString (json/write-str body)))
-        request (case method
-                  :get (.GET builder)
-                  :post (.POST builder publisher))]
-    (.send http-client
-           (.build request)
-           (HttpResponse$BodyHandlers/ofString))))
+  (test-http/send-string! method (str "http://127.0.0.1:" port path)
+                          (when (some? body) (json/write-str body)) headers))
 
 (defn- parsed [response]
   (json/read-str (.body response) :key-fn keyword))

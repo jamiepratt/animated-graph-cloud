@@ -50,7 +50,8 @@ Firebase records DNS-only while Firebase provisions and renews TLS; do not
 invent record values from this runbook.
 
 The checked-in `firebase.json` rewrites every route to the `agg-api` Cloud Run
-service in Warsaw. The production workflow invokes the pinned
+service in Warsaw. No default Firebase project is checked in: every deployment
+must pass `--project` explicitly. The production workflow invokes the pinned
 `firebase-tools@15.24.0` CLI only after the private Cloud Run candidate passes
 health verification.
 
@@ -150,7 +151,8 @@ Confirm all four enabled versions and IAM bindings without printing payloads.
 ## Owner-only release
 
 From GitHub Actions, dispatch **Release Alpha Compose production** with an exact
-reviewed commit/tag and confirmation `RELEASE ALPHA COMPOSE TO OWNER ONLY`.
+reviewed 40-character lowercase commit SHA and confirmation
+`RELEASE ALPHA COMPOSE TO OWNER ONLY`.
 Approve the `production environment` gate. The workflow builds that checked-out
 commit, scans it, pushes an immutable digest, verifies the private service,
 publishes Hosting, updates the durable renderer, and verifies health/privacy/
@@ -164,7 +166,8 @@ operations dashboard and alerts before costed acceptance.
 ## Rollback
 
 Normal rollback is another manually approved production workflow run using the
-last accepted commit or tag. This promotes the previous immutable code to both
+full 40-character lowercase SHA of the last accepted commit. This promotes the
+previous immutable code to both
 API and durable renderer while retaining current data and Secret Manager
 versions. Record the workflow URL and digest. A code rollback does not roll back
 secrets or data; restore those only through a separately reviewed recovery

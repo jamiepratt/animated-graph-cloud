@@ -148,6 +148,10 @@
         "transparent video overlays for short videos. Export the overlay, then "
         "place it above your footage in your editor.</p>"
         "<p>Alpha Compose does not upload or composite your source video.</p>"
+        "<p>Google account information is requested to sign in approved users. "
+        "Connecting Google Drive is optional and requests only the "
+        "<code>drive.file</code> permission, limited to files you select or "
+        "Alpha Compose creates for input selection and output delivery.</p>"
         "<p><a class=\"cta\" href=\"/v1/auth/login/start\">Sign in with Google</a></p>")))
 
 (def privacy-page

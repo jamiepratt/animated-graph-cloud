@@ -6,6 +6,7 @@ submissions="${ALPHA_COMPOSE_LOAD_SUBMISSIONS:-5}"
 base_url="${ALPHA_COMPOSE_BASE_URL:-https://alphacompose.com}"
 request_file="${ALPHA_COMPOSE_RENDER_REQUEST_FILE:-}"
 token="${ALPHA_COMPOSE_TOKEN:-}"
+requested_results_dir="${ALPHA_COMPOSE_LOAD_RESULTS_DIR:-}"
 
 if [[ "${ALPHA_COMPOSE_ALLOW_COSTED_LOAD_TEST:-}" != "I ACCEPT PRODUCTION RENDER COSTS" ]]; then
   echo "Refusing a costed production test. Set ALPHA_COMPOSE_ALLOW_COSTED_LOAD_TEST='I ACCEPT PRODUCTION RENDER COSTS'." >&2
@@ -28,11 +29,24 @@ if [[ ! "$submissions" =~ ^[1-5]$ ]]; then
   exit 2
 fi
 
-results_dir="$(mktemp -d)"
-trap 'rm -rf -- "$results_dir"' EXIT
-auth_config="$results_dir/curl-auth.conf"
 umask 077
+if [[ -n "$requested_results_dir" ]]; then
+  if [[ -L "$requested_results_dir" ]]; then
+    echo "ALPHA_COMPOSE_LOAD_RESULTS_DIR must not be a symbolic link." >&2
+    exit 2
+  fi
+  mkdir -p -- "$requested_results_dir"
+  results_dir="$(cd -- "$requested_results_dir" && pwd -P)"
+else
+  results_dir="$(mktemp -d "${TMPDIR:-/tmp}/alpha-compose-load-results.XXXXXX")"
+fi
+chmod 700 "$results_dir"
+echo "Response evidence: $results_dir"
+
+auth_config="$(mktemp "${TMPDIR:-/tmp}/alpha-compose-curl-auth.XXXXXX")"
+trap 'rm -f -- "$auth_config"' EXIT
 printf 'header = "Authorization: Bearer %s"\n' "$token" >"$auth_config"
+chmod 600 "$auth_config"
 unset token ALPHA_COMPOSE_TOKEN
 
 submit_render() {

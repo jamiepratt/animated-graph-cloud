@@ -1,5 +1,6 @@
 (ns agg.smoke-test
   (:require [agg.api.main :as api]
+            [agg.http-test-support :as test-http]
             [agg.render.frames :as frames]
             [agg.render.media :as media]
             [agg.renderer.main :as renderer]
@@ -7,29 +8,17 @@
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is]])
   (:import (java.io OutputStream)
-           (java.net URI)
-           (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
-                          HttpResponse$BodyHandlers)
-           (java.net ServerSocket)
            (java.nio.file Files OpenOption)))
 
 (defn- available-port []
-  (with-open [socket (ServerSocket. 0)]
-    (.getLocalPort socket)))
-
-(def ^:private http-client (HttpClient/newHttpClient))
+  (test-http/available-port))
 
 (deftest api-health-is-served-over-http
   (let [port (available-port)
         server (api/start! port)]
     (try
-      (let [request (-> (HttpRequest/newBuilder)
-                        (.uri (URI/create (str "http://127.0.0.1:" port "/health")))
-                        (.GET)
-                        (.build))
-            response (.send http-client
-                            request
-                            (HttpResponse$BodyHandlers/ofString))]
+      (let [response (test-http/send-string!
+                      :get (str "http://127.0.0.1:" port "/health") nil {})]
         (is (= 200 (.statusCode response)))
         (is (= "application/json; charset=utf-8"
                (some-> response .headers (.firstValue "content-type") (.orElse nil))))
@@ -56,16 +45,9 @@
                :sectionStartAt "2026-07-17T09:00:00Z"
                :sectionEndAt "2026-07-17T09:00:02Z"})]
     (try
-      (let [request (-> (HttpRequest/newBuilder)
-                        (.uri (URI/create (str "http://127.0.0.1:"
-                                               port
-                                               "/v1/preview")))
-                        (.header "Content-Type" "application/json")
-                        (.POST (HttpRequest$BodyPublishers/ofString body))
-                        (.build))
-            response (.send http-client
-                            request
-                            (HttpResponse$BodyHandlers/ofByteArray))
+      (let [response (test-http/send-bytes!
+                      :post (str "http://127.0.0.1:" port "/v1/preview")
+                      body {"Content-Type" "application/json"})
             png (.body response)]
         (is (= 200 (.statusCode response)))
         (is (= "image/png"
@@ -108,16 +90,9 @@
                :sectionStartAt "2026-07-17T09:00:00Z"
                :sectionEndAt "2026-07-17T09:00:02Z"})]
     (try
-      (let [request (-> (HttpRequest/newBuilder)
-                        (.uri (URI/create (str "http://127.0.0.1:"
-                                               port
-                                               "/v1/overlay")))
-                        (.header "Content-Type" "application/json")
-                        (.POST (HttpRequest$BodyPublishers/ofString body))
-                        (.build))
-            response (.send http-client
-                            request
-                            (HttpResponse$BodyHandlers/ofByteArray))]
+      (let [response (test-http/send-bytes!
+                      :post (str "http://127.0.0.1:" port "/v1/overlay")
+                      body {"Content-Type" "application/json"})]
         (is (= 200 (.statusCode response)))
         (is (= "video/quicktime"
                (some-> response .headers (.firstValue "content-type")
