@@ -1,6 +1,5 @@
 locals {
   required_services = setunion(toset([
-    "artifactregistry.googleapis.com",
     "billingbudgets.googleapis.com",
     "cloudbilling.googleapis.com",
     "cloudkms.googleapis.com",
@@ -47,6 +46,17 @@ resource "google_project_service" "required" {
   disable_on_destroy = false
 }
 
+resource "google_project_service" "artifact_registry" {
+  project            = var.project_id
+  service            = "artifactregistry.googleapis.com"
+  disable_on_destroy = false
+}
+
+moved {
+  from = google_project_service.required["artifactregistry.googleapis.com"]
+  to   = google_project_service.artifact_registry
+}
+
 resource "google_firestore_database" "default" {
   project     = var.project_id
   name        = "(default)"
@@ -72,7 +82,7 @@ resource "google_artifact_registry_repository" "containers" {
   description   = "Animated Graph Cloud container images"
   format        = "DOCKER"
 
-  depends_on = [google_project_service.required["artifactregistry.googleapis.com"]]
+  depends_on = [google_project_service.artifact_registry]
 }
 
 resource "google_storage_bucket" "temporary" {

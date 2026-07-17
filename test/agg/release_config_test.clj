@@ -27,6 +27,24 @@
     (is (str/includes? shared "id = \"projects/${each.value}/databases/(default)\""))
     (is (str/includes? shared "count = var.api_service_url == \"\" ? 0 : 1"))))
 
+(deftest artifact-registry-bootstrap-target-is-isolated-and-state-compatible
+  (let [shared (slurp "infra/dev/main.tf")
+        runbook (slurp "docs/production-runbook.md")
+        required-services
+        (second (re-find #"(?s)required_services\s*=\s*setunion\(toset\(\[(.*?)\]\),\s*var\.enable_firebase_hosting"
+                         shared))]
+    (is (not (str/includes? required-services
+                            "artifactregistry.googleapis.com")))
+    (is (re-find #"(?s)resource \"google_project_service\" \"artifact_registry\" \{.*?service\s*=\s*\"artifactregistry.googleapis.com\".*?\}"
+                 shared))
+    (is (re-find #"(?s)moved \{\s*from\s*=\s*google_project_service.required\[\"artifactregistry.googleapis.com\"\]\s*to\s*=\s*google_project_service.artifact_registry\s*\}"
+                 shared))
+    (is (re-find #"(?s)resource \"google_artifact_registry_repository\" \"containers\" \{.*?depends_on\s*=\s*\[google_project_service.artifact_registry\].*?\}"
+                 shared))
+    (is (str/includes? runbook "exactly two additions"))
+    (is (str/includes? runbook "Artifact Registry API"))
+    (is (not (str/includes? runbook "First create only the repository")))))
+
 (deftest firebase-hosting-routes-the-public-domain-to-warsaw-cloud-run
   (let [{:keys [hosting]} (read-json "firebase.json")
         production (slurp "infra/prod/main.tf")]

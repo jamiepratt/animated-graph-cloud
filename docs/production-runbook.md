@@ -86,8 +86,9 @@ terraform -chdir=infra/prod init
 ```
 
 The first Artifact Registry image and the Terraform-owned renderer job form a
-bootstrap dependency. First create only the repository (using any syntactically
-valid placeholder digest; the targeted resource does not consume it):
+bootstrap dependency. First enable only the Artifact Registry API and create
+the repository (using any syntactically valid placeholder digest; the targeted
+resource does not consume it):
 
 ```sh
 terraform -chdir=infra/prod apply \
@@ -95,9 +96,11 @@ terraform -chdir=infra/prod apply \
   -var='renderer_image=europe-central2-docker.pkg.dev/animated-graph-cloud-prod-jp/containers/animated-graph-cloud@sha256:0000000000000000000000000000000000000000000000000000000000000000'
 ```
 
-Review the target plan carefully. Then build and push a candidate with the
-operator's ambient credentials, resolve its immutable digest, and use that
-digest in a complete saved plan:
+Review the target plan carefully. For a new production state it must show
+exactly two additions: the Artifact Registry API service and the `containers`
+repository. It must not enable any other project API. Then build and push a
+candidate with the operator's ambient credentials, resolve its immutable
+digest, and use that digest in a complete saved plan:
 
 ```sh
 docker build -t europe-central2-docker.pkg.dev/animated-graph-cloud-prod-jp/containers/animated-graph-cloud:bootstrap .
