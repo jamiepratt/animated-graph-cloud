@@ -120,6 +120,13 @@
         (is (= "video/quicktime"
                (some-> response .headers (.firstValue "content-type")
                        (.orElse nil))))
+        (is (= "no-store"
+               (some-> response .headers (.firstValue "cache-control")
+                       (.orElse nil))))
+        (is (= "nosniff"
+               (some-> response .headers
+                       (.firstValue "x-content-type-options")
+                       (.orElse nil))))
         (is (= "deterministic-mov" (String. (.body response) "UTF-8"))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))

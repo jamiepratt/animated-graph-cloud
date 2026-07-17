@@ -92,7 +92,9 @@
 
 (defn- respond-path! [^HttpExchange exchange content-type ^Path path]
   (doto (.getResponseHeaders exchange)
-    (.set "Content-Type" content-type))
+    (.set "Content-Type" content-type)
+    (.set "Cache-Control" "no-store")
+    (.set "X-Content-Type-Options" "nosniff"))
   (.sendResponseHeaders exchange 200 (Files/size path))
   (with-open [input (Files/newInputStream path (make-array OpenOption 0))
               response-body (.getResponseBody exchange)]
