@@ -146,6 +146,59 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest internal-routes-accept-only-their-dedicated-runtime-identity
+  (let [port (available-port)
+        lifecycle (jobs/in-memory-system)
+        {:keys [system session]} (auth-fixture)
+        csrf (auth/issue-csrf-token system {:subject "google-subject-1"})
+        verifier (reify auth/TaskTokenVerifier
+                   (verify-task-token! [_ token]
+                     (when-let [email ({"signed-task-token" "tasks@example.com"
+                                        "signed-scheduler-token"
+                                        "scheduler@example.com"}
+                                       token)]
+                       {:issuer "https://accounts.google.com"
+                        :audience "https://app.example.com"
+                        :email email
+                        :email-verified? true})))
+        server (api/start! port {:job-service (:service lifecycle)
+                                 :auth-system system
+                                 :task-token-verifier verifier
+                                 :task-audience "https://app.example.com"
+                                 :tasks-service-account "tasks@example.com"
+                                 :scheduler-service-account
+                                 "scheduler@example.com"})]
+    (try
+      (let [submission (post! port "/v1/jobs" (fixture/render-request)
+                              {"Content-Type" "application/json"
+                               "Idempotency-Key" "internal-identities"
+                               "Cookie" (str "agg_session=" session)
+                               "X-CSRF-Token" csrf})
+            job-id (get (json/read-str (.body submission)) "id")
+            dispatch-path (str "/internal/v1/jobs/" job-id "/dispatch")
+            task-spoofs-scheduler
+            (post! port "/internal/v1/jobs/reconcile" {}
+                   {"X-CloudScheduler" "true"
+                    "Authorization" "Bearer signed-task-token"})
+            scheduler-spoofs-task
+            (post! port dispatch-path {}
+                   {"X-CloudTasks-TaskName" "tasks/scheduler-spoof"
+                    "Authorization" "Bearer signed-scheduler-token"})
+            scheduler-reconciles
+            (post! port "/internal/v1/jobs/reconcile" {}
+                   {"X-CloudScheduler" "true"
+                    "Authorization" "Bearer signed-scheduler-token"})
+            task-dispatches
+            (post! port dispatch-path {}
+                   {"X-CloudTasks-TaskName" "tasks/valid"
+                    "Authorization" "Bearer signed-task-token"})]
+        (is (= 401 (.statusCode task-spoofs-scheduler)))
+        (is (= 401 (.statusCode scheduler-spoofs-task)))
+        (is (= 200 (.statusCode scheduler-reconciles)))
+        (is (= 202 (.statusCode task-dispatches))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest picker-bridge-requires-session-and-uses-the-isolated-drive-grant
   (let [port (available-port)
         {:keys [system session]} (auth-fixture)

@@ -273,8 +273,9 @@
 
 (defn api-dependencies
   [{:keys [firestore project region base-url allowed-emails session-secret
-           oauth-client-credentials tasks-service-account picker-api-key
-           picker-app-id token-hash-secret]}]
+           oauth-client-credentials tasks-service-account
+           scheduler-service-account picker-api-key picker-app-id
+           token-hash-secret]}]
   (let [{:keys [credentials oauth cipher grant-store gateway]}
         (drive-components firestore project region oauth-client-credentials)
         allowlist (->> (str/split (or allowed-emails "") #",")
@@ -299,6 +300,7 @@
      :task-token-verifier (task-token-verifier base-url)
      :task-audience base-url
      :tasks-service-account tasks-service-account
+     :scheduler-service-account scheduler-service-account
      :picker-api-key picker-api-key
      :picker-app-id picker-app-id
      :token-service

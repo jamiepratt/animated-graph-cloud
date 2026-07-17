@@ -14,7 +14,7 @@
                                      Storage$SignUrlOption StorageOptions)
            (com.google.cloud.tasks.v2 CloudTasksClient HttpRequest
                                       OidcToken QueueName Task TaskName)
-           (java.time Clock Instant LocalDate YearMonth ZoneId ZoneOffset)
+           (java.time Clock Instant LocalDate YearMonth ZoneOffset)
            (java.util Date UUID)
            (java.util.concurrent ExecutionException TimeUnit)))
 
@@ -22,6 +22,8 @@
 ;; Storage enum. Resolve it once without leaking that naming collision.
 (def ^:private tasks-post
   (com.google.cloud.tasks.v2.HttpMethod/valueOf "POST"))
+
+(def ^:private billing-zone (ZoneOffset/ofHours -8))
 
 (defn- duplicate-task? [^ApiException error]
   (= StatusCode$Code/ALREADY_EXISTS
@@ -43,7 +45,7 @@
   (str (LocalDate/now (.withZone clock ZoneOffset/UTC))))
 
 (defn- billing-month [^Clock clock]
-  (str (YearMonth/now (.withZone clock (ZoneId/of "America/Los_Angeles")))))
+  (str (YearMonth/now (.withZone clock billing-zone))))
 
 (defn- job-doc [job]
   (cond-> {"id" (:id job)
@@ -633,7 +635,10 @@
         dispatcher-url (env "AGG_DISPATCHER_URL" nil)
         tasks-service-account
         (env "AGG_TASKS_SERVICE_ACCOUNT"
-             (str "agg-tasks@" project ".iam.gserviceaccount.com"))]
+             (str "agg-tasks@" project ".iam.gserviceaccount.com"))
+        scheduler-service-account
+        (env "AGG_SCHEDULER_SERVICE_ACCOUNT"
+             (str "agg-scheduler@" project ".iam.gserviceaccount.com"))]
     (when-not dispatcher-url
       (throw (ex-info "AGG_DISPATCHER_URL is required"
                       {:type ::missing-dispatcher-url})))
@@ -674,6 +679,7 @@
                  :oauth-client-credentials
                  (env "AGG_OAUTH_CLIENT_CREDENTIALS" nil)
                  :tasks-service-account tasks-service-account
+                 :scheduler-service-account scheduler-service-account
                  :picker-api-key (env "AGG_PICKER_API_KEY" nil)
                  :picker-app-id (env "AGG_PICKER_APP_ID" nil)
                  :token-hash-secret (env "AGG_TOKEN_HASH_PEPPER" nil)}))

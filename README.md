@@ -175,18 +175,20 @@ objects expire after one day; Firestore job metadata expires after 90 days.
 
 New jobs are admitted atomically against a global 100-submission UTC-day limit,
 the five live leases, and a conservative 25-cent reservation from the USD 30
-monthly development ceiling using Cloud Billing's Pacific calendar month.
+monthly development ceiling using Cloud Billing's fixed UTC−8 calendar month.
 Explicit retries reserve compute again. Rejections
 use stable `daily_submission_limit_exhausted`, `capacity_exhausted`, and
 `monthly_budget_exhausted` error codes; already-running work may finish.
 
-An OIDC-authenticated Cloud Scheduler request reconciles Firestore every five
-minutes. Expired running or launching jobs become `failed` with
+An OIDC-authenticated Cloud Scheduler request uses its own `agg-scheduler`
+identity to reconcile Firestore every five minutes; the dispatcher accepts only
+the separate `agg-tasks` identity. Expired running or launching jobs become `failed` with
 `stale_lease`; expired cancellations become `cancelled`; stale, terminal, and
 missing-job capacity leases are removed atomically. Operational events contain
 only bounded reasons, durations, and aggregate counts. Logs-based metrics,
-alerts, and the operations dashboard cover queue age, render failures, renderer
-memory, stale leases, Drive reauthorization, and budget admission. Billing
+alerts, and the operations dashboard cover dispatch queue age, live Cloud Tasks
+backlog depth, render failures, renderer memory, stale leases, Drive
+reauthorization, and budget admission. Billing
 budget notifications are advisory; application admission is the spend gate.
 
 Run the owned Firestore transaction contract against the emulator:

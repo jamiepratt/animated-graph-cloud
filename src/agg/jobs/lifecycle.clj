@@ -1,7 +1,7 @@
 (ns agg.jobs.lifecycle
   (:require [agg.contracts.render :as contract])
   (:import (java.security MessageDigest)
-           (java.time Clock Instant LocalDate YearMonth ZoneId ZoneOffset)
+           (java.time Clock Instant LocalDate YearMonth ZoneOffset)
            (java.util HexFormat UUID)))
 
 (defprotocol JobService
@@ -39,6 +39,7 @@
 (def max-daily-submissions 100)
 (def default-monthly-budget-cents 3000)
 (def default-render-reservation-cents 25)
+(def ^:private billing-zone (ZoneOffset/ofHours -8))
 (def lease-seconds (* 65 60))
 (def max-output-bytes (* 18 1024 1024 1024))
 
@@ -92,7 +93,7 @@
   (str (LocalDate/now (.withZone clock ZoneOffset/UTC))))
 
 (defn- billing-month [^Clock clock]
-  (str (YearMonth/now (.withZone clock (ZoneId/of "America/Los_Angeles")))))
+  (str (YearMonth/now (.withZone clock billing-zone))))
 
 (defrecord InMemoryJobService [state enqueued launcher worker ^Clock clock
                                daily-limit monthly-budget-cents

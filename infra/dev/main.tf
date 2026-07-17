@@ -141,6 +141,12 @@ resource "google_service_account" "tasks" {
   display_name = "Animated Graph Cloud task dispatcher"
 }
 
+resource "google_service_account" "scheduler" {
+  project      = var.project_id
+  account_id   = "agg-scheduler"
+  display_name = "Animated Graph Cloud reconciliation scheduler"
+}
+
 resource "google_service_account" "deployer" {
   project      = var.project_id
   account_id   = "agg-github-deployer"
@@ -258,7 +264,7 @@ resource "google_cloud_scheduler_job" "reconcile" {
     headers     = { "Content-Type" = "application/json" }
 
     oidc_token {
-      service_account_email = google_service_account.tasks.email
+      service_account_email = google_service_account.scheduler.email
       audience              = var.api_service_url
     }
   }
@@ -424,6 +430,36 @@ resource "google_monitoring_alert_policy" "queue_age" {
 
   documentation {
     content   = "Inspect Cloud Tasks backlog and API dispatch errors."
+    mime_type = "text/markdown"
+  }
+}
+
+resource "google_monitoring_alert_policy" "backlog_depth" {
+  project      = var.project_id
+  display_name = "Animated Graph Cloud sustained backlog"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.owner_email.name,
+  ]
+
+  conditions {
+    display_name = "Sustained Cloud Tasks backlog"
+
+    condition_threshold {
+      filter          = "metric.type=\"cloudtasks.googleapis.com/queue/depth\" AND resource.type=\"cloud_tasks_queue\" AND resource.label.queue_id=\"agg-render\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "300s"
+
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_MAX"
+      }
+    }
+  }
+
+  documentation {
+    content   = "The render queue has remained non-empty for five minutes. Inspect Cloud Tasks response codes, especially OIDC and API authentication failures."
     mime_type = "text/markdown"
   }
 }
@@ -694,6 +730,21 @@ resource "google_monitoring_dashboard" "operations" {
               }]
             }
           }
+        },
+        {
+          xPos = 0, yPos = 12, width = 6, height = 4
+          widget = {
+            title = "Cloud Tasks backlog depth"
+            xyChart = {
+              dataSets = [{
+                timeSeriesQuery = { timeSeriesFilter = {
+                  filter      = "metric.type=\"cloudtasks.googleapis.com/queue/depth\" AND resource.type=\"cloud_tasks_queue\" AND resource.label.queue_id=\"agg-render\""
+                  aggregation = { alignmentPeriod = "60s", perSeriesAligner = "ALIGN_MAX" }
+                } }
+              }]
+              yAxis = { label = "tasks", scale = "LINEAR" }
+            }
+          }
         }
       ]
     }
@@ -812,7 +863,7 @@ resource "google_service_account_iam_member" "tasks_service_agent_mints_oidc" {
 }
 
 resource "google_service_account_iam_member" "scheduler_service_agent_mints_oidc" {
-  service_account_id = google_service_account.tasks.name
+  service_account_id = google_service_account.scheduler.name
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-cloudscheduler.iam.gserviceaccount.com"
 }

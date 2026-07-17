@@ -16,6 +16,15 @@
         error (AlreadyExistsException. "duplicate task" nil status false)]
     (is (#'gcp/duplicate-task? error))))
 
+(defn- mutable-clock [now]
+  (letfn [(clock-for [zone]
+            (proxy [Clock] []
+              (getZone [] zone)
+              (withZone [new-zone] (clock-for new-zone))
+              (instant [] @now)
+              (millis [] (.toEpochMilli ^Instant @now))))]
+    (clock-for ZoneOffset/UTC)))
+
 (deftest cloud-run-override-replaces-args-without-an-invalid-clear-flag
   (let [request (#'gcp/run-job-request
                  "projects/test/locations/europe-central2/jobs/renderer"
@@ -205,6 +214,55 @@
                   #(jobs/submit-job! budget-service "budget-load-3"
                                      (fixture/render-request)))))
           (is (= 2 (count @enqueued))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
+(deftest firestore-billing-month-resets-at-fixed-utc-minus-eight
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId "animated-graph-cloud-billing-month-test")
+                        (.setEmulatorHost host)
+                        (.build)
+                        (.getService))
+          requests (atom {})
+          now (atom (Instant/parse "2026-07-31T23:00:00Z"))
+          request-store
+          (reify jobs/RequestStore
+            (save-request! [_ job-id request]
+              (let [object (str "jobs/" job-id "/request.json")]
+                (swap! requests assoc object request)
+                object))
+            (load-request [_ object] (get @requests object)))
+          queue (reify jobs/JobQueue
+                  (enqueue-job! [_ _job-id _attempt]))
+          service (gcp/job-service
+                   {:firestore firestore
+                    :request-store request-store
+                    :queue queue
+                    :clock (mutable-clock now)
+                    :monthly-budget-cents 25
+                    :render-reservation-cents 25})
+          exception-type
+          (fn [f]
+            (try
+              (f)
+              nil
+              (catch clojure.lang.ExceptionInfo error
+                (:type (ex-data error)))))]
+      (try
+        (doseq [collection ["jobs" "job-idempotency" "orchestration"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (is (:created? (jobs/submit-job! service "firestore-july-budget"
+                                         (fixture/render-request))))
+        (reset! now (Instant/parse "2026-08-01T07:30:00Z"))
+        (is (= ::jobs/monthly-budget-exhausted
+               (exception-type
+                #(jobs/submit-job! service "firestore-still-july"
+                                   (fixture/render-request)))))
+        (reset! now (Instant/parse "2026-08-01T08:00:00Z"))
+        (is (:created? (jobs/submit-job! service "firestore-august-budget"
+                                         (fixture/render-request))))
         (finally
           (.close firestore))))
     (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))

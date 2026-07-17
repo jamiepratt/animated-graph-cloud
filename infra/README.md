@@ -21,12 +21,16 @@ temporary-object roles. The renderer remains one task with zero retries; task
 redelivery can retry admission but cannot duplicate a non-queued execution.
 
 Cloud Scheduler calls the authenticated reconciliation route every five minutes
-with the task identity and the API origin as its OIDC audience. Terraform also
+with a dedicated `agg-scheduler` identity and the API origin as its OIDC
+audience; it cannot authenticate as the `agg-tasks` dispatcher. Terraform also
 owns a USD 30 monthly billing budget with 50%, 80%, and 100% thresholds, five
-logs-based metrics, six alert policies, and the operations dashboard. Billing
+logs-based metrics, seven alert policies, and the operations dashboard. A
+sustained-backlog alert reads Cloud Tasks' built-in queue-depth metric, so OIDC
+or endpoint failures remain visible without a successful API dispatch. Billing
 and Monitoring notifications go to the configured owner email; they do not stop
 resources. The API separately reserves 25 cents for
-every new render attempt and refuses work once the configured monthly ceiling is
+every new render attempt and refuses work once the configured fixed-UTC−8
+monthly ceiling is
 exhausted; the deployment workflow keeps those two values aligned.
 
 Google OAuth runtime values are operator-managed Secret Manager versions:

@@ -7,7 +7,7 @@
   (:import (java.net ServerSocket URI)
            (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
                           HttpResponse$BodyHandlers)
-           (java.time Instant)))
+           (java.time Clock Instant ZoneOffset)))
 
 (defn- available-port []
   (with-open [socket (ServerSocket. 0)]
@@ -61,6 +61,15 @@
     (catch clojure.lang.ExceptionInfo error
       (:type (ex-data error)))))
 
+(defn- mutable-clock [now]
+  (letfn [(clock-for [zone]
+            (proxy [Clock] []
+              (getZone [] zone)
+              (withZone [new-zone] (clock-for new-zone))
+              (instant [] @now)
+              (millis [] (.toEpochMilli ^Instant @now))))]
+    (clock-for ZoneOffset/UTC)))
+
 (deftest daily-admission-accepts-exactly-one-hundred-unique-submissions
   (let [service (:service (jobs/in-memory-system))
         request (render-request)]
@@ -94,6 +103,23 @@
             #(jobs/submit-job! service "budget-3" request))))
     (is (= 2 (count @(:enqueued system)))
         "rejected work never reaches the render queue")))
+
+(deftest billing-month-resets-at-fixed-utc-minus-eight
+  (let [now (atom (Instant/parse "2026-07-31T23:00:00Z"))
+        service (:service
+                 (jobs/in-memory-system
+                  {:clock (mutable-clock now)
+                   :monthly-budget-cents 25
+                   :render-reservation-cents 25}))]
+    (is (:created? (jobs/submit-job! service "july-budget"
+                                     (render-request))))
+    (reset! now (Instant/parse "2026-08-01T07:30:00Z"))
+    (is (= ::jobs/monthly-budget-exhausted
+           (exception-type
+            #(jobs/submit-job! service "still-july" (render-request)))))
+    (reset! now (Instant/parse "2026-08-01T08:00:00Z"))
+    (is (:created? (jobs/submit-job! service "august-budget"
+                                     (render-request))))))
 
 (deftest explicit-retry-reserves-compute-before-requeue
   (let [system (jobs/in-memory-system {:monthly-budget-cents 25

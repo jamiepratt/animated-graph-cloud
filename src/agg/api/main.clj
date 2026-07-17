@@ -238,9 +238,8 @@
   (assoc (require-user! exchange auth-system) :auth-kind :session))
 
 (defn- verified-internal-caller?
-  [exchange {:keys [auth-system task-token-verifier task-audience
-                    tasks-service-account]}
-   marker-header]
+  [exchange {:keys [auth-system task-token-verifier task-audience]}
+   marker-header expected-service-account]
   (and (some-> exchange .getRequestHeaders
                (.getFirst marker-header) not-empty)
        (if-not auth-system
@@ -253,12 +252,13 @@
                                  "https://accounts.google.com"}
                                issuer)
                     (= task-audience audience)
-                    (= tasks-service-account email)
+                    (= expected-service-account email)
                     email-verified?))
              (catch Throwable _ false))))))
 
-(defn- verified-task? [exchange dependencies]
-  (verified-internal-caller? exchange dependencies "X-CloudTasks-TaskName"))
+(defn- verified-task? [exchange {:keys [tasks-service-account] :as dependencies}]
+  (verified-internal-caller? exchange dependencies "X-CloudTasks-TaskName"
+                             tasks-service-account))
 
 (defn- dispatch-job! [exchange dependencies job-id]
   (if-not (verified-task? exchange dependencies)
@@ -275,7 +275,9 @@
       (respond-json! exchange (if started? 202 200) job))))
 
 (defn- reconcile-jobs! [exchange dependencies]
-  (if-not (verified-internal-caller? exchange dependencies "X-CloudScheduler")
+  (if-not (verified-internal-caller?
+           exchange dependencies "X-CloudScheduler"
+           (:scheduler-service-account dependencies))
     (respond-json! exchange 401 {:error "authenticated_scheduler_required"})
     (let [{:keys [repaired-jobs released-leases]}
           (jobs/reconcile-jobs! (:job-service dependencies))]

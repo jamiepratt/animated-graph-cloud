@@ -17,13 +17,16 @@ One Firestore transaction admits each new idempotency key. It rejects when the
 UTC-day counter has reached 100, when five unexpired capacity leases exist, or
 when another conservative compute reservation would exceed the monthly ceiling.
 The development ceiling is USD 30 and each attempt reserves 25 cents, above the
-measured maximum-render compute cost. Its month uses Cloud Billing's Pacific
-calendar boundary. Explicit retries reserve again; duplicate
+measured maximum-render compute cost. Its month resets at Cloud Billing's fixed
+midnight UTC−8 boundary rather than daylight-saving-aware Pacific local time.
+Explicit retries reserve again; duplicate
 submissions do not. Stable errors are `daily_submission_limit_exhausted`,
 `capacity_exhausted`, and `monthly_budget_exhausted`. Existing executions are
 never killed by a later budget decision.
 
-Cloud Scheduler sends an audience-bound OIDC request every five minutes. The
+Cloud Scheduler sends an audience-bound OIDC request every five minutes using a
+dedicated `agg-scheduler` identity. Dispatch accepts only `agg-tasks`, while
+reconciliation accepts only `agg-scheduler`. The
 reconciler fails expired launching/running jobs with `stale_lease`, completes an
 expired cancellation as cancelled, and removes expired, mismatched, terminal,
 or missing-job capacity leases in the same transaction. Reconciliation is
@@ -32,8 +35,10 @@ idempotent.
 The temporary bucket keeps its one-day delete lifecycle and `jobs.expireAt`
 keeps its Firestore 90-day TTL. Structured application events expose only a
 bounded admission reason, queue age, repair counts, or generic failure class.
-Logs-based metrics, alert policies, and one dashboard cover queue age, failures,
-memory utilization, stale leases, Drive reauthorization, and budget admission.
+Logs-based metrics, alert policies, and one dashboard cover dispatch queue age,
+live Cloud Tasks backlog depth, failures, memory utilization, stale leases,
+Drive reauthorization, and budget admission. Backlog depth comes directly from
+Cloud Tasks, so dispatch authentication failures cannot hide it.
 A separate Cloud Billing budget emits 50%, 80%, and 100% notifications.
 
 ## Consequences

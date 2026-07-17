@@ -44,6 +44,20 @@
   (is (re-find #"schedule\s*=\s*\"\*/5 \* \* \* \*\"" terraform))
   (is (str/includes? terraform "oidc_token")))
 
+(deftest reconciliation-uses-a-dedicated-least-privilege-identity
+  (is (str/includes? terraform
+                     "resource \"google_service_account\" \"scheduler\""))
+  (is (str/includes? terraform "account_id   = \"agg-scheduler\""))
+  (is (str/includes? terraform
+                     "service_account_email = google_service_account.scheduler.email"))
+  (is (str/includes? terraform
+                     "service_account_id = google_service_account.scheduler.name"))
+  (is (not (str/includes?
+            terraform
+            "service_account_id = google_service_account.tasks.name\n  role               = \"roles/iam.serviceAccountTokenCreator\"\n  member             = \"serviceAccount:service-${data.google_project.current.number}@gcp-sa-cloudscheduler.iam.gserviceaccount.com\"")))
+  (is (str/includes? workflow
+                     "AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@")))
+
 (deftest configured-budget-is-both-alerted-and-enforced-at-admission
   (is (str/includes? terraform
                      "resource \"google_billing_budget\" \"development\""))
@@ -66,17 +80,26 @@
                      "resource \"google_monitoring_dashboard\" \"operations\""))
   (is (str/includes? terraform
                      "resource \"google_monitoring_notification_channel\" \"owner_email\""))
-  (is (= 7 (count (re-seq #"notification_channels\s*=" terraform))))
+  (is (= 8 (count (re-seq #"notification_channels\s*=" terraform))))
   (doseq [signal ["Queue age" "Render failures" "Memory utilization"
                   "Stale leases" "Drive reauthorization"
                   "Budget admission"]]
     (is (str/includes? terraform signal)))
   (doseq [alert ["queue_age" "render_failures" "memory_utilization"
                  "stale_leases" "drive_reauthorization"
-                 "budget_admission"]]
+                 "budget_admission" "backlog_depth"]]
     (is (str/includes? terraform
                        (str "resource \"google_monitoring_alert_policy\" \""
                             alert "\"")))))
+
+(deftest sustained-cloud-tasks-backlog-is-visible-without-api-dispatch
+  (is (str/includes? terraform
+                     "cloudtasks.googleapis.com/queue/depth"))
+  (is (str/includes? terraform "resource.type=\\\"cloud_tasks_queue\\\""))
+  (is (str/includes? terraform "resource.label.queue_id=\\\"agg-render\\\""))
+  (is (str/includes? terraform "display_name = \"Sustained Cloud Tasks backlog\""))
+  (is (str/includes? terraform "duration        = \"300s\""))
+  (is (str/includes? terraform "title = \"Cloud Tasks backlog depth\"")))
 
 (deftest delivery-enables-the-api-with-its-own-authenticated-task-audience
   (is (str/includes? workflow "AGG_JOB_LIFECYCLE_ENABLED=true"))
