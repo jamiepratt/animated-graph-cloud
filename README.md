@@ -205,6 +205,27 @@ Firestore retains the ID and resumable session so worker retries resume the
 same file rather than creating duplicates. Polling success includes
 `driveFileId` and `driveWebViewLink`.
 
+## Web workflow and personal API tokens
+
+Authenticated users get a server-rendered HTMX workflow at `/`. Paste the render
+request JSON once, then preview or submit it. Returned HTML fragments poll the
+owned job and expose cancel or retry only when the current state permits it.
+The same page creates, lists, and revokes personal API tokens. The only custom
+browser JavaScript is the same-origin Google Picker bridge.
+
+Cookie-authenticated POST requests require the signed CSRF value supplied by
+the page in `X-CSRF-Token`. Automation should create a personal token and send
+it as `Authorization: Bearer TOKEN`; bearer requests do not use browser cookies.
+`POST /v1/tokens` returns the full token once, `GET /v1/tokens` lists metadata
+without secrets or hashes, and `POST /v1/tokens/{id}/revoke` revokes an owned
+token. These token-management writes require a browser session and CSRF token.
+Allowlist removal immediately disables both sessions and personal tokens.
+
+Personal tokens use a UUID selector plus 256 random secret bits. Firestore stores
+only owner metadata, revocation state, and an HMAC-SHA256. The HMAC pepper comes
+from the `token-hash-pepper` Secret Manager value and must contain at least 32
+bytes.
+
 The OAuth web-client JSON has this Secret Manager shape:
 
 ```json
@@ -216,10 +237,10 @@ Register both Cloud Run callbacks on that web client:
 - `https://SERVICE_URL/v1/auth/login/callback`
 - `https://SERVICE_URL/v1/auth/drive/callback`
 
-The runtime mounts `oauth-client-secret`, `session-key`, and `picker-api-key`
-from Secret Manager. Never place their values in Terraform, workflow YAML,
-logs, or command arguments. Store the Picker key as its exact bytes with no
-trailing newline. The key is API-restricted solely to `picker.googleapis.com`:
+The runtime mounts `oauth-client-secret`, `session-key`, `picker-api-key`, and
+`token-hash-pepper` from Secret Manager. Never place their values in Terraform,
+workflow YAML, logs, or command arguments. Store the Picker key as its exact
+bytes with no trailing newline. The key is API-restricted solely to `picker.googleapis.com`:
 browser-referrer restrictions are incompatible because Picker validates the
 developer key from its `docs.google.com` iframe.
 

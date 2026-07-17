@@ -50,6 +50,7 @@
   (let [port (available-port)
         lifecycle (jobs/in-memory-system)
         {:keys [system session]} (auth-fixture)
+        csrf (auth/issue-csrf-token system {:subject "google-subject-1"})
         server (api/start! port {:job-service (:service lifecycle)
                                  :auth-system system
                                  :task-audience "https://app.example.com"
@@ -59,7 +60,9 @@
                      "Idempotency-Key" "secure-job"}
             denied (post! port "/v1/jobs" (fixture/render-request) headers)
             admitted (post! port "/v1/jobs" (fixture/render-request)
-                            (assoc headers "Cookie" (str "agg_session=" session)))]
+                            (assoc headers
+                                   "Cookie" (str "agg_session=" session)
+                                   "X-CSRF-Token" csrf))]
         (is (= 401 (.statusCode denied)))
         (is (= {"error" "authentication_required"}
                (json/read-str (.body denied))))
@@ -71,10 +74,43 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest login-sets-a-bounded-secure-http-only-session-cookie
+  (let [port (available-port)
+        oauth (reify auth/OAuthClient
+                (exchange-code! [_ flow _ _ _]
+                  (is (= :login flow))
+                  {:subject "google-subject-1"
+                   :email "owner@example.com"
+                   :email-verified? true}))
+        system (auth/system
+                {:client-id "client-id"
+                 :client-secret "client-secret"
+                 :base-url (str "http://127.0.0.1:" port)
+                 :allowlist #{"owner@example.com"}
+                 :session-key (.getBytes "01234567890123456789012345678901")
+                 :oauth oauth})
+        flow (auth/begin-flow! system :login nil)
+        server (api/start! port {:auth-system system})]
+    (try
+      (let [response (get! port
+                           (str "/v1/auth/login/callback?code=code&state="
+                                (:state flow))
+                           {"Cookie" (str "agg_oauth_state="
+                                          (:stateCookie flow))})
+            session-cookie
+            (first (filter #(.startsWith ^String % "agg_session=")
+                           (.allValues (.headers response) "Set-Cookie")))]
+        (is (= 302 (.statusCode response)))
+        (is (re-find #"; Max-Age=43200; Path=/; Secure; HttpOnly; SameSite=Lax$"
+                     session-cookie)))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest forged-task-header-is-rejected-before-dispatch
   (let [port (available-port)
         lifecycle (jobs/in-memory-system)
         {:keys [system session]} (auth-fixture)
+        csrf (auth/issue-csrf-token system {:subject "google-subject-1"})
         verifier (reify auth/TaskTokenVerifier
                    (verify-task-token! [_ token]
                      (when (= "signed-task-token" token)
@@ -91,7 +127,8 @@
       (let [submission (post! port "/v1/jobs" (fixture/render-request)
                               {"Content-Type" "application/json"
                                "Idempotency-Key" "task-auth-job"
-                               "Cookie" (str "agg_session=" session)})
+                               "Cookie" (str "agg_session=" session)
+                               "X-CSRF-Token" csrf})
             job-id (get (json/read-str (.body submission)) "id")
             path (str "/internal/v1/jobs/" job-id "/dispatch")
             forged (post! port path {}
@@ -177,6 +214,8 @@
         owner-session (auth/issue-session auth-system
                                           {:subject "owner-subject"
                                            :email "owner@example.com"})
+        owner-csrf (auth/issue-csrf-token auth-system
+                                          {:subject "owner-subject"})
         member-session (auth/issue-session auth-system
                                            {:subject "member-subject"
                                             :email "member@example.com"})
@@ -186,7 +225,8 @@
       (let [submission (post! port "/v1/jobs" (fixture/render-request)
                               {"Content-Type" "application/json"
                                "Idempotency-Key" "owner-job"
-                               "Cookie" (str "agg_session=" owner-session)})
+                               "Cookie" (str "agg_session=" owner-session)
+                               "X-CSRF-Token" owner-csrf})
             job-id (get (json/read-str (.body submission)) "id")
             owner-poll (get! port (str "/v1/jobs/" job-id)
                              {"Cookie" (str "agg_session=" owner-session)})

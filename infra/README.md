@@ -27,8 +27,10 @@ API-restricted solely to `picker.googleapis.com`. A browser-referrer
 restriction is not compatible with Picker because Google validates the
 developer key from the `docs.google.com` iframe. The Secret Manager payload is
 the exact key bytes with no trailing newline. Terraform manages only the
-secret containers, least-privilege secret access, and KMS access. It never
-reads or stores secret payloads. The durable renderer mounts the OAuth client
+secret containers, least-privilege secret access, and KMS access. The API also
+reads `token-hash-pepper`, an operator-generated value of at least 32 bytes used
+only to HMAC personal API tokens. Terraform never reads or stores secret
+payloads. The durable renderer mounts the OAuth client
 secret so it can refresh an encrypted user grant and upload the completed MOV
 to Drive.
 

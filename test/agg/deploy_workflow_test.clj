@@ -51,7 +51,13 @@
   (is (str/includes? workflow
                      "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest"))
   (is (str/includes? workflow "AGG_SESSION_KEY=session-key:latest"))
-  (is (str/includes? workflow "AGG_PICKER_API_KEY=picker-api-key:latest")))
+  (is (str/includes? workflow "AGG_PICKER_API_KEY=picker-api-key:latest"))
+  (is (str/includes? workflow
+                     "AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest"))
+  (is (= 2 (count (re-seq #"AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest"
+                          workflow))))
+  (is (str/includes? terraform
+                     "resource \"google_secret_manager_secret_iam_member\" \"api_token_hash_access\"")))
 
 (deftest public-ingress-is-enabled-only-after-app-and-task-auth-configuration
   (let [auth-index (str/index-of workflow "AGG_AUTH_ENABLED=true")

@@ -522,7 +522,8 @@
                  (env "AGG_OAUTH_CLIENT_CREDENTIALS" nil)
                  :tasks-service-account tasks-service-account
                  :picker-api-key (env "AGG_PICKER_API_KEY" nil)
-                 :picker-app-id (env "AGG_PICKER_APP_ID" nil)}))
+                 :picker-app-id (env "AGG_PICKER_APP_ID" nil)
+                 :token-hash-secret (env "AGG_TOKEN_HASH_PEPPER" nil)}))
         job-dependencies))))
 
 (defn api-job-service []

@@ -35,6 +35,7 @@
 
 (def ^:private flow-seconds (* 10 60))
 (def ^:private session-seconds (* 12 60 60))
+(def ^:private csrf-seconds session-seconds)
 (def ^:private random (SecureRandom.))
 
 (defn- random-token [size]
@@ -166,6 +167,45 @@
       (throw error))
     (catch Throwable error
       (throw (ex-info "Session is invalid" {:type ::invalid-session} error)))))
+
+(defn require-allowlisted!
+  [{:keys [allowlist]} {:keys [subject email] :as user}]
+  (when (or (str/blank? subject)
+            (str/blank? email)
+            (not (contains? allowlist (str/lower-case email))))
+    (throw (ex-info "User is no longer allowlisted"
+                    {:type ::not-allowlisted})))
+  user)
+
+(defn issue-csrf-token [{:keys [session-key clock]} {:keys [subject]}]
+  (sign-json session-key
+             {:purpose "csrf"
+              :sub subject
+              :exp (.getEpochSecond
+                    (.plusSeconds (Instant/now clock) csrf-seconds))}))
+
+(defn verify-csrf!
+  [{:keys [session-key clock]} {:keys [subject]} token]
+  (try
+    (let [{:keys [purpose sub exp]}
+          (verify-json session-key token ::invalid-csrf)]
+      (when-not (and (= "csrf" purpose)
+                     (= subject sub)
+                     (number? exp)
+                     (> (long exp) (.getEpochSecond (Instant/now clock))))
+        (throw (ex-info "CSRF token is invalid or expired"
+                        {:type ::invalid-csrf})))
+      true)
+    (catch clojure.lang.ExceptionInfo error
+      (if (= ::invalid-csrf (:type (ex-data error)))
+        (throw error)
+        (throw (ex-info "CSRF token is invalid"
+                        {:type ::invalid-csrf}
+                        error))))
+    (catch Throwable error
+      (throw (ex-info "CSRF token is invalid"
+                      {:type ::invalid-csrf}
+                      error)))))
 
 (defn begin-flow! [{:keys [session-key clock] :as system} flow session]
   (let [user (when (= :drive flow) (session-user system session))

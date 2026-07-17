@@ -77,6 +77,7 @@ jobs:
             --memory 512Mi \
             --min 0 \
             --max 2 \
+            --update-secrets "AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
             --no-allow-unauthenticated \
             --quiet
 
@@ -116,7 +117,7 @@ jobs:
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=agg-renderer,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$CLOUD_RUN_SERVICE_URL,AGG_ALLOWED_EMAILS=$ALLOWED_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER" \
-            --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest" \
+            --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
             --quiet
 
       - name: Open ingress after application authentication is configured

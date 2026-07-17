@@ -157,6 +157,30 @@
              (catch clojure.lang.ExceptionInfo error
                (:type (ex-data error))))))))
 
+(deftest csrf-tokens-are-signed-expiring-and-bound-to-the-session-subject
+  (let [{:keys [system]} (drive-fixture)
+        user {:subject "google-subject-1" :email "owner@example.com"}
+        csrf (auth/issue-csrf-token system user)
+        expired-system
+        (assoc system :clock
+               (Clock/fixed (Instant/parse "2026-07-18T01:00:01Z")
+                            ZoneOffset/UTC))]
+    (is (true? (auth/verify-csrf! system user csrf)))
+    (doseq [[label candidate-user candidate-token]
+            [["another user" (assoc user :subject "member-subject") csrf]
+             ["tampered token" user (str csrf "x")]
+             ["expired token" user csrf]]]
+      (testing label
+        (is (= ::auth/invalid-csrf
+               (try
+                 (auth/verify-csrf! (if (= label "expired token")
+                                      expired-system
+                                      system)
+                                    candidate-user candidate-token)
+                 nil
+                 (catch clojure.lang.ExceptionInfo error
+                   (:type (ex-data error))))))))))
+
 (deftest drive-grant-is-encrypted-and-reuses-the-users-output-folder
   (let [{:keys [system grants encrypted folders]} (drive-fixture)
         session (auth/issue-session system {:subject "google-subject-1"

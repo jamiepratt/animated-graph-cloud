@@ -2,6 +2,8 @@
   (:require [agg.auth.core :as auth]
             [agg.drive.core :as drive]
             [agg.drive.gcp :as drive-gcp]
+            [agg.tokens.core :as tokens]
+            [agg.tokens.gcp :as tokens-gcp]
             [clojure.data.json :as json]
             [clojure.string :as str])
   (:import (com.google.api.client.googleapis.auth.oauth2 GoogleIdTokenVerifier$Builder)
@@ -243,6 +245,14 @@
                       {:type ::weak-session-key})))
     bytes))
 
+(defn- token-hash-pepper [value]
+  (let [bytes (.getBytes ^String (required value "AGG_TOKEN_HASH_PEPPER")
+                         StandardCharsets/UTF_8)]
+    (when (< (alength bytes) 32)
+      (throw (ex-info "AGG_TOKEN_HASH_PEPPER must contain at least 32 bytes"
+                      {:type ::weak-token-hash-pepper})))
+    bytes))
+
 (defn- crypto-key-name [project region]
   (str "projects/" project "/locations/" region
        "/keyRings/application/cryptoKeys/drive-refresh-tokens"))
@@ -264,7 +274,7 @@
 (defn api-dependencies
   [{:keys [firestore project region base-url allowed-emails session-secret
            oauth-client-credentials tasks-service-account picker-api-key
-           picker-app-id]}]
+           picker-app-id token-hash-secret]}]
   (let [{:keys [credentials oauth cipher grant-store gateway]}
         (drive-components firestore project region oauth-client-credentials)
         allowlist (->> (str/split (or allowed-emails "") #",")
@@ -290,7 +300,10 @@
      :task-audience base-url
      :tasks-service-account tasks-service-account
      :picker-api-key picker-api-key
-     :picker-app-id picker-app-id}))
+     :picker-app-id picker-app-id
+     :token-service
+     (tokens/service {:store (tokens-gcp/token-store firestore)
+                      :pepper (token-hash-pepper token-hash-secret)})}))
 
 (defn renderer-delivery
   [{:keys [firestore project region oauth-client-credentials]}]

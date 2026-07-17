@@ -1,0 +1,149 @@
+(ns agg.api-ui-test
+  (:require [agg.api.main :as api]
+            [agg.auth.core :as auth]
+            [agg.jobs-test :as fixture]
+            [agg.jobs.lifecycle :as jobs]
+            [agg.tokens.core :as tokens]
+            [clojure.data.json :as json]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]])
+  (:import (java.net ServerSocket URI URLEncoder)
+           (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
+                          HttpResponse$BodyHandlers)
+           (java.nio.charset StandardCharsets)))
+
+(defn- available-port []
+  (with-open [socket (ServerSocket. 0)] (.getLocalPort socket)))
+
+(defn- request! [port method path body headers]
+  (let [builder (HttpRequest/newBuilder
+                 (URI/create (str "http://127.0.0.1:" port path)))
+        _ (doseq [[name value] headers]
+            (.header builder name value))
+        publisher (HttpRequest$BodyPublishers/ofString (or body ""))
+        request (case method
+                  :get (.GET builder)
+                  :post (.POST builder publisher))]
+    (.send (HttpClient/newHttpClient)
+           (.build request)
+           (HttpResponse$BodyHandlers/ofString))))
+
+(defn- form [fields]
+  (->> fields
+       (map (fn [[name value]]
+              (str (URLEncoder/encode (clojure.core/name name)
+                                      StandardCharsets/UTF_8)
+                   "="
+                   (URLEncoder/encode (str value) StandardCharsets/UTF_8))))
+       (str/join "&")))
+
+(defn- fixture []
+  (let [oauth (reify auth/OAuthClient
+                (exchange-code! [_ _ _ _ _]
+                  (throw (UnsupportedOperationException.))))
+        auth-system (auth/system
+                     {:client-id "client-id"
+                      :client-secret "client-secret"
+                      :base-url "https://app.example.com"
+                      :allowlist #{"owner@example.com" "member@example.com"}
+                      :session-key (.getBytes "01234567890123456789012345678901")
+                      :oauth oauth})
+        owner {:subject "owner-subject" :email "owner@example.com"}
+        member {:subject "member-subject" :email "member@example.com"}]
+    {:auth-system auth-system
+     :owner owner
+     :owner-cookie (str "agg_session=" (auth/issue-session auth-system owner))
+     :owner-csrf (auth/issue-csrf-token auth-system owner)
+     :member-cookie (str "agg_session=" (auth/issue-session auth-system member))}))
+
+(def form-content-type
+  {"Content-Type" "application/x-www-form-urlencoded"})
+
+(deftest htmx-owner-workflow-previews-submits-polls-cancels-and-retries
+  (let [port (available-port)
+        lifecycle (jobs/in-memory-system)
+        token-system (tokens/in-memory-system
+                      {:pepper (.getBytes "abcdefghijklmnopqrstuvwxyz012345")})
+        {:keys [auth-system owner-cookie owner-csrf member-cookie]} (fixture)
+        server (api/start! port {:job-service (:service lifecycle)
+                                 :auth-system auth-system
+                                 :token-service (:service token-system)})
+        headers (merge form-content-type
+                       {"Cookie" owner-cookie "X-CSRF-Token" owner-csrf})
+        request-json (json/write-str (fixture/render-request))]
+    (try
+      (let [landing (request! port :get "/" nil {"Cookie" owner-cookie})]
+        (is (= 200 (.statusCode landing)))
+        (is (str/includes? (.body landing) "htmx.org@2.0.10"))
+        (is (str/includes? (.body landing) "hx-post=\"/ui/preview\""))
+        (is (str/includes? (.body landing) "hx-post=\"/ui/jobs\""))
+        (is (str/includes? (.body landing) "hx-post=\"/ui/tokens\""))
+        (is (str/includes? (.body landing) "X-CSRF-Token")))
+      (testing "preview is returned as an HTML fragment"
+        (let [preview (request! port :post "/ui/preview"
+                                (form {:request request-json}) headers)]
+          (is (= 200 (.statusCode preview)))
+          (is (str/includes? (.body preview) "data:image/png;base64,"))
+          (is (str/includes? (.body preview) "Midpoint preview"))))
+      (testing "missing CSRF is rejected before submission"
+        (is (= 403
+               (.statusCode
+                (request! port :post "/ui/jobs"
+                          (form {:request request-json})
+                          (merge form-content-type {"Cookie" owner-cookie}))))))
+      (let [submission (request! port :post "/ui/jobs"
+                                 (form {:request request-json}) headers)
+            job-id (second (re-find #"id=\"job-([^\"]+)\"" (.body submission)))
+            status-path (str "/ui/jobs/" job-id)]
+        (is (= 202 (.statusCode submission)))
+        (is (string? job-id))
+        (is (str/includes? (.body submission)
+                           (str "hx-get=\"" status-path "\"")))
+        (is (str/includes? (.body submission) "Queued"))
+        (is (= 200 (.statusCode
+                    (request! port :get status-path nil {"Cookie" owner-cookie}))))
+        (is (= 404 (.statusCode
+                    (request! port :get status-path nil {"Cookie" member-cookie}))))
+        (let [cancelled (request! port :post (str status-path "/cancel") "" headers)]
+          (is (= 200 (.statusCode cancelled)))
+          (is (str/includes? (.body cancelled) "Cancelled"))
+          (is (str/includes? (.body cancelled)
+                             (str "hx-post=\"" status-path "/retry\""))))
+        (let [retried (request! port :post (str status-path "/retry") "" headers)]
+          (is (= 202 (.statusCode retried)))
+          (is (str/includes? (.body retried) "Queued"))
+          (is (str/includes? (.body retried) "Attempt 2"))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest htmx-token-secret-is-shown-once-and-user-content-is-encoded
+  (let [port (available-port)
+        lifecycle (jobs/in-memory-system)
+        token-system (tokens/in-memory-system
+                      {:pepper (.getBytes "abcdefghijklmnopqrstuvwxyz012345")})
+        {:keys [auth-system owner-cookie owner-csrf]} (fixture)
+        server (api/start! port {:job-service (:service lifecycle)
+                                 :auth-system auth-system
+                                 :token-service (:service token-system)})
+        headers (merge form-content-type
+                       {"Cookie" owner-cookie "X-CSRF-Token" owner-csrf})]
+    (try
+      (let [created (request! port :post "/ui/tokens"
+                              (form {:name "<script>alert(1)</script>"})
+                              headers)
+            raw-token (second (re-find #"<code>(agg_pat_[^<]+)</code>"
+                                       (.body created)))
+            listed (request! port :get "/ui/tokens" nil
+                             {"Cookie" owner-cookie})]
+        (is (= 201 (.statusCode created)))
+        (is (= "no-store"
+               (.orElse (.firstValue (.headers created) "Cache-Control") nil)))
+        (is (string? raw-token))
+        (is (str/includes? (.body created) "&lt;script&gt;alert(1)&lt;/script&gt;"))
+        (is (not (str/includes? (.body created) "<script>alert(1)</script>")))
+        (is (= 200 (.statusCode listed)))
+        (is (str/includes? (.body listed) "&lt;script&gt;alert(1)&lt;/script&gt;"))
+        (is (not (str/includes? (.body listed) raw-token)))
+        (is (not (str/includes? (.body listed) "hash"))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))

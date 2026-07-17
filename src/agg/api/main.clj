@@ -6,6 +6,8 @@
             [agg.render.frames :as frames]
             [agg.render.media :as media]
             [agg.renderer.main :as renderer]
+            [agg.tokens.core :as tokens]
+            [agg.ui.core :as ui]
             [clojure.data.json :as json])
   (:gen-class)
   (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
@@ -14,7 +16,7 @@
            (java.nio.charset StandardCharsets)
            (java.nio.file Files OpenOption Path)
            (java.time Instant)
-           (java.util UUID)))
+           (java.util Base64 UUID)))
 
 (def ^:private health-body "{\"status\":\"ok\"}")
 
@@ -22,7 +24,9 @@
 
 (defn- respond-bytes! [^HttpExchange exchange status content-type bytes]
   (doto (.getResponseHeaders exchange)
-    (.set "Content-Type" content-type))
+    (.set "Content-Type" content-type)
+    (.set "Cache-Control" "no-store")
+    (.set "X-Content-Type-Options" "nosniff"))
   (.sendResponseHeaders exchange status (alength ^bytes bytes))
   (with-open [response-body (.getResponseBody exchange)]
     (.write response-body ^bytes bytes)))
@@ -39,7 +43,9 @@
 
 (defn- respond-redirect! [^HttpExchange exchange location cookies]
   (doto (.getResponseHeaders exchange)
-    (.set "Location" location))
+    (.set "Location" location)
+    (.set "Cache-Control" "no-store")
+    (.set "X-Content-Type-Options" "nosniff"))
   (doseq [cookie cookies]
     (.add (.getResponseHeaders exchange) "Set-Cookie" cookie))
   (.sendResponseHeaders exchange 302 -1)
@@ -100,6 +106,21 @@
                       {:type ::request-too-large})))
     (json/read-str (String. bytes StandardCharsets/UTF_8) :key-fn keyword)))
 
+(defn- request-form [^HttpExchange exchange]
+  (let [bytes (with-open [input (.getRequestBody exchange)]
+                (.readNBytes input (inc max-request-bytes)))]
+    (when (> (alength bytes) max-request-bytes)
+      (throw (ex-info "Request exceeds the size limit"
+                      {:type ::request-too-large})))
+    (->> (.split (String. bytes StandardCharsets/UTF_8) "&")
+         (keep (fn [part]
+                 (when-not (.isBlank ^String part)
+                   (let [[key value] (.split ^String part "=" 2)]
+                     [(URLDecoder/decode key StandardCharsets/UTF_8)
+                      (URLDecoder/decode (or value "")
+                                         StandardCharsets/UTF_8)]))))
+         (into {}))))
+
 (defn- request-render-request [exchange]
   (try
     (let [request (request-json exchange)]
@@ -118,6 +139,22 @@
 
 (defn- request-render-spec [exchange]
   (:render-spec (request-render-request exchange)))
+
+(defn- ui-render-request [exchange]
+  (try
+    (let [request (json/read-str (get (request-form exchange) "request")
+                                 :key-fn keyword)]
+      {:request request :render-spec (contract/prepare request)})
+    (catch clojure.lang.ExceptionInfo error
+      (if (= ::request-too-large (:type (ex-data error)))
+        (throw error)
+        (throw (ex-info "Invalid render request"
+                        {:type ::invalid-request}
+                        error))))
+    (catch Throwable error
+      (throw (ex-info "Invalid render request"
+                      {:type ::invalid-request}
+                      error)))))
 
 (defn- preview! [exchange frame-renderer]
   (let [render-spec (request-render-spec exchange)
@@ -165,6 +202,27 @@
           (#(when (and % (.startsWith ^String % "Bearer "))
               (subs % 7)))
           not-empty))
+
+(defn- authenticated-user! [exchange auth-system token-service]
+  (when auth-system
+    (if-let [session (session-token exchange)]
+      (assoc (auth/session-user auth-system session) :auth-kind :session)
+      (if-let [token (and token-service (bearer-token exchange))]
+        (->> (tokens/authenticate token-service token)
+             (auth/require-allowlisted! auth-system)
+             (#(assoc % :auth-kind :token)))
+        (throw (ex-info "Authentication is required"
+                        {:type ::auth/invalid-session}))))))
+
+(defn- require-csrf! [^HttpExchange exchange auth-system user]
+  (when (= :session (:auth-kind user))
+    (auth/verify-csrf!
+     auth-system user
+     (some-> exchange .getRequestHeaders (.getFirst "X-CSRF-Token"))))
+  user)
+
+(defn- require-session-user! [exchange auth-system]
+  (assoc (require-user! exchange auth-system) :auth-kind :session))
 
 (defn- verified-task?
   [exchange {:keys [auth-system task-token-verifier task-audience
@@ -220,34 +278,22 @@
     (respond-redirect! exchange "/?drive=connected"
                        [(clear-oauth-cookie)])))
 
-(defn- landing! [^HttpExchange exchange auth-system]
+(defn- landing! [^HttpExchange exchange auth-system token-service]
   (let [user (when-let [session (session-token exchange)]
                (auth/session-user auth-system session))
         body
         (if user
-          (str "<!doctype html><html><head><meta charset=\"utf-8\">"
-               "<title>Animated Graph Cloud</title></head><body>"
-               "<h1>Animated Graph Cloud</h1>"
-               "<p><a href=\"/v1/auth/drive/start\">Connect Google Drive</a></p>"
-               "<button id=\"open-picker\" type=\"button\">Select telemetry or watermark</button>"
-               "<p>Selected: <output id=\"picker-selection\">None</output></p>"
-               "<script>const selection=document.getElementById('picker-selection');"
-               "document.getElementById('open-picker').addEventListener('click',()=>{"
-               "window.open('/v1/drive/picker','agg-picker','popup,width=960,height=720');});"
-               "window.addEventListener('message',event=>{"
-               "if(event.origin!==location.origin||event.data?.type!=='agg-picker'){return;}"
-               "selection.textContent=event.data.files.map(file=>file.name).join(', ')||'None';"
-               "});</script></body></html>")
-          (str "<!doctype html><html><head><meta charset=\"utf-8\">"
-               "<title>Animated Graph Cloud</title></head><body>"
-               "<h1>Animated Graph Cloud</h1>"
-               "<a href=\"/v1/auth/login/start\">Sign in with Google</a>"
-               "</body></html>"))]
+          (ui/page {:user user
+                    :csrf (auth/issue-csrf-token auth-system user)
+                    :tokens (when token-service
+                              (tokens/list-tokens token-service
+                                                  (:subject user)))})
+          ui/anonymous-page)]
     (doto (.getResponseHeaders exchange)
       (.set "Cache-Control" "no-store")
       (.set "Referrer-Policy" "no-referrer")
       (.set "Content-Security-Policy"
-            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'"))
+            "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"))
     (respond! exchange 200 "text/html; charset=utf-8" body)))
 
 (defn- picker! [^HttpExchange exchange auth-system picker-api-key picker-app-id]
@@ -283,7 +329,7 @@
         (.set "Cache-Control" "no-store")
         (.set "Referrer-Policy" "no-referrer")
         (.set "Content-Security-Policy"
-              "default-src 'none'; script-src 'unsafe-inline' https://apis.google.com https://www.gstatic.com; frame-src https://docs.google.com https://accounts.google.com; style-src 'unsafe-inline'; connect-src https://www.googleapis.com"))
+              "default-src 'none'; script-src 'unsafe-inline' https://apis.google.com https://www.gstatic.com; frame-src https://docs.google.com https://accounts.google.com; style-src 'unsafe-inline'; connect-src https://www.googleapis.com; base-uri 'none'; frame-ancestors 'none'"))
       (respond! exchange 200 "text/html; charset=utf-8" html))))
 
 (defn- cancel-job! [exchange job-service job-id]
@@ -312,9 +358,59 @@
         :uploadUrl (jobs/signed-upload upload-signer object-name
                                        contentType 900)}))))
 
+(defn- create-personal-token! [exchange token-service user]
+  (let [{:keys [name]} (request-json exchange)]
+    (respond-json! exchange 201 (tokens/create-token! token-service user name))))
+
+(defn- list-personal-tokens! [exchange token-service user]
+  (respond-json! exchange 200
+                 (tokens/list-tokens token-service (:subject user))))
+
+(defn- revoke-personal-token! [exchange token-service user token-id]
+  (respond-json! exchange 200
+                 (tokens/revoke-token! token-service (:subject user) token-id)))
+
+(defn- preview-ui! [exchange frame-renderer]
+  (let [render-spec (:render-spec (ui-render-request exchange))
+        output (ByteArrayOutputStream.)]
+    (frames/render-preview! frame-renderer render-spec output)
+    (respond! exchange 200 "text/html; charset=utf-8"
+              (ui/preview-fragment
+               (.encodeToString (Base64/getEncoder) (.toByteArray output))))))
+
+(defn- submit-job-ui! [exchange job-service user]
+  (let [request (assoc (:request (ui-render-request exchange))
+                       :requesterSubject (:subject user))
+        {:keys [created? job]}
+        (jobs/submit-job! job-service (str "ui-" (UUID/randomUUID)) request)]
+    (respond! exchange (if created? 202 200) "text/html; charset=utf-8"
+              (ui/job-fragment job))))
+
+(defn- poll-job-ui! [exchange job-service job-id]
+  (if-let [job (jobs/get-job job-service job-id)]
+    (respond! exchange 200 "text/html; charset=utf-8" (ui/job-fragment job))
+    (respond! exchange 404 "text/html; charset=utf-8" "Job not found")))
+
+(defn- create-token-ui! [exchange token-service user]
+  (let [created (tokens/create-token! token-service user
+                                      (get (request-form exchange) "name"))]
+    (respond! exchange 201 "text/html; charset=utf-8"
+              (ui/token-panel
+               (tokens/list-tokens token-service (:subject user))
+               created))))
+
+(defn- list-tokens-ui! [exchange token-service user]
+  (respond! exchange 200 "text/html; charset=utf-8"
+            (ui/token-panel
+             (tokens/list-tokens token-service (:subject user)))))
+
+(defn- revoke-token-ui! [exchange token-service user token-id]
+  (tokens/revoke-token! token-service (:subject user) token-id)
+  (list-tokens-ui! exchange token-service user))
+
 (defn- route-handler [{:keys [frame-renderer video-encoder job-service
                               upload-signer auth-system picker-api-key
-                              picker-app-id]
+                              picker-app-id token-service]
                        :as dependencies}]
   (reify HttpHandler
     (handle [_ exchange]
@@ -326,7 +422,7 @@
             (respond! exchange 200 "application/json; charset=utf-8" health-body)
 
             (and auth-system (= "GET" method) (= "/" path))
-            (landing! exchange auth-system)
+            (landing! exchange auth-system token-service)
 
             (and auth-system (= "GET" method)
                  (= "/v1/auth/login/start" path))
@@ -349,25 +445,101 @@
                  (= "/v1/drive/picker" path))
             (picker! exchange auth-system picker-api-key picker-app-id)
 
+            (and auth-system (= "POST" method) (= "/ui/preview" path))
+            (let [user (require-session-user! exchange auth-system)]
+              (require-csrf! exchange auth-system user)
+              (preview-ui! exchange frame-renderer))
+
+            (and auth-system job-service (= "POST" method)
+                 (= "/ui/jobs" path))
+            (let [user (require-session-user! exchange auth-system)]
+              (require-csrf! exchange auth-system user)
+              (submit-job-ui! exchange job-service user))
+
+            (and auth-system job-service (= "GET" method)
+                 (re-matches #"/ui/jobs/[^/]+" path))
+            (let [user (require-session-user! exchange auth-system)
+                  job-id (last (.split path "/"))]
+              (require-job-owner! job-service user job-id)
+              (poll-job-ui! exchange job-service job-id))
+
+            (and auth-system job-service (= "POST" method)
+                 (re-matches #"/ui/jobs/[^/]+/cancel" path))
+            (let [user (require-session-user! exchange auth-system)
+                  job-id (nth (.split path "/") 3)]
+              (require-csrf! exchange auth-system user)
+              (require-job-owner! job-service user job-id)
+              (respond! exchange 200 "text/html; charset=utf-8"
+                        (ui/job-fragment (jobs/cancel-job! job-service job-id))))
+
+            (and auth-system job-service (= "POST" method)
+                 (re-matches #"/ui/jobs/[^/]+/retry" path))
+            (let [user (require-session-user! exchange auth-system)
+                  job-id (nth (.split path "/") 3)]
+              (require-csrf! exchange auth-system user)
+              (require-job-owner! job-service user job-id)
+              (respond! exchange 202 "text/html; charset=utf-8"
+                        (ui/job-fragment (jobs/retry-job! job-service job-id))))
+
+            (and auth-system token-service (= "POST" method)
+                 (= "/ui/tokens" path))
+            (let [user (require-session-user! exchange auth-system)]
+              (require-csrf! exchange auth-system user)
+              (create-token-ui! exchange token-service user))
+
+            (and auth-system token-service (= "GET" method)
+                 (= "/ui/tokens" path))
+            (list-tokens-ui! exchange token-service
+                             (require-session-user! exchange auth-system))
+
+            (and auth-system token-service (= "POST" method)
+                 (re-matches #"/ui/tokens/[^/]+/revoke" path))
+            (let [user (require-session-user! exchange auth-system)
+                  token-id (nth (.split path "/") 3)]
+              (require-csrf! exchange auth-system user)
+              (revoke-token-ui! exchange token-service user token-id))
+
             (and (= "POST" method) (= "/v1/preview" path))
-            (do (require-user! exchange auth-system)
+            (do (->> (authenticated-user! exchange auth-system token-service)
+                     (require-csrf! exchange auth-system))
                 (preview! exchange frame-renderer))
 
             (and (= "POST" method) (= "/v1/overlay" path))
-            (do (require-user! exchange auth-system)
+            (do (->> (authenticated-user! exchange auth-system token-service)
+                     (require-csrf! exchange auth-system))
                 (overlay! exchange frame-renderer video-encoder))
 
+            (and auth-system token-service (= "POST" method)
+                 (= "/v1/tokens" path))
+            (let [user (require-session-user! exchange auth-system)]
+              (require-csrf! exchange auth-system user)
+              (create-personal-token! exchange token-service user))
+
+            (and auth-system token-service (= "GET" method)
+                 (= "/v1/tokens" path))
+            (list-personal-tokens! exchange token-service
+                                   (require-session-user! exchange auth-system))
+
+            (and auth-system token-service (= "POST" method)
+                 (re-matches #"/v1/tokens/[^/]+/revoke" path))
+            (let [user (require-session-user! exchange auth-system)
+                  token-id (nth (.split path "/") 3)]
+              (require-csrf! exchange auth-system user)
+              (revoke-personal-token! exchange token-service user token-id))
+
             (and job-service (= "POST" method) (= "/v1/jobs" path))
-            (submit-job! exchange job-service
-                         (require-user! exchange auth-system))
+            (let [user (authenticated-user! exchange auth-system token-service)]
+              (require-csrf! exchange auth-system user)
+              (submit-job! exchange job-service user))
 
             (and upload-signer (= "POST" method) (= "/v1/uploads" path))
-            (do (require-user! exchange auth-system)
+            (do (->> (authenticated-user! exchange auth-system token-service)
+                     (require-csrf! exchange auth-system))
                 (issue-upload! exchange upload-signer))
 
             (and job-service (= "GET" method)
                  (re-matches #"/v1/jobs/[^/]+" path))
-            (let [user (require-user! exchange auth-system)
+            (let [user (authenticated-user! exchange auth-system token-service)
                   job-id (last (.split path "/"))]
               (require-job-owner! job-service user job-id)
               (poll-job! exchange job-service (last (.split path "/"))))
@@ -378,15 +550,17 @@
 
             (and job-service (= "POST" method)
                  (re-matches #"/v1/jobs/[^/]+/cancel" path))
-            (let [user (require-user! exchange auth-system)
+            (let [user (authenticated-user! exchange auth-system token-service)
                   job-id (nth (.split path "/") 3)]
+              (require-csrf! exchange auth-system user)
               (require-job-owner! job-service user job-id)
               (cancel-job! exchange job-service job-id))
 
             (and job-service (= "POST" method)
                  (re-matches #"/v1/jobs/[^/]+/retry" path))
-            (let [user (require-user! exchange auth-system)
+            (let [user (authenticated-user! exchange auth-system token-service)
                   job-id (nth (.split path "/") 3)]
+              (require-csrf! exchange auth-system user)
               (require-job-owner! job-service user job-id)
               (retry-job! exchange job-service job-id))
 
@@ -415,6 +589,9 @@
               ::auth/invalid-state
               (respond-json! exchange 400 {:error "invalid_oauth_state"})
 
+              ::auth/invalid-csrf
+              (respond-json! exchange 403 {:error "csrf_required"})
+
               ::auth/drive-grant-required
               (respond-json! exchange 401 {:error "drive_grant_required"})
 
@@ -438,6 +615,15 @@
 
               ::jobs/invalid-transition
               (respond-json! exchange 409 {:error "invalid_job_transition"})
+
+              ::tokens/invalid-token
+              (respond-json! exchange 401 {:error "authentication_required"})
+
+              ::tokens/invalid-token-name
+              (respond-json! exchange 400 {:error "invalid_token_name"})
+
+              ::tokens/token-not-found
+              (respond-json! exchange 404 {:error "token_not_found"})
 
               (respond! exchange 500 "application/json; charset=utf-8"
                         "{\"error\":\"render_failed\"}")))
