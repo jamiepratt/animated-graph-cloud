@@ -259,8 +259,8 @@
                       (str "Bearer " (some-> credentials .getAccessToken
                                              .getTokenValue)))))
 
-(def ^:private kms-max-attempts 3)
-(def ^:private kms-retry-delay-ms 100)
+(def ^:private kms-max-attempts 5)
+(def ^:private kms-retry-delay-ms 250)
 
 (defn- kms-retryable-status? [status]
   (or (= 429 status)
