@@ -95,6 +95,11 @@
         (is (str/includes? (.body landing) "htmx.org@2.0.10"))
         (is (str/includes? (.body landing) "hx-post=\"/ui/preview\""))
         (is (str/includes? (.body landing) "hx-post=\"/ui/jobs\""))
+        (is (str/includes? (.body landing) "id=\"telemetry-format\""))
+        (is (str/includes? (.body landing) "type=\"datetime-local\""))
+        (is (str/includes? (.body landing) "type=\"file\""))
+        (is (str/includes? (.body landing) "Apply JSON to form"))
+        (is (str/includes? (.body landing) "id=\"raw-json\""))
         (is (str/includes? (.body landing) "hx-post=\"/ui/tokens\""))
         (is (str/includes? (.body landing) "X-CSRF-Token")))
       (testing "preview is returned as an HTML fragment"
