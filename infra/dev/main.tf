@@ -876,6 +876,12 @@ resource "google_project_iam_member" "api_firestore_user" {
   member  = "serviceAccount:${google_service_account.api.email}"
 }
 
+resource "google_project_iam_member" "api_service_usage_consumer" {
+  project = var.project_id
+  role    = "roles/serviceusage.serviceUsageConsumer"
+  member  = "serviceAccount:${google_service_account.api.email}"
+}
+
 resource "google_project_iam_member" "renderer_firestore_user" {
   project = var.project_id
   role    = "roles/datastore.user"
