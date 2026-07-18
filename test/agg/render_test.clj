@@ -119,6 +119,8 @@
     (is (some #{"/tmp/overlay.pipe"} command))
     (is (str/includes? joined "force_original_aspect_ratio=decrease"))
     (is (str/includes? joined "amix=inputs=2"))
+    (is (str/includes? joined "volume=0.5[src]"))
+    (is (str/includes? joined "volume=1.0[beat]"))
     (is (not (some #(str/includes? % "source.mp4") command)))))
 
 (deftest polar-midpoint-preview-matches-the-golden-render

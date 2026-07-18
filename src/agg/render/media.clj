@@ -173,7 +173,7 @@
                        "source-only"
                        "[0:a]aformat=sample_rates=48000:channel_layouts=stereo,aresample=48000,alimiter=limit=0.95[a]"
                        (str "[0:a]aformat=sample_rates=48000:channel_layouts=stereo,aresample=48000,volume=0.5[src];"
-                            "[2:a]aformat=sample_rates=48000:channel_layouts=stereo,aresample=48000,volume=0.5[beat];"
+                            "[2:a]aformat=sample_rates=48000:channel_layouts=stereo,aresample=48000,volume=1.0[beat];"
                             "[src][beat]amix=inputs=2:duration=longest:dropout_transition=0,alimiter=limit=0.95[a]"))
         video-args (case output-format
                     "prores-422-mov"
