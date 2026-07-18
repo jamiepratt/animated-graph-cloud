@@ -3,6 +3,7 @@
             [agg.api.main :as api]
             [agg.auth.core :as auth]
             [agg.http-test-support :as test-http]
+            [agg.logs.core :as logs]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]))
@@ -115,5 +116,49 @@
           (is (str/includes? (.body added) "ui+member@example.com"))
           (is (= 200 (.statusCode revoked)))
           (is (str/includes? (.body revoked) "revoked"))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest administrators-can-view-formatted-and-raw-operational-logs
+  (let [port (available-port)
+        log-store (logs/in-memory-store)
+        _ (logs/append-log! log-store
+                            (logs/entry {:severity "ERROR"
+                                         :component "api"
+                                         :event "job_failed"
+                                         :message "Render request failed"}
+                                        "{\"severity\":\"ERROR\",\"component\":\"api\",\"event\":\"job_failed\"}"))
+        {:keys [directory service]}
+        (admin/in-memory-system {:owner-email "owner@example.com"
+                                 :initial-emails #{"member@example.com"
+                                                   "admin@example.com"}
+                                 :admin-emails #{"admin@example.com"}})
+        auth-system (auth-system directory)
+        owner {:subject "owner-subject" :email "owner@example.com"}
+        administrator {:subject "admin-subject" :email "admin@example.com"}
+        member {:subject "member-subject" :email "member@example.com"}
+        owner-cookie (str "agg_session=" (auth/issue-session auth-system owner))
+        admin-cookie (str "agg_session=" (auth/issue-session auth-system administrator))
+        member-cookie (str "agg_session=" (auth/issue-session auth-system member))
+        server (api/start! port {:auth-system auth-system
+                                 :admin-service service
+                                 :log-store log-store})]
+    (try
+      (let [landing (request! port :get "/" nil {"Cookie" owner-cookie})
+            formatted (request! port :get "/ui/admin/logs?severity=ERROR"
+                                nil {"Cookie" admin-cookie})
+            raw (request! port :get "/ui/admin/logs?view=raw&component=api"
+                          nil {"Cookie" owner-cookie})
+            member-response (request! port :get "/ui/admin/logs"
+                                      nil {"Cookie" member-cookie})]
+        (is (str/includes? (.body landing) "View operational logs"))
+        (is (= 200 (.statusCode formatted)))
+        (is (str/includes? (.body formatted) "Formatted events"))
+        (is (str/includes? (.body formatted) "Job failed"))
+        (is (str/includes? (.body formatted) "Render request failed"))
+        (is (= 200 (.statusCode raw)))
+        (is (str/includes? (.body raw) "Raw JSON"))
+        (is (str/includes? (.body raw) "&quot;event&quot;:&quot;job_failed&quot;"))
+        (is (= 403 (.statusCode member-response))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))

@@ -4,6 +4,8 @@
             [agg.contracts.render :as contract]
             [agg.auth.gcp :as auth-gcp]
             [agg.jobs.lifecycle :as lifecycle]
+            [agg.logs.core :as logs]
+            [agg.logs.gcp :as logs-gcp]
             [agg.observability :as observability]
             [clojure.data.json :as json]
             [clojure.string :as str])
@@ -930,6 +932,9 @@
                       {:type ::missing-dispatcher-url})))
     (let [store (request-store bucket)
           firestore (.getService (FirestoreOptions/getDefaultInstance))
+          log-store (logs-gcp/firestore-store firestore)
+          _ (observability/configure-persistence!
+             #(logs/append-log! log-store %))
           admin-emails (env-emails "AGG_ADMIN_EMAILS")
           auth-enabled? (= "true" (env "AGG_AUTH_ENABLED" "false"))
           auth-dependencies
@@ -975,6 +980,7 @@
           job-dependencies {:upload-signer store :job-service service}]
       (if auth-enabled?
         (assoc (merge job-dependencies auth-dependencies)
+               :log-store log-store
                :admin-service
                (admin/service
                 {:directory (:member-directory auth-dependencies)
@@ -983,7 +989,7 @@
                  (:credential-administration auth-dependencies)
                  :job-administration service
                  :event-sink observability/emit-event!}))
-        job-dependencies))))
+        (assoc job-dependencies :log-store log-store)))))
 
 (defn api-job-service []
   (:job-service (api-system)))

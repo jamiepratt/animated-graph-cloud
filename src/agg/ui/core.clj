@@ -1,6 +1,8 @@
 (ns agg.ui.core
   (:require [agg.admin.core :as admin]
-            [clojure.string :as str]))
+            [clojure.string :as str])
+  (:import (java.net URLEncoder)
+           (java.nio.charset StandardCharsets)))
 
 (defn escape-html [value]
   (-> (str (or value ""))
@@ -12,7 +14,7 @@
 
 (defn- title-case [value]
   (-> value
-      (str/replace "-" " ")
+      (str/replace #"[_-]+" " ")
       str/capitalize))
 
 (defn token-panel
@@ -40,23 +42,105 @@
                   "</li>")))
     "</ul></section>")))
 
-(defn member-panel [members]
-  (str
-   "<section id=\"members\"><h2>Member administration</h2>"
-   "<form hx-post=\"/ui/admin/members\" hx-target=\"#members\" hx-swap=\"outerHTML\">"
-   "<label>Member email <input type=\"email\" name=\"email\" maxlength=\"254\" required></label>"
-   "<button type=\"submit\">Add member</button></form><ul>"
-   (apply str
-          (for [{:keys [email role status]} members]
-            (str "<li><strong>" (escape-html email) "</strong> · "
-                 (escape-html role) " · " (escape-html status)
-                 (when (and (= "member" role) (= "active" status))
-                   (str " <form class=\"inline\" hx-post=\"/ui/admin/members/revoke\" "
-                        "hx-target=\"#members\" hx-swap=\"outerHTML\">"
-                        "<input type=\"hidden\" name=\"email\" value=\""
-                        (escape-html email) "\"><button type=\"submit\">Revoke</button></form>"))
-                 "</li>")))
-   "</ul></section>"))
+(defn member-panel
+  ([members]
+   (member-panel members true))
+  ([members logs-enabled?]
+   (str
+    "<section id=\"members\"><h2>Member administration</h2>"
+    (when logs-enabled?
+      "<p><a href=\"/ui/admin/logs\">View operational logs</a></p>")
+    "<form hx-post=\"/ui/admin/members\" hx-target=\"#members\" hx-swap=\"outerHTML\">"
+    "<label>Member email <input type=\"email\" name=\"email\" maxlength=\"254\" required></label>"
+    "<button type=\"submit\">Add member</button></form><ul>"
+    (apply str
+           (for [{:keys [email role status]} members]
+             (str "<li><strong>" (escape-html email) "</strong> · "
+                  (escape-html role) " · " (escape-html status)
+                  (when (and (= "member" role) (= "active" status))
+                    (str " <form class=\"inline\" hx-post=\"/ui/admin/members/revoke\" "
+                         "hx-target=\"#members\" hx-swap=\"outerHTML\">"
+                         "<input type=\"hidden\" name=\"email\" value=\""
+                         (escape-html email) "\"><button type=\"submit\">Revoke</button></form>"))
+                  "</li>")))
+    "</ul></section>")))
+
+(defn- url-value [value]
+  (URLEncoder/encode (str value) StandardCharsets/UTF_8))
+
+(defn- logs-query [{:keys [view severity component]}]
+  (str "?view=" (url-value view)
+       (when severity (str "&severity=" (url-value severity)))
+       (when component (str "&component=" (url-value component)))))
+
+(defn- selected-attribute [value selected]
+  (when (= value selected) " selected"))
+
+(defn- log-value [value]
+  (if (vector? value)
+    (str/join ", " (map str value))
+    (str value)))
+
+(defn- formatted-log [{:keys [createdAt fields]}]
+  (let [{:keys [severity component event message]} fields]
+    (str "<article class=\"log-entry\"><header><time>"
+         (escape-html createdAt) "</time><span class=\"log-level\">"
+         (escape-html severity) "</span><code>"
+         (escape-html (str component " / " (title-case event)))
+         "</code></header>"
+         (when message
+           (str "<p class=\"log-message\">" (escape-html message) "</p>"))
+         "<dl>"
+         (apply str
+                (for [[key value] (sort-by (comp str key) fields)
+                      :when (not= key :message)]
+                  (str "<dt>" (escape-html (name key)) "</dt><dd>"
+                       (escape-html (log-value value)) "</dd>")))
+         "</dl></article>")))
+
+(defn- raw-log [{:keys [raw]}]
+  (str "<article class=\"log-entry\"><pre>" (escape-html raw) "</pre></article>"))
+
+(defn logs-page [{:keys [user logs view severity component]}]
+  (let [raw? (= "raw" view)
+        toggle-view (if raw? "formatted" "raw")
+        toggle-label (if raw? "Formatted view" "Raw JSON view")
+        severities ["DEBUG" "INFO" "NOTICE" "WARNING" "ERROR"]]
+    (str
+     "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+     "<meta name=\"color-scheme\" content=\"light\"><title>Operational logs · Alpha Compose</title>"
+     "<style>"
+     ":root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;color:#152238;background:#f5f7fb;line-height:1.45}"
+     "*{box-sizing:border-box}body{margin:0}.shell{max-width:78rem;margin:0 auto;padding:2rem 1.25rem 4rem}"
+     "header{display:flex;justify-content:space-between;gap:1rem;align-items:end;margin:1rem 0 2rem}"
+     "h1,h2,p{margin-top:0}h1{font-size:clamp(2rem,4vw,3.4rem);letter-spacing:-.05em;margin-bottom:.35rem}"
+     ".muted{color:#5c6b82}.eyebrow{color:#4374c5;font-size:.75rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}"
+     ".card{background:white;border:1px solid #e1e7f0;border-radius:1.1rem;box-shadow:0 1rem 3rem #243b5a0d;padding:1.35rem;margin:1rem 0}"
+     ".filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem;align-items:end}label{display:block;font-weight:700;font-size:.9rem}input,select{font:inherit;width:100%;border:1px solid #cbd5e1;border-radius:.65rem;background:#fff;color:#152238;padding:.68rem .75rem;margin-top:.4rem}"
+     "button,.button{border:0;border-radius:.65rem;padding:.7rem 1rem;font-weight:800;cursor:pointer;background:#e8eef8;color:#1a3154;text-decoration:none;display:inline-block}.primary{background:#4374c5;color:white;box-shadow:0 .35rem .8rem #4374c533}"
+     ".actions{display:flex;gap:.7rem;align-items:center;flex-wrap:wrap;margin-top:1rem}.log-entry{border-top:1px solid #e8edf4;padding:1rem 0}.log-entry:first-child{border-top:0;padding-top:0}.log-entry header{display:flex;justify-content:flex-start;align-items:center;gap:.65rem;margin:0 0 .5rem;flex-wrap:wrap}.log-entry time{color:#718097;font-size:.85rem}.log-level{border-radius:999px;background:#e8eef8;padding:.2rem .55rem;font-size:.75rem;font-weight:800}.log-entry code,pre,dt,dd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.log-message{font-weight:700}.log-entry dl{display:grid;grid-template-columns:max-content 1fr;gap:.25rem .9rem;margin:0}.log-entry dt{color:#718097}.log-entry dd{margin:0;overflow-wrap:anywhere}.log-entry pre{white-space:pre-wrap;overflow:auto;background:#f8fafc;border-radius:.65rem;padding:1rem;margin:0;font-size:.82rem}.empty{padding:2rem 0;text-align:center;color:#5c6b82}footer{margin-top:2rem;color:#6c7a90}footer a{color:#315b9d;margin-right:.75rem}@media(max-width:680px){.shell{padding:1rem .8rem 3rem}header{display:block}.filters{grid-template-columns:1fr}.log-entry dl{grid-template-columns:1fr}.log-entry dt{margin-top:.5rem}}"
+     "</style></head><body><div class=\"shell\"><header><div><div class=\"eyebrow\">Administration</div><h1>Operational logs</h1><p class=\"muted\">Safe structured events retained for 30 days. Showing up to 100 recent entries.</p></div><p class=\"muted\">Signed in as "
+     (escape-html (:email user)) "</p></header>"
+     "<p><a href=\"/\">← Back to compose</a></p>"
+     "<section class=\"card\"><form method=\"get\" action=\"/ui/admin/logs\"><div class=\"filters\">"
+     "<label>Severity<select name=\"severity\"><option value=\"\">All severities</option>"
+     (apply str (for [option severities]
+                  (str "<option value=\"" option "\""
+                       (selected-attribute option severity) ">"
+                       option "</option>")))
+     "</select></label><label>Component<input name=\"component\" maxlength=\"64\" value=\""
+     (escape-html component) "\"></label><input type=\"hidden\" name=\"view\" value=\""
+     (escape-html view) "\"><button class=\"primary\" type=\"submit\">Apply filters</button></div></form>"
+     "<div class=\"actions\"><a class=\"button\" href=\"/ui/admin/logs"
+     (logs-query {:view toggle-view :severity severity :component component}) "\">"
+     toggle-label "</a><span class=\"muted\">" (count logs) " entries</span></div></section>"
+     "<section class=\"card\"><h2>" (if raw? "Raw JSON" "Formatted events") "</h2>"
+     (if (seq logs)
+       (apply str (map #(if raw? (raw-log %) (formatted-log %)) logs))
+       "<p class=\"empty\">No matching logs in the retention window.</p>")
+     "</section><footer><a href=\"/privacy\">Privacy</a> · <a href=\"/terms\">Terms</a></footer>"
+     "</div></body></html>")))
 
 (defn job-fragment [{:keys [id state attempt failureCode output]}]
   (let [path (str "/ui/jobs/" id)
@@ -91,7 +175,7 @@
   (str "<figure id=\"preview-result\"><img alt=\"Midpoint preview\" src=\"data:image/png;base64,"
        base64-png "\"></figure>"))
 
-(defn page [{:keys [user csrf tokens members]}]
+(defn page [{:keys [user csrf tokens members logs-enabled?]}]
   (let [csrf-headers (escape-html
                       (str "{\"X-CSRF-Token\":\"" csrf "\"}"))]
     (str
@@ -151,7 +235,7 @@
      "<div class=\"results\"><div id=\"preview-result\"></div><div id=\"job-result\"></div></div>"
      (token-panel tokens)
      (when (admin/administrator? (:role user))
-       (member-panel members))
+       (member-panel members logs-enabled?))
      "<footer><a href=\"/privacy\">Privacy</a> · <a href=\"/terms\">Terms</a></footer>"
      "<script>(function(){"
      "const form=document.getElementById('render-form'), hidden=document.getElementById('render-request'), raw=document.getElementById('raw-json');"

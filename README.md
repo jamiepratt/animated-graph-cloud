@@ -259,6 +259,13 @@ their encrypted Drive grant, and cancels queued or running work. Re-adding the
 email creates a new membership generation, so the member must complete Google
 login and Drive authorization again.
 
+Owner and admin sessions can also open `/ui/admin/logs`. The page shows up to
+100 recent privacy-safe structured events from the API and renderer, with
+severity/component filters and a toggle between formatted event details and the
+raw JSON emitted by the observability stack. Log copies are stored in Firestore
+for 30 days on a best-effort basis; a persistence failure does not fail a request
+or render.
+
 Cookie-authenticated POST requests require the signed CSRF value supplied by
 the page in `X-CSRF-Token`. Automation should create a personal token and send
 it as `Authorization: Bearer TOKEN`; bearer requests do not use browser cookies.

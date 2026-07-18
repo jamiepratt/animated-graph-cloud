@@ -6,6 +6,8 @@
             [agg.drive.core :as drive]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
+            [agg.logs.core :as logs]
+            [agg.logs.gcp :as logs-gcp]
             [agg.observability :as observability]
             [agg.render.audio :as audio]
             [agg.render.frames :as frames]
@@ -298,7 +300,17 @@
        :event "cloud_render_failed"
        :message "Cloud renderer job failed"})))
 
+(defn- configure-log-persistence! []
+  (try
+    (let [store (logs-gcp/firestore-store
+                 (.getService (FirestoreOptions/getDefaultInstance)))]
+      (observability/configure-persistence!
+       #(logs/append-log! store %)))
+    (catch Throwable _
+      true)))
+
 (defn -main [& args]
+  (configure-log-persistence!)
   (if (= "--job-id" (first args))
     (try
       (run-cloud-job! (second args))

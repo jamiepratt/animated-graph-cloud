@@ -5,6 +5,7 @@
             [agg.auth.core :as auth]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
+            [agg.logs.core :as logs]
             [agg.observability :as observability]
             [agg.render.frames :as frames]
             [agg.render.media :as media]
@@ -398,7 +399,22 @@
                        [(session-cookie session)
                         (clear-legacy-oauth-cookie)])))
 
-(defn- landing! [^HttpExchange exchange auth-system token-service admin-service]
+(defn- log-options [^HttpExchange exchange]
+  (let [params (query-params exchange)
+        options (logs/normalize-options
+                 {:severity (get params "severity")
+                  :component (get params "component")})]
+    (assoc options :view (if (= "raw" (get params "view"))
+                           "raw"
+                           "formatted"))))
+
+(defn- require-administrator-session-user! [exchange auth-system admin-service]
+  (let [user (require-session-user! exchange auth-system)]
+    (admin/list-members admin-service user)
+    user))
+
+(defn- landing! [^HttpExchange exchange auth-system token-service admin-service
+                log-store]
   (let [user (when-let [session (session-token exchange auth-system)]
                (auth/session-user auth-system session))
         body
@@ -410,7 +426,8 @@
                                                   (:subject user)))
                     :members (when (and admin-service
                                         (admin/administrator? (:role user)))
-                               (admin/list-members admin-service user))})
+                               (admin/list-members admin-service user))
+                    :logs-enabled? (boolean log-store)})
           ui/anonymous-page)]
     (doto (.getResponseHeaders exchange)
       (.set "Cache-Control" "no-store")
@@ -549,6 +566,23 @@
   (respond! exchange 200 "text/html; charset=utf-8"
             (ui/member-panel (admin/list-members admin-service user))))
 
+(defn- logs-ui! [exchange admin-service log-store auth-system]
+  (let [user (require-administrator-session-user! exchange auth-system
+                                                   admin-service)
+        options (log-options exchange)
+        entries (mapv logs/public-entry
+                      (logs/list-logs log-store options))]
+    (doto (.getResponseHeaders exchange)
+      (.set "Referrer-Policy" "no-referrer")
+      (.set "Content-Security-Policy"
+            "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"))
+    (respond! exchange 200 "text/html; charset=utf-8"
+              (ui/logs-page {:user user
+                             :logs entries
+                             :view (:view options)
+                             :severity (:severity options)
+                             :component (:component options)}))))
+
 (defn- add-member-ui! [exchange admin-service user]
   (admin/add-member! admin-service user (get (request-form exchange) "email"))
   (members-ui! exchange admin-service user))
@@ -559,7 +593,7 @@
 
 (defn- route-handler [{:keys [frame-renderer video-encoder job-service
                               upload-signer auth-system picker-api-key
-                              picker-app-id token-service admin-service]
+                              picker-app-id token-service admin-service log-store]
                        :as dependencies}]
   (reify HttpHandler
     (handle [_ exchange]
@@ -574,7 +608,7 @@
             (respond! exchange 200 "application/json; charset=utf-8" health-body)
 
             (and auth-system (= "GET" method) (= "/" path))
-            (landing! exchange auth-system token-service admin-service)
+            (landing! exchange auth-system token-service admin-service log-store)
 
             (and (= "GET" method) (= "/privacy" path))
             (respond! exchange 200 "text/html; charset=utf-8" ui/privacy-page)
@@ -661,6 +695,10 @@
                  (= "/ui/admin/members" path))
             (members-ui! exchange admin-service
                          (require-session-user! exchange auth-system))
+
+            (and auth-system admin-service log-store (= "GET" method)
+                 (= "/ui/admin/logs" path))
+            (logs-ui! exchange admin-service log-store auth-system)
 
             (and auth-system admin-service (= "POST" method)
                  (= "/ui/admin/members" path))

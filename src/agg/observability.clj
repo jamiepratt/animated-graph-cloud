@@ -73,12 +73,29 @@
            (not (contains? fields :message)))
       (assoc :message message))))
 
+(defonce ^:private persistence-sink (atom nil))
+
+(defn configure-persistence!
+  "Configures an optional best-effort sink for the safe console event record."
+  [sink]
+  (reset! persistence-sink sink)
+  true)
+
+(defn- persist-event! [fields raw]
+  (when-let [sink @persistence-sink]
+    (try
+      (sink {:fields fields :raw raw})
+      (catch Throwable _))))
+
 (defn- console-handler
   ([] nil)
   ([signal]
    (when (and (not= :trace (:kind signal))
               (not (contains? signal :tufte/pstats)))
-     (println (json/write-str (signal-fields signal))))))
+     (let [fields (signal-fields signal)
+           raw (json/write-str fields)]
+       (println raw)
+       (persist-event! fields raw)))))
 
 (defn configure! []
   (tel/remove-handler! :default/console)

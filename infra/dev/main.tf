@@ -256,6 +256,68 @@ resource "google_firestore_field" "job_expiry" {
   ttl_config {}
 }
 
+resource "google_firestore_field" "observability_logs_expiry" {
+  project    = var.project_id
+  database   = google_firestore_database.default.name
+  collection = "observability-logs"
+  field      = "expireAt"
+
+  ttl_config {}
+}
+
+resource "google_firestore_index" "observability_logs_by_severity" {
+  project    = var.project_id
+  database   = google_firestore_database.default.name
+  collection = "observability-logs"
+
+  fields {
+    field_path = "severity"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "createdAt"
+    order      = "DESCENDING"
+  }
+}
+
+resource "google_firestore_index" "observability_logs_by_component" {
+  project    = var.project_id
+  database   = google_firestore_database.default.name
+  collection = "observability-logs"
+
+  fields {
+    field_path = "component"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "createdAt"
+    order      = "DESCENDING"
+  }
+}
+
+resource "google_firestore_index" "observability_logs_by_severity_and_component" {
+  project    = var.project_id
+  database   = google_firestore_database.default.name
+  collection = "observability-logs"
+
+  fields {
+    field_path = "severity"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "component"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "createdAt"
+    order      = "DESCENDING"
+  }
+}
+
 resource "google_cloud_scheduler_job" "reconcile" {
   count = var.api_service_url == "" ? 0 : 1
 

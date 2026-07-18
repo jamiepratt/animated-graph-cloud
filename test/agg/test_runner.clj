@@ -15,6 +15,8 @@
             [agg.drive-gcp-test]
             [agg.gcp-jobs-test]
             [agg.jobs-test]
+            [agg.logs-test]
+            [agg.logs-gcp-test]
             [agg.observability-test]
             [agg.oxiwear-test]
             [agg.polar-test]
@@ -45,6 +47,8 @@
                                              'agg.drive-gcp-test
                                              'agg.gcp-jobs-test
                                              'agg.jobs-test
+                                             'agg.logs-test
+                                             'agg.logs-gcp-test
                                              'agg.observability-test
                                              'agg.oxiwear-test
                                              'agg.polar-test
