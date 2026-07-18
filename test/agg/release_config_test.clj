@@ -110,6 +110,32 @@
     (is (not (re-find #"uses: (?:actions/checkout|google-github-actions/(?:auth|setup-gcloud))@v\u005cd+"
                       workflow)))))
 
+(deftest production-release-validates-the-picker-key-before-deploying
+  (let [workflow (slurp ".github/workflows/deploy-production.yml")
+        key-check (str/index-of workflow
+                               "Verify production Picker API key")
+        private-deploy (str/index-of workflow "Deploy private API candidate")]
+    (is (number? key-check))
+    (is (number? private-deploy))
+    (when (and (number? key-check) (number? private-deploy))
+      (is (< key-check private-deploy)))
+    (doseq [check ["gcloud secrets versions access latest"
+                   "--secret=picker-api-key"
+                   "https://apikeys.googleapis.com/v2/keys:lookupKey"
+                   "projects/$PROJECT_NUMBER/locations/global/keys/"
+                   "picker.googleapis.com"]]
+      (testing check (is (str/includes? workflow check))))
+    (is (str/includes? workflow "--data-urlencode 'keyString@-'"))
+    (is (str/includes? workflow "key_resource"))
+    (is (not (str/includes? workflow "echo \"$picker_key\"")))))
+
+(deftest production-deployer-can-validate-picker-secret-metadata
+  (let [shared (slurp "infra/dev/main.tf")]
+    (is (str/includes? shared "apikeys.googleapis.com"))
+    (is (str/includes? shared "roles/serviceusage.apiKeysViewer"))
+    (is (str/includes? shared
+                       "resource \"google_secret_manager_secret_iam_member\" \"deployer_picker_access\""))))
+
 (deftest continuous-integration-validates-both-environments-and-api-contract
   (let [workflow (slurp ".github/workflows/ci.yml")]
     (is (str/includes? workflow

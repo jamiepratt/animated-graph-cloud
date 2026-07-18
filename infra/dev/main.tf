@@ -1,5 +1,6 @@
 locals {
   required_services = setunion(toset([
+    "apikeys.googleapis.com",
     "billingbudgets.googleapis.com",
     "cloudbilling.googleapis.com",
     "cloudkms.googleapis.com",
@@ -931,6 +932,13 @@ resource "google_secret_manager_secret_iam_member" "api_picker_access" {
   member    = "serviceAccount:${google_service_account.api.email}"
 }
 
+resource "google_secret_manager_secret_iam_member" "deployer_picker_access" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.application["picker-api-key"].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.deployer.email}"
+}
+
 resource "google_secret_manager_secret_iam_member" "api_token_hash_access" {
   project   = var.project_id
   secret_id = google_secret_manager_secret.application["token-hash-pepper"].secret_id
@@ -1048,6 +1056,12 @@ resource "google_project_iam_member" "deployer_run_admin" {
 resource "google_project_iam_member" "deployer_log_viewer" {
   project = var.project_id
   role    = "roles/logging.viewer"
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_project_iam_member" "deployer_picker_api_keys_viewer" {
+  project = var.project_id
+  role    = "roles/serviceusage.apiKeysViewer"
   member  = "serviceAccount:${google_service_account.deployer.email}"
 }
 

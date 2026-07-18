@@ -75,6 +75,31 @@ jobs:
         with:
           version: ">= 541.0.0"
 
+      - name: Verify production Picker API key
+        run: |
+          set -euo pipefail
+          key_resource="$({
+            gcloud secrets versions access latest \
+              --project="$PROJECT_ID" \
+              --secret=picker-api-key
+          } | curl --fail --silent --show-error --get \
+            --header "Authorization: Bearer $(gcloud auth print-access-token)" \
+            --data-urlencode 'keyString@-' \
+            'https://apikeys.googleapis.com/v2/keys:lookupKey' |
+            jq --raw-output '.name // empty')"
+          expected_key_prefix="projects/$PROJECT_NUMBER/locations/global/keys/"
+          case "$key_resource" in
+            "$expected_key_prefix"*) ;;
+            *)
+              echo "picker-api-key is not owned by the production project" >&2
+              exit 1
+              ;;
+          esac
+          api_targets="$(gcloud services api-keys describe "$key_resource" \
+            --project="$PROJECT_ID" \
+            --format='value(restrictions.apiTargets[].service)')"
+          test "$api_targets" = "picker.googleapis.com"
+
       - id: image
         name: Push and resolve immutable image digest
         env:

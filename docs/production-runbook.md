@@ -168,8 +168,10 @@ openssl rand -base64 48 | tr -d '\n' | gcloud secrets versions add token-hash-pe
   --project=animated-graph-cloud-prod-jp --data-file=-
 ```
 
-Create a Picker API key restricted only to `picker.googleapis.com`. Enter it
-without a trailing newline:
+Create the Picker API key in the production project, restrict it only to
+`picker.googleapis.com`, and enter it without a trailing newline. The
+production deployment verifies the key's owning project and API restriction
+before it deploys the candidate:
 
 ```sh
 read -rs PICKER_API_KEY
