@@ -1,112 +1,127 @@
-# 0003: Use bounded ProRes streaming on a sized Cloud Run Job
+# 0003: Use bounded multi-input FFmpeg rendering on a sized Cloud Run Job
 
-- Status: Accepted
-- Date: 2026-07-16
+- Status: Accepted, amended 2026-07-18
+- Original date: 2026-07-16
+- Amendment: add streamable Drive-video compositing and the expanded FFmpeg bundle
 
 ## Context
 
-The renderer must create transparent, production-shaped MOV overlays without
-retaining image sequences or unbounded frame collections. The maximum locked
-cases are 12,000 1920x1080 frames and 6,000 2704x1520 frames, both at 25 fps.
-The output must remain directly inspectable as a standard, seekable MOV while
-the Cloud Run task stays below its time, memory, output-size, and cost gates.
+The renderer must create production-shaped video without retaining image
+sequences or unbounded frame collections. The original render path produces a
+transparent ProRes 4444 MOV overlay. The new path also needs to take one video
+selected from the requester's Google Drive, composite the telemetry overlay
+over its first frames, and deliver a normal video output.
+
+The selected source is capped at 2 GiB and is streamed through a non-seekable
+input. A source is accepted only when the bundled FFmpeg can decode it from
+that pipe; support is not claimed for every format that an unrestricted FFmpeg
+build could decode from a seekable file. The source is never persisted as a
+durable object or expanded into a frame collection.
+
+Both paths retain the existing bounded render envelope: preset dimensions,
+25 fps, a maximum section duration, a reusable Java2D RGBA buffer, local output
+finalization, and a one-task Cloud Run Job with a 3,600-second timeout.
 
 ## Decision
 
 Build FFmpeg 8.1.2 from the official release tarball whose SHA-256 is
 `464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c`.
-The container build verifies that digest before extraction. It disables
-autodetection, networking, shared libraries, documentation, and all default
-features, then enables only FFmpeg, FFprobe, the file and pipe protocols, MOV,
-raw video, WAV, ProRes, AAC, PCM, and their required conversion filters. The
-final command-selected JDK 21 image remains digest-pinned and non-root.
+The container build verifies that digest before extraction. The bundle still
+starts from `--disable-everything`, but is no longer limited to the
+overlay-only feature set. It remains network-free, uses only the `file` and
+`pipe` protocols, and keeps FFmpeg's own libraries statically built while
+enabling the in-tree demuxers, decoders, parsers, and bitstream filters needed
+to accept streamable source media.
 
-Java2D renders into one reusable interleaved RGBA byte buffer. Each frame is
-written directly to FFmpeg's stdin; no frame file or frame collection exists.
-Heartbeat synthesis writes identical 48 kHz PCM stereo samples through one
-bounded chunk buffer to a temporary WAV input. FFmpeg is invoked with
-`prores_ks`, profile 4, `yuva444p10le`, and 16 alpha bits, plus native AAC-LC
-with `-b:a 192k`.
+The bundle is built with Ubuntu Jammy's pinned
+`libx264-dev=2:0.163.3060+git5db6aa6-2build1` package. FFmpeg enables GPL and
+`libx264`; the final image carries the matching `libx264.so.163` runtime beside
+the FFmpeg and FFprobe binaries. Output encoders are limited to native AAC,
+`libx264`, and `prores_ks`. MOV and MP4 muxers are enabled. The filter set
+includes source normalization, video overlay, frame-rate conversion, audio
+mixing, resampling, and limiting: `scale`, `crop`, `pad`, `fps`, `format`,
+`setsar`, `overlay`, `aformat`, `aresample`, `amix`, and `alimiter`.
 
-The 4444 `ap4h` decoder representation needs an explicit distinction: FFmpeg's
-encoder accepts `yuva444p10le`, while FFmpeg 8.1.2 selects 12-bit decoding for
-the 4444 tag and FFprobe reports `yuva444p12le`. Tests and reports lock both
-values instead of weakening the check to a format prefix. Likewise, 192 kbps is
-the exact native AAC encoder target. FFprobe reports the lower observed average
-for sparse identical-channel heartbeat content; reports preserve both values.
-Padding, added noise, and extra codecs are rejected as ways to manufacture a
-nominal measured bitrate.
+The two render modes have separate media contracts:
 
-FFmpeg finalizes a conventional non-fragmented MOV on the task's temporary
-filesystem. The renderer validates FFprobe fields and top-level `moov`/`mdat`
-atoms, rejects `moof`, calculates SHA-256, uploads MOV/JFR/report objects to the
-private temporary bucket, and deletes local artifacts only after all uploads
-succeed. The bucket's one-day lifecycle supplies the human handoff without
-turning spike outputs into durable storage.
+- Overlay-only requests remain seekable, non-fragmented ProRes 4444 MOV files
+  with transparent video and deterministic 48 kHz stereo AAC heartbeat audio.
+- Requests with a selected Drive source use the preset canvas and 25 fps. The
+  source begins at frame zero, runs for the telemetry section duration, and is
+  rejected if it is shorter. The selected fit mode defaults to letterbox or
+  pillarbox when absent. Composited output defaults to H.264 MP4, with ProRes
+  422 MOV as the alternate format.
+- Composited audio defaults to source audio plus heartbeat. The mix is bounded
+  by normalization and limiting; source-only and heartbeat-only modes remain
+  selectable.
 
-Terraform owns a generation-2 Warsaw `agg-renderer` Job with one task, no
-parallelism, zero retries, no GPU, 8 vCPU, 32 GiB memory, and a hard 3,600-second
-timeout. Its image input must be an immutable digest. The staged runner executes
-one case at a time, carries prior retry cost into a conservative USD 3 ceiling,
-and can resume only missing stages from a validated run ID.
+Java2D continues to render into one reusable interleaved RGBA buffer. The
+compositing path feeds source video and overlay frames as separate FFmpeg
+inputs; it does not write a source copy, frame files, or a frame collection.
+FFmpeg finalizes the output on the task's temporary filesystem. The renderer
+validates the selected output contract, calculates SHA-256, uploads the
+result/report artifacts, and deletes local artifacts only after successful
+delivery.
 
-## Measurements
+The final command-selected JDK 21 image remains digest-pinned and non-root.
+Terraform continues to own a generation-2 Warsaw `agg-renderer` Job with one
+task, no parallelism, zero retries, no GPU, 8 vCPU, 32 GiB memory, and a hard
+3,600-second timeout. Its image input must be an immutable digest.
 
-The accepted rerun uses the Linux/AMD64 image manifest
+## Existing measurements and new acceptance
+
+The measurements below are historical baseline evidence for the original
+overlay-only path and the previous minimal FFmpeg bundle. They remain useful
+for regression comparison but do not prove the new Drive-video or H.264 path.
+
+The accepted baseline used the Linux/AMD64 image manifest
 `europe-central2-docker.pkg.dev/animated-graph-cloud-jp/containers/animated-graph-cloud@sha256:1e4cbd1e9af97487286af0a14791b5f08bead56363fa2f06ed4b45b669da44b6`
 and object root
 `gs://animated-graph-cloud-jp-temporary/renderer-spike/20260716T231234Z`.
 The exact immutable image was built locally after a successful CI deployment;
-no SLSA, SBOM, or build-provenance attestation is claimed. Artifact Analysis
+no SLSA, SBOM, or build-provenance attestation was claimed. Artifact Analysis
 reported `FINISHED_SUCCESS` with continuous analysis active and zero critical
 or high effective vulnerabilities (65 medium, 13 low, and 1 minimal). An
-earlier ARM64 startup attempt produced no renderer artifact. The corrected
-one-minute gates produced these results:
+earlier ARM64 startup attempt produced no renderer artifact.
 
-| Case | Task wall | Render wall | Effective fps | Peak cgroup memory | Output bytes | SHA-256 |
-|---|---:|---:|---:|---:|---:|---|
-| 1080p25, 60 s | 76.429 s | 64.227 s | 23.355 | 5,373,894,656 | 290,643,089 | `2a268ac71863378d7542352f4a5c2f17f5c3e1ee97011c14fe7b2776e13d1b2a` |
-| 2.7k25, 60 s | 132.401 s | 118.230 s | 12.687 | 10,465,345,536 | 454,511,039 | `3d110fe232040212c2e070e2071d4b1f3107c23b05a6c1b136d240d761bdd988` |
+| Case | Task wall | Render wall | Effective fps | Peak cgroup memory | Output bytes |
+|---|---:|---:|---:|---:|---:|
+| 1080p25, 480 s overlay | 524.627 s | 473.172 s | 25.361 | 7,675,768,832 | 2,327,694,978 |
+| 2.7k25, 240 s overlay | 482.442 s | 444.055 s | 13.512 | 11,897,987,072 | 1,821,740,649 |
 
-Conservative linear projections were 10.19 minutes and 2.17 GiB for the
-eight-minute 1080p case, and 8.83 minutes and 1.69 GiB for the four-minute 2.7K
-case. Both stayed within the release gates, so both maximum cases ran and
-produced:
+Both baseline MOVs validated as conventional seekable, non-fragmented ProRes
+4444 `ap4h` containers with `yuva444p12le` decoding, 25 fps, and AAC-LC stereo
+at 48 kHz. The original acceptance also covered midpoint/end decoding and
+DaVinci Resolve alpha playback.
 
-| Case | Task wall | Render wall | Effective fps | Peak cgroup memory | Output bytes | SHA-256 |
-|---|---:|---:|---:|---:|---:|---|
-| 1080p25, 480 s | 524.627 s | 473.172 s | 25.361 | 7,675,768,832 | 2,327,694,978 | `b81ee768f1d4fc109a87e66db0515cd43bc29acb72bab7d3292f5271fe6a2199` |
-| 2.7k25, 240 s | 482.442 s | 444.055 s | 13.512 | 11,897,987,072 | 1,821,740,649 | `ca9c7978946f2d74edca0112b1d5a606bc2174417d2aa1ad42ee34b5880828b3` |
+The amended decision requires new acceptance evidence before the compositing
+path is released:
 
-Both finished below 9 minutes, 12 GB peak cgroup memory, and 2.33 GB output,
-well inside the 60-minute, 30 GiB, and 18 GiB acceptance bounds. Maximum JFR
-evidence recorded 50,837 and 34,450 allocation samples representing
-188,324,011,088 and 98,350,707,792 sampled bytes, 652 and 490 garbage
-collections, and 1,304 and 980 heap summaries. The recordings were 10,587,521
-and 6,528,668 bytes. The staged runner's conservative USD 0.990827 total
-includes the successful rerun and USD 0.688 of prior spend.
-
-Both maximum MOVs validate as conventional seekable, non-fragmented ProRes
-4444 `ap4h` containers. FFprobe decodes `yuva444p12le` with 16 alpha bits at
-the required dimensions and 25 fps. Each contains AAC-LC stereo at 48 kHz with
-the exact 192 kbps encoder target preserved in the report; sparse identical-
-channel heartbeat samples produce observed averages of 73,186 and 73,271 bps.
-Local downloads matched the report byte sizes and SHA-256 digests, and frame
-decoding succeeded at the midpoint and final second of each output.
+- the expanded bundle starts as a non-root image and exposes H.264 encode,
+  common streamable video decode, MP4/MOV muxing, overlay, audio mixing, and
+  limiting;
+- streamable Drive-video fixtures cover the supported input matrix, the 2 GiB
+  admission limit, short-source rejection, source/audio absence, and strict
+  non-seekable failure behavior;
+- both fit modes, all audio modes, H.264 MP4, and ProRes 422 MOV validate at
+  both presets; and
+- maximum-duration composited renders record wall time, effective fps, peak
+  memory, output size, checksum, FFprobe evidence, and source non-persistence.
 
 ## Consequences
 
-Memory remains bounded by one frame buffer, the JVM/FFmpeg working sets, and
-the temporary media files rather than duration-sized image data. Standard MOV
-finalization needs local space and prevents streaming the unfinished container
-directly to object storage; the measured headroom justifies that tradeoff.
-Interrupted jobs may leave lifecycle-managed cloud objects, but zero retries
-prevent duplicate compute and resume validation prevents silently accepting a
-partial stage.
+The FFmpeg build is larger and slower to compile because it includes broad
+in-tree decode and demux support. Enabling x264 introduces GPL licensing and a
+pinned runtime library that must remain part of image review and release
+evidence. The restricted protocol set, source-size cap, streamability rule,
+fixed render envelope, and output validation limit the resulting media and
+resource risk.
 
-The regenerated maximum MOVs were imported into DaVinci Resolve, sought near
-their midpoints and ends, alpha-composited over a checkerboard, and played with
-active audio meters. This agent-operated acceptance completes the media handoff
-for GitHub issue #3. The owner accepted the visible near-diagonal synthetic
-trace for this infrastructure spike; trace-shape fidelity remains tracked in
-GitHub issue #4 and does not change this decision.
+The original transparent-overlay contract remains stable. The compositing path
+can use the same telemetry timeline and frame renderer, but its two-input
+FFmpeg orchestration, source streaming, output contracts, audio mix, and
+performance envelope require separate tests and production evidence.
+
+Standard container finalization still needs local output space; the completed
+file is delivered through the existing resumable Drive path rather than being
+streamed as an unfinished container to object storage.

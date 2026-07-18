@@ -17,6 +17,8 @@ RUN apt-get update \
        ca-certificates \
        curl \
        nasm \
+       pkg-config \
+       libx264-dev=2:0.163.3060+git5db6aa6-2build1 \
        xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
@@ -36,6 +38,9 @@ RUN curl --fail --location --silent --show-error \
        --disable-network \
        --disable-shared \
        --enable-static \
+       --enable-gpl \
+       --enable-libx264 \
+       --pkg-config-flags=--static \
        --enable-ffmpeg \
        --enable-ffprobe \
        --enable-avcodec \
@@ -43,14 +48,18 @@ RUN curl --fail --location --silent --show-error \
        --enable-swresample \
        --enable-swscale \
        --enable-protocol=file,pipe \
-       --enable-demuxer=mov,rawvideo,wav \
-       --enable-muxer=mov \
-       --enable-decoder=aac,pcm_s16le,prores,rawvideo \
-       --enable-encoder=aac,prores_ks \
-       --enable-parser=aac \
-       --enable-filter=aformat,aresample,format,scale \
+       --enable-demuxers \
+       --enable-muxer=mov,mp4 \
+       --enable-decoders \
+       --enable-parsers \
+       --enable-bsfs \
+       --enable-encoder=aac,libx264,prores_ks \
+       --enable-filter=aformat,alimiter,amix,aresample,crop,fps,format,overlay,pad,scale,setsar \
     && make --jobs="$(nproc)" \
     && make install \
+    && mkdir --parents /opt/ffmpeg/lib \
+    && cp "$(pkg-config --variable=libdir x264)/libx264.so.163" \
+          /opt/ffmpeg/lib/libx264.so.163 \
     && /opt/ffmpeg/bin/ffmpeg -version \
     && /opt/ffmpeg/bin/ffprobe -version
 
@@ -61,7 +70,10 @@ RUN groupadd --system app \
 WORKDIR /app
 COPY --from=ffmpeg-build /opt/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg-build /opt/ffmpeg/bin/ffprobe /usr/local/bin/ffprobe
+COPY --from=ffmpeg-build /opt/ffmpeg/lib/libx264.so.163 /usr/local/lib/libx264.so.163
 COPY --from=build --chown=app:app /workspace/target/animated-graph-cloud.jar ./animated-graph-cloud.jar
+
+RUN ldconfig
 
 USER app
 ENV JAVA_TOOL_OPTIONS="-Djava.awt.headless=true -Xmx2g"

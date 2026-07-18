@@ -16,9 +16,18 @@ docker run --rm --entrypoint java "$image" -version 2>&1 | grep -q 'version "21\
 
 docker run --rm --entrypoint ffmpeg "$image" -version 2>&1 | grep -q 'ffmpeg version 8\.1\.2'
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -encoders 2>&1 | grep -q 'prores_ks'
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -encoders 2>&1 | grep -q 'libx264'
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -encoders 2>&1 | grep -q 'aac'
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -decoders 2>&1 | grep -q ' h264 '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -demuxers 2>&1 | grep -q ' matroska,webm '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -muxers 2>&1 | grep -q ' mp4 '
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -h encoder=prores_ks 2>&1 | \
   grep -q 'Supported pixel formats:.*yuva444p10le'
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -h encoder=libx264 2>&1 | \
+  grep -q 'libx264'
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' overlay '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' amix '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' alimiter '
 
 renderer_output="$(docker run --rm "$image" clojure.main -m agg.renderer.main)"
 if [ "$renderer_output" != "$expected_renderer" ]; then
