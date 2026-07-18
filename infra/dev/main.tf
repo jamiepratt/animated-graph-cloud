@@ -199,6 +199,11 @@ resource "google_cloud_run_v2_job" "renderer" {
         }
 
         env {
+          name  = "GOOGLE_CLOUD_PROJECT"
+          value = var.project_id
+        }
+
+        env {
           name  = "AGG_DRIVE_DELIVERY_ENABLED"
           value = "true"
         }

@@ -82,6 +82,8 @@
     (is (str/includes? workflow "PROJECT_ID: animated-graph-cloud-prod-jp"))
     (is (str/includes? workflow "PROJECT_NUMBER: \"488013150738\""))
     (is (str/includes? workflow "PUBLIC_BASE_URL: https://alphacompose.com"))
+    (is (str/includes? workflow
+                       "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"))
     (is (str/includes? workflow "full 40-character lowercase commit SHA"))
     (is (not (str/includes? workflow "default: main")))
     (is (str/includes? workflow "^\u005b0-9a-f\u005d{40}$"))
@@ -91,6 +93,9 @@
     (is (str/includes? workflow "test \"$(git rev-parse HEAD)\" = \"$RELEASE_COMMIT\""))
     (is (str/includes? workflow "AGG_OWNER_EMAIL=$OWNER_EMAIL"))
     (is (str/includes? workflow "AGG_ADMIN_EMAILS=$ADMIN_EMAILS"))
+    (is (re-find
+         #"gcloud run jobs update \"\$DURABLE_JOB\"[\s\S]*?--update-env-vars \"GOOGLE_CLOUD_PROJECT=\$PROJECT_ID\""
+         workflow))
     (is (str/includes? workflow "AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL"))
     (is (str/includes? workflow "npx --yes firebase-tools@15.24.0 deploy"))
     (is (str/includes? workflow "--only hosting"))

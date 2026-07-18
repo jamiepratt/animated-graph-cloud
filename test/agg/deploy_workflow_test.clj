@@ -12,6 +12,12 @@
   (is (str/includes? dockerfile "COPY resources ./resources"))
   (is (str/includes? dockerfile "RUN clojure -T:build uber")))
 
+(deftest renderer-job-pins-the-runtime-project
+  (is (str/includes? terraform
+                     "name  = \"GOOGLE_CLOUD_PROJECT\""))
+  (is (str/includes? terraform
+                     "value = var.project_id")))
+
 (deftest private-health-probe-uses-an-audience-correct-wif-id-token
   (is (str/includes? workflow "token_format: id_token"))
   (is (str/includes? workflow
