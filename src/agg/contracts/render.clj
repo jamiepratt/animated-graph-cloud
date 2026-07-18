@@ -5,7 +5,8 @@
             [agg.telemetry.garmin :as garmin]
             [agg.telemetry.oxiwear :as oxiwear]
             [agg.telemetry.polar :as polar]
-            [agg.telemetry.timeline :as timeline])
+            [agg.telemetry.timeline :as timeline]
+            [clojure.string :as str])
   (:import (java.nio.charset StandardCharsets)
            (java.time Duration Instant)))
 
@@ -41,7 +42,7 @@
   (when source-video
     (require! (and (map? source-video)
                    (string? (:fileId source-video))
-                   (not (clojure.string/blank? (:fileId source-video))))
+                   (not (str/blank? (:fileId source-video))))
               "sourceVideo.fileId is required"
               {:type ::invalid-source-video}))
   (when (or output-format fit-mode audio-mode)
@@ -236,7 +237,7 @@
                    (= file-id id)
                    (string? name)
                    (string? mimeType)
-                   (clojure.string/starts-with? mimeType "video/")
+                   (str/starts-with? mimeType "video/")
                    (integer? size)
                    (not (neg? size))
                    (not trashed))

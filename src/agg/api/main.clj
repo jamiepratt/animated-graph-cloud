@@ -223,9 +223,6 @@
                       {:type ::invalid-request}
                       error)))))
 
-(defn- request-render-spec [exchange]
-  (:render-spec (request-render-request exchange)))
-
 (defn- attach-source!
   [auth-system user {:keys [request render-spec]}]
   (if-not (:source-video render-spec)

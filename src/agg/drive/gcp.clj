@@ -172,7 +172,6 @@
           (throw (errors/raise! "Drive output folder lookup failed"
                           {:type ::folder-lookup-failed :status status}))))))
   drive/DriveGateway
-  drive/SourceGateway
   (generate-output-id! [_ access-token]
     (let [{:keys [body]}
           (require-success
@@ -231,6 +230,7 @@
         (throw (errors/raise! "Drive resumable status query failed"
                         {:type ::resumable-status-failed
                          :status (:status query-response)})))))
+  drive/SourceGateway
   (source-metadata! [_ access-token file-id]
     (let [{:keys [status body]}
           (send! (authorized

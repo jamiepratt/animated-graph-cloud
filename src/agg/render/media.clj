@@ -3,7 +3,7 @@
             [clojure.data.json :as json]
             [clojure.string :as str])
   (:import (java.io RandomAccessFile)
-           (java.nio.file Files OpenOption Path StandardOpenOption)))
+           (java.nio.file Files OpenOption Path)))
 
 (defprotocol VideoEncoder
   (encode! [encoder render-spec audio-path output-path write-frames!])
