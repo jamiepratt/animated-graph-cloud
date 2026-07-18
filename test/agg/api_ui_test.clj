@@ -59,6 +59,12 @@
             terms (request! port :get "/terms" nil {})]
         (is (= 200 (.statusCode homepage)))
         (is (str/includes? (.body homepage) "Alpha Compose"))
+        (is (str/includes? (.body homepage) "class=\"shell\""))
+        (is (str/includes? (.body homepage) "class=\"hero\""))
+        (is (str/includes? (.body homepage) "class=\"hero-card\""))
+        (is (str/includes? (.body homepage) "class=\"feature-grid\""))
+        (is (str/includes? (.body homepage) "class=\"card trust-card\""))
+        (is (str/includes? (.body homepage) "Sign in with Google"))
         (is (str/includes? (.body homepage) "href=\"/privacy\""))
         (is (str/includes? (.body homepage) "href=\"/terms\""))
         (is (str/includes? (.body homepage) "Google account information"))
