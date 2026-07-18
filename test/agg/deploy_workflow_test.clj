@@ -3,9 +3,14 @@
             [clojure.test :refer [deftest is]]))
 
 (def ^:private workflow (slurp ".github/workflows/deploy.yml"))
+(def ^:private dockerfile (slurp "Dockerfile"))
 (def ^:private terraform (slurp "infra/dev/main.tf"))
 (def ^:private terraform-variables (slurp "infra/dev/variables.tf"))
 (def ^:private cloud-spike (slurp "script/run_cloud_spike.sh"))
+
+(deftest docker-build-includes-runtime-resources
+  (is (str/includes? dockerfile "COPY resources ./resources"))
+  (is (str/includes? dockerfile "RUN clojure -T:build uber")))
 
 (deftest private-health-probe-uses-an-audience-correct-wif-id-token
   (is (str/includes? workflow "token_format: id_token"))
