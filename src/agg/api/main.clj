@@ -686,6 +686,10 @@
         (try
           (observability/trace! ::api-request
             (cond
+            (and (= "GET" method) (contains? public-assets path))
+            (let [[resource content-type] (get public-assets path)]
+              (respond-asset! exchange resource content-type))
+
             (and (= "GET" method) (= "/health" path))
             (respond! exchange 200 "application/json; charset=utf-8" health-body)
 

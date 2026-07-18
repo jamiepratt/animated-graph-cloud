@@ -77,6 +77,37 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest site-icon-assets-are-served-and-linked
+  (let [port (available-port)
+        {:keys [auth-system]} (fixture)
+        server (api/start! port {:auth-system auth-system})]
+    (try
+      (let [homepage (request! port :get "/" nil {})
+            svg (test-http/send-string! :get
+                                        (str "http://127.0.0.1:" port "/favicon.svg")
+                                        nil
+                                        {})
+            png (test-http/send-bytes! :get
+                                       (str "http://127.0.0.1:" port "/favicon-32.png")
+                                       nil
+                                       {})]
+        (is (= 200 (.statusCode homepage)))
+        (is (str/includes? (.body homepage) "href=\"/favicon.svg\""))
+        (is (str/includes? (.body homepage) "href=\"/apple-touch-icon.png\""))
+        (is (= 200 (.statusCode svg)))
+        (is (= "image/svg+xml; charset=utf-8"
+               (.orElse (.firstValue (.headers svg) "Content-Type") nil)))
+        (is (= "public, max-age=86400, immutable"
+               (.orElse (.firstValue (.headers svg) "Cache-Control") nil)))
+        (is (str/includes? (.body svg) "#4374C5"))
+        (is (= 200 (.statusCode png)))
+        (is (= "image/png"
+               (.orElse (.firstValue (.headers png) "Content-Type") nil)))
+        (is (= [-119 80 78 71 13 10 26 10]
+               (mapv int (take 8 (.body png))))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest htmx-owner-workflow-previews-submits-polls-cancels-and-retries
   (let [port (available-port)
         lifecycle (jobs/in-memory-system)
