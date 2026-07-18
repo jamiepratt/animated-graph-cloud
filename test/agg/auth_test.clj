@@ -104,6 +104,7 @@
     (is (= session (:session (auth/browser-cookie system cookie))))
     (is (= (:stateCookie flow)
            (:oauth (auth/browser-cookie system cookie))))
+    (is (nil? (auth/browser-cookie system session)))
     (is (nil? (auth/browser-cookie system (str cookie "tampered"))))))
 
 (deftest login-callback-requires-matching-unexpired-state-and-allowlisted-email

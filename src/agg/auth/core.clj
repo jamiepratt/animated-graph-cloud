@@ -202,7 +202,14 @@
   [{:keys [session-key]} token]
   (when-not (str/blank? token)
     (try
-      (verify-json session-key token ::invalid-browser-cookie)
+      (let [cookie (verify-json session-key token ::invalid-browser-cookie)]
+        ;; A raw session is also a valid signed JSON value. Only accept the
+        ;; wrapper shape here so raw __session cookies continue to work after
+        ;; the OAuth callback replaces the temporary browser cookie.
+        (when (and (map? cookie)
+                   (or (contains? cookie :session)
+                       (contains? cookie :oauth)))
+          cookie))
       (catch Throwable _ nil))))
 
 (defn session-user [{:keys [session-key clock allowlist member-directory

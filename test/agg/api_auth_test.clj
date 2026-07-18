@@ -87,10 +87,17 @@
                            {"Cookie" (str "__session=" browser-cookie)})
             session-cookie
             (first (filter #(.startsWith ^String % "__session=")
-                           (.allValues (.headers response) "Set-Cookie")))]
+                           (.allValues (.headers response) "Set-Cookie")))
+            session-name (first (.split session-cookie "=" 2))
+            session-value (first (.split (second (.split session-cookie "=" 2))
+                                         ";" 2))
+            authenticated (get! port "/"
+                                {"Cookie" (str "__session=" session-value)})]
         (is (= 302 (.statusCode response)))
         (is (re-find #"; Max-Age=43200; Path=/; Secure; HttpOnly; SameSite=Lax$"
-                     session-cookie)))
+                     session-cookie))
+        (is (= "__session" session-name))
+        (is (re-find #"Signed in as owner@example.com" (.body authenticated))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
