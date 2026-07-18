@@ -356,7 +356,7 @@
                               (tokens/list-tokens token-service
                                                   (:subject user)))
                     :members (when (and admin-service
-                                        (= :owner (:role user)))
+                                        (admin/administrator? (:role user)))
                                (admin/list-members admin-service user))})
           ui/anonymous-page)]
     (doto (.getResponseHeaders exchange)
@@ -795,8 +795,8 @@
               ::tokens/token-not-found
               (respond-json! exchange 404 {:error "token_not_found"})
 
-              ::admin/owner-required
-              (respond-json! exchange 403 {:error "owner_required"})
+              ::admin/admin-required
+              (respond-json! exchange 403 {:error "admin_required"})
 
               ::admin/invalid-email
               (respond-json! exchange 400 {:error "invalid_member_email"})

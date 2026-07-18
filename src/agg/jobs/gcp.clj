@@ -3,7 +3,8 @@
             [agg.contracts.render :as contract]
             [agg.auth.gcp :as auth-gcp]
             [agg.jobs.lifecycle :as lifecycle]
-            [clojure.data.json :as json])
+            [clojure.data.json :as json]
+            [clojure.string :as str])
   (:import (com.google.api.gax.rpc ApiException StatusCode$Code)
            (com.google.cloud.firestore DocumentSnapshot Firestore
                                        FirestoreException FirestoreOptions
@@ -899,6 +900,13 @@
 (defn- env [name default]
   (get (System/getenv) name default))
 
+(defn- env-emails [name]
+  (->> (str/split (env name "") #"[;,]")
+       (map str/trim)
+       (remove str/blank?)
+       (map admin/require-email)
+       set))
+
 (defn- env-long [name default]
   (or (parse-long (env name (str default)))
       (throw (ex-info (str name " must be an integer")
@@ -920,6 +928,7 @@
                       {:type ::missing-dispatcher-url})))
     (let [store (request-store bucket)
           firestore (.getService (FirestoreOptions/getDefaultInstance))
+          admin-emails (env-emails "AGG_ADMIN_EMAILS")
           auth-enabled? (= "true" (env "AGG_AUTH_ENABLED" "false"))
           auth-dependencies
           (when auth-enabled?
@@ -930,6 +939,7 @@
               :base-url (env "AGG_PUBLIC_BASE_URL" dispatcher-url)
               :internal-audience dispatcher-url
               :owner-email (env "AGG_OWNER_EMAIL" nil)
+              :admin-emails admin-emails
               :session-secret (env "AGG_SESSION_KEY" nil)
               :oauth-client-credentials
               (env "AGG_OAUTH_CLIENT_CREDENTIALS" nil)

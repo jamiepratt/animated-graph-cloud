@@ -124,7 +124,7 @@
 (defn system
   [{:keys [client-id client-secret base-url allowlist session-key oauth clock
            authorization-endpoint cipher grant-store drive drive-token-client
-           member-directory owner-email]
+           member-directory owner-email admin-emails]
     :or {clock (Clock/systemUTC)
          authorization-endpoint "https://accounts.google.com/o/oauth2/v2/auth"}}]
   (when-not (and (not-empty client-id)
@@ -140,6 +140,7 @@
    :allowlist (into #{} (map str/lower-case) allowlist)
    :member-directory member-directory
    :owner-email (some-> owner-email str/lower-case)
+   :admin-emails (into #{} (map str/lower-case) admin-emails)
    :session-key session-key
    :oauth oauth
    :cipher cipher
@@ -213,7 +214,7 @@
       (catch Throwable _ nil))))
 
 (defn session-user [{:keys [session-key clock allowlist member-directory
-                            owner-email]
+                            owner-email admin-emails]
                      :as system}
                     token]
   (try
@@ -235,15 +236,18 @@
           (when-not (contains? allowlist (str/lower-case email))
             (throw (ex-info "Session user is no longer allowlisted"
                             {:type ::not-allowlisted})))
-          (cond-> {:subject sub :email email}
-            (= (str/lower-case email) owner-email) (assoc :role :owner)))))
+          (assoc {:subject sub :email email}
+                 :role (cond
+                         (= (str/lower-case email) owner-email) :owner
+                         (contains? admin-emails (str/lower-case email)) :admin
+                         :else :member)))))
     (catch clojure.lang.ExceptionInfo error
       (throw error))
     (catch Throwable error
       (throw (ex-info "Session is invalid" {:type ::invalid-session} error)))))
 
 (defn require-allowlisted!
-  [{:keys [allowlist member-directory owner-email] :as system}
+  [{:keys [allowlist member-directory owner-email admin-emails] :as system}
    {:keys [subject email] :as user}]
   (if member-directory
     (dynamic-member system user false)
@@ -253,8 +257,11 @@
                 (not (contains? allowlist (str/lower-case email))))
         (throw (ex-info "User is no longer allowlisted"
                         {:type ::not-allowlisted})))
-      (cond-> user
-        (= (str/lower-case email) owner-email) (assoc :role :owner)))))
+      (assoc user
+             :role (cond
+                     (= (str/lower-case email) owner-email) :owner
+                     (contains? admin-emails (str/lower-case email)) :admin
+                     :else :member)))))
 
 (defn issue-csrf-token [{:keys [session-key clock]} {:keys [subject]}]
   (sign-json session-key

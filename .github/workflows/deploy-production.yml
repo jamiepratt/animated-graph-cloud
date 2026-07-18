@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       confirmation:
-        description: "Type: RELEASE ALPHA COMPOSE TO OWNER ONLY"
+        description: "Type: RELEASE ALPHA COMPOSE WITH MULTI-ADMIN ACCESS"
         required: true
         type: string
 
@@ -32,6 +32,7 @@ env:
   API_SERVICE_ACCOUNT: agg-api@animated-graph-cloud-prod-jp.iam.gserviceaccount.com
   RENDERER_SERVICE_ACCOUNT: agg-renderer@animated-graph-cloud-prod-jp.iam.gserviceaccount.com
   OWNER_EMAIL: me@jamiep.org
+  ADMIN_EMAILS: me@jamiep.org;bartoszjakubowiak@gmail.com
   PUBLIC_BASE_URL: https://alphacompose.com
   DAILY_SUBMISSION_LIMIT: "100"
   MONTHLY_BUDGET_MINOR_UNITS: "40000"
@@ -39,7 +40,7 @@ env:
 
 jobs:
   release:
-    if: github.event.inputs.confirmation == 'RELEASE ALPHA COMPOSE TO OWNER ONLY'
+    if: github.event.inputs.confirmation == 'RELEASE ALPHA COMPOSE WITH MULTI-ADMIN ACCESS'
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -153,7 +154,7 @@ jobs:
           test -n "$service_url"
           echo "url=$service_url" >>"$GITHUB_OUTPUT"
 
-      - name: Configure owner-only production runtime
+      - name: Configure multi-admin production runtime
         env:
           CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
         run: |
@@ -161,7 +162,7 @@ jobs:
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --remove-env-vars "AGG_MONTHLY_BUDGET_CENTS,AGG_RENDER_RESERVATION_CENTS" \
-            --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=$DURABLE_JOB,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
+            --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=$DURABLE_JOB,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
             --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
             --quiet
 
@@ -218,12 +219,12 @@ jobs:
           IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
         run: |
           {
-            echo "## Alpha Compose owner-only production release"
+            echo "## Alpha Compose multi-admin production release"
             echo
             echo "- Ref: ${{ inputs.release_ref }}"
             echo "- Commit: ${{ steps.source.outputs.commit }}"
             echo "- Image: $IMAGE_DIGEST"
             echo "- Domain: $PUBLIC_BASE_URL"
-            echo "- Audience: owner only; no member was added by this workflow"
+            echo "- Administrators: $ADMIN_EMAILS"
             echo "- Manual acceptance remains recorded separately"
           } >>"$GITHUB_STEP_SUMMARY"

@@ -26,7 +26,7 @@ tags:
   - name: Tokens
     description: Personal API token management.
   - name: Administration
-    description: Owner-only membership management.
+    description: Owner- and admin-managed membership management.
   - name: Browser authorization
     description: Google login, optional Drive authorization, and Drive Picker browser redirects.
 paths:
@@ -363,18 +363,18 @@ paths:
     get:
       operationId: listMembers
       tags: [Administration]
-      summary: List owner-managed memberships.
+      summary: List administrator-managed memberships.
       security:
         - sessionCookie: []
       responses:
         "200":
-          description: Owner-managed memberships.
+          description: Administrator-managed memberships.
           content:
             application/json:
               schema:
                 type: array
                 items: {$ref: "#/components/schemas/Member"}
-        "403": {$ref: "#/components/responses/OwnerRequired"}
+        "403": {$ref: "#/components/responses/AdminRequired"}
     post:
       operationId: addMember
       tags: [Administration]
@@ -391,7 +391,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Member"}
-        "403": {$ref: "#/components/responses/OwnerRequired"}
+        "403": {$ref: "#/components/responses/AdminRequired"}
   /v1/admin/members/revoke:
     post:
       operationId: revokeMember
@@ -409,7 +409,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Member"}
-        "403": {$ref: "#/components/responses/OwnerRequired"}
+        "403": {$ref: "#/components/responses/AdminRequired"}
 components:
   securitySchemes:
     bearerAuth:
@@ -509,8 +509,8 @@ components:
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
-    OwnerRequired:
-      description: Owner session required.
+    AdminRequired:
+      description: Owner or admin session required.
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -613,7 +613,7 @@ components:
       required: [email, role, status]
       properties:
         email: {type: string, format: email}
-        role: {type: string, enum: [owner, member]}
+        role: {type: string, enum: [owner, admin, member]}
         status: {type: string, enum: [active, revoked]}
         membershipVersion: {type: integer, minimum: 1}
     Error:
@@ -640,4 +640,4 @@ components:
             - job_not_found
             - invalid_job_transition
             - token_not_found
-            - owner_required
+            - admin_required

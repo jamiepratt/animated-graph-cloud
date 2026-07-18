@@ -74,14 +74,18 @@
       (update :role name)
       (update :status name)))
 
-(defn- require-owner! [actor]
-  (when-not (= :owner (:role actor))
-    (throw (ex-info "Owner access is required" {:type ::owner-required})))
+(defn administrator? [role]
+  (contains? #{:owner :admin} role))
+
+(defn- require-administrator! [actor]
+  (when-not (administrator? (:role actor))
+    (throw (ex-info "Administrator access is required"
+                    {:type ::admin-required})))
   actor)
 
-(defn- require-active-owner! [directory actor]
-  (require-owner! actor)
-  (require-owner! (active-member directory actor)))
+(defn- require-active-administrator! [directory actor]
+  (let [member (active-member directory actor)]
+    (require-administrator! member)))
 
 (defn- require-active [records {:keys [email subject membership-version]}]
   (let [member (get records (normalize-email email))]
@@ -235,10 +239,10 @@
                          event-sink]
   Administration
   (list-members [_ actor]
-    (require-active-owner! directory actor)
+    (require-active-administrator! directory actor)
     (mapv public-member (list-member-records directory)))
   (add-member! [_ actor email]
-    (require-active-owner! directory actor)
+    (require-active-administrator! directory actor)
     (let [member (add-member-record! directory email)]
       (emit! event-sink
              {:severity "NOTICE"
@@ -247,7 +251,7 @@
               :targetMemberId (member-id (:email member))})
       (public-member member)))
   (revoke-member! [_ actor email]
-    (require-active-owner! directory actor)
+    (require-active-administrator! directory actor)
     (let [member (revoke-member-record! directory email)
           subject (:subject member)
           identity (cleanup-identity member)
@@ -298,15 +302,22 @@
 
 (defn in-memory-system
   [{:keys [owner-email initial-emails token-administration
-           credential-administration job-administration event-sink]}]
+           credential-administration job-administration event-sink
+           admin-emails]}]
   (let [owner-email (require-email owner-email)
-        initial-emails (conj (set (map require-email initial-emails)) owner-email)
+        admin-emails (into #{} (map require-email) admin-emails)
+        initial-emails (into (conj (set (map require-email initial-emails))
+                                   owner-email)
+                             admin-emails)
         records
         (atom
          (into {}
                (map (fn [email]
                       [email {:email email
-                              :role (if (= email owner-email) :owner :member)
+                              :role (cond
+                                      (= email owner-email) :owner
+                                      (contains? admin-emails email) :admin
+                                      :else :member)
                               :status :active
                               :membership-version (membership-version)}]))
                initial-emails))

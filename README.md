@@ -225,8 +225,11 @@ response, runtime identities, and the renderer's structured completion log.
 When `AGG_AUTH_ENABLED=true`, browser users start login at
 `GET /v1/auth/login/start`. Login requests only `openid email profile` and
 rechecks the active Firestore membership generation on every authenticated
-request. `AGG_OWNER_EMAIL` bootstraps the non-revocable owner. Drive is connected
-separately at `GET /v1/auth/drive/start` with only `drive.file`; the callback
+request. `AGG_OWNER_EMAIL` bootstraps the non-revocable owner, while
+`AGG_ADMIN_EMAILS` (comma- or semicolon-separated) bootstraps any number of
+active administrators. Administrators can manage the allowlist but cannot
+replace or revoke the owner. Drive is connected separately at
+`GET /v1/auth/drive/start` with only `drive.file`; the callback
 encrypts the refresh token with the Warsaw KMS key and creates or reuses the
 user's `Alpha Compose` folder. `GET /v1/drive/picker` opens a no-store
 Google Picker bridge for the same restricted grant. The authenticated `/`
@@ -248,10 +251,10 @@ owned job and expose cancel or retry only when the current state permits it.
 The same page creates, lists, and revokes personal API tokens. The only custom
 browser JavaScript is the same-origin Google Picker bridge.
 
-The owner page also lists, adds, and revokes members. The equivalent JSON routes
-are `GET /v1/admin/members`, `POST /v1/admin/members`, and
-`POST /v1/admin/members/revoke`; writes require the owner's session and CSRF
-token. Revocation invalidates the member's sessions and personal tokens, deletes
+The owner and admin pages list, add, and revoke members. The equivalent JSON
+routes are `GET /v1/admin/members`, `POST /v1/admin/members`, and
+`POST /v1/admin/members/revoke`; writes require an administrator's session and
+CSRF token. Revocation invalidates the member's sessions and personal tokens, deletes
 their encrypted Drive grant, and cancels queued or running work. Re-adding the
 email creates a new membership generation, so the member must complete Google
 login and Drive authorization again.

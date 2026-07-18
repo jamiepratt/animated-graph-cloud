@@ -78,7 +78,7 @@
     (is (not (re-find #"(?m)^\s*push:" workflow)))
     (is (str/includes? workflow "environment: production"))
     (is (str/includes? workflow
-                       "confirmation == 'RELEASE ALPHA COMPOSE TO OWNER ONLY'"))
+                       "confirmation == 'RELEASE ALPHA COMPOSE WITH MULTI-ADMIN ACCESS'"))
     (is (str/includes? workflow "PROJECT_ID: animated-graph-cloud-prod-jp"))
     (is (str/includes? workflow "PROJECT_NUMBER: \"488013150738\""))
     (is (str/includes? workflow "PUBLIC_BASE_URL: https://alphacompose.com"))
@@ -90,6 +90,7 @@
     (is (str/includes? workflow "${{ steps.source.outputs.commit }}"))
     (is (not (str/includes? workflow "animated-graph-cloud:${{ github.sha }}")))
     (is (str/includes? workflow "AGG_OWNER_EMAIL=$OWNER_EMAIL"))
+    (is (str/includes? workflow "AGG_ADMIN_EMAILS=$ADMIN_EMAILS"))
     (is (str/includes? workflow "AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL"))
     (is (str/includes? workflow "npx --yes firebase-tools@15.24.0 deploy"))
     (is (str/includes? workflow "--only hosting"))
@@ -161,7 +162,7 @@
     (is (str/includes? load-test "Response evidence:"))
     (is (not (str/includes? load-test "rm -rf -- \"$results_dir\"")))
     (is (str/includes? load-test "rm -f -- \"$auth_config\""))
-    (doseq [manual ["DaVinci Resolve" "Google Drive" "owner-only production smoke"
+    (doseq [manual ["DaVinci Resolve" "Google Drive" "owner/admin production smoke"
                     "OAuth brand verification" "legal approval"]]
       (testing manual (is (str/includes? acceptance manual))))
     (is (str/includes? acceptance "Automated"))
@@ -178,7 +179,7 @@
                         "https://alphacompose.com/privacy"
                         "https://alphacompose.com/v1/auth/login/callback"
                         "https://alphacompose.com/v1/auth/drive/callback"
-                        "drive.file" "owner only" "Rollback" "Secret Manager"
+                        "drive.file" "AGG_ADMIN_EMAILS" "Rollback" "Secret Manager"
                         "animated-graph-cloud-prod-jp" "animated-graph-cloud-jp"]]
       (testing checkpoint (is (str/includes? runbook checkpoint))))
     (is (str/includes? runbook "gcloud secrets versions add"))
@@ -197,7 +198,7 @@
   (let [adr (slurp "docs/adr/0009-isolate-production-behind-owner-gated-release.md")
         context-map (slurp "CONTEXT-MAP.md")]
     (doseq [decision ["Firebase Hosting" "europe-central2" "production"
-                      "owner-only" "separate OAuth" "manual"]]
+                      "owner-approved" "separate OAuth" "manual"]]
       (testing decision (is (str/includes? adr decision))))
     (is (str/includes? context-map "infra/prod/"))
     (is (str/includes? context-map "docs/openapi.yaml"))

@@ -8,8 +8,8 @@
 Alpha Compose needs a public product domain while compute remains in Warsaw.
 Development state, identities, secrets, OAuth credentials, budgets, and releases
 must not become an accidental path into production. Direct Cloud Run domain
-mapping is not available for `europe-central2`, and the first release is for the
-owner only.
+mapping is not available for `europe-central2`, and release authority remains
+with the owner even when configured administrators use the product.
 
 ## Decision
 
@@ -27,7 +27,7 @@ that association cannot be undone. Cloudflare remains the registrar and DNS
 authority; Firebase owns the application hosting route.
 
 Production release is manual through the GitHub `production` environment. The
-approver supplies an explicit owner-only confirmation and release ref. CI builds
+approver supplies an explicit owner-approved multi-admin confirmation and release ref. CI builds
 and scans that checked-out commit, publishes an immutable digest, verifies the
 private candidate, then opens ingress and deploys the pinned Firebase CLI
 configuration. The workflow does not add members or publish OAuth.

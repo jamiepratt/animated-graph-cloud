@@ -29,35 +29,45 @@
              (exchange-code! [_ _ _ _ _]
                (throw (UnsupportedOperationException.))))}))
 
-(deftest owner-administers-members-through-session-and-csrf-protected-routes
+(deftest owners-and-admins-administer-members-through-session-and-csrf-protected-routes
   (let [port (available-port)
         {:keys [directory service]}
         (admin/in-memory-system {:owner-email "owner@example.com"
-                                 :initial-emails #{"member@example.com"}})
+                                 :initial-emails #{"member@example.com"
+                                                   "admin@example.com"}
+                                 :admin-emails #{"admin@example.com"}})
         auth-system (auth-system directory)
         owner {:subject "owner-subject" :email "owner@example.com"}
+        administrator {:subject "admin-subject" :email "admin@example.com"}
         member {:subject "member-subject" :email "member@example.com"}
         owner-cookie (str "agg_session=" (auth/issue-session auth-system owner))
+        admin-cookie (str "agg_session=" (auth/issue-session auth-system administrator))
         member-cookie (str "agg_session=" (auth/issue-session auth-system member))
         owner-csrf (auth/issue-csrf-token auth-system owner)
+        admin-csrf (auth/issue-csrf-token auth-system administrator)
         member-csrf (auth/issue-csrf-token auth-system member)
         server (api/start! port {:auth-system auth-system
                                  :admin-service service})]
     (try
-      (testing "only the owner sees and reads administration"
+      (testing "owners and admins see and read administration"
         (let [owner-page (request! port :get "/" nil {"Cookie" owner-cookie})
+              admin-page (request! port :get "/" nil {"Cookie" admin-cookie})
               member-page (request! port :get "/" nil {"Cookie" member-cookie})
               owner-list (request! port :get "/v1/admin/members" nil
                                    {"Cookie" owner-cookie})
+              admin-list (request! port :get "/v1/admin/members" nil
+                                   {"Cookie" admin-cookie})
               member-list (request! port :get "/v1/admin/members" nil
                                     {"Cookie" member-cookie})]
           (is (str/includes? (.body owner-page) "Member administration"))
+          (is (str/includes? (.body admin-page) "Member administration"))
           (is (not (str/includes? (.body member-page) "Member administration")))
           (is (= 200 (.statusCode owner-list)))
+          (is (= 200 (.statusCode admin-list)))
           (is (= 403 (.statusCode member-list)))
-          (is (= {"error" "owner_required"}
+          (is (= {"error" "admin_required"}
                  (json/read-str (.body member-list))))))
-      (testing "member writes require the owner's CSRF token"
+      (testing "member writes require an administrator's CSRF token"
         (let [missing-csrf (request! port :post "/v1/admin/members"
                                      {:email "new@example.com"}
                                      {"Content-Type" "application/json"
@@ -67,6 +77,11 @@
                                    {"Content-Type" "application/json"
                                     "Cookie" member-cookie
                                     "X-CSRF-Token" member-csrf})
+              admin-add (request! port :post "/v1/admin/members"
+                                  {:email "admin-added@example.com"}
+                                  {"Content-Type" "application/json"
+                                   "Cookie" admin-cookie
+                                   "X-CSRF-Token" admin-csrf})
               owner-add (request! port :post "/v1/admin/members"
                                   {:email "new@example.com"}
                                   {"Content-Type" "application/json"
@@ -79,6 +94,7 @@
                                       "X-CSRF-Token" owner-csrf})]
           (is (= 403 (.statusCode missing-csrf)))
           (is (= 403 (.statusCode member-add)))
+          (is (= 201 (.statusCode admin-add)))
           (is (= 201 (.statusCode owner-add)))
           (is (= {"email" "new@example.com"
                   "role" "member"

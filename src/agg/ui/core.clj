@@ -1,5 +1,6 @@
 (ns agg.ui.core
-  (:require [clojure.string :as str]))
+  (:require [agg.admin.core :as admin]
+            [clojure.string :as str]))
 
 (defn escape-html [value]
   (-> (str (or value ""))
@@ -117,7 +118,7 @@
      "<button type=\"submit\">Submit render</button></form>"
      "<div id=\"preview-result\"></div><div id=\"job-result\"></div></section>"
      (token-panel tokens)
-     (when (= :owner (:role user))
+     (when (admin/administrator? (:role user))
        (member-panel members))
      "<footer><a href=\"/privacy\">Privacy</a> · <a href=\"/terms\">Terms</a></footer>"
      "<script>const selection=document.getElementById('picker-selection');"
@@ -161,7 +162,7 @@
         "<p>Questions or deletion "
         "requests may be sent to <a href=\"mailto:me@jamiep.org\">me@jamiep.org</a>.</p>"
         "<h2>Information used</h2><p>We use your Google account identifier and "
-        "email address to authenticate you and enforce the owner-managed access list. "
+        "email address to authenticate you and enforce the administrator-managed access list. "
         "When you connect Google Drive, Alpha Compose receives only the "
         "<code>drive.file</code> permission, allowing access to files you select or "
         "that Alpha Compose creates. We process telemetry and optional watermark "

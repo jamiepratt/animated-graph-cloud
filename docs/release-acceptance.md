@@ -25,15 +25,15 @@ commit SHA under `automated.repositoryAcceptance`.
 ## Manual/external production evidence
 
 All rows start `not-run`. Record exact candidate commit and immutable image digest.
-The owner-only production smoke is evidence only after the approved workflow
-and authenticated owner check complete.
+The owner/admin production smoke is evidence only after the approved workflow
+and authenticated owner or admin check complete.
 
 | Area | Required evidence |
 |---|---|
 | Legal and identity | Owner/legal approval of the public homepage, Privacy policy, and Terms of service; public URLs captured. |
 | Firebase and domain | Owner acceptance of Firebase Terms, Firebase project association, Cloudflare DNS records, domain verification, and valid TLS for `alphacompose.com`. |
 | OAuth brand verification | Alpha Compose brand published in the production Google project with exact homepage, privacy/terms URLs, authorized domain, callbacks, and only `openid email profile drive.file`. |
-| Owner-only production smoke | Approved GitHub `production` environment run; owner login works; membership view contains no non-owner active member. |
+| Owner/admin production smoke | Approved GitHub `production` environment run; owner and configured admin logins work; membership view exposes administration only to those roles. |
 | Maximum-duration renders | Both `1080p25` and `2.7k25` maximum-duration outputs complete within the configured one-task, zero-retry, 60-minute envelope; capture job execution, output checksum, timing, memory, and cost. |
 | Input matrix | Polar CSV, Garmin FIT, OxiWear heart-rate CSV, optional OxiWear SpO2, timer, and PNG watermark each produce the expected production overlay. |
 | DaVinci Resolve | Manual DaVinci Resolve playback and alpha-composite inspection of both maximum presets, including seeking, duration, transparency, and heartbeat audio. |
@@ -56,7 +56,7 @@ rejection; retain and augment the printed response-evidence directory manually.
 
 ## Release decision
 
-Release remains owner-only until every applicable production row has evidence,
+Release remains owner-approved and configured-admin-scoped until every applicable production row has evidence,
 legal copy is approved, OAuth is published, rollback has been exercised, and no
 unresolved HIGH/CRITICAL security finding remains. Adding the first member is a
 separate owner decision after this matrix is accepted.

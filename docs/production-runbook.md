@@ -87,7 +87,8 @@ In Google Auth Platform for `animated-graph-cloud-prod-jp`:
 - create a production Web application client with exact redirects
   `https://alphacompose.com/v1/auth/login/callback` and
   `https://alphacompose.com/v1/auth/drive/callback`;
-- keep the release owner only; do not add allowlisted members during release.
+- configure the intended `AGG_ADMIN_EMAILS` set; the release bootstraps those
+  administrators but does not add ordinary allowlisted members.
 
 Complete the public pages and DNS/TLS before submitting OAuth brand
 verification. OAuth publication and verification are external Google actions;
@@ -170,15 +171,16 @@ unset PICKER_API_KEY
 
 Confirm all four enabled versions and IAM bindings without printing payloads.
 
-## Owner-only release
+## Multi-admin release
 
 From GitHub Actions, dispatch **Release Alpha Compose production** with an exact
 reviewed 40-character lowercase commit SHA and confirmation
-`RELEASE ALPHA COMPOSE TO OWNER ONLY`.
+`RELEASE ALPHA COMPOSE WITH MULTI-ADMIN ACCESS`.
 Approve the `production environment` gate. The workflow builds that checked-out
 commit, scans it, pushes an immutable digest, verifies the private service,
 publishes Hosting, updates the durable renderer, and verifies health/privacy/
-terms. It neither publishes OAuth nor adds a member.
+terms. It neither publishes OAuth nor adds ordinary members; configured
+administrators are bootstrapped from `AGG_ADMIN_EMAILS`.
 
 Afterward, apply the Scheduler step above, complete
 `docs/release-acceptance.md`, and store a populated copy of the evidence

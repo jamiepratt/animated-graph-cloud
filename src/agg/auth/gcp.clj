@@ -328,12 +328,14 @@
 
 (defn api-dependencies
   [{:keys [firestore project region base-url internal-audience owner-email
+           admin-emails
            session-secret
            oauth-client-credentials tasks-service-account
            scheduler-service-account picker-api-key picker-app-id
            token-hash-secret]}]
   (let [owner-email (required owner-email "AGG_OWNER_EMAIL")
-        member-directory (admin-gcp/member-directory firestore owner-email)
+        member-directory (admin-gcp/member-directory firestore owner-email
+                                                     admin-emails)
         {:keys [credentials oauth cipher grant-store gateway]}
         (drive-components firestore project region oauth-client-credentials
                           member-directory)
@@ -343,6 +345,7 @@
                       :base-url (required base-url "AGG_PUBLIC_BASE_URL")
                       :member-directory member-directory
                       :owner-email owner-email
+                      :admin-emails admin-emails
                       :session-key (session-key session-secret)
                       :oauth oauth
                       :cipher cipher

@@ -2,31 +2,37 @@
   (:require [agg.admin.core :as admin]
             [clojure.test :refer [deftest is testing]]))
 
-(deftest only-the-owner-can-list-add-or-revoke-members
+(deftest owners-and-admins-can-list-add-or-revoke-members
   (let [{:keys [directory service]}
         (admin/in-memory-system {:owner-email "owner@example.com"
-                                 :initial-emails #{"member@example.com"}})
+                                 :initial-emails #{"member@example.com"
+                                                   "admin@example.com"}
+                                 :admin-emails #{"admin@example.com"}})
         owner (admin/authorize-member! directory "owner@example.com"
                                        "owner-subject")
+        administrator (admin/authorize-member! directory "admin@example.com"
+                                               "admin-subject")
         member (admin/authorize-member! directory "member@example.com"
                                         "member-subject")]
-    (is (= [{:email "member@example.com" :role "member" :status "active"}
+    (is (= [{:email "admin@example.com" :role "admin" :status "active"}
+            {:email "member@example.com" :role "member" :status "active"}
             {:email "owner@example.com" :role "owner" :status "active"}]
            (admin/list-members service owner)))
-    (is (= {:email "new@example.com" :role "member" :status "active"}
-           (admin/add-member! service owner " New@Example.com ")))
-    (is (= {:email "member@example.com" :role "member" :status "revoked"}
-           (admin/revoke-member! service owner "MEMBER@example.com")))
     (testing "a member cannot administer the allowlist"
       (doseq [action [#(admin/list-members service member)
                       #(admin/add-member! service member "blocked@example.com")
                       #(admin/revoke-member! service member "owner@example.com")]]
-        (is (= ::admin/owner-required
+        (is (= ::admin/admin-required
                (try
                  (action)
                  nil
                  (catch clojure.lang.ExceptionInfo error
-                   (:type (ex-data error))))))))))
+                   (:type (ex-data error))))))))
+    (testing "an admin can administer the allowlist"
+      (is (= {:email "new@example.com" :role "member" :status "active"}
+             (admin/add-member! service administrator " New@Example.com ")))
+      (is (= {:email "member@example.com" :role "member" :status "revoked"}
+             (admin/revoke-member! service administrator "MEMBER@example.com"))))))
 
 (deftest revocation-invalidates-every-access-path-and-emits-a-safe-event
   (let [revoked-tokens (atom [])

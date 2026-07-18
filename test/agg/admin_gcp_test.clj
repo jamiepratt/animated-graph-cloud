@@ -8,6 +8,40 @@
             [clojure.test :refer [deftest is]])
   (:import (com.google.cloud.firestore FirestoreOptions)))
 
+(deftest configured-admins-are-bootstrapped-and-can-administer-members
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId "animated-graph-cloud-multi-admin-test")
+                        (.setEmulatorHost host)
+                        .build
+                        .getService)]
+      (try
+        (doseq [collection ["members" "administration"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (let [directory (gcp/member-directory firestore "owner@example.com"
+                                              #{"admin@example.com"})
+              owner (admin/authorize-member! directory "owner@example.com"
+                                             "owner-subject")
+              administrator (admin/authorize-member! directory
+                                                     "admin@example.com"
+                                                     "admin-subject")
+              service (admin/service {:directory directory})]
+          (is (= :admin (:role administrator)))
+          (is (= {:email "new@example.com"
+                  :role "member"
+                  :status "active"}
+                 (admin/add-member! service administrator "new@example.com")))
+          (is (= :admin
+                 (:role
+                  (admin/active-member
+                   (gcp/member-directory firestore "owner@example.com"
+                                         #{"admin@example.com"})
+                   administrator))))
+          (is (= :owner (:role (admin/active-member directory owner)))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
 (deftest configured-owner-rotation-invalidates-the-former-owner
   (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
     (let [firestore (-> (FirestoreOptions/newBuilder)
