@@ -55,6 +55,57 @@
 (defn- emit-event! [dependencies event fields]
   ((or (:event-sink dependencies) log-event!) event fields))
 
+(defn- error-types [error]
+  (loop [current error
+         types #{}]
+    (if current
+      (recur (.getCause ^Throwable current)
+             (if-let [type (:type (ex-data current))]
+               (conj types type)
+               types))
+      types)))
+
+(defn- preview-path? [path]
+  (contains? #{"/v1/preview" "/ui/preview"} path))
+
+(declare respond-json!)
+
+(defn- preview-failure [error request-id]
+  (let [types (error-types error)
+        contract? (contains? types ::invalid-request)
+        invalid-source? (contains? types ::contract/invalid-source-metadata)
+        source-metadata? (or invalid-source?
+                             (contains? types
+                                        :agg.drive.gcp/source-metadata-failed))
+        source-content? (contains? types
+                                   :agg.drive.gcp/source-download-failed)
+        category (cond
+                   contract? "request_contract"
+                   source-metadata? "drive_source_metadata"
+                   source-content? "drive_source_content"
+                   :else "preview_rendering")
+        status (cond
+                 contract? 400
+                 invalid-source? 400
+                 :else 502)
+        error-code (if contract? "invalid_request" "preview_failed")]
+    {:status status
+     :category category
+     :body (cond-> {:error error-code
+                    :category category
+                    :requestId request-id}
+             (not contract?) (assoc :retryable true))
+     :log? (not contract?)}))
+
+(defn- respond-preview-failure! [dependencies exchange request-id error]
+  (let [{:keys [status category body log?]} (preview-failure error request-id)]
+    (when log?
+      (emit-event! dependencies "request_failed"
+                   {:severity (if (= 400 status) "WARNING" "ERROR")
+                    :requestId request-id
+                    :category category}))
+    (respond-json! exchange status body)))
+
 (defn- oauth-callback-failure [type]
   (case type
     ::auth/revoked-grant
@@ -975,8 +1026,10 @@
                             "{\"error\":\"payload_too_large\"}")
 
                   ::invalid-request
-                  (respond! exchange 400 "application/json; charset=utf-8"
-                            "{\"error\":\"invalid_request\"}")
+                  (if (preview-path? path)
+                    (respond-preview-failure! dependencies exchange request-id error)
+                    (respond! exchange 400 "application/json; charset=utf-8"
+                              "{\"error\":\"invalid_request\"}"))
 
                   ::invalid-upload-request
                   (respond-json! exchange 400 {:error "invalid_upload_request"})
@@ -1010,11 +1063,15 @@
                                                :limit contract/max-source-bytes})
 
                   ::contract/invalid-source-metadata
-                  (respond-json! exchange 400 {:error "invalid_source_video"})
+                  (if (preview-path? path)
+                    (respond-preview-failure! dependencies exchange request-id error)
+                    (respond-json! exchange 400 {:error "invalid_source_video"}))
 
                   ::drive/source-unavailable
-                  (respond-json! exchange 503 {:error "drive_source_unavailable"
-                                               :retryable true})
+                  (if (preview-path? path)
+                    (respond-preview-failure! dependencies exchange request-id error)
+                    (respond-json! exchange 503 {:error "drive_source_unavailable"
+                                                 :retryable true}))
 
                   ::jobs/invalid-idempotency-key
                   (respond-json! exchange 400 {:error "invalid_idempotency_key"})
@@ -1092,20 +1149,25 @@
                   ::jobs/member-not-allowlisted
                   (respond-json! exchange 403 {:error "not_allowlisted"})
 
-                  (do
-                    (emit-event! dependencies "request_failed"
-                                 {:severity "ERROR"
-                                  :reason "unexpected_application_error"
-                                  :errorType (some-> error ex-data :type str)})
-                    (respond! exchange 500 "application/json; charset=utf-8"
-                              "{\"error\":\"render_failed\"}"))))))
+                  (if (preview-path? path)
+                    (respond-preview-failure! dependencies exchange request-id error)
+                    (do
+                      (emit-event! dependencies "request_failed"
+                                   {:severity "ERROR"
+                                    :reason "unexpected_application_error"
+                                    :errorType (some-> error ex-data :type str)})
+                      (respond! exchange 500 "application/json; charset=utf-8"
+                                "{\"error\":\"render_failed\"}")))))))
           (catch Throwable error
-            (emit-event! dependencies "request_failed"
-                         {:severity "ERROR"
-                          :reason "unexpected_error"
-                          :errorType (some-> error ex-data :type str)})
-            (respond! exchange 500 "application/json; charset=utf-8"
-                      "{\"error\":\"render_failed\"}")))))))
+            (if (preview-path? path)
+              (respond-preview-failure! dependencies exchange request-id error)
+              (do
+                (emit-event! dependencies "request_failed"
+                             {:severity "ERROR"
+                              :reason "unexpected_error"
+                              :errorType (some-> error ex-data :type str)})
+                (respond! exchange 500 "application/json; charset=utf-8"
+                          "{\"error\":\"render_failed\"}")))))))))
 
 (defn start!
   ([port]

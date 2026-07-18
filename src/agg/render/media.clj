@@ -67,37 +67,37 @@
         output @captured]
     (when-not (zero? exit-status)
       (throw (errors/raise! "Media tool failed"
-                      {:type ::media-tool-failed
-                       :exit-status exit-status})))
+                            {:type ::media-tool-failed
+                             :exit-status exit-status})))
     output))
 
 (defn extract-preview!
   "Extracts one PNG from a completed local composite without retaining frames."
   ([ffmpeg render-spec input-path output]
    (let [builder (doto (ProcessBuilder. ^java.util.List
-                                        [ffmpeg "-hide_banner" "-nostdin"
-                                         "-loglevel" "error"
-                                         "-ss" (str (/ (double (:duration-seconds
-                                                                   render-spec))
-                                                          2.0))
-                                         "-i" (str input-path)
-                                         "-frames:v" "1"
-                                         "-f" "image2pipe"
-                                         "-vcodec" "png" "pipe:1"])
-                    (.redirectErrorStream false))
+                        [ffmpeg "-hide_banner" "-nostdin"
+                         "-loglevel" "error"
+                         "-ss" (str (/ (double (:duration-seconds
+                                                render-spec))
+                                       2.0))
+                         "-i" (str input-path)
+                         "-frames:v" "1"
+                         "-f" "image2pipe"
+                         "-vcodec" "png" "pipe:1"])
+                   (.redirectErrorStream false))
          process (.start builder)
          stdout (future
                   (with-open [input (.getInputStream process)]
                     (.readAllBytes input)))
          stderr (future
-                 (with-open [input (.getErrorStream process)]
-                   (slurp input)))
+                  (with-open [input (.getErrorStream process)]
+                    (slurp input)))
          status (.waitFor process)]
      (when-not (zero? status)
        @stderr
        (throw (errors/raise! "Preview extraction failed"
-                       {:type ::preview-extraction-failed
-                        :exit-status status})))
+                             {:type ::preview-extraction-failed
+                              :exit-status status})))
      (.write ^java.io.OutputStream output ^bytes @stdout)
      (.flush ^java.io.OutputStream output)
      {:width (:width render-spec) :height (:height render-spec)
@@ -139,8 +139,8 @@
         @captured
         (when-not (zero? exit-status)
           (throw (errors/raise! "FFmpeg encoding failed"
-                          {:type ::encoding-failed
-                           :exit-status exit-status})))
+                                {:type ::encoding-failed
+                                 :exit-status exit-status})))
         {:exit-status exit-status})
       (catch Throwable error
         (.destroyForcibly process)
@@ -152,7 +152,7 @@
         process (.start (ProcessBuilder. ^java.util.List ["mkfifo" (str path)]))]
     (when-not (zero? (.waitFor process))
       (throw (errors/raise! "Could not create the overlay pipe"
-                      {:type ::pipe-creation-failed})))
+                            {:type ::pipe-creation-failed})))
     path))
 
 (defn composite-command
@@ -176,13 +176,13 @@
                             "[2:a]aformat=sample_rates=48000:channel_layouts=stereo,aresample=48000,volume=1.0[beat];"
                             "[src][beat]amix=inputs=2:duration=longest:dropout_transition=0,alimiter=limit=0.95[a]"))
         video-args (case output-format
-                    "prores-422-mov"
-                    ["-c:v" (:encoder prores-422-contract)
-                     "-profile:v" "3"
-                     "-pix_fmt" (:pixel-format prores-422-contract)]
-                    ["-c:v" (:encoder h264-mp4-contract)
-                     "-pix_fmt" (:pixel-format h264-mp4-contract)
-                     "-preset" "fast"])
+                     "prores-422-mov"
+                     ["-c:v" (:encoder prores-422-contract)
+                      "-profile:v" "3"
+                      "-pix_fmt" (:pixel-format prores-422-contract)]
+                     ["-c:v" (:encoder h264-mp4-contract)
+                      "-pix_fmt" (:pixel-format h264-mp4-contract)
+                      "-preset" "fast"])
         format-args (if (= "prores-422-mov" output-format)
                       ["-f" "mov"]
                       ["-f" "mp4" "-movflags" "+faststart"])]
@@ -247,15 +247,20 @@
           source-error @source-result
           overlay-error @overlay-result]
       (try
-        (when (and (not (zero? exit-status))
-                   (or source-error overlay-error))
+        (when source-error
           (throw (errors/raise! "FFmpeg compositing failed"
-                          {:type ::compositing-failed
-                           :exit-status exit-status})))
+                                {:type ::compositing-failed
+                                 :exit-status exit-status}
+                                source-error)))
+        (when overlay-error
+          (throw (errors/raise! "FFmpeg compositing failed"
+                                {:type ::compositing-failed
+                                 :exit-status exit-status}
+                                overlay-error)))
         (when-not (zero? exit-status)
           (throw (errors/raise! "FFmpeg compositing failed"
-                          {:type ::compositing-failed
-                           :exit-status exit-status})))
+                                {:type ::compositing-failed
+                                 :exit-status exit-status})))
         {:exit-status exit-status}
         (finally
           (Files/deleteIfExists overlay-pipe)
@@ -335,7 +340,7 @@
                    (some #{"mdat"} atoms)
                    (not-any? #{"moof"} atoms))
       (throw (errors/raise! "Encoded media does not satisfy the renderer contract"
-                      {:type ::invalid-media-contract})))
+                            {:type ::invalid-media-contract})))
     {:video {:codec "prores"
              :profile "4444"
              :encoder-input-pixel-format
@@ -372,9 +377,9 @@
                          h264-mp4-contract)
         expected-container (:format expected-video)]
     (when (and duration (< duration (- (double expected-duration)
-                                      (/ 1.0 (:fps render-spec)))))
+                                       (/ 1.0 (:fps render-spec)))))
       (throw (errors/raise! "Source video is shorter than the requested section"
-                      {:type ::short-source})))
+                            {:type ::short-source})))
     (when-not (and (= (:codec expected-video) (:codec_name video))
                    (= (:width render-spec) (:width video))
                    (= (:height render-spec) (:height video))
@@ -393,7 +398,7 @@
                                    (/ 1.0 (:fps render-spec)))
                    (str/includes? (:format_name format) expected-container))
       (throw (errors/raise! "Encoded composited media violates its contract"
-                      {:type ::invalid-composited-media-contract})))
+                            {:type ::invalid-composited-media-contract})))
     {:video {:codec (:codec_name video)
              :profile (:profile video)
              :pixel-format (:pix_fmt video)
