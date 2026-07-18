@@ -57,6 +57,19 @@
              (catch clojure.lang.ExceptionInfo error
                (:type (ex-data error))))))))
 
+(deftest oauth-service-failure-becomes-a-bounded-domain-error
+  (let [client (gcp/->GoogleOAuthClient
+                (fn [_]
+                  {:status 503 :body (json/write-str {:error "temporarily_unavailable"})})
+                "client-id" "client-secret" identity
+                "https://oauth2.googleapis.test/token")]
+    (is (= ::auth/oauth-exchange-failed
+           (try
+             (auth/refresh-drive-token! client "refresh-token")
+             nil
+             (catch clojure.lang.ExceptionInfo error
+               (:type (ex-data error))))))))
+
 (deftest kms-cipher-persists-only-ciphertext-and-round-trips
   (let [requests (atom [])
         send! (fn [request]

@@ -66,7 +66,7 @@
       (throw (ex-info "Google OAuth token exchange failed"
                       {:type (if (= "invalid_grant" (:error parsed))
                                ::auth/revoked-grant
-                               ::oauth-exchange-failed)
+                               ::auth/oauth-exchange-failed)
                        :status status})))
     parsed))
 

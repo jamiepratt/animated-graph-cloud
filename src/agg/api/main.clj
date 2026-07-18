@@ -34,6 +34,62 @@
 (defn- emit-event! [dependencies event fields]
   ((or (:event-sink dependencies) log-event!) event fields))
 
+(defn- oauth-callback-failure [type]
+  (case type
+    ::auth/revoked-grant
+    {:category "invalid_grant"
+     :status 401
+     :body {:error "drive_grant_required"}}
+
+    ::auth/missing-refresh-token
+    {:category "missing_refresh_token"
+     :status 401
+     :body {:error "drive_grant_required"}}
+
+    ::auth/invalid-drive-scopes
+    {:category "unexpected_scopes"
+     :status 400
+     :body {:error "invalid_drive_scopes"}}
+
+    ::auth/invalid-code
+    {:category "invalid_code"
+     :status 400
+     :body {:error "invalid_oauth_code"}}
+
+    ::auth/oauth-exchange-failed
+    {:category "oauth_exchange"
+     :status 502
+     :body {:error "oauth_exchange_failed" :retryable true}}
+
+    ::auth/missing-access-token
+    {:category "oauth_exchange"
+     :status 502
+     :body {:error "oauth_exchange_failed" :retryable true}}
+
+    ::auth/drive-unavailable
+    {:category "drive"
+     :status 502
+     :body {:error "drive_unavailable" :retryable true}}
+
+    ::auth/kms-unavailable
+    {:category "kms"
+     :status 503
+     :body {:error "kms_unavailable" :retryable true}}
+
+    ::auth/grant-persistence-failed
+    {:category "grant_persistence"
+     :status 503
+     :body {:error "grant_persistence_failed" :retryable true}}
+
+    nil))
+
+(defn- log-oauth-callback-failure! [dependencies request-id failure]
+  (emit-event! dependencies "oauth_callback_failed"
+               {:severity (if (>= (:status failure) 500) "ERROR" "WARNING")
+                :requestId request-id
+                :category (:category failure)
+                :status (:status failure)}))
+
 (defn- respond-bytes! [^HttpExchange exchange status content-type bytes]
   (doto (.getResponseHeaders exchange)
     (.set "Content-Type" content-type)
@@ -511,7 +567,9 @@
   (reify HttpHandler
     (handle [_ exchange]
       (let [method (.getRequestMethod exchange)
-            path (some-> exchange .getRequestURI .getPath)]
+            path (some-> exchange .getRequestURI .getPath)
+            request-id (str (UUID/randomUUID))]
+        (.set (.getResponseHeaders exchange) "X-Request-Id" request-id)
         (try
           (cond
             (and (= "GET" method) (= "/health" path))
@@ -708,7 +766,12 @@
             (respond! exchange 404 "application/json; charset=utf-8"
                       "{\"error\":\"not_found\"}"))
           (catch clojure.lang.ExceptionInfo error
-            (case (:type (ex-data error))
+            (let [failure (oauth-callback-failure (:type (ex-data error)))]
+              (if failure
+                (do
+                  (log-oauth-callback-failure! dependencies request-id failure)
+                  (respond-json! exchange (:status failure) (:body failure)))
+                (case (:type (ex-data error))
               ::request-too-large
               (respond! exchange 413 "application/json; charset=utf-8"
                         "{\"error\":\"payload_too_large\"}")
@@ -811,7 +874,7 @@
               (respond-json! exchange 403 {:error "not_allowlisted"})
 
               (respond! exchange 500 "application/json; charset=utf-8"
-                        "{\"error\":\"render_failed\"}")))
+                        "{\"error\":\"render_failed\"}")))))
           (catch Throwable _
             (respond! exchange 500 "application/json; charset=utf-8"
                       "{\"error\":\"render_failed\"}")))))))

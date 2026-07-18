@@ -82,8 +82,23 @@ paths:
             Set-Cookie:
               description: Signed Firebase-compatible `__session` cookie.
               schema: {type: string}
-        "400": {$ref: "#/components/responses/InvalidOAuthState"}
+        "400":
+          description: OAuth state, code, or Drive scope validation failed.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
         "403": {$ref: "#/components/responses/NotAllowlisted"}
+        "502":
+          description: Google OAuth or Drive is temporarily unavailable.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "503":
+          description: KMS or grant persistence is temporarily unavailable.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
   /v1/auth/drive/start:
     get:
       operationId: startGoogleDriveAuthorization
@@ -628,8 +643,14 @@ components:
             - authentication_required
             - not_allowlisted
             - invalid_oauth_state
+            - invalid_oauth_code
+            - invalid_drive_scopes
             - csrf_required
             - drive_grant_required
+            - oauth_exchange_failed
+            - drive_unavailable
+            - kms_unavailable
+            - grant_persistence_failed
             - picker_not_configured
             - invalid_idempotency_key
             - idempotency_conflict
@@ -641,3 +662,4 @@ components:
             - invalid_job_transition
             - token_not_found
             - admin_required
+        retryable: {type: boolean}

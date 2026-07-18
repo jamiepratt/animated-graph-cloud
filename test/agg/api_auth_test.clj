@@ -5,7 +5,7 @@
             [agg.jobs-test :as fixture]
             [agg.jobs.lifecycle :as jobs]
             [clojure.data.json :as json]
-            [clojure.test :refer [deftest is]]))
+            [clojure.test :refer [deftest is testing]]))
 
 (defn- available-port []
   (test-http/available-port))
@@ -31,6 +31,44 @@
     {:system system
      :session (auth/issue-session system {:subject "google-subject-1"
                                           :email "owner@example.com"})}))
+
+(defn- drive-callback-fixture
+  ([oauth]
+   (drive-callback-fixture oauth {}))
+  ([oauth {:keys [cipher drive grant-store]}]
+   (let [cipher (or cipher
+                    (reify auth/TokenCipher
+                      (encrypt-token! [_ value] (str "kms:" value))
+                      (decrypt-token! [_ value] (subs value 4))))
+         drive (or drive
+                   (reify auth/DriveClient
+                     (ensure-output-folder! [_ _ existing-folder]
+                       (or existing-folder "folder-1"))))
+         grant-store (or grant-store
+                         (reify auth/GrantStore
+                           (load-grant [_ _] nil)
+                           (save-grant! [_ _ grant] grant)
+                           (revoke-grant! [_ _] nil)))
+         system (auth/system {:client-id "client-id"
+                              :client-secret "client-secret"
+                              :base-url "https://app.example.com"
+                              :allowlist #{"owner@example.com"}
+                              :session-key (.getBytes "01234567890123456789012345678901")
+                              :oauth oauth
+                              :cipher cipher
+                              :grant-store grant-store
+                              :drive drive})]
+     {:system system
+      :session (auth/issue-session system {:subject "google-subject-1"
+                                           :email "owner@example.com"})})))
+
+(defn- valid-drive-oauth []
+  (reify auth/OAuthClient
+    (exchange-code! [_ flow _ _ _]
+      (is (= :drive flow))
+      {:access-token "drive-access"
+       :refresh-token "drive-refresh"
+       :granted-scopes #{"https://www.googleapis.com/auth/drive.file"}})))
 
 (deftest configured-user-routes-require-an-allowlisted-session
   (let [port (available-port)
@@ -100,6 +138,111 @@
         (is (re-find #"Signed in as owner@example.com" (.body authenticated))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
+
+(deftest drive-callback-returns-safe-categorized-errors
+  (doseq [{:keys [label oauth options expected-status expected-body category]
+           :or {options {}}}
+          [{:label "revoked grant"
+            :oauth (reify auth/OAuthClient
+                     (exchange-code! [_ _ _ _ _]
+                       (throw (ex-info "invalid_grant"
+                                       {:type ::auth/revoked-grant}))))
+            :expected-status 401
+            :expected-body {"error" "drive_grant_required"}
+            :category "invalid_grant"}
+           {:label "missing refresh token"
+            :oauth (reify auth/OAuthClient
+                     (exchange-code! [_ _ _ _ _]
+                       {:access-token "drive-access"
+                        :refresh-token nil
+                        :granted-scopes
+                        #{"https://www.googleapis.com/auth/drive.file"}}))
+            :expected-status 401
+            :expected-body {"error" "drive_grant_required"}
+            :category "missing_refresh_token"}
+           {:label "unexpected scopes"
+            :oauth (reify auth/OAuthClient
+                     (exchange-code! [_ _ _ _ _]
+                       {:access-token "drive-access"
+                        :refresh-token "drive-refresh"
+                        :granted-scopes #{"https://www.googleapis.com/auth/drive"}}))
+            :expected-status 400
+            :expected-body {"error" "invalid_drive_scopes"}
+            :category "unexpected_scopes"}
+           {:label "OAuth service"
+            :oauth (reify auth/OAuthClient
+                     (exchange-code! [_ _ _ _ _]
+                       (throw (ex-info "OAuth unavailable"
+                                       {:type ::auth/oauth-exchange-failed
+                                        :status 503}))))
+            :expected-status 502
+            :expected-body {"error" "oauth_exchange_failed"
+                            "retryable" true}
+            :category "oauth_exchange"}
+           {:label "Drive service"
+            :oauth (valid-drive-oauth)
+            :options {:drive (reify auth/DriveClient
+                               (ensure-output-folder! [_ _ _]
+                                 (throw (ex-info "Drive unavailable"
+                                                 {:type ::drive-unavailable
+                                                  :status 503}))))}
+            :expected-status 502
+            :expected-body {"error" "drive_unavailable"
+                            "retryable" true}
+            :category "drive"}
+           {:label "KMS service"
+            :oauth (valid-drive-oauth)
+            :options {:cipher (reify auth/TokenCipher
+                                (encrypt-token! [_ _]
+                                  (throw (ex-info "KMS unavailable"
+                                                  {:type ::kms-unavailable
+                                                   :status 503})))
+                                (decrypt-token! [_ _] "unused"))}
+            :expected-status 503
+            :expected-body {"error" "kms_unavailable"
+                            "retryable" true}
+            :category "kms"}
+           {:label "grant persistence"
+            :oauth (valid-drive-oauth)
+            :options {:grant-store (reify auth/GrantStore
+                                     (load-grant [_ _] nil)
+                                     (save-grant! [_ _ _]
+                                       (throw (ex-info "Firestore unavailable"
+                                                       {:type ::persistence-unavailable
+                                                        :status 503})))
+                                     (revoke-grant! [_ _] nil))}
+            :expected-status 503
+            :expected-body {"error" "grant_persistence_failed"
+                            "retryable" true}
+            :category "grant_persistence"}]]
+    (testing label
+      (let [port (available-port)
+            events (atom [])
+            {:keys [system session]} (drive-callback-fixture oauth options)
+            flow (auth/begin-flow! system :drive session)
+            browser-cookie (auth/issue-browser-cookie
+                            system {:session session
+                                    :oauth (:stateCookie flow)})
+            server (api/start! port
+                               {:auth-system system
+                                :event-sink #(swap! events conj [%1 %2])})]
+        (try
+          (let [response (get! port
+                               (str "/v1/auth/drive/callback?code=code&state="
+                                    (:state flow))
+                               {"Cookie" (str "__session=" browser-cookie)})
+                event (second (first @events))]
+            (is (= expected-status (.statusCode response)))
+            (is (= expected-body (json/read-str (.body response))))
+            (is (= ["oauth_callback_failed"]
+                   (mapv first @events)))
+            (is (= category (:category event)))
+            (is (re-matches #"[0-9a-f-]{36}" (:requestId event)))
+            (is (= expected-status (:status event)))
+            (is (not-any? #(contains? event %)
+                          [:code :token :email :filename :message])))
+          (finally
+            (.close ^java.lang.AutoCloseable server)))))))
 
 (deftest forged-task-header-is-rejected-before-dispatch
   (let [port (available-port)

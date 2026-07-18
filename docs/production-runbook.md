@@ -95,6 +95,15 @@ verification. OAuth publication and verification are external Google actions;
 record their result rather than treating `drive.file` classification as proof
 of approval.
 
+Drive callback failures return bounded JSON error codes. `drive_grant_required`
+means the owner should repeat authorization; `invalid_drive_scopes` means the
+grant must be restarted with only `drive.file`; `oauth_exchange_failed`,
+`drive_unavailable`, `kms_unavailable`, and `grant_persistence_failed` are
+retryable service failures. The API emits one `oauth_callback_failed` event
+with only `requestId`, `category`, `status`, and severity. Use the response
+`X-Request-Id` to correlate an owner report; never add OAuth codes, tokens,
+email addresses, filenames, or request bodies to an issue or log.
+
 ## Terraform bootstrap
 
 The state bucket is `gs://animated-graph-cloud-prod-jp-tfstate`, prefix `prod`.

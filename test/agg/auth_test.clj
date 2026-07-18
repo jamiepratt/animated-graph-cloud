@@ -263,6 +263,40 @@
     (is (= "drive-folder-1"
            (get-in @grants ["google-subject-1" :folder-id])))))
 
+(deftest drive-reauthorization-preserves-an-existing-refresh-token
+  (let [{:keys [system grants encrypted]} (drive-fixture)
+        session (auth/issue-session system {:subject "google-subject-1"
+                                            :email "owner@example.com"})
+        first-flow (auth/begin-flow! system :drive session)]
+    (auth/finish-drive! system {:code "first-drive-code"
+                                :state (:state first-flow)
+                                :state-cookie (:stateCookie first-flow)})
+    (let [reauthorization-system
+          (assoc system
+                 :oauth
+                 (reify auth/OAuthClient
+                   (exchange-code! [_ flow _ _ _]
+                     (is (= :drive flow))
+                     {:access-token "reauthorized-drive-access-token"
+                      :refresh-token nil
+                      :granted-scopes
+                      #{"https://www.googleapis.com/auth/drive.file"}})))
+          second-flow (auth/begin-flow! reauthorization-system :drive session)]
+      (is (= {:user {:subject "google-subject-1"
+                     :email "owner@example.com"
+                     :role :member}}
+               (select-keys
+                (auth/finish-drive!
+                 reauthorization-system
+                 {:code "second-drive-code"
+                  :state (:state second-flow)
+                  :state-cookie (:stateCookie second-flow)})
+                [:user])))
+      (is (= ["drive-refresh-token"] @encrypted))
+      (is (= "kms:drive-refresh-token"
+             (get-in @grants ["google-subject-1"
+                              :refresh-token-ciphertext]))))))
+
 (deftest drive-access-refreshes-an-encrypted-grant-and-revokes-only-invalid-grants
   (let [{:keys [system grants refreshes]} (drive-fixture)
         subject "google-subject-1"]
