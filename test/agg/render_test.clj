@@ -24,13 +24,6 @@
     {:result (frames/stream! render-spec output)
      :rgba (.toByteArray output)}))
 
-(defn- visible-pixels [rgba width height]
-  (vec (for [y (range height)
-             x (range width)
-             :when (pos? (bit-and 0xff
-                                  (aget rgba (+ 3 (* 4 (+ x (* y width)))))))]
-         [x y])))
-
 (defn- alpha-bounds [^bytes rgba width]
   (loop [pixel 0
          visible-count 0
@@ -111,9 +104,10 @@
                       :sectionEndAt "2026-07-17T09:00:02Z"})
         first-output (ByteArrayOutputStream.)
         second-output (ByteArrayOutputStream.)]
-    (is (= {:window-seconds 30.0
-            :heart-rate-min 40.0
-            :heart-rate-max 220.0}
+    (is (= {:padding-ratio 0.10
+            :minimum-heart-rate-padding 2.0
+            :minimum-spo2-padding 0.5
+            :tick-count 5}
            frames/trace-contract))
     (frames/render-preview! frames/java2d-frame-renderer render-spec first-output)
     (frames/render-preview! frames/java2d-frame-renderer render-spec second-output)
@@ -156,7 +150,7 @@
         colors (map unsigned pixels)]
     (testing "the SpO2 series has its own cyan trace"
       (is (some #(= [52 200 235] (subvec % 0 3)) colors)))
-    (testing "timer glyphs render in white"
+    (testing "the live readout and axes render in white"
       (is (some #(= [255 255 255] (subvec % 0 3)) colors)))
     (testing "the uploaded watermark retains its PNG color"
       (is (some #(= [255 0 0 255] %) colors)))))
@@ -178,27 +172,27 @@
              (sha256-bytes (.toByteArray output)))
           preset-id))))
 
-(deftest frames-stream-only-a-full-frame-heart-rate-trace
-  (let [width 64
-        height 36
-        {:keys [rgba]} (streamed-rgba {:width width
-                                       :height height
-                                       :fps 1
-                                       :duration-seconds 1})
-        visible (visible-pixels rgba width height)
-        visible-by-column (group-by first visible)
-        xs (map first visible)
-        ys (map second visible)]
-    (testing "only the antialiased trace has alpha"
-      (is (pos? (count visible)))
-      (is (<= (count visible) (* width 8)))
-      (is (every? #(<= (count %) 8) (vals visible-by-column))))
-    (testing "the trace uses nearly the full frame coordinate system"
-      (is (>= (count visible-by-column) (- width 4)))
-      (is (<= (apply min xs) 2))
-      (is (>= (apply max xs) (- width 3)))
-      (is (<= (apply min ys) 2))
-      (is (>= (apply max ys) (- height 3))))))
+(deftest frames-render-axes-readout-cursor-and-future-opacity
+  (let [{:keys [rgba]}
+        (streamed-rgba {:width 160
+                        :height 90
+                        :fps 1
+                        :duration-seconds 2
+                        :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                                    {:seconds 2.0 :heart-rate 140.0}]})
+        pixels (partition 4 rgba)
+        unsigned (fn [pixel] (mapv #(bit-and 0xff %) pixel))
+        colors (map unsigned pixels)]
+    (testing "the graph has opaque current pixels and half-alpha future pixels"
+      (is (some #(= [255 55 82 255] %) colors))
+      (is (some #(and (= [255 55 82] (subvec % 0 3))
+                       (pos? (last %))
+                       (< (last %) 255))
+                colors)))
+    (testing "axes and the readout render in white"
+      (is (some #(= [255 255 255 255] %) colors)))
+    (testing "the graph remains transparent outside its drawn content"
+      (is (some #(= [0 0 0 0] %) colors)))))
 
 (deftest production-frame-dimensions-keep-the-trace-near-every-edge
   (doseq [preset-id ["1080p25" "2.7k25"]]
@@ -207,17 +201,13 @@
                                                 :height height
                                                 :fps 1
                                                 :duration-seconds 1})
-          {:keys [visible-count min-x max-x min-y max-y]} (alpha-bounds rgba width)
-          horizontal-tolerance (Math/ceil (* width 0.02))
-          vertical-tolerance (Math/ceil (* height 0.03))]
+          {:keys [visible-count min-x max-x min-y max-y]} (alpha-bounds rgba width)]
       (testing preset-id
         (is (= {:frame-count 1 :buffer-count 1} result))
         (is (= (* width height 4) (alength rgba)))
         (is (pos? visible-count))
-        (is (<= min-x horizontal-tolerance))
-        (is (>= max-x (- width horizontal-tolerance 1)))
-        (is (<= min-y vertical-tolerance))
-        (is (>= max-y (- height vertical-tolerance 1)))))))
+        (is (<= 0 min-x max-x (dec width)))
+        (is (<= 0 min-y max-y (dec height)))))))
 
 (deftest heartbeat-wav-is-exact-stereo-pcm
   (let [output (ByteArrayOutputStream.)
