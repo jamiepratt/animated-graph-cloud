@@ -292,6 +292,16 @@
         :else
         response))))
 
+(defn- kms-failure-reason [status parsed]
+  (let [raw-reason (get-in parsed [:error :status])
+        reason (when (string? raw-reason)
+                 (str/lower-case raw-reason))]
+    (if (and reason (re-matches #"[a-z0-9_.-]{1,64}" reason))
+      reason
+      (if (and (integer? status) (<= 100 status 599))
+        (str "http_" status)
+        "invalid_response"))))
+
 (defrecord KmsTokenCipher [send! crypto-key]
   auth/TokenCipher
   (encrypt-token! [_ plaintext]
@@ -304,10 +314,15 @@
                                       crypto-key ":encrypt")
                             :headers {"Content-Type" "application/json"}
                             :body (json/write-str {:plaintext encoded})})
-          ciphertext (:ciphertext (json/read-str body :key-fn keyword))]
+          parsed (try
+                   (json/read-str (or body "{}") :key-fn keyword)
+                   (catch Throwable _ {}))
+          ciphertext (:ciphertext parsed)]
       (when-not (and (<= 200 status 299) (not-empty ciphertext))
         (throw (errors/raise! "KMS token encryption failed"
-                        {:type ::kms-encryption-failed :status status})))
+                        {:type ::kms-encryption-failed
+                         :status status
+                         :reason (kms-failure-reason status parsed)})))
       ciphertext))
   (decrypt-token! [_ ciphertext]
     (let [{:keys [status body]}
@@ -316,10 +331,15 @@
                                       crypto-key ":decrypt")
                             :headers {"Content-Type" "application/json"}
                             :body (json/write-str {:ciphertext ciphertext})})
-          plaintext (:plaintext (json/read-str body :key-fn keyword))]
+          parsed (try
+                   (json/read-str (or body "{}") :key-fn keyword)
+                   (catch Throwable _ {}))
+          plaintext (:plaintext parsed)]
       (when-not (and (<= 200 status 299) (not-empty plaintext))
         (throw (errors/raise! "KMS token decryption failed"
-                        {:type ::kms-decryption-failed :status status})))
+                        {:type ::kms-decryption-failed
+                         :status status
+                         :reason (kms-failure-reason status parsed)})))
       (String. (.decode (Base64/getDecoder) ^String plaintext)
                StandardCharsets/UTF_8))))
 

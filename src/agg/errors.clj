@@ -5,7 +5,7 @@
 (def ^:private safe-context-keys
   #{:status :offset :size :reported :sent-through :line :limit :limits
     :retryable :job-id :field :component :exit-status :failure-code
-    :state :components})
+    :state :components :reason})
 
 (defn- finite-number? [value]
   (and (number? value)
@@ -29,6 +29,7 @@
   (case key
     :limits (safe-limits? value)
     (:job-id :field :component :failure-code) (safe-string? value)
+    :reason (safe-string? value)
     :state (keyword? value)
     :components (and (vector? value)
                      (<= (count value) 16)

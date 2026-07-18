@@ -196,7 +196,8 @@
                                 (encrypt-token! [_ _]
                                   (throw (ex-info "KMS unavailable"
                                                   {:type ::kms-unavailable
-                                                   :status 503})))
+                                                   :status 503
+                                                   :reason "permission_denied"})))
                                 (decrypt-token! [_ _] "unused"))}
             :expected-status 503
             :expected-body {"error" "kms_unavailable"
@@ -237,6 +238,8 @@
             (is (= ["oauth_callback_failed"]
                    (mapv first @events)))
             (is (= category (:category event)))
+            (when (= "kms" category)
+              (is (= "permission_denied" (:reason event))))
             (is (re-matches #"[0-9a-f-]{36}" (:requestId event)))
             (is (= expected-status (:status event)))
             (is (not-any? #(contains? event %)

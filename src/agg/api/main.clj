@@ -92,12 +92,14 @@
 
     nil))
 
-(defn- log-oauth-callback-failure! [dependencies request-id failure]
+(defn- log-oauth-callback-failure! [dependencies request-id failure error]
   (emit-event! dependencies "oauth_callback_failed"
-               {:severity (if (>= (:status failure) 500) "ERROR" "WARNING")
-                :requestId request-id
-                :category (:category failure)
-                :status (:status failure)}))
+               (cond-> {:severity (if (>= (:status failure) 500) "ERROR" "WARNING")
+                        :requestId request-id
+                        :category (:category failure)
+                        :status (:status failure)}
+                 (string? (:reason (ex-data error)))
+                 (assoc :reason (:reason (ex-data error))))))
 
 (defn- respond-bytes! [^HttpExchange exchange status content-type bytes]
   (doto (.getResponseHeaders exchange)
@@ -891,7 +893,7 @@
             (let [failure (oauth-callback-failure (:type (ex-data error)))]
               (if failure
                 (do
-                  (log-oauth-callback-failure! dependencies request-id failure)
+                  (log-oauth-callback-failure! dependencies request-id failure error)
                   (respond-json! exchange (:status failure) (:body failure)))
                 (case (:type (ex-data error))
               ::request-too-large

@@ -326,10 +326,14 @@
     {:flow flow :verifier verifier :user user}))
 
 (defn- external-failure [type message error]
-  (let [status (:status (ex-data error))
+  (let [error-data (ex-data error)
+        status (:status error-data)
+        reason (:reason error-data)
         data (cond-> {:type type}
                (and (integer? status) (<= 100 status 599))
-               (assoc :status status))]
+               (assoc :status status)
+               (string? reason)
+               (assoc :reason reason))]
     (throw (errors/raise! message data error))))
 
 (defn finish-login!

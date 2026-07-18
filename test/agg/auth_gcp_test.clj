@@ -132,6 +132,23 @@
            (auth/encrypt-token! cipher "refresh-secret")))
     (is (= 2 @attempts))))
 
+(deftest kms-cipher-reports-only-a-bounded-failure-reason
+  (let [cipher (gcp/->KmsTokenCipher
+                (fn [_]
+                  {:status 403
+                   :body (json/write-str
+                          {:error {:status "PERMISSION_DENIED"
+                                   :message "do not expose this response"}})})
+                "projects/project/locations/europe-central2/keyRings/application/cryptoKeys/drive-refresh-tokens")]
+    (try
+      (auth/encrypt-token! cipher "refresh-secret")
+      (is false "KMS encryption should fail")
+      (catch clojure.lang.ExceptionInfo error
+        (is (= ::gcp/kms-encryption-failed (:type (ex-data error))))
+        (is (= 403 (:status (ex-data error))))
+        (is (= "permission_denied" (:reason (ex-data error))))
+        (is (not (contains? (ex-data error) :message)))))))
+
 (deftest task-token-verifier-exposes-only-cryptographically-verified-claims
   (let [verifier (gcp/->GoogleTaskTokenVerifier
                   (fn [token]
