@@ -513,7 +513,7 @@
       (.set "Cache-Control" "no-store")
       (.set "Referrer-Policy" "no-referrer")
       (.set "Content-Security-Policy"
-            "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"))
+            "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"))
     (respond! exchange 200 "text/html; charset=utf-8" body)))
 
 (defn- picker! [^HttpExchange exchange auth-system picker-api-key picker-app-id]
@@ -657,7 +657,7 @@
     (doto (.getResponseHeaders exchange)
       (.set "Referrer-Policy" "no-referrer")
       (.set "Content-Security-Policy"
-            "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"))
+            "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'"))
     (respond! exchange 200 "text/html; charset=utf-8"
               (ui/logs-page {:user user
                              :logs entries

@@ -100,6 +100,10 @@
         (is (= 200 (.statusCode homepage)))
         (is (str/includes? (.body homepage) "href=\"/favicon.svg\""))
         (is (str/includes? (.body homepage) "href=\"/apple-touch-icon.png\""))
+        (is (str/includes? (.orElse (.firstValue (.headers homepage)
+                                             "Content-Security-Policy")
+                                   nil)
+                           "img-src 'self' data:"))
         (is (= 200 (.statusCode svg)))
         (is (= "image/svg+xml; charset=utf-8"
                (.orElse (.firstValue (.headers svg) "Content-Type") nil)))
