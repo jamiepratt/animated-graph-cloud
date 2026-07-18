@@ -104,7 +104,7 @@
                       {:async nil})
   true)
 
-(defonce ^:private configured? (configure!))
+(configure!)
 
 (defn emit-event!
   "Emits one bounded structured event through Telemere."

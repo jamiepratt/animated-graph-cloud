@@ -2,7 +2,7 @@
   (:require [agg.logs.core :as logs]
             [clojure.data.json :as json])
   (:import (com.google.cloud Timestamp)
-           (com.google.cloud.firestore Firestore Query Query$Direction)
+           (com.google.cloud.firestore Firestore Query$Direction)
            (java.util Date)
            (java.util.concurrent ExecutionException Future)))
 
