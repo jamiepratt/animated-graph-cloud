@@ -271,10 +271,13 @@ replace or revoke the owner. Drive is connected separately at
 encrypts the refresh token with the Warsaw KMS key and creates or reuses the
 user's `Alpha Compose` folder. `GET /v1/drive/picker` opens a no-store
 Google Picker bridge for the same restricted grant. The authenticated `/`
-entrypoint opens that bridge in a popup and accepts selected CSV, FIT-like
-binary, or PNG metadata only from the same origin. A directly opened Picker
-page also displays its selection, so the manual flow never discards it. The
-bridge does not broaden the server grant or silently download selected files.
+entrypoint opens that bridge in a popup. The Drive view shows selectable video
+files and the Picker's Upload tab provides a supported path for adding a
+source video under `drive.file`; the bridge does not broaden the server grant
+or silently download selected files. If the Drive view is empty, the bridge
+offers a privacy-safe diagnostic report that records only bounded status
+categories (token refresh, account binding, MIME selection, and Drive
+indexing probe), never tokens, account values, or filenames.
 
 Completed cloud jobs upload their local MOV to a preallocated Drive file ID.
 Firestore retains the ID and resumable session so worker retries resume the

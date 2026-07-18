@@ -53,12 +53,15 @@
   (str "https://www.googleapis.com/drive/v3/files/"
        (urlencode file-id)))
 
+(defn- drive-url [path query]
+  (str "https://www.googleapis.com/drive/v3/" path "?" query))
+
 (defn- require-success [{:keys [status body] :as response} error-type]
   (if (<= 200 status 299)
     response
     (throw (errors/raise! "Google Drive request failed"
-                    {:type error-type :status status
-                     :reason (:error (parse-json body))}))))
+                          {:type error-type :status status
+                           :reason (:error (parse-json body))}))))
 
 (defn- create-folder! [send! access-token]
   (let [{:keys [body]}
@@ -79,16 +82,16 @@
     (if-let [[_ last-byte] (re-matches #"bytes=0-(\d+)" header)]
       (inc (parse-long last-byte))
       (throw (errors/raise! "Drive returned an invalid resumable range"
-                      {:type ::invalid-resumable-progress
-                       :range header})))))
+                            {:type ::invalid-resumable-progress
+                             :range header})))))
 
 (defn- initial-offset [header size]
   (let [offset (range-offset header)]
     (when (or (neg? offset) (>= offset size))
       (throw (errors/raise! "Drive resumable query returned an invalid offset"
-                      {:type ::invalid-resumable-progress
-                       :offset offset
-                       :size size})))
+                            {:type ::invalid-resumable-progress
+                             :offset offset
+                             :size size})))
     offset))
 
 (defn- continued-offset [header offset end size]
@@ -97,11 +100,11 @@
               (> reported (inc end))
               (>= reported size))
       (throw (errors/raise! "Drive resumable upload made invalid progress"
-                      {:type ::invalid-resumable-progress
-                       :offset offset
-                       :reported reported
-                       :sent-through end
-                       :size size})))
+                            {:type ::invalid-resumable-progress
+                             :offset offset
+                             :reported reported
+                             :sent-through end
+                             :size size})))
     reported))
 
 (defn- read-chunk [^Path path offset length]
@@ -114,7 +117,7 @@
         (when (.hasRemaining buffer)
           (when (neg? (.read channel buffer))
             (throw (errors/raise! "Drive upload source ended early"
-                            {:type ::short-upload-source})))
+                                  {:type ::short-upload-source})))
           (recur buffer))))
     bytes))
 
@@ -145,8 +148,8 @@
 
         :else
         (throw (errors/raise! "Drive resumable upload failed"
-                        {:type ::resumable-upload-failed
-                         :status (:status response)}))))))
+                              {:type ::resumable-upload-failed
+                               :status (:status response)}))))))
 
 (defrecord RestDriveGateway [send! chunk-size]
   auth/DriveClient
@@ -170,7 +173,7 @@
               (create-folder! send! access-token)))
           :else
           (throw (errors/raise! "Drive output folder lookup failed"
-                          {:type ::folder-lookup-failed :status status}))))))
+                                {:type ::folder-lookup-failed :status status}))))))
   drive/DriveGateway
   (generate-output-id! [_ access-token]
     (let [{:keys [body]}
@@ -184,7 +187,7 @@
            ::id-generation-failed)]
       (or (first (:ids (parse-json body)))
           (throw (errors/raise! "Drive returned no generated output ID"
-                          {:type ::id-generation-failed})))))
+                                {:type ::id-generation-failed})))))
   (begin-resumable-upload! [_ access-token
                             {:keys [file-id folder-id name content-type size]}]
     (let [{:keys [headers]}
@@ -204,7 +207,7 @@
           location (get headers "location")]
       (or (not-empty location)
           (throw (errors/raise! "Drive returned no resumable session"
-                          {:type ::resumable-start-failed})))))
+                                {:type ::resumable-start-failed})))))
   (upload-resumable! [_ access-token session-uri path size]
     (upload-from! send! chunk-size access-token session-uri path size 0))
   (resume-resumable! [_ access-token session-uri path size]
@@ -228,8 +231,8 @@
 
         :else
         (throw (errors/raise! "Drive resumable status query failed"
-                        {:type ::resumable-status-failed
-                         :status (:status query-response)})))))
+                              {:type ::resumable-status-failed
+                               :status (:status query-response)})))))
   drive/SourceGateway
   (source-metadata! [_ access-token file-id]
     (let [{:keys [status body]}
@@ -243,7 +246,7 @@
         (let [metadata (parse-json body)]
           (assoc metadata :size (some-> (:size metadata) str parse-long)))
         (throw (errors/raise! "Google Drive source metadata request failed"
-                        {:type ::source-metadata-failed :status status})))))
+                              {:type ::source-metadata-failed :status status})))))
   (stream-source! [_ access-token file-id output]
     (let [request (-> (HttpRequest/newBuilder
                        (URI/create (str (source-url file-id) "?alt=media")))
@@ -259,8 +262,40 @@
         (do
           (.close ^java.io.InputStream (.body response))
           (throw (errors/raise! "Google Drive source download failed"
-                          {:type ::source-download-failed
-                           :status (.statusCode response)})))))))
+                                {:type ::source-download-failed
+                                 :status (.statusCode response)}))))))
+  drive/PickerDiagnostics
+  (picker-diagnostics! [_ access-token]
+    (let [about (send! (authorized
+                        {:method :get
+                         :url (drive-url "about"
+                                         "fields=user(permissionId)")
+                         :headers {}}
+                        access-token))
+          files (send! (authorized
+                        {:method :get
+                         :url (drive-url "files"
+                                         (str "pageSize=1"
+                                              "&spaces=drive"
+                                              "&fields=files(mimeType)"
+                                              "&q="
+                                              (urlencode
+                                               "trashed = false and mimeType contains 'video/'")))
+                         :headers {}}
+                        access-token))
+          account-status (cond
+                           (= 401 (:status about)) "token-rejected"
+                           (<= 200 (:status about) 299) "resolved"
+                           :else "unavailable")
+          index-status (cond
+                         (= 401 (:status files)) "token-rejected"
+                         (<= 200 (:status files) 299)
+                         (if (seq (:files (parse-json (:body files))))
+                           "video-found"
+                           "video-empty")
+                         :else "unavailable")]
+      {:account-status account-status
+       :index-status index-status})))
 
 (defn gateway []
   (->RestDriveGateway http-send! (* 8 1024 1024)))

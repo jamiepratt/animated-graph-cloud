@@ -18,6 +18,9 @@
   (source-metadata! [gateway access-token file-id])
   (stream-source! [gateway access-token file-id output]))
 
+(defprotocol PickerDiagnostics
+  (picker-diagnostics! [gateway access-token]))
+
 (defprotocol OutputDelivery
   (deliver-output! [delivery job-id subject path]))
 
@@ -31,7 +34,7 @@
 (defn delivery [{:keys [store gateway access-provider]}]
   (when-not (and store gateway access-provider)
     (throw (errors/raise! "Drive delivery dependencies are incomplete"
-                    {:type ::invalid-configuration})))
+                          {:type ::invalid-configuration})))
   (->ResumableDelivery store gateway access-provider))
 
 (defn- public-result [file-id]
@@ -86,7 +89,7 @@
               (let [expected-id (:file-id reservation)]
                 (when-not (= expected-id file-id)
                   (throw (errors/raise! "Drive completed a different output ID"
-                                  {:type ::unexpected-output-id})))
+                                        {:type ::unexpected-output-id})))
                 (complete-delivery! store job-id {:file-id expected-id})
                 (public-result expected-id))
 
@@ -97,10 +100,10 @@
                        false
                        (inc restarts))
                 (throw (errors/raise! "Drive resumable session repeatedly expired"
-                                {:type ::resumable-session-expired})))
+                                      {:type ::resumable-session-expired})))
 
               (throw (errors/raise! "Drive resumable upload failed"
-                              {:type ::upload-failed :status status})))))))))
+                                    {:type ::upload-failed :status status})))))))))
 
 (defn deliver! [delivery job-id subject path]
   (deliver-output! delivery job-id subject path))

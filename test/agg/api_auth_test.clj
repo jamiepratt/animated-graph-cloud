@@ -1,6 +1,7 @@
 (ns agg.api-auth-test
   (:require [agg.api.main :as api]
             [agg.auth.core :as auth]
+            [agg.drive.core :as drive]
             [agg.http-test-support :as test-http]
             [agg.jobs-test :as fixture]
             [agg.jobs.lifecycle :as jobs]
@@ -377,7 +378,71 @@
         (is (re-find #"picker-key" (.body response)))
         (is (re-find #"891643499444" (.body response)))
         (is (re-find #"id=\"picker-selection\"" (.body response)))
-        (is (re-find #"selection\.textContent" (.body response))))
+        (is (re-find #"selection\.textContent" (.body response)))
+        (is (re-find #"google\.picker\.DocsUploadView" (.body response)))
+        (is (re-find #"setSelectableMimeTypes" (.body response)))
+        (is (not (re-find #"setMimeTypes\('video/\*'\)" (.body response))))
+        (is (re-find #"/v1/drive/picker/diagnostic" (.body response)))
+        (is (re-find #"connect-src 'self' https://www\.googleapis\.com"
+                     (some-> response .headers (.firstValue "content-security-policy")
+                             (.orElse nil)))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest empty-picker-diagnostic-is-csrf-protected-and-privacy-safe
+  (let [port (available-port)
+        events (atom [])
+        {:keys [system session]} (auth-fixture)
+        grants (reify auth/GrantStore
+                 (load-grant [_ _]
+                   {:refresh-token-ciphertext "kms:refresh"
+                    :folder-id "folder-1"})
+                 (save-grant! [_ _ grant] grant)
+                 (revoke-grant! [_ _]))
+        cipher (reify auth/TokenCipher
+                 (encrypt-token! [_ value] (str "kms:" value))
+                 (decrypt-token! [_ value] (subs value 4)))
+        token-client (reify auth/DriveTokenClient
+                       (refresh-drive-token! [_ token]
+                         (is (= "refresh" token))
+                         {:access-token "diagnostic-access-token"}))
+        gateway (reify drive/PickerDiagnostics
+                  (picker-diagnostics! [_ access-token]
+                    (is (= "diagnostic-access-token" access-token))
+                    {:account-status "resolved"
+                     :index-status "video-empty"}))
+        auth-system (assoc system
+                           :grant-store grants
+                           :cipher cipher
+                           :drive gateway
+                           :drive-token-client token-client)
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        server (api/start! port {:auth-system auth-system
+                                 :event-sink #(swap! events conj [%1 %2])})]
+    (try
+      (let [body {:phase "empty" :view "drive" :listState "empty"}
+            denied (post! port "/v1/drive/picker/diagnostic" body
+                          {"Cookie" (str "agg_session=" session)
+                           "Content-Type" "application/json"})
+            response (post! port "/v1/drive/picker/diagnostic" body
+                            {"Cookie" (str "agg_session=" session)
+                             "Content-Type" "application/json"
+                             "X-CSRF-Token" csrf})
+            event (second (first @events))]
+        (is (= 403 (.statusCode denied)))
+        (is (= 200 (.statusCode response)))
+        (is (= {"accepted" true} (json/read-str (.body response))))
+        (is (= ["picker_diagnostic"] (mapv first @events)))
+        (is (= "empty" (:phase event)))
+        (is (= "drive" (:view event)))
+        (is (= "empty" (:listState event)))
+        (is (= "refreshed" (:tokenStatus event)))
+        (is (= "resolved" (:accountStatus event)))
+        (is (= "selectable-video-mime-types" (:mimeFilter event)))
+        (is (= "video-empty" (:indexStatus event)))
+        (is (not-any? #(contains? event %)
+                      [:token :accessToken :email :filename :fileId])))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

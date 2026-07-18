@@ -60,6 +60,30 @@
     (is (= 2147483648
            (:size (drive/source-metadata! gateway "access" "video-1"))))))
 
+(deftest picker-diagnostics-probe-account-and-video-index-without-returning-files
+  (let [requests (atom [])
+        responses (atom [{:status 200
+                          :body (json/write-str {:user {:permissionId "account-1"}})}
+                         {:status 200
+                          :body (json/write-str {:files [{:mimeType "video/mp4"}]})}])
+        gateway (gcp/->RestDriveGateway
+                 (fn [request]
+                   (swap! requests conj request)
+                   (let [response (first @responses)]
+                     (swap! responses subvec 1)
+                     response))
+                 (* 8 1024 1024))
+        result (drive/picker-diagnostics! gateway "picker-access-token")]
+    (is (= {:account-status "resolved"
+            :index-status "video-found"}
+           result))
+    (is (= 2 (count @requests)))
+    (is (every? #(= "Bearer picker-access-token"
+                    (get-in % [:headers "Authorization"]))
+                @requests))
+    (is (.contains ^String (:url (second @requests)) "mimeType+contains+%27video%2F%27"))
+    (is (not (.contains ^String (:url (second @requests)) "video-1")))))
+
 (deftest missing-output-folder-is-created-once
   (let [requests (atom [])
         gateway

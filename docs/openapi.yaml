@@ -159,6 +159,34 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Error"}
+  /v1/drive/picker/diagnostic:
+    post:
+      operationId: reportGoogleDrivePickerDiagnostic
+      tags: [Browser authorization]
+      summary: Report a privacy-safe Google Drive Picker state.
+      description: Records bounded Picker status categories without tokens, account values, filenames, or file IDs.
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phase, view, listState]
+              properties:
+                phase: {type: string, enum: [opened, loaded, empty, selected, cancelled, error]}
+                view: {type: string, enum: [drive, upload, unknown]}
+                listState: {type: string, enum: [unknown, empty, selected]}
+      responses:
+        "200":
+          description: Diagnostic accepted.
+        "400":
+          description: Diagnostic payload is invalid.
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "403": {$ref: "#/components/responses/CsrfRequired"}
   /v1/preview:
     post:
       operationId: createPreview
@@ -493,6 +521,11 @@ components:
           schema: {$ref: "#/components/schemas/Error"}
     AuthenticationRequired:
       description: Authentication or a valid Drive grant is required.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    CsrfRequired:
+      description: Browser CSRF token is missing or invalid.
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}

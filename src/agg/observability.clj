@@ -8,11 +8,13 @@
   #{:severity :component :event :message :reason :queueAgeMs :repairedJobs
     :releasedLeases :targetMemberId :tokensRevoked :credentialsDeleted
     :jobsCancelled :cleanupErrors :components :failureCode :errorType :port
-    :requestId :category :status})
+    :requestId :category :status :phase :view :listState :tokenStatus
+    :accountStatus :mimeFilter :indexStatus})
 
 (def ^:private safe-value-keys
   #{:severity :component :event :message :reason :failureCode :errorType
-    :requestId :category})
+    :requestId :category :phase :view :listState :tokenStatus :accountStatus
+    :mimeFilter :indexStatus})
 
 (defn- safe-string? [value]
   (and (string? value)
@@ -23,7 +25,7 @@
   (and (string? value)
        (<= (count value) 256)
        (not (re-find #"(?i)telemetry|token|credential|signed.?url|https?://"
-                      value))))
+                     value))))
 
 (defn- safe-event-value? [key value]
   (cond
