@@ -65,8 +65,16 @@
                  (catch Throwable _ {}))]
     (when-not (<= 200 status 299)
       (throw (errors/raise! "Google OAuth token exchange failed"
-                      {:type (if (= "invalid_grant" (:error parsed))
+                      {:type (cond
+                               (and (= "invalid_grant" (:error parsed))
+                                    (= "authorization_code"
+                                       (get form "grant_type")))
+                               ::auth/invalid-code
+
+                               (= "invalid_grant" (:error parsed))
                                ::auth/revoked-grant
+
+                               :else
                                ::auth/oauth-exchange-failed)
                        :status status})))
     parsed))
@@ -252,6 +260,7 @@
                                              .getTokenValue)))))
 
 (def ^:private kms-max-attempts 3)
+(def ^:private kms-retry-delay-ms 100)
 
 (defn- kms-retryable-status? [status]
   (or (= 429 status)
@@ -259,10 +268,28 @@
 
 (defn- kms-send! [send! request]
   (loop [attempt 1]
-    (let [response (send! request)]
-      (if (and (< attempt kms-max-attempts)
-               (kms-retryable-status? (:status response)))
-        (recur (inc attempt))
+    (let [{:keys [response error]}
+          (try
+            {:response (send! request)}
+            (catch java.io.IOException error
+              {:error error}))]
+      (cond
+        error
+        (if (< attempt kms-max-attempts)
+          (do
+            (Thread/sleep (* kms-retry-delay-ms
+                             (bit-shift-left 1 (dec attempt))))
+            (recur (inc attempt)))
+          (throw error))
+
+        (and (< attempt kms-max-attempts)
+             (kms-retryable-status? (:status response)))
+        (do
+          (Thread/sleep (* kms-retry-delay-ms
+                           (bit-shift-left 1 (dec attempt))))
+          (recur (inc attempt)))
+
+        :else
         response))))
 
 (defrecord KmsTokenCipher [send! crypto-key]

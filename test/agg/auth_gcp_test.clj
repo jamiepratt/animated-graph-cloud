@@ -57,6 +57,20 @@
              (catch clojure.lang.ExceptionInfo error
                (:type (ex-data error))))))))
 
+(deftest invalid-authorization-code-is-not-a-revoked-drive-grant
+  (let [client (gcp/->GoogleOAuthClient
+                (fn [_]
+                  {:status 400 :body (json/write-str {:error "invalid_grant"})})
+                "client-id" "client-secret" identity
+                "https://oauth2.googleapis.test/token")]
+    (is (= ::auth/invalid-code
+           (try
+             (auth/exchange-code! client :drive "used-code" "verifier"
+                                  "https://app/drive/callback")
+             nil
+             (catch clojure.lang.ExceptionInfo error
+               (:type (ex-data error))))))))
+
 (deftest oauth-service-failure-becomes-a-bounded-domain-error
   (let [client (gcp/->GoogleOAuthClient
                 (fn [_]
@@ -104,6 +118,19 @@
     (is (= "kms-ciphertext"
            (auth/encrypt-token! cipher "refresh-secret")))
     (is (= 2 (count @requests)))))
+
+(deftest kms-cipher-retries-transient-transport-failures
+  (let [attempts (atom 0)
+        cipher (gcp/->KmsTokenCipher
+                (fn [_]
+                  (if (= 1 (swap! attempts inc))
+                    (throw (java.io.IOException. "temporary network failure"))
+                    {:status 200
+                     :body (json/write-str {:ciphertext "kms-ciphertext"})}))
+                "projects/project/locations/europe-central2/keyRings/application/cryptoKeys/drive-refresh-tokens")]
+    (is (= "kms-ciphertext"
+           (auth/encrypt-token! cipher "refresh-secret")))
+    (is (= 2 @attempts))))
 
 (deftest task-token-verifier-exposes-only-cryptographically-verified-claims
   (let [verifier (gcp/->GoogleTaskTokenVerifier
