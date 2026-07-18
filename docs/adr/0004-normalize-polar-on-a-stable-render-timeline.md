@@ -32,8 +32,10 @@ per-frame PNG sequence or frame collection is created.
 
 ## Consequences
 
-Fixed inputs produce a golden-stable preview and byte-identical MOV with the
-pinned FFmpeg build. A slow heart-rate change remains proportionally slow and
-does not acquire a misleading full-height slope. Values outside the visual
-40–220 bpm range are clipped at the trace boundary while their original values
-remain available to audio timing and later composition work.
+Fixed inputs produce a golden-stable preview for each supported Java2D runtime;
+the macOS and Linux fixtures are kept separately because logical font rasterizing
+is host-dependent. The production image and its acceptance fixture use Linux.
+A slow heart-rate change remains proportionally slow and does not acquire a
+misleading full-height slope. Values outside the visual 40–220 bpm range are
+clipped at the trace boundary while their original values remain available to
+audio timing and later composition work.

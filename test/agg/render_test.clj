@@ -19,6 +19,17 @@
   (.formatHex (HexFormat/of)
               (.digest (MessageDigest/getInstance "SHA-256") value)))
 
+(defn- golden-platform []
+  (let [os-name (str/lower-case (System/getProperty "os.name" ""))]
+    (cond
+      (str/includes? os-name "mac") "mac"
+      (str/includes? os-name "linux") "linux"
+      :else (throw (ex-info "No golden render fixture for this platform"
+                            {:os-name os-name})))))
+
+(defn- golden-resource [name]
+  (str "fixtures/golden/" name "-" (golden-platform) ".sha256"))
+
 (defn- streamed-rgba [render-spec]
   (let [output (ByteArrayOutputStream.)]
     {:result (frames/stream! render-spec output)
@@ -114,7 +125,7 @@
     (is (java.util.Arrays/equals (.toByteArray first-output)
                                  (.toByteArray second-output)))
     (is (= (str/trim
-            (slurp (io/resource "fixtures/golden/polar-preview.sha256")))
+            (slurp (io/resource (golden-resource "polar-preview"))))
            (sha256-bytes (.toByteArray first-output))))))
 
 (deftest frames-stream-as-rgba-with-transparency
@@ -166,9 +177,9 @@
       (frames/render-preview! frames/java2d-frame-renderer render-spec output)
       (is (= (str/trim
               (slurp (io/resource
-                      (str "fixtures/golden/complete-"
-                           preset-id
-                           "-preview.sha256"))))
+                      (golden-resource (str "complete-"
+                                            preset-id
+                                            "-preview")))))
              (sha256-bytes (.toByteArray output)))
           preset-id))))
 
