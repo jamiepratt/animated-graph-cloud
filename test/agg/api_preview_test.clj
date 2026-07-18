@@ -103,3 +103,30 @@
                       [:access-token :token :filename :file-id :fileId :name :body])))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
+
+(deftest preview-contract-failure-is-structured-and-logged
+  (let [events (atom [])
+        port (available-port)
+        server (api/start! port
+                           {:event-sink (fn [event fields]
+                                          (swap! events conj
+                                                 (assoc fields :event event)))})]
+    (try
+      (let [response (test-http/send-string!
+                      :post
+                      (str "http://127.0.0.1:" port "/v1/preview")
+                      "{}"
+                      {"Content-Type" "application/json"})
+            body (json/read-str (.body response) :key-fn keyword)
+            event (first @events)
+            request-id (some-> response .headers (.firstValue "x-request-id")
+                               (.orElse nil))]
+        (is (= 400 (.statusCode response)))
+        (is (= "invalid_request" (:error body)))
+        (is (= "request_contract" (:category body)))
+        (is (= request-id (:requestId body)))
+        (is (= "request_failed" (:event event)))
+        (is (= "request_contract" (:category event)))
+        (is (= request-id (:requestId event))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))

@@ -95,7 +95,7 @@
                     :category category
                     :requestId request-id}
              (not contract?) (assoc :retryable true))
-     :log? (not contract?)}))
+     :log? true}))
 
 (defn- respond-preview-failure! [dependencies exchange request-id error]
   (let [{:keys [status category body log?]} (preview-failure error request-id)]
