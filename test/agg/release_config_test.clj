@@ -131,6 +131,10 @@
     (doseq [contract ["RenderRequest:" "Job:" "Error:" "bearerAuth:"
                       "sessionCookie:" "Idempotency-Key"]]
       (testing contract (is (str/includes? openapi contract))))
+    (doseq [field ["telemetryFormat" "telemetrySyncAt" "sectionStartAt"
+                   "spo2" "timer" "watermark" "sourceVideo"
+                   "outputFormat" "fitMode" "audioMode"]]
+      (testing field (is (str/includes? openapi field))))
     (is (str/includes? openapi "drive.file"))
     (doseq [behavior ["operationId: startGoogleLogin"
                       "operationId: finishGoogleLogin"

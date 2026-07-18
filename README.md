@@ -94,6 +94,22 @@ compositing output is available only through durable jobs.
 }
 ```
 
+The render JSON fields are:
+
+| Field | Required | Accepted value or shape |
+| --- | --- | --- |
+| `telemetryFormat` | Yes | `polar-csv`, `garmin-fit`, or `oxiwear-hr-csv` |
+| `telemetry` | Yes | CSV text, or base64 FIT content for `garmin-fit`; CSV is limited to 10 MiB and FIT base64 to 13,981,016 characters |
+| `preset` | Yes | `1080p25` (1920×1080, 25 fps, up to 8 minutes) or `2.7k25` (2704×1520, 25 fps, up to 4 minutes) |
+| `telemetrySyncAt`, `cameraSyncAt`, `sectionStartAt`, `sectionEndAt` | Yes | ISO-8601 instants with `Z` or an explicit UTC offset |
+| `spo2` | No | `{ "format": "oxiwear-spo2-csv", "telemetry": "..." }`; CSV is limited to 10 MiB |
+| `timer` | No | `{ "startAt": "...", "endAt": "..." }`, within the requested section |
+| `watermark` | No | `{ "contentBase64": "..." }`, a valid PNG up to 2 MiB and 1024×1024 pixels |
+| `sourceVideo` | No | `{ "fileId": "..." }`; optional client `name` and `mimeType` are ignored |
+| `outputFormat` | No | With `sourceVideo`: `h264-mp4` or `prores-422-mov` |
+| `fitMode` | No | With `sourceVideo`: `letterbox`, `pillarbox`, or `crop` |
+| `audioMode` | No | With `sourceVideo`: `source+heartbeat`, `source-only`, or `heartbeat-only` |
+
 Timestamps are ISO-8601 instants. `cameraSyncAt` must not follow the section;
 section end must follow section start by a whole number of seconds. The anchor
 offset maps the camera section onto Polar time, and Polar telemetry must cover

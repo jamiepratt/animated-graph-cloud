@@ -543,6 +543,7 @@ components:
     RenderRequest:
       type: object
       additionalProperties: false
+      description: Common render configuration accepted by preview, overlay, and durable-job endpoints. Source-video composition options require sourceVideo.
       required:
         - telemetryFormat
         - telemetry
@@ -555,31 +556,51 @@ components:
         telemetryFormat:
           type: string
           enum: [polar-csv, garmin-fit, oxiwear-hr-csv]
+          description: Heart-rate input encoding. polar-csv and oxiwear-hr-csv use CSV text; garmin-fit uses base64-encoded FIT content.
         telemetry:
           type: string
-          maxLength: 10485760
-          description: CSV text or base64-encoded Garmin FIT content.
+          description: CSV text or base64-encoded Garmin FIT content. CSV is limited to 10 MiB of UTF-8 text; Garmin FIT base64 is limited to 13,981,016 characters (a 10 MiB binary input).
         preset:
           type: string
           enum: [1080p25, 2.7k25]
-        telemetrySyncAt: {$ref: "#/components/schemas/Instant"}
-        cameraSyncAt: {$ref: "#/components/schemas/Instant"}
-        sectionStartAt: {$ref: "#/components/schemas/Instant"}
-        sectionEndAt: {$ref: "#/components/schemas/Instant"}
+          description: 1080p25 is 1920×1080 at 25 fps for up to 8 minutes; 2.7k25 is 2704×1520 at 25 fps for up to 4 minutes.
+        telemetrySyncAt:
+          allOf: [{$ref: "#/components/schemas/Instant"}]
+          description: Timestamp in telemetry at the camera synchronization moment.
+        cameraSyncAt:
+          allOf: [{$ref: "#/components/schemas/Instant"}]
+          description: Camera timestamp corresponding to telemetrySyncAt; must not follow sectionStartAt.
+        sectionStartAt:
+          allOf: [{$ref: "#/components/schemas/Instant"}]
+          description: Start of the rendered camera section.
+        sectionEndAt:
+          allOf: [{$ref: "#/components/schemas/Instant"}]
+          description: End of the rendered camera section; duration must be a whole number of seconds and within the preset maximum.
         spo2:
           type: object
           additionalProperties: false
           required: [format, telemetry]
           properties:
-            format: {const: oxiwear-spo2-csv}
-            telemetry: {type: string, maxLength: 10485760}
+            format:
+              const: oxiwear-spo2-csv
+              description: OxiWear SpO₂ CSV format.
+            telemetry:
+              type: string
+              maxLength: 10485760
+              description: OxiWear SpO₂ CSV text, limited to 10 MiB of UTF-8 text.
+          description: Optional OxiWear SpO₂ series; samples must cover the requested section.
         timer:
           type: object
           additionalProperties: false
           required: [startAt, endAt]
           properties:
-            startAt: {$ref: "#/components/schemas/Instant"}
-            endAt: {$ref: "#/components/schemas/Instant"}
+            startAt:
+              allOf: [{$ref: "#/components/schemas/Instant"}]
+              description: Timer start, inclusive, within the requested section.
+            endAt:
+              allOf: [{$ref: "#/components/schemas/Instant"}]
+              description: Timer end, exclusive, after startAt and no later than sectionEndAt.
+          description: Optional elapsed timer interval.
         watermark:
           type: object
           additionalProperties: false
@@ -590,6 +611,7 @@ components:
               contentEncoding: base64
               maxLength: 2796204
               description: PNG up to 2 MiB and 1024×1024 pixels.
+          description: Optional PNG watermark.
         sourceVideo:
           type: object
           additionalProperties: false
@@ -603,14 +625,30 @@ components:
           type: string
           enum: [h264-mp4, prores-422-mov]
           default: h264-mp4
+          description: Composited output container. Only valid with sourceVideo.
         fitMode:
           type: string
           enum: [letterbox, pillarbox, crop]
           default: letterbox
+          description: How the source video fits the render canvas. Only valid with sourceVideo.
         audioMode:
           type: string
           enum: [source+heartbeat, source-only, heartbeat-only]
           default: source+heartbeat
+          description: Audio tracks for composited output. Only valid with sourceVideo.
+      allOf:
+        - if:
+            properties:
+              telemetryFormat: {const: garmin-fit}
+          then:
+            properties:
+              telemetry: {maxLength: 13981016}
+        - if:
+            properties:
+              telemetryFormat: {enum: [polar-csv, oxiwear-hr-csv]}
+          then:
+            properties:
+              telemetry: {maxLength: 10485760}
     Instant:
       type: string
       format: date-time
