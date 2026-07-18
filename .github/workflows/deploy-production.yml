@@ -97,8 +97,12 @@ jobs:
           esac
           api_targets="$(gcloud services api-keys describe "$key_resource" \
             --project="$PROJECT_ID" \
-            --format='value(restrictions.apiTargets[].service)')"
-          test "$api_targets" = "picker.googleapis.com"
+            --format='json(restrictions)')"
+          jq -e '
+            (.restrictions | keys | sort) == ["apiTargets"] and
+            (.restrictions.apiTargets | length == 1) and
+            (.restrictions.apiTargets[0].service == "picker.googleapis.com")
+          ' <<<"$api_targets" >/dev/null
 
       - id: image
         name: Push and resolve immutable image digest

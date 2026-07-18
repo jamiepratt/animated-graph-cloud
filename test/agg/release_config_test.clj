@@ -113,7 +113,7 @@
 (deftest production-release-validates-the-picker-key-before-deploying
   (let [workflow (slurp ".github/workflows/deploy-production.yml")
         key-check (str/index-of workflow
-                               "Verify production Picker API key")
+                                "Verify production Picker API key")
         private-deploy (str/index-of workflow "Deploy private API candidate")]
     (is (number? key-check))
     (is (number? private-deploy))
@@ -123,7 +123,9 @@
                    "--secret=picker-api-key"
                    "https://apikeys.googleapis.com/v2/keys:lookupKey"
                    "projects/$PROJECT_NUMBER/locations/global/keys/"
-                   "picker.googleapis.com"]]
+                   "picker.googleapis.com"
+                   "--format='json(restrictions)'"
+                   "(.restrictions | keys | sort) == [\"apiTargets\"]"]]
       (testing check (is (str/includes? workflow check))))
     (is (str/includes? workflow "--data-urlencode 'keyString@-'"))
     (is (str/includes? workflow "key_resource"))
