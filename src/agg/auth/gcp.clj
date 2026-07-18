@@ -251,6 +251,20 @@
                       (str "Bearer " (some-> credentials .getAccessToken
                                              .getTokenValue)))))
 
+(def ^:private kms-max-attempts 3)
+
+(defn- kms-retryable-status? [status]
+  (or (= 429 status)
+      (<= 500 status 599)))
+
+(defn- kms-send! [send! request]
+  (loop [attempt 1]
+    (let [response (send! request)]
+      (if (and (< attempt kms-max-attempts)
+               (kms-retryable-status? (:status response)))
+        (recur (inc attempt))
+        response))))
+
 (defrecord KmsTokenCipher [send! crypto-key]
   auth/TokenCipher
   (encrypt-token! [_ plaintext]
@@ -258,11 +272,11 @@
                                    (.getBytes ^String plaintext
                                               StandardCharsets/UTF_8))
           {:keys [status body]}
-          (send! {:method :post
-                  :url (str "https://cloudkms.googleapis.com/v1/"
-                            crypto-key ":encrypt")
-                  :headers {"Content-Type" "application/json"}
-                  :body (json/write-str {:plaintext encoded})})
+          (kms-send! send! {:method :post
+                            :url (str "https://cloudkms.googleapis.com/v1/"
+                                      crypto-key ":encrypt")
+                            :headers {"Content-Type" "application/json"}
+                            :body (json/write-str {:plaintext encoded})})
           ciphertext (:ciphertext (json/read-str body :key-fn keyword))]
       (when-not (and (<= 200 status 299) (not-empty ciphertext))
         (throw (errors/raise! "KMS token encryption failed"
@@ -270,11 +284,11 @@
       ciphertext))
   (decrypt-token! [_ ciphertext]
     (let [{:keys [status body]}
-          (send! {:method :post
-                  :url (str "https://cloudkms.googleapis.com/v1/"
-                            crypto-key ":decrypt")
-                  :headers {"Content-Type" "application/json"}
-                  :body (json/write-str {:ciphertext ciphertext})})
+          (kms-send! send! {:method :post
+                            :url (str "https://cloudkms.googleapis.com/v1/"
+                                      crypto-key ":decrypt")
+                            :headers {"Content-Type" "application/json"}
+                            :body (json/write-str {:ciphertext ciphertext})})
           plaintext (:plaintext (json/read-str body :key-fn keyword))]
       (when-not (and (<= 200 status 299) (not-empty plaintext))
         (throw (errors/raise! "KMS token decryption failed"

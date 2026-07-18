@@ -1,16 +1,8 @@
-name: Release Alpha Compose production
+name: Deploy Alpha Compose production
 
 on:
-  workflow_dispatch:
-    inputs:
-      release_ref:
-        description: "Exact reviewed full 40-character lowercase commit SHA"
-        required: true
-        type: string
-      confirmation:
-        description: "Type: RELEASE ALPHA COMPOSE WITH MULTI-ADMIN ACCESS"
-        required: true
-        type: string
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -39,36 +31,24 @@ env:
   RENDER_RESERVATION_MINOR_UNITS: "125"
 
 jobs:
-  release:
-    if: github.event.inputs.confirmation == 'RELEASE ALPHA COMPOSE WITH MULTI-ADMIN ACCESS'
+  deploy:
     runs-on: ubuntu-latest
-    environment: production
     steps:
-      - id: source
-        name: Validate reviewed release commit
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Verify pushed commit
         env:
-          RELEASE_COMMIT: ${{ inputs.release_ref }}
+          RELEASE_COMMIT: ${{ github.sha }}
         run: |
           if [[ ! "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "release_ref must be an exact full 40-character lowercase commit SHA." >&2
+            echo "github.sha must be an exact full 40-character lowercase commit SHA." >&2
             exit 2
           fi
-          commit="$RELEASE_COMMIT"
-          echo "commit=$commit" >>"$GITHUB_OUTPUT"
-
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          ref: ${{ inputs.release_ref }}
-
-      - name: Verify checked-out release commit
-        env:
-          RELEASE_COMMIT: ${{ steps.source.outputs.commit }}
-        run: |
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
 
       - name: Build immutable release candidate
         env:
-          IMAGE_TAG: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/animated-graph-cloud:${{ steps.source.outputs.commit }}
+          IMAGE_TAG: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/animated-graph-cloud:${{ github.sha }}
         run: |
           docker build --tag "$IMAGE_TAG" .
           test/container_smoke.sh "$IMAGE_TAG"
@@ -76,7 +56,7 @@ jobs:
       - name: Scan release candidate
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
-          image-ref: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/animated-graph-cloud:${{ steps.source.outputs.commit }}
+          image-ref: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/animated-graph-cloud:${{ github.sha }}
           format: table
           exit-code: "1"
           ignore-unfixed: true
@@ -98,7 +78,7 @@ jobs:
       - id: image
         name: Push and resolve immutable image digest
         env:
-          IMAGE_TAG: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/animated-graph-cloud:${{ steps.source.outputs.commit }}
+          IMAGE_TAG: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/animated-graph-cloud:${{ github.sha }}
         run: |
           gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
           docker push "$IMAGE_TAG"
@@ -219,10 +199,10 @@ jobs:
           IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
         run: |
           {
-            echo "## Alpha Compose multi-admin production release"
+            echo "## Alpha Compose production deployment"
             echo
-            echo "- Ref: ${{ inputs.release_ref }}"
-            echo "- Commit: ${{ steps.source.outputs.commit }}"
+            echo "- Ref: ${{ github.ref }}"
+            echo "- Commit: ${{ github.sha }}"
             echo "- Image: $IMAGE_DIGEST"
             echo "- Domain: $PUBLIC_BASE_URL"
             echo "- Administrators: $ADMIN_EMAILS"

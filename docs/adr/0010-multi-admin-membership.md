@@ -29,6 +29,5 @@ the membership, preserving the existing generation-bound cleanup contract.
 The live authorization check accepts `owner` or `admin` roles from the active
 Firestore record, so role changes take effect on the next request without
 trusting stale session role claims. Deployments must configure the intended
-administrator set explicitly. Production release confirmation names the
-multi-admin audience rather than silently broadening the previous owner-only
-release.
+administrator set explicitly. Production deployment keeps the multi-admin
+audience rather than silently broadening the previous owner-only release.

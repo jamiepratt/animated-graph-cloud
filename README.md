@@ -254,6 +254,9 @@ Pushes to `main` authenticate through GitHub Workload Identity Federation,
 scan and push an immutable commit-tagged image, deploy the private `agg-api`
 service, and execute `agg-renderer-smoke`. The workflow verifies the health
 response, runtime identities, and the renderer's structured completion log.
+Production follows the same protected-`main` model through its separate
+automatic deployment workflow; each successful push can promote the public
+application after the private candidate and smoke checks pass.
 
 ## Google login and Drive delivery
 

@@ -6,7 +6,7 @@
 (defn- read-json [path]
   (json/read-str (slurp path) :key-fn keyword))
 
-(deftest production-infrastructure-is-isolated-and-owner-only
+(deftest production-infrastructure-is-isolated-and-main-only
   (let [production (slurp "infra/prod/main.tf")
         backend (slurp "infra/prod/versions.tf")
         variables (slurp "infra/prod/variables.tf")
@@ -15,7 +15,7 @@
     (is (re-find #"project_id\s*=\s*\"animated-graph-cloud-prod-jp\"" production))
     (is (re-find #"environment_name\s*=\s*\"production\"" production))
     (is (re-find #"import_default_firestore\s*=\s*false" production))
-    (is (re-find #"github_subject\s*=\s*\"repo:jamiepratt@558780/animated-graph-cloud@1303177214:environment:production\""
+    (is (re-find #"github_subject\s*=\s*\"repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/main\""
                  production))
     (is (str/includes? backend
                        "bucket = \"animated-graph-cloud-prod-jp-tfstate\""))
@@ -72,23 +72,23 @@
     (is (= ["firebase-debug.log" "firebase-debug.*.log"] (:ignore hosting)))
     (is (re-find #"enable_firebase_hosting\s*=\s*true" production))))
 
-(deftest production-release-is-manual-environment-gated-and-domain-aware
+(deftest production-release-deploys-main-push-and-is-domain-aware
   (let [workflow (slurp ".github/workflows/deploy-production.yml")]
-    (is (str/includes? workflow "workflow_dispatch:"))
-    (is (not (re-find #"(?m)^\s*push:" workflow)))
-    (is (str/includes? workflow "environment: production"))
-    (is (str/includes? workflow
-                       "confirmation == 'RELEASE ALPHA COMPOSE WITH MULTI-ADMIN ACCESS'"))
+    (is (str/includes? workflow "push:"))
+    (is (str/includes? workflow "branches: [main]"))
+    (is (not (str/includes? workflow "workflow_dispatch:")))
+    (is (not (str/includes? workflow "environment: production")))
+    (is (not (str/includes? workflow "confirmation")))
     (is (str/includes? workflow "PROJECT_ID: animated-graph-cloud-prod-jp"))
     (is (str/includes? workflow "PROJECT_NUMBER: \"488013150738\""))
     (is (str/includes? workflow "PUBLIC_BASE_URL: https://alphacompose.com"))
     (is (str/includes? workflow "full 40-character lowercase commit SHA"))
     (is (not (str/includes? workflow "default: main")))
     (is (str/includes? workflow "^\u005b0-9a-f\u005d{40}$"))
-    (is (str/includes? workflow "ref: ${{ inputs.release_ref }}"))
-    (is (str/includes? workflow "echo \"commit=$commit\""))
-    (is (str/includes? workflow "${{ steps.source.outputs.commit }}"))
-    (is (not (str/includes? workflow "animated-graph-cloud:${{ github.sha }}")))
+    (is (str/includes? workflow "github.sha"))
+    (is (not (str/includes? workflow "inputs.release_ref")))
+    (is (not (str/includes? workflow "steps.source.outputs.commit")))
+    (is (str/includes? workflow "test \"$(git rev-parse HEAD)\" = \"$RELEASE_COMMIT\""))
     (is (str/includes? workflow "AGG_OWNER_EMAIL=$OWNER_EMAIL"))
     (is (str/includes? workflow "AGG_ADMIN_EMAILS=$ADMIN_EMAILS"))
     (is (str/includes? workflow "AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL"))
@@ -179,7 +179,7 @@
 
 (deftest production-runbook-has-safe-bootstrap-rollback-and-oauth-checkpoints
   (let [runbook (slurp "docs/production-runbook.md")]
-    (doseq [checkpoint ["cannot be undone" "Firebase Terms" "production environment"
+    (doseq [checkpoint ["cannot be undone" "Firebase Terms" "protected\n`main`"
                         "https://alphacompose.com/privacy"
                         "https://alphacompose.com/v1/auth/login/callback"
                         "https://alphacompose.com/v1/auth/drive/callback"
@@ -193,16 +193,16 @@
     (is (str/includes? runbook "Application Default Credentials"))
     (is (re-find #"before any local\s+Terraform or Firebase CLI command"
                  runbook))
-    (is (str/includes? runbook "40-character lowercase commit SHA"))
-    (is (not (str/includes? runbook "branch or tag")))
+    (is (str/includes? runbook "Every push to protected `main`"))
+    (is (not (str/includes? runbook "production environment")))
     (is (not (str/includes? runbook ".firebaserc")))
     (is (not (str/includes? runbook "service account key")))))
 
 (deftest production-release-decision-is-contextual-and-discoverable
-  (let [adr (slurp "docs/adr/0009-isolate-production-behind-owner-gated-release.md")
+  (let [adr (slurp "docs/adr/0011-automatic-production-deployment.md")
         context-map (slurp "CONTEXT-MAP.md")]
-    (doseq [decision ["Firebase Hosting" "europe-central2" "production"
-                      "owner-approved" "separate OAuth" "manual"]]
+    (doseq [decision ["Production deployment" "protected `main`"
+                      "Branch protection" "Rollback"]]
       (testing decision (is (str/includes? adr decision))))
     (is (str/includes? context-map "infra/prod/"))
     (is (str/includes? context-map "docs/openapi.yaml"))

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Alpha Compose</title>
+  <rect width="512" height="512" rx="112" fill="#F7F9FC"/>
+  <path fill="#152238" fill-rule="evenodd" d="M72 406 183 128q10-30 41-30h32q31 0 45 30l111 278h-83l-85-230-85 230H72Zm87-56h170l-85-174-85 174Z"/>
+  <path fill="#4374C5" d="M390 154a171 171 0 1 0 0 204l-53-52a99 99 0 1 1 0-100l53-52Z"/>
+</svg>

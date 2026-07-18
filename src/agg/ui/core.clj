@@ -12,6 +12,13 @@
       (str/replace "\"" "&quot;")
       (str/replace "'" "&#x27;")))
 
+(defn- icon-links []
+  (str "<link rel=\"icon\" href=\"/favicon.svg\" type=\"image/svg+xml\">"
+       "<link rel=\"icon\" href=\"/favicon-32.png\" type=\"image/png\" sizes=\"32x32\">"
+       "<link rel=\"icon\" href=\"/favicon-16.png\" type=\"image/png\" sizes=\"16x16\">"
+       "<link rel=\"apple-touch-icon\" sizes=\"180x180\" href=\"/apple-touch-icon.png\">"
+       "<meta name=\"theme-color\" content=\"#152238\">"))
+
 (defn- title-case [value]
   (-> value
       (str/replace #"[_-]+" " ")
@@ -109,7 +116,8 @@
     (str
      "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
      "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-     "<meta name=\"color-scheme\" content=\"light\"><title>Operational logs · Alpha Compose</title>"
+     "<meta name=\"color-scheme\" content=\"light\">" (icon-links)
+     "<title>Operational logs · Alpha Compose</title>"
      "<style>"
      ":root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;color:#152238;background:#f5f7fb;line-height:1.45}"
      "*{box-sizing:border-box}body{margin:0}.shell{max-width:78rem;margin:0 auto;padding:2rem 1.25rem 4rem}"
@@ -181,7 +189,8 @@
     (str
      "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
      "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-     "<meta name=\"color-scheme\" content=\"light\"><title>Alpha Compose</title>"
+     "<meta name=\"color-scheme\" content=\"light\">" (icon-links)
+     "<title>Alpha Compose</title>"
      "<script src=\"https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js\" "
      "integrity=\"sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V\" "
      "crossorigin=\"anonymous\"></script>"
@@ -271,6 +280,7 @@
 (defn- public-page [title body]
   (str "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+       (icon-links)
        "<title>" title " · Alpha Compose</title>"
        "<style>body{font-family:system-ui;max-width:48rem;margin:3rem auto;padding:0 1.25rem;line-height:1.55}"
        "header,footer{margin:2rem 0}nav a{margin-right:1rem}.cta{display:inline-block;padding:.65rem 1rem;background:#17202a;color:white;text-decoration:none;border-radius:.3rem}"

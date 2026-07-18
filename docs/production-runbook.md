@@ -18,8 +18,8 @@ Stop for explicit owner approval before each item:
    automate or imply this checkpoint has happened.
 3. Approve Cloudflare DNS records, Firebase custom-domain verification, and
    Google Search Console/authorized-domain verification.
-4. Publish the external Google OAuth app and approve the owner-only production
-   release.
+4. Publish the external Google OAuth app and approve the public legal, domain,
+   and OAuth configuration.
 5. Approve every costed production acceptance render and load test.
 
 ## Repository and GitHub preparation
@@ -30,12 +30,12 @@ Run repository-only acceptance first:
 script/release_acceptance.sh
 ```
 
-Create a GitHub environment named `production`. Require the intended owner
-approval and restrict deployment to protected release refs. The Terraform WIF
-condition requires the repository's immutable GitHub OIDC subject
-`repo:jamiepratt@558780/animated-graph-cloud@1303177214:environment:production`;
-a workflow job without that environment or from a different repository identity
-cannot impersonate the production deployer.
+Protect the `main` branch with the intended required checks and restrict direct
+pushes. The Terraform WIF condition requires the repository's immutable GitHub
+OIDC subject
+`repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/main`;
+a workflow from another ref or repository identity cannot impersonate the
+production deployer.
 
 The repository contains no secret values and no long-lived JSON credential file. Use
 ambient operator credentials locally and GitHub Workload Identity Federation in
@@ -180,16 +180,13 @@ unset PICKER_API_KEY
 
 Confirm all four enabled versions and IAM bindings without printing payloads.
 
-## Multi-admin release
+## Automatic production deployment
 
-From GitHub Actions, dispatch **Release Alpha Compose production** with an exact
-reviewed 40-character lowercase commit SHA and confirmation
-`RELEASE ALPHA COMPOSE WITH MULTI-ADMIN ACCESS`.
-Approve the `production environment` gate. The workflow builds that checked-out
-commit, scans it, pushes an immutable digest, verifies the private service,
-publishes Hosting, updates the durable renderer, and verifies health/privacy/
-terms. It neither publishes OAuth nor adds ordinary members; configured
-administrators are bootstrapped from `AGG_ADMIN_EMAILS`.
+Every push to protected `main` triggers **Deploy Alpha Compose production**. The
+workflow builds and scans the pushed commit, pushes an immutable digest,
+verifies the private service, publishes Hosting, updates the durable renderer,
+and verifies health/privacy/terms. It neither publishes OAuth nor adds ordinary
+members; configured administrators are bootstrapped from `AGG_ADMIN_EMAILS`.
 
 Afterward, apply the Scheduler step above, complete
 `docs/release-acceptance.md`, and store a populated copy of the evidence
@@ -198,13 +195,11 @@ operations dashboard and alerts before costed acceptance.
 
 ## Rollback
 
-Normal rollback is another manually approved production workflow run using the
-full 40-character lowercase SHA of the last accepted commit. This promotes the
-previous immutable code to both
-API and durable renderer while retaining current data and Secret Manager
-versions. Record the workflow URL and digest. A code rollback does not roll back
-secrets or data; restore those only through a separately reviewed recovery
-plan.
+Normal rollback is a reviewed revert or restoration commit pushed to protected
+`main`. This promotes the resulting immutable code to both API and durable
+renderer while retaining current data and Secret Manager versions. Record the
+workflow URL and digest. A code rollback does not roll back secrets or data;
+restore those only through a separately reviewed recovery plan.
 
 For an authentication, legal, or data-exposure emergency, close public origin
 ingress first (Firebase will receive a forbidden backend response):

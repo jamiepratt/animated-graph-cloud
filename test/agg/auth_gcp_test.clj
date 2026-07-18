@@ -89,6 +89,22 @@
     (is (= [":encrypt" ":decrypt"]
            (mapv #(subs (:url %) (- (count (:url %)) 8)) @requests)))))
 
+(deftest kms-cipher-retries-transient-encryption-failures
+  (let [responses (atom [{:status 503 :body "{}"}
+                         {:status 200
+                          :body (json/write-str {:ciphertext "kms-ciphertext"})}])
+        requests (atom [])
+        cipher (gcp/->KmsTokenCipher
+                (fn [request]
+                  (swap! requests conj request)
+                  (let [response (first @responses)]
+                    (swap! responses subvec 1)
+                    response))
+                "projects/project/locations/europe-central2/keyRings/application/cryptoKeys/drive-refresh-tokens")]
+    (is (= "kms-ciphertext"
+           (auth/encrypt-token! cipher "refresh-secret")))
+    (is (= 2 (count @requests)))))
+
 (deftest task-token-verifier-exposes-only-cryptographically-verified-claims
   (let [verifier (gcp/->GoogleTaskTokenVerifier
                   (fn [token]

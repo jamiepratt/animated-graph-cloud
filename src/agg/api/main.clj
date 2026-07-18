@@ -13,7 +13,8 @@
             [agg.renderer.main :as renderer]
             [agg.tokens.core :as tokens]
             [agg.ui.core :as ui]
-            [clojure.data.json :as json])
+            [clojure.data.json :as json]
+            [clojure.java.io :as io])
   (:gen-class)
   (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
            (java.io ByteArrayOutputStream)
@@ -26,6 +27,15 @@
 (def ^:private health-body "{\"status\":\"ok\"}")
 
 (def max-request-bytes contract/max-render-request-bytes)
+
+(def ^:private public-assets
+  {"/alpha-compose-mark.svg" ["public/alpha-compose-mark.svg" "image/svg+xml; charset=utf-8"]
+   "/favicon.svg" ["public/favicon.svg" "image/svg+xml; charset=utf-8"]
+   "/favicon-16.png" ["public/favicon-16.png" "image/png"]
+   "/favicon-32.png" ["public/favicon-32.png" "image/png"]
+   "/apple-touch-icon.png" ["public/apple-touch-icon.png" "image/png"]
+   "/icon-192.png" ["public/icon-192.png" "image/png"]
+   "/icon-512.png" ["public/icon-512.png" "image/png"]})
 
 (defn- log-event! [event fields]
   (observability/emit-event! "api" event fields))
@@ -103,6 +113,20 @@
                   status
                   content-type
                   (.getBytes ^String body StandardCharsets/UTF_8)))
+
+(defn- respond-asset! [^HttpExchange exchange resource content-type]
+  (if-let [url (io/resource resource)]
+    (with-open [input (io/input-stream url)]
+      (let [bytes (.readAllBytes input)]
+        (doto (.getResponseHeaders exchange)
+          (.set "Content-Type" content-type)
+          (.set "Cache-Control" "public, max-age=86400, immutable")
+          (.set "X-Content-Type-Options" "nosniff"))
+        (.sendResponseHeaders exchange 200 (alength ^bytes bytes))
+        (with-open [response-body (.getResponseBody exchange)]
+          (.write response-body ^bytes bytes))))
+    (respond! exchange 404 "application/json; charset=utf-8"
+              "{\"error\":\"not_found\"}")))
 
 (defn- respond-json! [exchange status body]
   (respond! exchange status "application/json; charset=utf-8"

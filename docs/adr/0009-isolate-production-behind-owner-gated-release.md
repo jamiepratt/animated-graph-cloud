@@ -1,6 +1,6 @@
 # 0009: Isolate production behind an owner-gated release
 
-- Status: Accepted
+- Status: Superseded by ADR 0011
 - Date: 2026-07-17
 
 ## Context

@@ -84,7 +84,7 @@ variable "enable_firebase_hosting" {
 }
 
 variable "github_subject" {
-  description = "Optional exact GitHub OIDC subject, used to bind production to an environment."
+  description = "Optional exact GitHub OIDC subject, used to bind a deployment to a specific ref or environment."
   type        = string
   default     = ""
 }
