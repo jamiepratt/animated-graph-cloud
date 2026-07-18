@@ -928,6 +928,7 @@
               :project project
               :region region
               :base-url (env "AGG_PUBLIC_BASE_URL" dispatcher-url)
+              :internal-audience dispatcher-url
               :owner-email (env "AGG_OWNER_EMAIL" nil)
               :session-secret (env "AGG_SESSION_KEY" nil)
               :oauth-client-credentials

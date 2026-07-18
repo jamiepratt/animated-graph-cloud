@@ -15,7 +15,7 @@
     (is (re-find #"project_id\s*=\s*\"animated-graph-cloud-prod-jp\"" production))
     (is (re-find #"environment_name\s*=\s*\"production\"" production))
     (is (re-find #"import_default_firestore\s*=\s*false" production))
-    (is (re-find #"github_subject\s*=\s*\"repo:jamiepratt/animated-graph-cloud:environment:production\""
+    (is (re-find #"github_subject\s*=\s*\"repo:jamiepratt@558780/animated-graph-cloud@1303177214:environment:production\""
                  production))
     (is (str/includes? backend
                        "bucket = \"animated-graph-cloud-prod-jp-tfstate\""))
@@ -44,6 +44,21 @@
     (is (str/includes? runbook "exactly two additions"))
     (is (str/includes? runbook "Artifact Registry API"))
     (is (not (str/includes? runbook "First create only the repository")))))
+
+(deftest production-runtime-secrets-are-utf8-safe
+  (let [runbook (slurp "docs/production-runbook.md")]
+    (is (= 2 (count (re-seq #"openssl rand -base64 48 \| tr -d '\\n'"
+                            runbook))))
+    (is (not (re-find #"openssl rand 48 \|" runbook)))))
+
+(deftest internal-service-tokens-use-the-cloud-run-audience
+  (let [runtime (slurp "src/agg/jobs/gcp.clj")
+        auth-runtime (slurp "src/agg/auth/gcp.clj")]
+    (is (str/includes? runtime ":internal-audience dispatcher-url"))
+    (is (str/includes?
+         auth-runtime
+         ":task-token-verifier (task-token-verifier internal-audience)"))
+    (is (str/includes? auth-runtime ":task-audience internal-audience"))))
 
 (deftest firebase-hosting-routes-the-public-domain-to-warsaw-cloud-run
   (let [{:keys [hosting]} (read-json "firebase.json")

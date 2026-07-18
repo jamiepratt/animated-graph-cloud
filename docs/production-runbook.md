@@ -32,9 +32,10 @@ script/release_acceptance.sh
 
 Create a GitHub environment named `production`. Require the intended owner
 approval and restrict deployment to protected release refs. The Terraform WIF
-condition requires the exact OIDC subject
-`repo:jamiepratt/animated-graph-cloud:environment:production`; a workflow job
-without that environment cannot impersonate the production deployer.
+condition requires the repository's immutable GitHub OIDC subject
+`repo:jamiepratt@558780/animated-graph-cloud@1303177214:environment:production`;
+a workflow job without that environment or from a different repository identity
+cannot impersonate the production deployer.
 
 The repository contains no secret values and no long-lived JSON credential file. Use
 ambient operator credentials locally and GitHub Workload Identity Federation in
@@ -151,9 +152,9 @@ arguments. Add payloads over standard input:
 ```sh
 gcloud secrets versions add oauth-client-secret \
   --project=animated-graph-cloud-prod-jp --data-file=- < /secure/path/production-oauth-client.json
-openssl rand 48 | gcloud secrets versions add session-key \
+openssl rand -base64 48 | tr -d '\n' | gcloud secrets versions add session-key \
   --project=animated-graph-cloud-prod-jp --data-file=-
-openssl rand 48 | gcloud secrets versions add token-hash-pepper \
+openssl rand -base64 48 | tr -d '\n' | gcloud secrets versions add token-hash-pepper \
   --project=animated-graph-cloud-prod-jp --data-file=-
 ```
 

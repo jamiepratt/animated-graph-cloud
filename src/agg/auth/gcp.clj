@@ -327,7 +327,8 @@
      :gateway gateway}))
 
 (defn api-dependencies
-  [{:keys [firestore project region base-url owner-email session-secret
+  [{:keys [firestore project region base-url internal-audience owner-email
+           session-secret
            oauth-client-credentials tasks-service-account
            scheduler-service-account picker-api-key picker-app-id
            token-hash-secret]}]
@@ -354,8 +355,8 @@
     {:auth-system auth-system
      :member-directory member-directory
      :credential-administration grant-store
-     :task-token-verifier (task-token-verifier base-url)
-     :task-audience base-url
+     :task-token-verifier (task-token-verifier internal-audience)
+     :task-audience internal-audience
      :tasks-service-account tasks-service-account
      :scheduler-service-account scheduler-service-account
      :picker-api-key picker-api-key

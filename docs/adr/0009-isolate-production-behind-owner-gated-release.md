@@ -17,7 +17,8 @@ Production uses the separate `animated-graph-cloud-prod-jp` project and its own
 GCS Terraform state, service identities, secret containers, PLN 400 budget, and
 Google OAuth web client. Development and production retain separate OAuth
 credentials. Production Workload Identity Federation accepts only the exact
-GitHub OIDC subject for the `production` environment.
+immutable GitHub OIDC subject (including owner and repository IDs) for the
+`production` environment.
 
 Firebase Hosting terminates TLS for `alphacompose.com` and rewrites requests to
 the `agg-api` Cloud Run service in `europe-central2`. Adding Firebase to the

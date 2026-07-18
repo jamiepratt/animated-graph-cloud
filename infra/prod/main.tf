@@ -4,7 +4,7 @@ module "application" {
   project_id               = "animated-graph-cloud-prod-jp"
   region                   = "europe-central2"
   github_repository        = "jamiepratt/animated-graph-cloud"
-  github_subject           = "repo:jamiepratt/animated-graph-cloud:environment:production"
+  github_subject           = "repo:jamiepratt@558780/animated-graph-cloud@1303177214:environment:production"
   renderer_image           = var.renderer_image
   api_service_url          = var.api_service_url
   monthly_budget_pln       = var.monthly_budget_pln
