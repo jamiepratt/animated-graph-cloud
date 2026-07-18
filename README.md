@@ -78,8 +78,9 @@ GitHub issue #3.
 ## Telemetry preview and overlay API
 
 `POST /v1/preview` returns `image/png`; `POST /v1/overlay` returns a seekable
-`video/quicktime` ProRes 4444 overlay with AAC heartbeat audio. Both accept the
-same JSON body:
+`video/quicktime` ProRes 4444 overlay with AAC heartbeat audio. Overlay-only
+behavior remains synchronous. A preview may include a verified Drive source;
+compositing output is available only through durable jobs.
 
 ```json
 {
@@ -145,6 +146,24 @@ input has a byte ceiling, and normalized series have a 900,000-sample ceiling.
 See ADR 0006.
 
 ## Durable render jobs
+
+To composite one Drive video, send only its server-verified file ID:
+
+```json
+{
+  "sourceVideo": {"fileId": "drive-file-id"},
+  "outputFormat": "h264-mp4",
+  "fitMode": "letterbox",
+  "audioMode": "source+heartbeat"
+}
+```
+
+The API ignores client-supplied source names and MIME types, verifies Drive
+metadata with `drive.file`, rejects sources above 2 GiB or shorter than the
+requested section, and streams source bytes through a non-seekable FFmpeg pipe.
+Supported outputs are H.264 MP4 (default) and ProRes 422 MOV. Fit defaults to
+letterbox/pillarbox; audio defaults to source plus bounded heartbeat mix, with
+source-only and heartbeat-only modes also available.
 
 `POST /v1/jobs` accepts the same validated render JSON as `/v1/overlay` and
 requires an `Idempotency-Key` header of 1–128 characters. A new request returns

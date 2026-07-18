@@ -38,9 +38,10 @@
 (defn render!
   "Runs one bounded render and returns its validated media report."
   [{:keys [output-path profile? jfr-path] :as render-spec}
-   {:keys [media video-encoder frame-renderer]}]
+   {:keys [media video-encoder frame-renderer source-stream!]}]
   (let [video-encoder (or video-encoder media)
         frame-renderer (or frame-renderer frames/java2d-frame-renderer)
+        compositing? (some? (:source-video render-spec))
         audio-path (Files/createTempFile "agg-audio-" ".wav"
                                          (make-array java.nio.file.attribute.FileAttribute 0))
         started (System/nanoTime)
@@ -54,25 +55,43 @@
                                     audio-path
                                     (make-array OpenOption 0))]
             (audio/write-wav! render-spec audio-output)))
-        (let [encode-result (tufte/p
-                             ::encoding
-                             (media/encode! video-encoder
-                                            render-spec
-                                            audio-path
-                                            output-path
-                                            (fn [output]
-                                              (reset!
-                                               frame-result
-                                               (tufte/p
-                                                ::frame-streaming
-                                                (frames/stream-frames!
-                                                 frame-renderer
-                                                 render-spec
-                                                 output))))))
+        (let [write-overlay!
+              (fn [output]
+                (reset! frame-result
+                        (tufte/p
+                         ::frame-streaming
+                         (frames/stream-frames!
+                          frame-renderer render-spec output))))
+              encode-result
+              (tufte/p
+               ::encoding
+               (if compositing?
+                 (do
+                   (when-not (and source-stream!
+                                  (satisfies? media/CompositeEncoder
+                                             video-encoder))
+                     (throw (errors/raise!
+                             "Video compositing dependencies are incomplete"
+                             {:type ::missing-compositing-dependencies})))
+                   (media/encode-composite! video-encoder
+                                             render-spec
+                                             audio-path
+                                             output-path
+                                             source-stream!
+                                             write-overlay!))
+                 (media/encode! video-encoder
+                                render-spec
+                                audio-path
+                                output-path
+                                write-overlay!)))
               verified (tufte/p ::verification
-                                (media/verify! video-encoder
-                                               render-spec
-                                               output-path))
+                                (if compositing?
+                                  (media/verify-composite! video-encoder
+                                                           render-spec
+                                                           output-path)
+                                  (media/verify! video-encoder
+                                                 render-spec
+                                                 output-path)))
               wall-seconds (/ (- (System/nanoTime) started) 1000000000.0)
               frame-count (truss/have! pos?
                                        (:frame-count @frame-result))
@@ -93,6 +112,11 @@
            :sha256 (sha256 output-path)
            :peak-cgroup-memory-bytes peak-memory
            :jfr jfr-summary
+           :content-type (if compositing?
+                           (if (= "prores-422-mov" (:output-format render-spec))
+                             "video/quicktime"
+                             "video/mp4")
+                           "video/quicktime")
            :media verified})
         (finally
           (when recording
@@ -158,7 +182,7 @@
   ([{:keys [output-path report-path jfr-path bucket object-prefix delete-local?
             ffmpeg ffprobe]
      :as request}
-    {:keys [media video-encoder artifact-store]}]
+    {:keys [media video-encoder artifact-store source-stream!]}]
    (when (not= (some? bucket) (some? object-prefix))
      (throw (errors/raise! "Bucket and object prefix must be supplied together"
                      {:type ::invalid-upload-options})))
@@ -173,7 +197,8 @@
                             (when bucket (storage/gcs-store bucket object-prefix)))
          completed? (atom false)]
      (try
-       (let [result (render! request {:video-encoder video-encoder})
+       (let [result (render! request {:video-encoder video-encoder
+                                      :source-stream! source-stream!})
              report-json (json/write-str (dissoc result :objects))]
          (Files/writeString report-path
                             report-json
@@ -190,7 +215,8 @@
                                  (storage/upload! artifact-store
                                                   :media
                                                   output-path
-                                                  "video/quicktime"))
+                                                  (or (:content-type result)
+                                                      "video/quicktime")))
                          :profile (when jfr-path
                                     (tufte/p
                                      ::uploads
@@ -219,8 +245,12 @@
     (tufte/profile {:id ::cloud-render}
       (let [subject (:requesterSubject request)
             render-spec (tufte/p ::telemetry-parsing (contract/prepare request))
+            output-suffix (if (= "h264-mp4"
+                                (:output-format render-spec))
+                           ".mp4"
+                           ".mov")
             output-path (Files/createTempFile
-                         "agg-cloud-output-" ".mov"
+                         "agg-cloud-output-" output-suffix
                          (make-array java.nio.file.attribute.FileAttribute 0))
             report-path (Files/createTempFile
                          "agg-cloud-report-" ".json"
@@ -250,7 +280,7 @@
             (cond-> {:output-bytes (:output-bytes result)
                      :object (get-in result [:objects :media :object])
                      :sha256 (:sha256 result)
-                     :contentType "video/quicktime"}
+                     :contentType (:content-type result "video/quicktime")}
               delivered (assoc :driveFileId (:fileId delivered)
                                :driveWebViewLink (:webViewLink delivered))))
           (finally
@@ -277,10 +307,29 @@
             :project project
             :region region
             :oauth-client-credentials
-            (get (System/getenv) "AGG_OAUTH_CLIENT_CREDENTIALS")}))]
+            (get (System/getenv) "AGG_OAUTH_CLIENT_CREDENTIALS")}))
+        source-system
+        (when (= "true" (get (System/getenv) "AGG_DRIVE_SOURCE_ENABLED" "true"))
+          (auth-gcp/renderer-source
+           {:firestore (.getService (FirestoreOptions/getDefaultInstance))
+            :project project
+            :region region
+            :oauth-client-credentials
+            (get (System/getenv) "AGG_OAUTH_CLIENT_CREDENTIALS")}))
+        render-cloud!
+        (fn [request dependencies]
+          (let [source-stream!
+                (when (and source-system (:source-video request))
+                  (let [{:keys [access-token]} ((:access-provider source-system)
+                                                (:requesterSubject request))
+                        file-id (get-in request [:source-video :file-id])]
+                    (fn [output]
+                      (drive/stream-source! (:gateway source-system)
+                                            access-token file-id output))))]
+            (run-job! request (assoc dependencies :source-stream! source-stream!))))]
     (require-cloud-success!
      (jobs/run-job! (gcp/renderer-job-service
-                     (->CloudRenderWorker bucket drive-delivery run-job!))
+                     (->CloudRenderWorker bucket drive-delivery render-cloud!))
                     job-id))))
 
 (defn cloud-failure-event [cause]

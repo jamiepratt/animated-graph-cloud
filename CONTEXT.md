@@ -1,6 +1,6 @@
 # Project context
 
-Alpha Compose is the public product. The `animated-graph-cloud` service accepts private telemetry inputs, renders overlay-only ProRes 4444 MOV files, and writes completed outputs to the requesting user's Google Drive.
+Alpha Compose is the public product. The `animated-graph-cloud` service accepts private telemetry inputs, renders transparent overlay-only ProRes 4444 MOV files or bounded composites of one verified Google Drive video, and writes completed outputs to the requesting user's Google Drive.
 
 ## Invariants
 
@@ -12,7 +12,7 @@ Alpha Compose is the public product. The `animated-graph-cloud` service accepts 
 - The configured owner controls Firestore-backed memberships; revocation invalidates every access path and active job.
 - Runtime and CI identities use ambient credentials or Workload Identity Federation. Service-account key files are forbidden.
 - Temporary cloud objects expire after 24 hours. Job metadata expires after 90 days.
-- No source video is downloaded or composited.
+- Source video is streamed directly from Google Drive into FFmpeg only for durable compositing jobs; it is never persisted by the service.
 - Rendering emits a standard seekable MOV with ProRes 4444 alpha, 25 fps, and heartbeat audio.
 - Logs exclude email addresses, Google subjects, filenames, tokens, telemetry values, Drive credentials, and signed URLs.
 - Safe structured observability events from the API and renderer are copied best-effort to the Firestore `observability-logs` collection for 30 days. Owner and admin sessions can inspect the latest 100 events at `/ui/admin/logs` with severity/component filters and formatted or raw JSON views.

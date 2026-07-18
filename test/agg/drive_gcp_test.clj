@@ -47,6 +47,19 @@
     (is (= :get (:method (first @requests))))
     (is (.contains ^String (:url (first @requests)) "/files/folder-1"))))
 
+(deftest source-metadata-normalizes-drive-int64-size
+  (let [gateway (gcp/->RestDriveGateway
+                 (fn [_]
+                   {:status 200
+                    :body (json/write-str {:id "video-1"
+                                           :name "source.mp4"
+                                           :mimeType "video/mp4"
+                                           :size "2147483648"
+                                           :trashed false})})
+                 (* 8 1024 1024))]
+    (is (= 2147483648
+           (:size (drive/source-metadata! gateway "access" "video-1"))))))
+
 (deftest missing-output-folder-is-created-once
   (let [requests (atom [])
         gateway

@@ -14,6 +14,10 @@
   (upload-resumable! [gateway access-token session-uri path size])
   (resume-resumable! [gateway access-token session-uri path size]))
 
+(defprotocol SourceGateway
+  (source-metadata! [gateway access-token file-id])
+  (stream-source! [gateway access-token file-id output]))
+
 (defprotocol OutputDelivery
   (deliver-output! [delivery job-id subject path]))
 
@@ -43,14 +47,18 @@
 
 (defn- begin-session!
   [{:keys [store gateway]} job-id access-token
-   {:keys [file-id folder-id]} size]
-  (let [session-uri
+   {:keys [file-id folder-id]} size path]
+  (let [content-type (if (.endsWith (str path) ".mp4")
+                       "video/mp4"
+                       "video/quicktime")
+        extension (if (= "video/mp4" content-type) "mp4" "mov")
+        session-uri
         (begin-resumable-upload!
          gateway access-token
          {:file-id file-id
           :folder-id folder-id
-          :name (str "animated-graph-" job-id ".mov")
-          :content-type "video/quicktime"
+          :name (str "animated-graph-" job-id "." extension)
+          :content-type content-type
           :size size})]
     (save-upload-session! store job-id session-uri)
     session-uri))
@@ -67,7 +75,7 @@
             size (Files/size path)]
         (loop [session-uri (or (:session-uri reservation)
                                (begin-session! delivery job-id access-token
-                                               reservation size))
+                                               reservation size path))
                recovered? (some? (:session-uri reservation))
                restarts 0]
           (let [{:keys [status file-id]}
@@ -85,7 +93,7 @@
               :session-expired
               (if (< restarts 2)
                 (recur (begin-session! delivery job-id access-token
-                                       reservation size)
+                                       reservation size path)
                        false
                        (inc restarts))
                 (throw (errors/raise! "Drive resumable session repeatedly expired"

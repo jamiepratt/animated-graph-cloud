@@ -378,3 +378,14 @@
      {:store (drive-gcp/delivery-store firestore)
       :gateway gateway
       :access-provider #(auth/drive-access! access-system %)})))
+
+(defn renderer-source
+  "Returns the Drive source gateway and a refresh-backed access provider."
+  [{:keys [firestore project region oauth-client-credentials]}]
+  (let [{:keys [oauth cipher grant-store gateway]}
+        (drive-components firestore project region oauth-client-credentials nil)
+        access-system {:cipher cipher
+                       :grant-store grant-store
+                       :drive-token-client oauth}]
+    {:gateway gateway
+     :access-provider #(auth/drive-access! access-system %)}))

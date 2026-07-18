@@ -101,7 +101,25 @@
 
 (deftest rendering-boundaries-are-protocol-backed
   (is (satisfies? frames/FrameRenderer frames/java2d-frame-renderer))
-  (is (satisfies? media/VideoEncoder (media/ffmpeg-video-encoder))))
+  (is (satisfies? media/VideoEncoder (media/ffmpeg-video-encoder)))
+  (is (satisfies? media/CompositeEncoder (media/ffmpeg-video-encoder))))
+
+(deftest compositing-command-keeps-drive-source-on-a-non-seekable-pipe
+  (let [command (media/composite-command
+                 "ffmpeg"
+                 {:width 1920 :height 1080 :fps 25 :duration-seconds 2
+                  :output-format "h264-mp4"
+                  :fit-mode "letterbox"
+                  :audio-mode "source+heartbeat"}
+                 "/tmp/heartbeat.wav"
+                 "/tmp/overlay.pipe"
+                 "/tmp/output.mp4")
+        joined (str/join " " command)]
+    (is (some #{"pipe:0"} command))
+    (is (some #{"/tmp/overlay.pipe"} command))
+    (is (str/includes? joined "force_original_aspect_ratio=decrease"))
+    (is (str/includes? joined "amix=inputs=2"))
+    (is (not (some #(str/includes? % "source.mp4") command)))))
 
 (deftest polar-midpoint-preview-matches-the-golden-render
   (let [telemetry (slurp (io/resource "fixtures/polar/valid.csv"))

@@ -3,6 +3,7 @@
             [agg.admin.core :as admin]
             [agg.contracts.render :as contract]
             [agg.auth.core :as auth]
+            [agg.drive.core :as drive]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
             [agg.logs.core :as logs]
@@ -225,6 +226,32 @@
 (defn- request-render-spec [exchange]
   (:render-spec (request-render-request exchange)))
 
+(defn- attach-source!
+  [auth-system user {:keys [request render-spec]}]
+  (if-not (:source-video render-spec)
+    {:request request :render-spec render-spec}
+    (do
+      (when-not (and auth-system user)
+        (throw (errors/raise! "Drive authorization is required"
+                        {:type ::auth/drive-grant-required})))
+      (let [{:keys [access-token]}
+            (auth/drive-access! auth-system (:subject user))
+            gateway (:drive auth-system)]
+        (when-not (satisfies? drive/SourceGateway gateway)
+          (throw (errors/raise! "Drive source dependencies are incomplete"
+                          {:type ::drive/source-unavailable})))
+        (let [file-id (get-in render-spec [:source-video :file-id])
+              metadata (drive/source-metadata! gateway access-token file-id)
+              request (assoc request :sourceVideoServerMetadata metadata)]
+          {:request request
+           :render-spec (contract/attach-source-metadata render-spec metadata)
+           :source-stream!
+           (fn [output]
+             (drive/stream-source! gateway access-token file-id output))})))))
+
+(defn- source-aware-request! [exchange auth-system user]
+  (attach-source! auth-system user (request-render-request exchange)))
+
 (defn- ui-render-request [exchange]
   (try
     (let [request (json/read-str (get (request-form exchange) "request")
@@ -241,14 +268,45 @@
                       {:type ::invalid-request}
                       error)))))
 
-(defn- preview! [exchange frame-renderer]
-  (let [render-spec (request-render-spec exchange)
-        output (ByteArrayOutputStream.)]
-    (frames/render-preview! frame-renderer render-spec output)
-    (respond-bytes! exchange 200 "image/png" (.toByteArray output))))
+(defn- source-aware-ui-request! [exchange auth-system user]
+  (attach-source! auth-system user (ui-render-request exchange)))
+
+(defn- preview-bytes [render-spec source-stream! frame-renderer video-encoder]
+  (let [output (ByteArrayOutputStream.)]
+    (if source-stream!
+      (let [composite-path (Files/createTempFile
+                            "agg-preview-composite-"
+                            (if (= "h264-mp4" (:output-format render-spec))
+                              ".mp4"
+                              ".mov")
+                            (make-array java.nio.file.attribute.FileAttribute 0))]
+        (try
+          (renderer/render! (assoc render-spec
+                                   :output-path composite-path
+                                   :profile? false)
+                            {:frame-renderer frame-renderer
+                             :video-encoder (or video-encoder
+                                                (media/ffmpeg-video-encoder))
+                             :source-stream! source-stream!})
+          (media/extract-preview! "ffmpeg" render-spec composite-path output)
+          (finally
+            (Files/deleteIfExists composite-path))))
+      (frames/render-preview! frame-renderer render-spec output))
+    (.toByteArray output)))
+
+(defn- preview! [exchange frame-renderer video-encoder auth-system user]
+  (let [{:keys [render-spec source-stream!]} (source-aware-request!
+                                              exchange auth-system user)]
+    (respond-bytes! exchange 200 "image/png"
+                    (preview-bytes render-spec source-stream!
+                                   frame-renderer video-encoder))))
 
 (defn- overlay! [exchange frame-renderer video-encoder]
-  (let [render-spec (request-render-spec exchange)
+  (let [{:keys [render-spec]} (request-render-request exchange)
+        _ (when (:source-video render-spec)
+            (throw (errors/raise!
+                    "Video compositing is available only through durable jobs"
+                    {:type ::compositing-not-supported})))
         output-path (Files/createTempFile
                      "agg-overlay-"
                      ".mov"
@@ -263,10 +321,11 @@
       (finally
         (Files/deleteIfExists output-path)))))
 
-(defn- submit-job! [^HttpExchange exchange job-service user]
+(defn- submit-job! [^HttpExchange exchange job-service auth-system user]
   (let [idempotency-key (some-> exchange .getRequestHeaders
                                 (.getFirst "Idempotency-Key"))
-        request (cond-> (:request (request-render-request exchange))
+        {:keys [request]} (source-aware-request! exchange auth-system user)
+        request (cond-> request
                   user (assoc :requesterSubject (:subject user)
                               :requesterEmail (:email user)
                               :requesterMembershipVersion
@@ -454,12 +513,12 @@
                "const selection=document.getElementById('picker-selection');"
                "function pickerCallback(data){"
                "if(data.action===google.picker.Action.PICKED){"
-               "const files=data.docs.map(d=>({id:d.id,name:d.name,mimeType:d.mimeType}));"
-               "selection.textContent=files.map(file=>file.name).join(', ')||'None';"
-               "if(window.opener){window.opener.postMessage({type:'agg-picker',files},location.origin);}}}"
+               "const d=data.docs&&data.docs[0];const file=d?{id:d.id,name:d.name}:null;"
+               "selection.textContent=file?.name||'None';"
+               "if(window.opener){window.opener.postMessage({type:'agg-picker',file},location.origin);}}}"
                "function openPicker(){gapi.load('picker',()=>{"
                "const view=new google.picker.DocsView().setIncludeFolders(false)"
-               ".setMimeTypes('text/csv,image/png,application/octet-stream');"
+               ".setMimeTypes('video/*').setSelectFolderEnabled(false);"
                "new google.picker.PickerBuilder().addView(view)"
                ".setOAuthToken(" token ").setDeveloperKey(" api-key ")"
                ".setAppId(" app-id ").setOrigin(location.origin)"
@@ -521,16 +580,18 @@
   (let [{:keys [email]} (request-json exchange)]
     (respond-json! exchange 200 (admin/revoke-member! admin-service user email))))
 
-(defn- preview-ui! [exchange frame-renderer]
-  (let [render-spec (:render-spec (ui-render-request exchange))
-        output (ByteArrayOutputStream.)]
-    (frames/render-preview! frame-renderer render-spec output)
+(defn- preview-ui! [exchange frame-renderer video-encoder auth-system user]
+  (let [{:keys [render-spec source-stream!]}
+        (source-aware-ui-request! exchange auth-system user)]
     (respond! exchange 200 "text/html; charset=utf-8"
               (ui/preview-fragment
-               (.encodeToString (Base64/getEncoder) (.toByteArray output))))))
+               (.encodeToString (Base64/getEncoder)
+                                (preview-bytes render-spec source-stream!
+                                               frame-renderer video-encoder))))))
 
-(defn- submit-job-ui! [exchange job-service user]
-  (let [request (assoc (:request (ui-render-request exchange))
+(defn- submit-job-ui! [exchange job-service auth-system user]
+  (let [{:keys [request]} (source-aware-ui-request! exchange auth-system user)
+        request (assoc request
                        :requesterSubject (:subject user)
                        :requesterEmail (:email user)
                        :requesterMembershipVersion
@@ -640,13 +701,13 @@
             (and auth-system (= "POST" method) (= "/ui/preview" path))
             (let [user (require-session-user! exchange auth-system)]
               (require-csrf! exchange auth-system user)
-              (preview-ui! exchange frame-renderer))
+              (preview-ui! exchange frame-renderer video-encoder auth-system user))
 
             (and auth-system job-service (= "POST" method)
                  (= "/ui/jobs" path))
             (let [user (require-session-user! exchange auth-system)]
               (require-csrf! exchange auth-system user)
-              (submit-job-ui! exchange job-service user))
+              (submit-job-ui! exchange job-service auth-system user))
 
             (and auth-system job-service (= "GET" method)
                  (re-matches #"/ui/jobs/[^/]+" path))
@@ -713,9 +774,9 @@
               (revoke-member-ui! exchange admin-service user))
 
             (and (= "POST" method) (= "/v1/preview" path))
-            (do (->> (authenticated-user! exchange auth-system token-service)
-                     (require-csrf! exchange auth-system))
-                (preview! exchange frame-renderer))
+            (let [user (authenticated-user! exchange auth-system token-service)]
+              (require-csrf! exchange auth-system user)
+              (preview! exchange frame-renderer video-encoder auth-system user))
 
             (and (= "POST" method) (= "/v1/overlay" path))
             (do (->> (authenticated-user! exchange auth-system token-service)
@@ -760,7 +821,7 @@
             (and job-service (= "POST" method) (= "/v1/jobs" path))
             (let [user (authenticated-user! exchange auth-system token-service)]
               (require-csrf! exchange auth-system user)
-              (submit-job! exchange job-service user))
+              (submit-job! exchange job-service auth-system user))
 
             (and upload-signer (= "POST" method) (= "/v1/uploads" path))
             (do (->> (authenticated-user! exchange auth-system token-service)
@@ -836,6 +897,20 @@
 
               ::picker-not-configured
               (respond-json! exchange 503 {:error "picker_not_configured"})
+
+              ::compositing-not-supported
+              (respond-json! exchange 400 {:error "compositing_requires_durable_job"})
+
+              ::contract/source-too-large
+              (respond-json! exchange 413 {:error "source_video_too_large"
+                                           :limit contract/max-source-bytes})
+
+              ::contract/invalid-source-metadata
+              (respond-json! exchange 400 {:error "invalid_source_video"})
+
+              ::drive/source-unavailable
+              (respond-json! exchange 503 {:error "drive_source_unavailable"
+                                           :retryable true})
 
               ::jobs/invalid-idempotency-key
               (respond-json! exchange 400 {:error "invalid_idempotency_key"})

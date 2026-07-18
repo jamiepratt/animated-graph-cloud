@@ -11,6 +11,8 @@
 
 (def max-telemetry-bytes (* 10 1024 1024))
 
+(def max-source-bytes (* 2 1024 1024 1024))
+
 (defn- base64-characters [bytes]
   (* 4 (quot (+ bytes 2) 3)))
 
@@ -35,6 +37,48 @@
   (when-not condition
     (throw (errors/raise! message data))))
 
+(defn- source-options [source-video output-format fit-mode audio-mode]
+  (when source-video
+    (require! (and (map? source-video)
+                   (string? (:fileId source-video))
+                   (not (clojure.string/blank? (:fileId source-video))))
+              "sourceVideo.fileId is required"
+              {:type ::invalid-source-video}))
+  (when (or output-format fit-mode audio-mode)
+    (require! source-video
+              "Video composition requires sourceVideo.fileId"
+              {:type ::composition-requires-source}))
+  (let [output-format (case (or output-format "h264-mp4")
+                        "mp4" "h264-mp4"
+                        "h264" "h264-mp4"
+                        "prores-422" "prores-422-mov"
+                        "h264-mp4" "h264-mp4"
+                        "prores-422-mov" "prores-422-mov"
+                        nil)
+        fit-mode (or fit-mode "letterbox")
+        audio-mode (case (or audio-mode "source+heartbeat")
+                     "source" "source-only"
+                     "heartbeat" "heartbeat-only"
+                     "source-and-heartbeat" "source+heartbeat"
+                     "source+heartbeat" "source+heartbeat"
+                     "source-only" "source-only"
+                     "heartbeat-only" "heartbeat-only"
+                     nil)]
+    (when source-video
+      (require! (contains? #{"h264-mp4" "prores-422-mov"} output-format)
+                "Unsupported composited output format"
+                {:type ::unsupported-output-format})
+      (require! (contains? #{"letterbox" "pillarbox" "crop"} fit-mode)
+                "Unsupported source fit mode"
+                {:type ::unsupported-fit-mode})
+      (require! (contains? #{"source+heartbeat" "source-only" "heartbeat-only"}
+                            audio-mode)
+                "Unsupported composited audio mode"
+                {:type ::unsupported-audio-mode})
+      {:output-format output-format
+       :fit-mode fit-mode
+       :audio-mode audio-mode})))
+
 (defn- parse-heart-rate [format telemetry]
   (case format
     "polar-csv" (polar/parse-csv telemetry)
@@ -56,10 +100,17 @@
   (and (not (.isAfter ^Instant (:timestamp (first samples)) start))
        (not (.isBefore ^Instant (:timestamp (last samples)) end))))
 
+(declare attach-source-metadata)
+
 (defn prepare
   "Validates a render request and returns its shared normalized contract."
   [{:keys [telemetryFormat telemetry preset telemetrySyncAt cameraSyncAt
-           sectionStartAt sectionEndAt spo2 timer watermark]}]
+           sectionStartAt sectionEndAt spo2 timer watermark sourceVideo
+           outputFormat fitMode audioMode format fit audio sourceVideoServerMetadata]}]
+  (let [source (source-options sourceVideo
+                               (or outputFormat format)
+                               (or fitMode fit)
+                               (or audioMode audio))]
   (require! (#{"polar-csv" "garmin-fit" "oxiwear-hr-csv"}
              telemetryFormat)
             "Unsupported telemetry format"
@@ -153,6 +204,15 @@
                    :telemetry (timeline/section samples
                                                 telemetry-start
                                                 telemetry-end))
+      source
+      (merge source)
+
+      sourceVideo
+      (assoc :source-video {:file-id (:fileId sourceVideo)})
+
+      sourceVideoServerMetadata
+      (attach-source-metadata sourceVideoServerMetadata)
+
       spo2-samples
       (assoc :spo2 (timeline/section-values spo2-samples
                                             :spo2
@@ -166,4 +226,27 @@
                                                             timer-end)})
 
       watermark-image
-      (assoc :watermark watermark-image))))
+      (assoc :watermark watermark-image)))))
+
+(defn attach-source-metadata
+  "Attaches metadata fetched from Drive; request-supplied metadata is ignored."
+  [render-spec {:keys [id name mimeType size trashed] :as metadata}]
+  (let [file-id (get-in render-spec [:source-video :file-id])]
+    (require! (and file-id
+                   (= file-id id)
+                   (string? name)
+                   (string? mimeType)
+                   (clojure.string/starts-with? mimeType "video/")
+                   (integer? size)
+                   (not (neg? size))
+                   (not trashed))
+              "Drive source metadata is invalid"
+              {:type ::invalid-source-metadata})
+    (require! (<= size max-source-bytes)
+              "Drive source exceeds the size limit"
+              {:type ::source-too-large
+               :limit max-source-bytes
+               :size size})
+    (assoc render-spec :source-video
+           {:file-id file-id
+            :metadata (select-keys metadata [:id :name :mimeType :size :trashed])})))

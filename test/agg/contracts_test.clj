@@ -154,3 +154,33 @@
            (error-type (assoc (valid-request)
                               :timer {:startAt "2026-07-17T09:00:01Z"
                                       :endAt "2026-07-17T09:00:03Z"}))))))
+
+(deftest source-video-is-an-id-only-client-input
+  (let [prepared (contract/prepare
+                  (assoc (valid-request)
+                         :sourceVideo {:fileId "drive-video-1"
+                                       :name "client-filename.mp4"
+                                       :mimeType "video/mp4"}))]
+    (is (= {:file-id "drive-video-1"}
+           (:source-video prepared)))
+    (is (= {:output-format "h264-mp4"
+            :fit-mode "letterbox"
+            :audio-mode "source+heartbeat"}
+           (select-keys prepared [:output-format :fit-mode :audio-mode])))))
+
+(deftest server-source-metadata-enforces-the-two-gibibyte-admission-limit
+  (let [prepared (contract/prepare
+                  (assoc (valid-request)
+                         :sourceVideo {:fileId "drive-video-1"}))]
+    (is (= ::contract/source-too-large
+           (try
+             (contract/attach-source-metadata
+              prepared
+              {:id "drive-video-1"
+               :name "server-name.mp4"
+               :mimeType "video/mp4"
+               :size (inc contract/max-source-bytes)
+               :trashed false})
+             nil
+             (catch clojure.lang.ExceptionInfo error
+               (:type (ex-data error))))))))

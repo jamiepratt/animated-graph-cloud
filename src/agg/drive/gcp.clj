@@ -49,6 +49,10 @@
 (defn- parse-json [body]
   (json/read-str (or body "{}") :key-fn keyword))
 
+(defn- source-url [file-id]
+  (str "https://www.googleapis.com/drive/v3/files/"
+       (urlencode file-id)))
+
 (defn- require-success [{:keys [status body] :as response} error-type]
   (if (<= 200 status 299)
     response
@@ -168,6 +172,7 @@
           (throw (errors/raise! "Drive output folder lookup failed"
                           {:type ::folder-lookup-failed :status status}))))))
   drive/DriveGateway
+  drive/SourceGateway
   (generate-output-id! [_ access-token]
     (let [{:keys [body]}
           (require-success
@@ -225,7 +230,37 @@
         :else
         (throw (errors/raise! "Drive resumable status query failed"
                         {:type ::resumable-status-failed
-                         :status (:status query-response)}))))))
+                         :status (:status query-response)})))))
+  (source-metadata! [_ access-token file-id]
+    (let [{:keys [status body]}
+          (send! (authorized
+                  {:method :get
+                   :url (str (source-url file-id)
+                             "?fields=id,name,mimeType,size,trashed")
+                   :headers {}}
+                  access-token))]
+      (if (<= 200 status 299)
+        (let [metadata (parse-json body)]
+          (assoc metadata :size (some-> (:size metadata) str parse-long)))
+        (throw (errors/raise! "Google Drive source metadata request failed"
+                        {:type ::source-metadata-failed :status status})))))
+  (stream-source! [_ access-token file-id output]
+    (let [request (-> (HttpRequest/newBuilder
+                       (URI/create (str (source-url file-id) "?alt=media")))
+                      (.header "Authorization" (str "Bearer " access-token))
+                      (.GET)
+                      (.build))
+          response (.send (HttpClient/newHttpClient)
+                          request
+                          (HttpResponse$BodyHandlers/ofInputStream))]
+      (if (<= 200 (.statusCode response) 299)
+        (with-open [input (.body response)]
+          (.transferTo ^java.io.InputStream input output))
+        (do
+          (.close ^java.io.InputStream (.body response))
+          (throw (errors/raise! "Google Drive source download failed"
+                          {:type ::source-download-failed
+                           :status (.statusCode response)})))))))
 
 (defn gateway []
   (->RestDriveGateway http-send! (* 8 1024 1024)))

@@ -3,8 +3,8 @@ info:
   title: Alpha Compose API
   version: 1.0.0
   description: |
-    Create transparent ProRes 4444 telemetry overlays for short videos.
-    Alpha Compose never uploads or composites source video. Browser sessions
+    Create transparent ProRes 4444 telemetry overlays or bounded composites for
+    short videos. Browser sessions
     require `X-CSRF-Token` on writes; personal bearer tokens do not. Google
     Drive delivery uses only the `drive.file` scope.
   contact:
@@ -590,6 +590,27 @@ components:
               contentEncoding: base64
               maxLength: 2796204
               description: PNG up to 2 MiB and 1024×1024 pixels.
+        sourceVideo:
+          type: object
+          additionalProperties: false
+          required: [fileId]
+          properties:
+            fileId: {type: string, minLength: 1}
+            name: {type: string, description: Ignored client metadata.}
+            mimeType: {type: string, description: Ignored client metadata.}
+          description: One Drive video selected by ID; server metadata is authoritative.
+        outputFormat:
+          type: string
+          enum: [h264-mp4, prores-422-mov]
+          default: h264-mp4
+        fitMode:
+          type: string
+          enum: [letterbox, pillarbox, crop]
+          default: letterbox
+        audioMode:
+          type: string
+          enum: [source+heartbeat, source-only, heartbeat-only]
+          default: source+heartbeat
     Instant:
       type: string
       format: date-time
@@ -612,7 +633,7 @@ components:
           properties:
             objectName: {type: string}
             sha256: {type: string, pattern: "^[0-9a-f]{64}$"}
-            contentType: {const: video/quicktime}
+            contentType: {type: string, enum: [video/quicktime, video/mp4]}
             driveFileId: {type: string}
             driveWebViewLink: {type: string, format: uri}
     Token:
@@ -652,6 +673,10 @@ components:
             - kms_unavailable
             - grant_persistence_failed
             - picker_not_configured
+            - compositing_requires_durable_job
+            - source_video_too_large
+            - invalid_source_video
+            - drive_source_unavailable
             - invalid_idempotency_key
             - idempotency_conflict
             - daily_submission_limit_exhausted
