@@ -84,22 +84,39 @@
                                        StandardCharsets/UTF_8)]))))
        (into {})))
 
-(defn- session-token [exchange]
-  (get (cookies exchange) "agg_session"))
+(defn- browser-cookie [exchange auth-system]
+  (let [cookie (get (cookies exchange) "__session")]
+    (when auth-system
+      (auth/browser-cookie auth-system cookie))))
+
+(defn- session-token [exchange auth-system]
+  (let [cookie (cookies exchange)
+        browser (browser-cookie exchange auth-system)]
+    (if (some? browser)
+      (:session browser)
+      (or (get cookie "__session")
+          (get cookie "agg_session")))))
+
+(defn- oauth-state-token [exchange auth-system]
+  (let [cookie (cookies exchange)
+        browser (browser-cookie exchange auth-system)]
+    (if (some? browser)
+      (:oauth browser)
+      (get cookie "agg_oauth_state"))))
 
 (defn- require-user! [exchange auth-system]
   (when auth-system
-    (auth/session-user auth-system (session-token exchange))))
+    (auth/session-user auth-system (session-token exchange auth-system))))
 
-(defn- oauth-state-cookie [value]
-  (str "agg_oauth_state=" value
-       "; Max-Age=600; Path=/v1/auth; Secure; HttpOnly; SameSite=Lax"))
-
-(defn- session-cookie [value]
-  (str "agg_session=" value
+(defn- browser-cookie-header [value]
+  (str "__session=" value
        "; Max-Age=43200; Path=/; Secure; HttpOnly; SameSite=Lax"))
 
-(defn- clear-oauth-cookie []
+(defn- session-cookie [value]
+  (str "__session=" value
+       "; Max-Age=43200; Path=/; Secure; HttpOnly; SameSite=Lax"))
+
+(defn- clear-legacy-oauth-cookie []
   "agg_oauth_state=; Max-Age=0; Path=/v1/auth; Secure; HttpOnly; SameSite=Lax")
 
 (defn- respond-path! [^HttpExchange exchange content-type ^Path path]
@@ -222,7 +239,7 @@
 
 (defn- authenticated-user! [exchange auth-system token-service]
   (when auth-system
-    (if-let [session (session-token exchange)]
+    (if-let [session (session-token exchange auth-system)]
       (assoc (auth/session-user auth-system session) :auth-kind :session)
       (if-let [token (and token-service (bearer-token exchange))]
         (->> (tokens/authenticate token-service token)
@@ -295,35 +312,41 @@
                                    :releasedLeases released-leases}))))
 
 (defn- begin-auth! [exchange auth-system flow]
-  (let [started (auth/begin-flow! auth-system flow
-                                  (when (= :drive flow)
-                                    (session-token exchange)))]
+  (let [session (session-token exchange auth-system)
+        started (auth/begin-flow! auth-system flow
+                                  (when (= :drive flow) session))
+        cookie (auth/issue-browser-cookie
+                auth-system
+                {:session session
+                 :oauth (:stateCookie started)})]
     (respond-redirect! exchange (:authorizationUrl started)
-                       [(oauth-state-cookie (:stateCookie started))])))
+                       [(browser-cookie-header cookie)])))
 
 (defn- finish-login! [exchange auth-system]
   (let [params (query-params exchange)
         result (auth/finish-login! auth-system
                                    {:code (get params "code")
                                     :state (get params "state")
-                                    :state-cookie (get (cookies exchange)
-                                                       "agg_oauth_state")})]
+                                    :state-cookie (oauth-state-token
+                                                   exchange auth-system)})]
     (respond-redirect! exchange "/"
                        [(session-cookie (:session result))
-                        (clear-oauth-cookie)])))
+                        (clear-legacy-oauth-cookie)])))
 
 (defn- finish-drive! [exchange auth-system]
   (let [params (query-params exchange)
+        session (session-token exchange auth-system)
         _ (auth/finish-drive! auth-system
                               {:code (get params "code")
                                :state (get params "state")
-                               :state-cookie (get (cookies exchange)
-                                                  "agg_oauth_state")})]
+                               :state-cookie (oauth-state-token
+                                              exchange auth-system)})]
     (respond-redirect! exchange "/?drive=connected"
-                       [(clear-oauth-cookie)])))
+                       [(session-cookie session)
+                        (clear-legacy-oauth-cookie)])))
 
 (defn- landing! [^HttpExchange exchange auth-system token-service admin-service]
-  (let [user (when-let [session (session-token exchange)]
+  (let [user (when-let [session (session-token exchange auth-system)]
                (auth/session-user auth-system session))
         body
         (if user

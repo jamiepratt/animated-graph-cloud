@@ -36,6 +36,7 @@
   (let [port (available-port)
         lifecycle (jobs/in-memory-system)
         {:keys [system session]} (auth-fixture)
+        browser-cookie (auth/issue-browser-cookie system {:session session})
         csrf (auth/issue-csrf-token system {:subject "google-subject-1"})
         server (api/start! port {:job-service (:service lifecycle)
                                  :auth-system system
@@ -47,7 +48,7 @@
             denied (post! port "/v1/jobs" (fixture/render-request) headers)
             admitted (post! port "/v1/jobs" (fixture/render-request)
                             (assoc headers
-                                   "Cookie" (str "agg_session=" session)
+                                   "Cookie" (str "__session=" browser-cookie)
                                    "X-CSRF-Token" csrf))]
         (is (= 401 (.statusCode denied)))
         (is (= {"error" "authentication_required"}
@@ -76,15 +77,16 @@
                  :session-key (.getBytes "01234567890123456789012345678901")
                  :oauth oauth})
         flow (auth/begin-flow! system :login nil)
+        browser-cookie (auth/issue-browser-cookie
+                        system {:oauth (:stateCookie flow)})
         server (api/start! port {:auth-system system})]
     (try
       (let [response (get! port
                            (str "/v1/auth/login/callback?code=code&state="
                                 (:state flow))
-                           {"Cookie" (str "agg_oauth_state="
-                                          (:stateCookie flow))})
+                           {"Cookie" (str "__session=" browser-cookie)})
             session-cookie
-            (first (filter #(.startsWith ^String % "agg_session=")
+            (first (filter #(.startsWith ^String % "__session=")
                            (.allValues (.headers response) "Set-Cookie")))]
         (is (= 302 (.statusCode response)))
         (is (re-find #"; Max-Age=43200; Path=/; Secure; HttpOnly; SameSite=Lax$"

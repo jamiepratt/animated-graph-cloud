@@ -87,6 +87,25 @@
     (is (not (re-find #"drive" (:authorizationUrl login))))
     (is (re-find #"drive.file" (:authorizationUrl drive)))))
 
+(deftest firebase-browser-cookie-bundles-session-and-oauth-state
+  (let [system (auth/system {:client-id "client-id"
+                             :client-secret "client-secret"
+                             :base-url "https://app.example.com"
+                             :allowlist #{"owner@example.com"}
+                             :session-key (.getBytes "01234567890123456789012345678901")
+                             :oauth (fake-oauth (atom []))
+                             :clock fixed-clock})
+        session (auth/issue-session system
+                                    {:subject "google-subject-1"
+                                     :email "owner@example.com"})
+        flow (auth/begin-flow! system :login nil)
+        cookie (auth/issue-browser-cookie
+                system {:session session :oauth (:stateCookie flow)})]
+    (is (= session (:session (auth/browser-cookie system cookie))))
+    (is (= (:stateCookie flow)
+           (:oauth (auth/browser-cookie system cookie))))
+    (is (nil? (auth/browser-cookie system (str cookie "tampered"))))))
+
 (deftest login-callback-requires-matching-unexpired-state-and-allowlisted-email
   (let [exchanges (atom [])
         system (auth/system {:client-id "client-id"

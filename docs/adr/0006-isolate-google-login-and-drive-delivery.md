@@ -23,6 +23,10 @@ a twelve-hour signed session, and every authenticated request rechecks the
 current lowercase email allowlist. Job ownership is bound to the Google subject
 and never exposed in the public job resource.
 
+Production Firebase Hosting rewrites forward only the specially named `__session`
+cookie to Cloud Run, so the signed browser envelope carries both the session token
+and the in-progress OAuth state.
+
 The OAuth web-client JSON, session key, and restricted Picker API key are
 Secret Manager values. Refresh tokens are encrypted directly with the Warsaw
 `drive-refresh-tokens` KMS key before Firestore storage. API and renderer

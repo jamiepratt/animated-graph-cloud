@@ -51,7 +51,7 @@ paths:
       operationId: startGoogleLogin
       tags: [Browser authorization]
       summary: Start approved-user Google sign-in.
-      description: Starts a PKCE-protected login flow and stores signed OAuth state in an HttpOnly cookie.
+      description: Starts a PKCE-protected login flow and stores signed OAuth state in the Firebase-compatible `__session` HttpOnly cookie.
       security: []
       responses:
         "302":
@@ -61,14 +61,14 @@ paths:
               description: Google OAuth authorization URL requesting `openid email profile`.
               schema: {type: string, format: uri}
             Set-Cookie:
-              description: Short-lived signed `agg_oauth_state` cookie.
+              description: Signed Firebase-compatible `__session` cookie containing short-lived OAuth state.
               schema: {type: string}
   /v1/auth/login/callback:
     get:
       operationId: finishGoogleLogin
       tags: [Browser authorization]
       summary: Finish approved-user Google sign-in.
-      description: Validates the query state against the signed OAuth state cookie and allowlists the Google identity.
+      description: Validates the query state against signed OAuth state in the `__session` cookie and allowlists the Google identity.
       security: []
       parameters:
         - $ref: "#/components/parameters/OAuthCode"
@@ -80,7 +80,7 @@ paths:
             Location:
               schema: {type: string, const: /}
             Set-Cookie:
-              description: Signed `agg_session` cookie plus expiration of `agg_oauth_state`.
+              description: Signed Firebase-compatible `__session` cookie.
               schema: {type: string}
         "400": {$ref: "#/components/responses/InvalidOAuthState"}
         "403": {$ref: "#/components/responses/NotAllowlisted"}
@@ -100,7 +100,7 @@ paths:
               description: Google OAuth authorization URL requesting only `drive.file`.
               schema: {type: string, format: uri}
             Set-Cookie:
-              description: Short-lived signed `agg_oauth_state` cookie tied to the signed-in user.
+              description: Signed Firebase-compatible `__session` cookie containing short-lived OAuth state tied to the signed-in user.
               schema: {type: string}
         "401": {$ref: "#/components/responses/AuthenticationRequired"}
   /v1/auth/drive/callback:
@@ -120,7 +120,7 @@ paths:
             Location:
               schema: {type: string, const: "/?drive=connected"}
             Set-Cookie:
-              description: Expiration of the `agg_oauth_state` cookie.
+              description: Refreshed signed Firebase-compatible `__session` cookie.
               schema: {type: string}
         "400": {$ref: "#/components/responses/InvalidOAuthState"}
         "403": {$ref: "#/components/responses/NotAllowlisted"}
@@ -419,7 +419,7 @@ components:
     sessionCookie:
       type: apiKey
       in: cookie
-      name: agg_session
+      name: __session
   parameters:
     CsrfToken:
       name: X-CSRF-Token
@@ -452,7 +452,7 @@ components:
       name: state
       in: query
       required: true
-      description: OAuth state value that must match the signed state cookie.
+      description: OAuth state value that must match signed state in the `__session` cookie.
       schema: {type: string, minLength: 1}
   requestBodies:
     RenderRequest:

@@ -190,6 +190,21 @@
                  (:membership-version member)
                  (assoc :membershipVersion (:membership-version member))))))
 
+;; Firebase Hosting forwards only the specially named __session cookie.
+(defn issue-browser-cookie
+  [{:keys [session-key]} {:keys [session oauth]}]
+  (sign-json session-key
+             (cond-> {}
+               (not (str/blank? session)) (assoc :session session)
+               (not (str/blank? oauth)) (assoc :oauth oauth))))
+
+(defn browser-cookie
+  [{:keys [session-key]} token]
+  (when-not (str/blank? token)
+    (try
+      (verify-json session-key token ::invalid-browser-cookie)
+      (catch Throwable _ nil))))
+
 (defn session-user [{:keys [session-key clock allowlist member-directory
                             owner-email]
                      :as system}
