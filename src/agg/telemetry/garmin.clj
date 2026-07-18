@@ -1,4 +1,5 @@
 (ns agg.telemetry.garmin
+  (:require [agg.errors :as errors])
   (:import (com.garmin.fit MesgBroadcaster RecordMesgListener)
            (java.io ByteArrayInputStream)
            (java.util Base64)))
@@ -14,7 +15,7 @@
   (try
     (when-not (and (string? encoded)
                    (<= (count encoded) max-base64-characters))
-      (throw (ex-info "Garmin FIT input exceeds the size limit"
+      (throw (errors/raise! "Garmin FIT input exceeds the size limit"
                       {:type ::fit-too-large
                        :limit max-fit-bytes})))
     (let [bytes (.decode (Base64/getDecoder) ^String encoded)
@@ -22,7 +23,7 @@
           sample-count (volatile! 0)
           broadcaster (MesgBroadcaster.)]
       (when (> (alength bytes) max-fit-bytes)
-        (throw (ex-info "Garmin FIT input exceeds the size limit"
+        (throw (errors/raise! "Garmin FIT input exceeds the size limit"
                         {:type ::fit-too-large
                          :limit max-fit-bytes})))
       (.addListener
@@ -31,7 +32,7 @@
          (onMesg [_ record]
            (when (and (.getTimestamp record) (.getHeartRate record))
              (when-not (< @sample-count max-samples)
-               (throw (ex-info "Garmin FIT has too many samples"
+               (throw (errors/raise! "Garmin FIT has too many samples"
                                {:type ::too-many-samples
                                 :limit max-samples})))
              (vswap! sample-count inc)
@@ -44,6 +45,6 @@
     (catch clojure.lang.ExceptionInfo error
       (throw error))
     (catch Throwable cause
-      (throw (ex-info "Malformed Garmin FIT input"
+      (throw (errors/raise! "Malformed Garmin FIT input"
                       {:type ::malformed-fit}
                       cause)))))

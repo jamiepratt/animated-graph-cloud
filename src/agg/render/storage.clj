@@ -1,5 +1,6 @@
 (ns agg.render.storage
-  (:require [clojure.data.json :as json])
+  (:require [agg.errors :as errors]
+            [clojure.data.json :as json])
   (:import (java.net URI URLEncoder)
            (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
                           HttpResponse$BodyHandlers)
@@ -25,7 +26,7 @@
                     (.build))
         response (.send client request (HttpResponse$BodyHandlers/ofString))]
     (when-not (= 200 (.statusCode response))
-      (throw (ex-info "Ambient access token unavailable"
+      (throw (errors/raise! "Ambient access token unavailable"
                       {:type ::ambient-token-unavailable
                        :status (.statusCode response)})))
     (:access_token (json/read-str (.body response) :key-fn keyword))))
@@ -48,7 +49,7 @@
                       (.build))
           response (.send client request (HttpResponse$BodyHandlers/discarding))]
       (when-not (<= 200 (.statusCode response) 299)
-        (throw (ex-info "Artifact upload failed"
+        (throw (errors/raise! "Artifact upload failed"
                         {:type ::upload-failed
                          :status (.statusCode response)})))
       {:bucket bucket :object object})))

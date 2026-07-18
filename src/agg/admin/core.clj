@@ -1,5 +1,6 @@
 (ns agg.admin.core
-  (:require [clojure.string :as str])
+  (:require [agg.errors :as errors]
+            [clojure.string :as str])
   (:import (java.nio.charset StandardCharsets)
            (java.security MessageDigest)
            (java.util HexFormat UUID)))
@@ -48,13 +49,13 @@
     (when-not (and (string? normalized)
                    (<= 3 (count normalized) 254)
                    (re-matches #"[^\s@]+@[^\s@]+" normalized))
-      (throw (ex-info "A valid member email is required"
+      (throw (errors/raise! "A valid member email is required"
                       {:type ::invalid-email})))
     normalized))
 
 (defn require-subject [subject]
   (when (str/blank? subject)
-    (throw (ex-info "A Google subject is required"
+    (throw (errors/raise! "A Google subject is required"
                     {:type ::invalid-subject})))
   subject)
 
@@ -79,7 +80,7 @@
 
 (defn- require-administrator! [actor]
   (when-not (administrator? (:role actor))
-    (throw (ex-info "Administrator access is required"
+    (throw (errors/raise! "Administrator access is required"
                     {:type ::admin-required})))
   actor)
 
@@ -93,7 +94,7 @@
                    (= :active (:status member))
                    (= subject (:subject member))
                    (= membership-version (:membership-version member)))
-      (throw (ex-info "Member is not allowlisted" {:type ::not-allowlisted})))
+      (throw (errors/raise! "Member is not allowlisted" {:type ::not-allowlisted})))
     member))
 
 (defrecord InMemoryMemberDirectory [records lock]
@@ -107,7 +108,7 @@
                          (= :active (:status member))
                          (or (nil? (:subject member))
                              (= subject (:subject member))))
-            (throw (ex-info "Member is not allowlisted"
+            (throw (errors/raise! "Member is not allowlisted"
                             {:type ::not-allowlisted})))
           (let [authorized (assoc member :subject subject)]
             (swap! records assoc email authorized)
@@ -139,9 +140,9 @@
       (locking lock
         (let [member (get @records email)]
           (when-not member
-            (throw (ex-info "Member does not exist" {:type ::member-not-found})))
+            (throw (errors/raise! "Member does not exist" {:type ::member-not-found})))
           (when (= :owner (:role member))
-            (throw (ex-info "The owner cannot be revoked"
+            (throw (errors/raise! "The owner cannot be revoked"
                             {:type ::owner-cannot-be-revoked})))
           (let [revoked (assoc member :status :revoked)]
             (swap! records assoc email revoked)
@@ -164,7 +165,7 @@
    component fallback
    #(if administration
       (action administration)
-      (throw (ex-info "Owner rotation cleanup dependency is unavailable"
+      (throw (errors/raise! "Owner rotation cleanup dependency is unavailable"
                       {:type ::invalid-configuration
                        :component component})))))
 
@@ -230,7 +231,7 @@
                distinct
                vec)]
       (when (seq failures)
-        (throw (ex-info "Owner rotation cleanup is incomplete"
+        (throw (errors/raise! "Owner rotation cleanup is incomplete"
                         {:type ::revocation-incomplete
                          :components failures}))))))
 
@@ -286,7 +287,7 @@
       (emit! event-sink
              event)
       (when (seq errors)
-        (throw (ex-info "Member was revoked but cleanup is incomplete"
+        (throw (errors/raise! "Member was revoked but cleanup is incomplete"
                         {:type ::revocation-incomplete
                          :components errors})))
       (public-member member))))

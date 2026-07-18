@@ -1,5 +1,6 @@
 (ns agg.telemetry.oxiwear
-  (:require [clojure.string :as str])
+  (:require [agg.errors :as errors]
+            [clojure.string :as str])
   (:import (java.io BufferedReader StringReader)
            (java.time Instant)
            (java.util.regex Pattern)))
@@ -29,7 +30,7 @@
             timestamp-index (column-index columns "reading_time")
             value-index (column-index columns value-column)]
         (when-not (and timestamp-index value-index)
-          (throw (ex-info "Unsupported OxiWear CSV columns"
+          (throw (errors/raise! "Unsupported OxiWear CSV columns"
                           {:type ::unsupported-columns})))
         (loop [samples (transient [])
                sample-count 0
@@ -44,7 +45,7 @@
                                (Double/isFinite value)
                                (<= minimum value maximum)
                                (< sample-count max-samples))
-                  (throw (ex-info "Malformed OxiWear CSV row"
+                  (throw (errors/raise! "Malformed OxiWear CSV row"
                                   {:type ::malformed-row
                                    :line line-number})))
                 (recur (conj! samples
@@ -56,7 +57,7 @@
     (catch clojure.lang.ExceptionInfo error
       (throw error))
     (catch Throwable cause
-      (throw (ex-info "Malformed OxiWear CSV row"
+      (throw (errors/raise! "Malformed OxiWear CSV row"
                       {:type ::malformed-row}
                       cause)))))
 

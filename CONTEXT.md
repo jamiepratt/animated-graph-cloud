@@ -16,6 +16,22 @@ Alpha Compose is the public product. The `animated-graph-cloud` service accepts 
 - Rendering emits a standard seekable MOV with ProRes 4444 alpha, 25 fps, and heartbeat audio.
 - Logs exclude email addresses, Google subjects, filenames, tokens, telemetry values, Drive credentials, and signed URLs.
 
+## Error metadata and source locations
+
+Production application errors are raised through `agg.errors/raise!`. Every
+deliberate error has a namespaced keyword `:type`, retains its existing message
+and cause, and receives a nested `:source` map containing the macro callsite
+`:file`, `:line`, and `:column`. Wrapping creates a new outer source location
+while keeping the original exception object as the unchanged cause.
+
+Only explicitly allowlisted, bounded diagnostic fields may accompany an error:
+numeric status/offset/size/limit fields, bounded invariant fields such as
+`line`, `field`, `component`, `job-id`, and `retryable`, and numeric `limits`.
+Error context must never contain failed values, request bodies, telemetry,
+tokens, credentials, filenames, or signed URLs. `raise!` never logs; API, job,
+and worker boundaries emit at most one safe Telemere signal and translate
+internal types to transport responses or public job `failureCode` values.
+
 ## Current cloud identity
 
 - Development project: `animated-graph-cloud-jp` (`891643499444`).

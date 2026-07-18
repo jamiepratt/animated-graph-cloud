@@ -6,7 +6,10 @@
         com.google.cloud/google-cloud-firestore {:mvn/version "3.44.0"}
         com.google.cloud/google-cloud-run {:mvn/version "0.94.0"}
         com.google.cloud/google-cloud-storage {:mvn/version "2.70.0"}
-        com.google.cloud/google-cloud-tasks {:mvn/version "2.94.0"}}
+        com.google.cloud/google-cloud-tasks {:mvn/version "2.94.0"}
+        com.taoensso/telemere {:mvn/version "1.0.1"}
+        com.taoensso/tufte {:mvn/version "3.0.2"}
+        com.taoensso/truss {:mvn/version "2.4.0"}}
  :aliases
  {:api {:main-opts ["-m" "agg.api.main"]}
   :renderer {:main-opts ["-m" "agg.renderer.main"]}

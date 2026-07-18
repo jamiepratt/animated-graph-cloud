@@ -1,5 +1,6 @@
 (ns agg.jobs.lifecycle
-  (:require [agg.admin.core :as admin]
+  (:require [agg.errors :as errors]
+            [agg.admin.core :as admin]
             [agg.contracts.render :as contract])
   (:import (java.security MessageDigest)
            (java.time Clock Instant LocalDate YearMonth ZoneOffset)
@@ -48,12 +49,21 @@
 (def lease-seconds (* 65 60))
 (def max-output-bytes (* 18 1024 1024 1024))
 
+(defn public-failure-code [failure]
+  (cond
+    (nil? failure) nil
+    (string? failure) failure
+    (= ::worker-failed failure) "worker_failed"
+    (= ::launch-failed failure) "launch_failed"
+    (= ::invalid-transition failure) "invalid_job_transition"
+    :else "worker_failed"))
+
 (defn validate-admission-limits!
   [daily-limit monthly-budget-minor-units render-reservation-minor-units]
   (when-not (every? #(and (integer? %) (pos? %))
                     [daily-limit monthly-budget-minor-units
                      render-reservation-minor-units])
-    (throw (ex-info "Admission limits must be positive integers"
+    (throw (errors/raise! "Admission limits must be positive integers"
                     {:type ::invalid-admission-configuration})))
   true)
 
@@ -78,7 +88,7 @@
            :retryUrl (str "/v1/jobs/" id "/retry")
            :createdAt (str created-at)
            :updatedAt (str updated-at)}
-    failure (assoc :failureCode failure)
+    failure (assoc :failureCode (public-failure-code failure))
     output (assoc :output output)))
 
 (defn- active-lease? [now job]
@@ -112,7 +122,7 @@
       (admin/with-active-member! member-directory identity action)
       (catch clojure.lang.ExceptionInfo error
         (if (= ::admin/not-allowlisted (:type (ex-data error)))
-          (throw (ex-info "Member is no longer allowlisted"
+          (throw (errors/raise! "Member is no longer allowlisted"
                           {:type ::member-not-allowlisted}
                           error))
           (throw error))))))
@@ -158,7 +168,7 @@
   (submit-job! [_ idempotency-key request]
     (when-not (and (string? idempotency-key)
                    (<= 1 (count idempotency-key) 128))
-      (throw (ex-info "A bounded Idempotency-Key header is required"
+      (throw (errors/raise! "A bounded Idempotency-Key header is required"
                       {:type ::invalid-idempotency-key})))
     (contract/prepare request)
     (let [request-digest (request-digest request)
@@ -170,7 +180,7 @@
                 (let [{stored-digest :digest}
                       (get-in @state [:idempotency idempotency-key])]
                   (when-not (= stored-digest request-digest)
-                    (throw (ex-info
+                    (throw (errors/raise!
                             "Idempotency key already belongs to another request"
                             {:type ::idempotency-conflict})))
                   {:created? false :job (get-in @state [:jobs job-id])})
@@ -183,14 +193,14 @@
                       _ (when (>= (count (filter #(active-lease? now %)
                                                  (vals (:jobs @state))))
                                   max-active-leases)
-                          (throw (ex-info "All render leases are held"
+                          (throw (errors/raise! "All render leases are held"
                                           {:type ::capacity-exhausted})))
                       _ (when (>= submitted daily-limit)
-                          (throw (ex-info "Daily submission limit is exhausted"
+                          (throw (errors/raise! "Daily submission limit is exhausted"
                                           {:type ::daily-submission-limit-exhausted})))
                       _ (when (> (+ reserved render-reservation-minor-units)
                                  monthly-budget-minor-units)
-                          (throw (ex-info "Monthly compute budget is exhausted"
+                          (throw (errors/raise! "Monthly compute budget is exhausted"
                                           {:type ::monthly-budget-exhausted})))
                       job {:id job-id
                            :state :queued
@@ -225,14 +235,14 @@
           (locking state
             (let [job (get-in @state [:jobs job-id])]
               (when-not job
-                (throw (ex-info "Job does not exist" {:type ::job-not-found})))
+                (throw (errors/raise! "Job does not exist" {:type ::job-not-found})))
               (if (not= :queued (:state job))
                 {:started? false :job job}
                 (do
                   (when (>= (count (filter #(active-lease? now %)
                                            (vals (:jobs @state))))
                             max-active-leases)
-                    (throw (ex-info "All render leases are held"
+                    (throw (errors/raise! "All render leases are held"
                                     {:type ::capacity-exhausted})))
                   (let [lease-token (str (UUID/randomUUID))
                         admitted (assoc job
@@ -289,7 +299,7 @@
                                     :failure "launch_failed"
                                     :updated-at (Instant/now clock))
                              (dissoc :lease))))))
-            (throw (ex-info "Renderer launch failed"
+            (throw (errors/raise! "Renderer launch failed"
                             {:type ::launch-failed}
                             cause)))))))
   (cancel-job! [_ job-id]
@@ -298,7 +308,7 @@
           (locking state
             (let [job (get-in @state [:jobs job-id])]
               (when-not job
-                (throw (ex-info "Job does not exist" {:type ::job-not-found})))
+                (throw (errors/raise! "Job does not exist" {:type ::job-not-found})))
               (case (:state job)
                 :cancelled {:job job}
                 :queued (let [updated (cancelled-job job now)]
@@ -315,7 +325,7 @@
                            (swap! state assoc-in [:jobs job-id] updated)
                            {:job updated :execution (:execution job)})
                 :cancellation-requested {:job job}
-                (throw (ex-info "Terminal job cannot be cancelled"
+                (throw (errors/raise! "Terminal job cannot be cancelled"
                                 {:type ::invalid-transition
                                  :state (:state job)})))))]
       (if-let [execution (:execution result)]
@@ -332,7 +342,7 @@
   (retry-job! [_ job-id]
     (let [job (locking state (get-in @state [:jobs job-id]))
           _ (when-not job
-              (throw (ex-info "Job does not exist" {:type ::job-not-found})))
+              (throw (errors/raise! "Job does not exist" {:type ::job-not-found})))
           now (Instant/now clock)
           month (billing-month clock)
           retried
@@ -342,18 +352,18 @@
               (locking state
                 (let [job (get-in @state [:jobs job-id])]
                   (when-not (contains? #{:cancelled :failed} (:state job))
-                    (throw (ex-info "Only failed or cancelled jobs can be retried"
+                    (throw (errors/raise! "Only failed or cancelled jobs can be retried"
                                     {:type ::invalid-transition
                                      :state (:state job)})))
                   (let [reserved (get-in @state [:admission :monthly month] 0)
                         _ (when (>= (count (filter #(active-lease? now %)
                                                    (vals (:jobs @state))))
                                     max-active-leases)
-                            (throw (ex-info "All render leases are held"
+                            (throw (errors/raise! "All render leases are held"
                                             {:type ::capacity-exhausted})))
                         _ (when (> (+ reserved render-reservation-minor-units)
                                    monthly-budget-minor-units)
-                            (throw (ex-info "Monthly compute budget is exhausted"
+                            (throw (errors/raise! "Monthly compute budget is exhausted"
                                             {:type ::monthly-budget-exhausted})))
                         updated (-> job
                                     (assoc :state :queued
@@ -374,9 +384,9 @@
     (let [job (locking state
                 (let [current (get-in @state [:jobs job-id])]
                   (when-not current
-                    (throw (ex-info "Job does not exist" {:type ::job-not-found})))
+                    (throw (errors/raise! "Job does not exist" {:type ::job-not-found})))
                   (when-not (= :running (:state current))
-                    (throw (ex-info "Only a running job can render"
+                    (throw (errors/raise! "Only a running job can render"
                                     {:type ::invalid-transition
                                      :state (:state current)})))
                   current))]
@@ -421,7 +431,7 @@
                                :updated-at (Instant/now clock))
                         (dissoc :lease :execution :output)))]
               (swap! state assoc-in [:jobs job-id] updated)))
-          (throw (ex-info "Render worker failed"
+          (throw (errors/raise! "Render worker failed"
                           {:type ::worker-failed :job-id job-id}
                           cause))))))
   admin/JobAdministration
@@ -475,7 +485,7 @@
          worker (or worker
                     (reify RenderWorker
                       (perform-render! [_ _ _]
-                        (throw (ex-info "No render worker configured" {})))))]
+                        (throw (errors/raise! "No render worker configured" {})))))]
      {:service (->InMemoryJobService state enqueued launcher worker clock
                                      daily-limit monthly-budget-minor-units
                                      render-reservation-minor-units member-directory)

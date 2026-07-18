@@ -1,5 +1,6 @@
 (ns agg.auth.gcp
-  (:require [agg.admin.core :as admin]
+  (:require [agg.errors :as errors]
+            [agg.admin.core :as admin]
             [agg.admin.gcp :as admin-gcp]
             [agg.auth.core :as auth]
             [agg.drive.core :as drive]
@@ -63,7 +64,7 @@
                  (json/read-str (or body "{}") :key-fn keyword)
                  (catch Throwable _ {}))]
     (when-not (<= 200 status 299)
-      (throw (ex-info "Google OAuth token exchange failed"
+      (throw (errors/raise! "Google OAuth token exchange failed"
                       {:type (if (= "invalid_grant" (:error parsed))
                                ::auth/revoked-grant
                                ::auth/oauth-exchange-failed)
@@ -90,7 +91,7 @@
                 :granted-scopes (into #{}
                                       (remove str/blank?)
                                       (str/split (or scope "") #"\s+"))}
-        (throw (ex-info "Unknown OAuth flow" {:type ::auth/invalid-flow})))))
+        (throw (errors/raise! "Unknown OAuth flow" {:type ::auth/invalid-flow})))))
   auth/DriveTokenClient
   (refresh-drive-token! [_ refresh-token]
     (let [{:keys [access_token]}
@@ -110,11 +111,11 @@
 
 (defn- verified-token-payload [verifier token]
   (when (str/blank? token)
-    (throw (ex-info "Google ID token is missing"
+    (throw (errors/raise! "Google ID token is missing"
                     {:type ::invalid-id-token})))
   (if-let [verified (.verify verifier token)]
     (.getPayload verified)
-    (throw (ex-info "Google ID token signature or claims are invalid"
+    (throw (errors/raise! "Google ID token signature or claims are invalid"
                     {:type ::invalid-id-token}))))
 
 (defn identity-verifier [client-id]
@@ -151,7 +152,7 @@
         client-id (:client_id credentials)
         client-secret (:client_secret credentials)]
     (when-not (and (not-empty client-id) (not-empty client-secret))
-      (throw (ex-info "OAuth client secret JSON is invalid"
+      (throw (errors/raise! "OAuth client secret JSON is invalid"
                       {:type ::invalid-client-secret})))
     {:client-id client-id :client-secret client-secret}))
 
@@ -211,7 +212,7 @@
            grant))
         (catch clojure.lang.ExceptionInfo error
           (if (= ::admin/not-allowlisted (:type (ex-data error)))
-            (throw (ex-info "User is no longer allowlisted"
+            (throw (errors/raise! "User is no longer allowlisted"
                             {:type ::auth/not-allowlisted}
                             error))
             (throw error))))))
@@ -264,7 +265,7 @@
                   :body (json/write-str {:plaintext encoded})})
           ciphertext (:ciphertext (json/read-str body :key-fn keyword))]
       (when-not (and (<= 200 status 299) (not-empty ciphertext))
-        (throw (ex-info "KMS token encryption failed"
+        (throw (errors/raise! "KMS token encryption failed"
                         {:type ::kms-encryption-failed :status status})))
       ciphertext))
   (decrypt-token! [_ ciphertext]
@@ -276,7 +277,7 @@
                   :body (json/write-str {:ciphertext ciphertext})})
           plaintext (:plaintext (json/read-str body :key-fn keyword))]
       (when-not (and (<= 200 status 299) (not-empty plaintext))
-        (throw (ex-info "KMS token decryption failed"
+        (throw (errors/raise! "KMS token decryption failed"
                         {:type ::kms-decryption-failed :status status})))
       (String. (.decode (Base64/getDecoder) ^String plaintext)
                StandardCharsets/UTF_8))))
@@ -287,7 +288,7 @@
 
 (defn- required [value name]
   (when (str/blank? value)
-    (throw (ex-info (str name " is required")
+    (throw (errors/raise! (str name " is required")
                     {:type ::missing-configuration :name name})))
   value)
 
@@ -295,7 +296,7 @@
   (let [bytes (.getBytes ^String (required value "AGG_SESSION_KEY")
                          StandardCharsets/UTF_8)]
     (when (< (alength bytes) 32)
-      (throw (ex-info "AGG_SESSION_KEY must contain at least 32 bytes"
+      (throw (errors/raise! "AGG_SESSION_KEY must contain at least 32 bytes"
                       {:type ::weak-session-key})))
     bytes))
 
@@ -303,7 +304,7 @@
   (let [bytes (.getBytes ^String (required value "AGG_TOKEN_HASH_PEPPER")
                          StandardCharsets/UTF_8)]
     (when (< (alength bytes) 32)
-      (throw (ex-info "AGG_TOKEN_HASH_PEPPER must contain at least 32 bytes"
+      (throw (errors/raise! "AGG_TOKEN_HASH_PEPPER must contain at least 32 bytes"
                       {:type ::weak-token-hash-pepper})))
     bytes))
 

@@ -1,4 +1,5 @@
 (ns agg.drive.core
+  (:require [agg.errors :as errors])
   (:import (java.nio.file Files Path)))
 
 (defprotocol DeliveryStore
@@ -25,7 +26,7 @@
 
 (defn delivery [{:keys [store gateway access-provider]}]
   (when-not (and store gateway access-provider)
-    (throw (ex-info "Drive delivery dependencies are incomplete"
+    (throw (errors/raise! "Drive delivery dependencies are incomplete"
                     {:type ::invalid-configuration})))
   (->ResumableDelivery store gateway access-provider))
 
@@ -76,7 +77,7 @@
               :complete
               (let [expected-id (:file-id reservation)]
                 (when-not (= expected-id file-id)
-                  (throw (ex-info "Drive completed a different output ID"
+                  (throw (errors/raise! "Drive completed a different output ID"
                                   {:type ::unexpected-output-id})))
                 (complete-delivery! store job-id {:file-id expected-id})
                 (public-result expected-id))
@@ -87,10 +88,10 @@
                                        reservation size)
                        false
                        (inc restarts))
-                (throw (ex-info "Drive resumable session repeatedly expired"
+                (throw (errors/raise! "Drive resumable session repeatedly expired"
                                 {:type ::resumable-session-expired})))
 
-              (throw (ex-info "Drive resumable upload failed"
+              (throw (errors/raise! "Drive resumable upload failed"
                               {:type ::upload-failed :status status})))))))))
 
 (defn deliver! [delivery job-id subject path]

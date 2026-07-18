@@ -1,5 +1,6 @@
 (ns agg.contracts.render
-  (:require [agg.render.spec :as spec]
+  (:require [agg.errors :as errors]
+            [agg.render.spec :as spec]
             [agg.render.watermark :as watermark]
             [agg.telemetry.garmin :as garmin]
             [agg.telemetry.oxiwear :as oxiwear]
@@ -26,20 +27,20 @@
   (try
     (Instant/parse value)
     (catch Throwable cause
-      (throw (ex-info (str field " must be an ISO-8601 instant")
+      (throw (errors/raise! (str field " must be an ISO-8601 instant")
                       {:type ::invalid-timestamp :field field}
                       cause)))))
 
 (defn- require! [condition message data]
   (when-not condition
-    (throw (ex-info message data))))
+    (throw (errors/raise! message data))))
 
 (defn- parse-heart-rate [format telemetry]
   (case format
     "polar-csv" (polar/parse-csv telemetry)
     "garmin-fit" (garmin/parse-fit-base64 telemetry)
     "oxiwear-hr-csv" (oxiwear/parse-heart-rate-csv telemetry)
-    (throw (ex-info "Unsupported telemetry format"
+    (throw (errors/raise! "Unsupported telemetry format"
                     {:type ::unsupported-format}))))
 
 (defn- utf8-size [value]

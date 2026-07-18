@@ -76,6 +76,17 @@
   (is (= 40000 jobs/default-monthly-budget-minor-units))
   (is (= 125 jobs/default-render-reservation-minor-units)))
 
+(deftest internal-failures-map-to-stable-public-failure-codes
+  (is (= "worker_failed"
+         (:failureCode (jobs/job-resource {:state :failed
+                                           :failure ::jobs/worker-failed}))))
+  (is (= "launch_failed"
+         (:failureCode (jobs/job-resource {:state :failed
+                                           :failure ::jobs/launch-failed}))))
+  (is (= "existing_code"
+         (:failureCode (jobs/job-resource {:state :failed
+                                           :failure "existing_code"})))))
+
 (deftest member-cleanup-cancels-only-its-generation-and-legacy-jobs
   (let [service (:service (jobs/in-memory-system))
         request (assoc (render-request)

@@ -1,9 +1,11 @@
 (ns agg.api.main
-  (:require [agg.admin.core :as admin]
+  (:require [agg.errors :as errors]
+            [agg.admin.core :as admin]
             [agg.contracts.render :as contract]
             [agg.auth.core :as auth]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
+            [agg.observability :as observability]
             [agg.render.frames :as frames]
             [agg.render.media :as media]
             [agg.renderer.main :as renderer]
@@ -24,12 +26,7 @@
 (def max-request-bytes contract/max-render-request-bytes)
 
 (defn- log-event! [event fields]
-  (println
-   (json/write-str
-    (merge {:severity "INFO"
-            :component "api"
-            :event event}
-           fields))))
+  (observability/emit-event! "api" event fields))
 
 (defn- emit-event! [dependencies event fields]
   ((or (:event-sink dependencies) log-event!) event fields))
@@ -189,7 +186,7 @@
   (let [bytes (with-open [input (.getRequestBody exchange)]
                 (.readNBytes input (inc max-request-bytes)))]
     (when (> (alength bytes) max-request-bytes)
-      (throw (ex-info "Request exceeds the size limit"
+      (throw (errors/raise! "Request exceeds the size limit"
                       {:type ::request-too-large})))
     (json/read-str (String. bytes StandardCharsets/UTF_8) :key-fn keyword)))
 
@@ -197,7 +194,7 @@
   (let [bytes (with-open [input (.getRequestBody exchange)]
                 (.readNBytes input (inc max-request-bytes)))]
     (when (> (alength bytes) max-request-bytes)
-      (throw (ex-info "Request exceeds the size limit"
+      (throw (errors/raise! "Request exceeds the size limit"
                       {:type ::request-too-large})))
     (->> (.split (String. bytes StandardCharsets/UTF_8) "&")
          (keep (fn [part]
@@ -216,11 +213,11 @@
     (catch clojure.lang.ExceptionInfo error
       (if (= ::request-too-large (:type (ex-data error)))
         (throw error)
-        (throw (ex-info "Invalid render request"
+        (throw (errors/raise! "Invalid render request"
                         {:type ::invalid-request}
                         error))))
     (catch Throwable error
-      (throw (ex-info "Invalid render request"
+      (throw (errors/raise! "Invalid render request"
                       {:type ::invalid-request}
                       error)))))
 
@@ -235,11 +232,11 @@
     (catch clojure.lang.ExceptionInfo error
       (if (= ::request-too-large (:type (ex-data error)))
         (throw error)
-        (throw (ex-info "Invalid render request"
+        (throw (errors/raise! "Invalid render request"
                         {:type ::invalid-request}
                         error))))
     (catch Throwable error
-      (throw (ex-info "Invalid render request"
+      (throw (errors/raise! "Invalid render request"
                       {:type ::invalid-request}
                       error)))))
 
@@ -285,7 +282,7 @@
 (defn- require-job-owner! [job-service user job-id]
   (when (and user
              (not (jobs/owns-job? job-service job-id (:subject user))))
-    (throw (ex-info "Job does not exist" {:type ::jobs/job-not-found}))))
+    (throw (errors/raise! "Job does not exist" {:type ::jobs/job-not-found}))))
 
 (defn- bearer-token [^HttpExchange exchange]
   (some-> exchange .getRequestHeaders (.getFirst "Authorization")
@@ -301,7 +298,7 @@
         (->> (tokens/authenticate token-service token)
              (auth/require-allowlisted! auth-system)
              (#(assoc % :auth-kind :token)))
-        (throw (ex-info "Authentication is required"
+        (throw (errors/raise! "Authentication is required"
                         {:type ::auth/invalid-session}))))))
 
 (defn- require-csrf! [^HttpExchange exchange auth-system user]
@@ -426,7 +423,7 @@
   (let [user (require-user! exchange auth-system)
         {:keys [access-token]} (auth/drive-access! auth-system (:subject user))]
     (when-not (and (not-empty picker-api-key) (not-empty picker-app-id))
-      (throw (ex-info "Google Picker is not configured"
+      (throw (errors/raise! "Google Picker is not configured"
                       {:type ::picker-not-configured})))
     (let [token (json/write-str access-token)
           api-key (json/write-str picker-api-key)
@@ -469,7 +466,7 @@
     (when-not (and (= "application/json" contentType)
                    (integer? contentLength)
                    (<= 1 contentLength max-request-bytes))
-      (throw (ex-info "Invalid upload request"
+      (throw (errors/raise! "Invalid upload request"
                       {:type ::invalid-upload-request})))
     (let [upload-id (str (UUID/randomUUID))
           object-name (str "uploads/" upload-id "/request.json")
@@ -571,7 +568,8 @@
             request-id (str (UUID/randomUUID))]
         (.set (.getResponseHeaders exchange) "X-Request-Id" request-id)
         (try
-          (cond
+          (observability/trace! ::api-request
+            (cond
             (and (= "GET" method) (= "/health" path))
             (respond! exchange 200 "application/json; charset=utf-8" health-body)
 
@@ -764,7 +762,7 @@
 
             :else
             (respond! exchange 404 "application/json; charset=utf-8"
-                      "{\"error\":\"not_found\"}"))
+                      "{\"error\":\"not_found\"}")))
           (catch clojure.lang.ExceptionInfo error
             (let [failure (oauth-callback-failure (:type (ex-data error)))]
               (if failure
@@ -825,6 +823,10 @@
 
               ::jobs/transaction-contention
               (do
+                (emit-event! dependencies "job_failed"
+                             {:severity "WARNING"
+                              :reason "transaction_contention"
+                              :failureCode "transaction_contention"})
                 (.set (.getResponseHeaders exchange) "Retry-After" "1")
                 (respond-json! exchange 503
                                {:error "transaction_contention"
@@ -873,9 +875,18 @@
               ::jobs/member-not-allowlisted
               (respond-json! exchange 403 {:error "not_allowlisted"})
 
-              (respond! exchange 500 "application/json; charset=utf-8"
-                        "{\"error\":\"render_failed\"}")))))
-          (catch Throwable _
+              (do
+                (emit-event! dependencies "request_failed"
+                             {:severity "ERROR"
+                              :reason "unexpected_application_error"
+                              :errorType (some-> error ex-data :type str)})
+                (respond! exchange 500 "application/json; charset=utf-8"
+                          "{\"error\":\"render_failed\"}"))))))
+          (catch Throwable error
+            (emit-event! dependencies "request_failed"
+                         {:severity "ERROR"
+                          :reason "unexpected_error"
+                          :errorType (some-> error ex-data :type str)})
             (respond! exchange 500 "application/json; charset=utf-8"
                       "{\"error\":\"render_failed\"}")))))))
 
@@ -900,8 +911,6 @@
                        (gcp/api-system)
                        {})]
     (start! port dependencies)
-    (println (str "{\"severity\":\"INFO\","
-                  "\"component\":\"api\","
-                  "\"event\":\"server_started\","
-                  "\"message\":\"API server started\","
-                  "\"port\":" port "}"))))
+    (observability/emit-event! "api" "server_started"
+                               {:message "API server started"
+                                :port port})))

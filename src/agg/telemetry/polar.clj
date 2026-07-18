@@ -1,5 +1,6 @@
 (ns agg.telemetry.polar
-  (:require [clojure.string :as str])
+  (:require [agg.errors :as errors]
+            [clojure.string :as str])
   (:import (java.io BufferedReader StringReader)
            (java.time Instant)
            (java.util.regex Pattern)))
@@ -36,7 +37,7 @@
           timestamp-index (column-index columns timestamp-columns)
           heart-rate-index (column-index columns heart-rate-columns)]
       (when-not (and timestamp-index heart-rate-index)
-        (throw (ex-info "Unsupported Polar CSV columns"
+        (throw (errors/raise! "Unsupported Polar CSV columns"
                         {:type ::unsupported-columns})))
       (loop [samples (transient [])
              sample-count 0
@@ -60,7 +61,7 @@
                       {:timestamp (Instant/parse timestamp)
                        :heart-rate parsed-heart-rate})
                     (catch Throwable cause
-                      (throw (ex-info "Malformed Polar CSV row"
+                      (throw (errors/raise! "Malformed Polar CSV row"
                                       {:type ::malformed-row
                                        :line line-number}
                                       cause))))]

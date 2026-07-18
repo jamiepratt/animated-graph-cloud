@@ -1,5 +1,6 @@
 (ns agg.drive.gcp
-  (:require [agg.auth.core :as auth]
+  (:require [agg.errors :as errors]
+            [agg.auth.core :as auth]
             [agg.drive.core :as drive]
             [clojure.data.json :as json]
             [clojure.string :as str])
@@ -51,7 +52,7 @@
 (defn- require-success [{:keys [status body] :as response} error-type]
   (if (<= 200 status 299)
     response
-    (throw (ex-info "Google Drive request failed"
+    (throw (errors/raise! "Google Drive request failed"
                     {:type error-type :status status
                      :reason (:error (parse-json body))}))))
 
@@ -73,14 +74,14 @@
     0
     (if-let [[_ last-byte] (re-matches #"bytes=0-(\d+)" header)]
       (inc (parse-long last-byte))
-      (throw (ex-info "Drive returned an invalid resumable range"
+      (throw (errors/raise! "Drive returned an invalid resumable range"
                       {:type ::invalid-resumable-progress
                        :range header})))))
 
 (defn- initial-offset [header size]
   (let [offset (range-offset header)]
     (when (or (neg? offset) (>= offset size))
-      (throw (ex-info "Drive resumable query returned an invalid offset"
+      (throw (errors/raise! "Drive resumable query returned an invalid offset"
                       {:type ::invalid-resumable-progress
                        :offset offset
                        :size size})))
@@ -91,7 +92,7 @@
     (when (or (<= reported offset)
               (> reported (inc end))
               (>= reported size))
-      (throw (ex-info "Drive resumable upload made invalid progress"
+      (throw (errors/raise! "Drive resumable upload made invalid progress"
                       {:type ::invalid-resumable-progress
                        :offset offset
                        :reported reported
@@ -108,7 +109,7 @@
       (loop [buffer (ByteBuffer/wrap bytes)]
         (when (.hasRemaining buffer)
           (when (neg? (.read channel buffer))
-            (throw (ex-info "Drive upload source ended early"
+            (throw (errors/raise! "Drive upload source ended early"
                             {:type ::short-upload-source})))
           (recur buffer))))
     bytes))
@@ -139,7 +140,7 @@
                                  offset end size))
 
         :else
-        (throw (ex-info "Drive resumable upload failed"
+        (throw (errors/raise! "Drive resumable upload failed"
                         {:type ::resumable-upload-failed
                          :status (:status response)}))))))
 
@@ -164,7 +165,7 @@
               id
               (create-folder! send! access-token)))
           :else
-          (throw (ex-info "Drive output folder lookup failed"
+          (throw (errors/raise! "Drive output folder lookup failed"
                           {:type ::folder-lookup-failed :status status}))))))
   drive/DriveGateway
   (generate-output-id! [_ access-token]
@@ -178,7 +179,7 @@
                    access-token))
            ::id-generation-failed)]
       (or (first (:ids (parse-json body)))
-          (throw (ex-info "Drive returned no generated output ID"
+          (throw (errors/raise! "Drive returned no generated output ID"
                           {:type ::id-generation-failed})))))
   (begin-resumable-upload! [_ access-token
                             {:keys [file-id folder-id name content-type size]}]
@@ -198,7 +199,7 @@
            ::resumable-start-failed)
           location (get headers "location")]
       (or (not-empty location)
-          (throw (ex-info "Drive returned no resumable session"
+          (throw (errors/raise! "Drive returned no resumable session"
                           {:type ::resumable-start-failed})))))
   (upload-resumable! [_ access-token session-uri path size]
     (upload-from! send! chunk-size access-token session-uri path size 0))
@@ -222,7 +223,7 @@
                                       size))
 
         :else
-        (throw (ex-info "Drive resumable status query failed"
+        (throw (errors/raise! "Drive resumable status query failed"
                         {:type ::resumable-status-failed
                          :status (:status query-response)}))))))
 

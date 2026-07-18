@@ -1,4 +1,5 @@
 (ns agg.telemetry.timeline
+  (:require [agg.errors :as errors])
   (:import (java.time Duration Instant)))
 
 (defn seconds-between [^Instant start ^Instant end]
@@ -17,7 +18,7 @@
                       [left right]))
                   (partition 2 1 samples))]
         (when-not (and left right)
-          (throw (ex-info "Timestamp is outside telemetry coverage"
+          (throw (errors/raise! "Timestamp is outside telemetry coverage"
                           {:type ::outside-coverage})))
         (let [span (seconds-between (:timestamp left) (:timestamp right))
               offset (seconds-between (:timestamp left) timestamp)
@@ -42,7 +43,7 @@
                       [left right]))
                   (partition 2 1 samples))]
         (when-not (and left right)
-          (throw (ex-info "Second is outside telemetry coverage"
+          (throw (errors/raise! "Second is outside telemetry coverage"
                           {:type ::outside-coverage})))
         (let [span (- (:seconds right) (:seconds left))
               ratio (/ (- seconds (:seconds left)) span)]

@@ -1,5 +1,6 @@
 (ns agg.render.frames
-  (:require [agg.render.spec :as spec])
+  (:require [agg.errors :as errors]
+            [agg.render.spec :as spec])
   (:import (java.awt AlphaComposite BasicStroke Color Font RenderingHints)
            (java.awt.image BufferedImage ComponentColorModel DataBuffer DataBufferByte Raster)
            (java.awt.color ColorSpace)
@@ -445,7 +446,7 @@
           midpoint (/ (double duration-seconds) 2.0)]
       (render-frame! image layout midpoint)
       (when-not (ImageIO/write image "png" output)
-        (throw (ex-info "PNG encoder unavailable" {:type ::png-unavailable})))
+        (throw (errors/raise! "PNG encoder unavailable" {:type ::png-unavailable})))
       (.flush ^OutputStream output)
       {:width width :height height :at-seconds midpoint})))
 

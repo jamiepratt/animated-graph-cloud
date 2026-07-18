@@ -1,17 +1,21 @@
 (ns agg.renderer.main
-  (:require [agg.contracts.render :as contract]
+  (:require [agg.errors :as errors]
+            [agg.contracts.render :as contract]
             [agg.auth.core :as auth]
             [agg.auth.gcp :as auth-gcp]
             [agg.drive.core :as drive]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
+            [agg.observability :as observability]
             [agg.render.audio :as audio]
             [agg.render.frames :as frames]
             [agg.render.media :as media]
             [agg.render.profile :as profile]
             [agg.render.spec :as spec]
             [agg.render.storage :as storage]
-            [clojure.data.json :as json])
+            [clojure.data.json :as json]
+            [taoensso.truss :as truss]
+            [taoensso.tufte :as tufte])
   (:gen-class)
   (:import (java.nio.file Files OpenOption Path StandardOpenOption)
            (com.google.cloud.firestore FirestoreOptions)
@@ -41,48 +45,61 @@
         frame-result (atom nil)
         memory-sampler (when profile? (profile/start-memory-sampler))
         recording (when profile? (profile/start-recording))]
-    (try
-      (with-open [audio-output (Files/newOutputStream audio-path (make-array OpenOption 0))]
-        (audio/write-wav! render-spec audio-output))
-      (let [encode-result (media/encode! video-encoder
-                                         render-spec
-                                         audio-path
-                                         output-path
-                                         (fn [output]
-                                           (reset! frame-result
-                                                   (frames/stream-frames!
-                                                    frame-renderer
-                                                    render-spec
-                                                    output))))
-            verified (media/verify! video-encoder render-spec output-path)
-            wall-seconds (/ (- (System/nanoTime) started) 1000000000.0)
-            frame-count (:frame-count @frame-result)
-            jfr-summary (when recording
-                          (profile/finish-recording! recording jfr-path))
-            peak-memory (when memory-sampler
-                          ((:stop! memory-sampler)))]
-        {:preset (:id render-spec)
-         :width (:width render-spec)
-         :height (:height render-spec)
-         :fps (:fps render-spec)
-         :duration-seconds (:duration-seconds render-spec)
-         :frame-count frame-count
-         :effective-fps (/ frame-count wall-seconds)
-         :wall-seconds wall-seconds
-         :ffmpeg-exit-status (:exit-status encode-result)
-         :output-bytes (Files/size output-path)
-         :sha256 (sha256 output-path)
-         :peak-cgroup-memory-bytes peak-memory
-         :jfr jfr-summary
-         :media verified})
-      (finally
-        (when recording
-          (try
-            (.close recording)
-            (catch Throwable _)))
-        (when memory-sampler
-          ((:stop! memory-sampler)))
-        (Files/deleteIfExists audio-path)))))
+    (tufte/profile {:id ::render}
+      (try
+        (tufte/p ::audio-generation
+          (with-open [audio-output (Files/newOutputStream
+                                    audio-path
+                                    (make-array OpenOption 0))]
+            (audio/write-wav! render-spec audio-output)))
+        (let [encode-result (tufte/p
+                             ::encoding
+                             (media/encode! video-encoder
+                                            render-spec
+                                            audio-path
+                                            output-path
+                                            (fn [output]
+                                              (reset!
+                                               frame-result
+                                               (tufte/p
+                                                ::frame-streaming
+                                                (frames/stream-frames!
+                                                 frame-renderer
+                                                 render-spec
+                                                 output))))))
+              verified (tufte/p ::verification
+                                (media/verify! video-encoder
+                                               render-spec
+                                               output-path))
+              wall-seconds (/ (- (System/nanoTime) started) 1000000000.0)
+              frame-count (truss/have! pos?
+                                       (:frame-count @frame-result))
+              jfr-summary (when recording
+                            (profile/finish-recording! recording jfr-path))
+              peak-memory (when memory-sampler
+                            ((:stop! memory-sampler)))]
+          {:preset (:id render-spec)
+           :width (:width render-spec)
+           :height (:height render-spec)
+           :fps (:fps render-spec)
+           :duration-seconds (:duration-seconds render-spec)
+           :frame-count frame-count
+           :effective-fps (/ frame-count wall-seconds)
+           :wall-seconds wall-seconds
+           :ffmpeg-exit-status (:exit-status encode-result)
+           :output-bytes (Files/size output-path)
+           :sha256 (sha256 output-path)
+           :peak-cgroup-memory-bytes peak-memory
+           :jfr jfr-summary
+           :media verified})
+        (finally
+          (when recording
+            (try
+              (.close recording)
+              (catch Throwable _)))
+          (when memory-sampler
+            ((:stop! memory-sampler)))
+          (Files/deleteIfExists audio-path))))))
 
 (defn- path [value]
   (when value
@@ -90,7 +107,7 @@
 
 (defn- option-map [args]
   (when (odd? (count args))
-    (throw (ex-info "Renderer options require flag/value pairs"
+    (throw (errors/raise! "Renderer options require flag/value pairs"
                     {:type ::invalid-options})))
   (into {} (map vec (partition 2 args))))
 
@@ -101,7 +118,7 @@
         duration-option (get options "--duration-seconds")
         duration (when duration-option
                    (or (parse-long duration-option)
-                       (throw (ex-info "Duration must be an integer"
+                       (throw (errors/raise! "Duration must be an integer"
                                        {:type ::invalid-duration}))))
         output-option (get options "--output")
         output-path (or (path output-option)
@@ -141,7 +158,7 @@
      :as request}
     {:keys [media video-encoder artifact-store]}]
    (when (not= (some? bucket) (some? object-prefix))
-     (throw (ex-info "Bucket and object prefix must be supplied together"
+     (throw (errors/raise! "Bucket and object prefix must be supplied together"
                      {:type ::invalid-upload-options})))
    (let [video-encoder (or video-encoder
                            media
@@ -166,19 +183,25 @@
                (if artifact-store
                  (assoc result
                         :objects
-                        {:media (storage/upload! artifact-store
-                                                 :media
-                                                 output-path
-                                                 "video/quicktime")
+                        {:media (tufte/p
+                                 ::uploads
+                                 (storage/upload! artifact-store
+                                                  :media
+                                                  output-path
+                                                  "video/quicktime"))
                          :profile (when jfr-path
-                                    (storage/upload! artifact-store
-                                                     :profile
-                                                     jfr-path
-                                                     "application/octet-stream"))
-                         :report (storage/upload! artifact-store
-                                                  :report
-                                                  report-path
-                                                  "application/json")})
+                                    (tufte/p
+                                     ::uploads
+                                     (storage/upload! artifact-store
+                                                      :profile
+                                                      jfr-path
+                                                      "application/octet-stream")))
+                         :report (tufte/p
+                                  ::uploads
+                                  (storage/upload! artifact-store
+                                                   :report
+                                                   report-path
+                                                   "application/json"))})
                  result)]
            (reset! completed? true)
            completed-result))
@@ -191,44 +214,50 @@
 (defrecord CloudRenderWorker [bucket drive-delivery render-cloud!]
   jobs/RenderWorker
   (perform-render! [_ job-id request]
-    (let [subject (:requesterSubject request)
-          render-spec (contract/prepare request)
-          output-path (Files/createTempFile
-                       "agg-cloud-output-" ".mov"
-                       (make-array java.nio.file.attribute.FileAttribute 0))
-          report-path (Files/createTempFile
-                       "agg-cloud-report-" ".json"
-                       (make-array java.nio.file.attribute.FileAttribute 0))
-          object-prefix (str "jobs/" job-id "/output-"
-                             (java.util.UUID/randomUUID))]
-      (try
-        (let [result
-              ((or render-cloud! run-job!)
-               (assoc render-spec
-                      :output-path output-path
-                      :report-path report-path
-                      :profile? false
-                      :delete-local? false)
-               {:artifact-store (storage/gcs-store bucket object-prefix)})
-              delivered
-              (when drive-delivery
-                (when-not subject
-                  (throw (ex-info "Drive delivery requires a requester"
-                                  {:type ::missing-requester})))
-                (drive/deliver-output! drive-delivery job-id subject output-path))]
-          (cond-> {:output-bytes (:output-bytes result)
-                   :object (get-in result [:objects :media :object])
-                   :sha256 (:sha256 result)
-                   :contentType "video/quicktime"}
-            delivered (assoc :driveFileId (:fileId delivered)
-                             :driveWebViewLink (:webViewLink delivered))))
-        (finally
-          (Files/deleteIfExists output-path)
-          (Files/deleteIfExists report-path))))))
+    (tufte/profile {:id ::cloud-render}
+      (let [subject (:requesterSubject request)
+            render-spec (tufte/p ::telemetry-parsing (contract/prepare request))
+            output-path (Files/createTempFile
+                         "agg-cloud-output-" ".mov"
+                         (make-array java.nio.file.attribute.FileAttribute 0))
+            report-path (Files/createTempFile
+                         "agg-cloud-report-" ".json"
+                         (make-array java.nio.file.attribute.FileAttribute 0))
+            object-prefix (str "jobs/" job-id "/output-"
+                               (java.util.UUID/randomUUID))]
+        (try
+          (let [result
+                ((or render-cloud! run-job!)
+                 (assoc render-spec
+                        :output-path output-path
+                        :report-path report-path
+                        :profile? false
+                        :delete-local? false)
+                 {:artifact-store (storage/gcs-store bucket object-prefix)})
+                delivered
+                (when drive-delivery
+                  (when-not subject
+                    (throw (errors/raise! "Drive delivery requires a requester"
+                                    {:type ::missing-requester})))
+                  (tufte/p
+                   ::drive-delivery
+                   (drive/deliver-output! drive-delivery
+                                          job-id
+                                          subject
+                                          output-path)))]
+            (cond-> {:output-bytes (:output-bytes result)
+                     :object (get-in result [:objects :media :object])
+                     :sha256 (:sha256 result)
+                     :contentType "video/quicktime"}
+              delivered (assoc :driveFileId (:fileId delivered)
+                               :driveWebViewLink (:webViewLink delivered))))
+          (finally
+            (Files/deleteIfExists output-path)
+            (Files/deleteIfExists report-path)))))))
 
 (defn require-cloud-success! [result]
   (when (= "failed" (:state result))
-    (throw (ex-info "Cloud renderer recorded a durable failure"
+    (throw (errors/raise! "Cloud renderer recorded a durable failure"
                     {:type ::cloud-job-failed
                      :failure-code (:failureCode result)})))
   result)
@@ -273,27 +302,19 @@
   (if (= "--job-id" (first args))
     (try
       (run-cloud-job! (second args))
-      (println (str "{\"severity\":\"INFO\","
-                    "\"component\":\"renderer\","
-                    "\"event\":\"cloud_render_complete\","
-                    "\"message\":\"Cloud renderer job completed\"}"))
+      (observability/emit-event! "renderer" "cloud_render_complete"
+                                 {:message "Cloud renderer job completed"})
       (catch Throwable cause
-        (println (json/write-str (cloud-failure-event cause)))
+        (observability/emit-event! (cloud-failure-event cause))
         (System/exit 1)))
     (if (empty? args)
-      (println (str "{\"severity\":\"INFO\","
-                    "\"component\":\"renderer\","
-                    "\"event\":\"smoke_complete\","
-                    "\"message\":\"Renderer smoke job completed\"}"))
+      (observability/emit-event! "renderer" "smoke_complete"
+                                 {:message "Renderer smoke job completed"})
       (try
         (run-job! (parse-options args))
-        (println (str "{\"severity\":\"INFO\","
-                      "\"component\":\"renderer\","
-                      "\"event\":\"render_complete\","
-                      "\"message\":\"Renderer job completed\"}"))
-        (catch Throwable _
-          (println (str "{\"severity\":\"ERROR\","
-                        "\"component\":\"renderer\","
-                        "\"event\":\"render_failed\","
-                        "\"message\":\"Renderer job failed\"}"))
+        (observability/emit-event! "renderer" "render_complete"
+                                   {:message "Renderer job completed"})
+        (catch Throwable cause
+          (observability/emit-error! "renderer" "render_failed" cause
+                                     {:message "Renderer job failed"})
           (System/exit 1))))))

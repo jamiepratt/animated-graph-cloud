@@ -1,5 +1,6 @@
 (ns agg.render.media
-  (:require [clojure.data.json :as json]
+  (:require [agg.errors :as errors]
+            [clojure.data.json :as json]
             [clojure.string :as str])
   (:import (java.io RandomAccessFile)
            (java.nio.file Path)))
@@ -47,7 +48,7 @@
         exit-status (.waitFor process)
         output @captured]
     (when-not (zero? exit-status)
-      (throw (ex-info "Media tool failed"
+      (throw (errors/raise! "Media tool failed"
                       {:type ::media-tool-failed
                        :exit-status exit-status})))
     output))
@@ -87,7 +88,7 @@
       (let [exit-status (.waitFor process)]
         @captured
         (when-not (zero? exit-status)
-          (throw (ex-info "FFmpeg encoding failed"
+          (throw (errors/raise! "FFmpeg encoding failed"
                           {:type ::encoding-failed
                            :exit-status exit-status})))
         {:exit-status exit-status})
@@ -116,7 +117,7 @@
                          (zero? size32) (- length offset)
                          :else size32)]
               (when (< size 8)
-                (throw (ex-info "Invalid MOV atom size" {:type ::invalid-container})))
+                (throw (errors/raise! "Invalid MOV atom size" {:type ::invalid-container})))
               (recur (+ offset size) (conj atoms atom-type)))))))))
 
 (defn- parse-rate [rate]
@@ -152,7 +153,7 @@
                    (some #{"moov"} atoms)
                    (some #{"mdat"} atoms)
                    (not-any? #{"moof"} atoms))
-      (throw (ex-info "Encoded media does not satisfy the renderer contract"
+      (throw (errors/raise! "Encoded media does not satisfy the renderer contract"
                       {:type ::invalid-media-contract})))
     {:video {:codec "prores"
              :profile "4444"

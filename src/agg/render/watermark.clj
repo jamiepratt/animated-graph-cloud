@@ -1,4 +1,5 @@
 (ns agg.render.watermark
+  (:require [agg.errors :as errors])
   (:import (java.io ByteArrayInputStream)
            (java.nio ByteBuffer)
            (java.util Base64)
@@ -16,7 +17,7 @@
 
 (defn- require-png! [condition message type]
   (when-not condition
-    (throw (ex-info message {:type type :limits limits}))))
+    (throw (errors/raise! message {:type type :limits limits}))))
 
 (defn decode-base64
   "Validates bounded PNG headers before decoding one reusable image."
@@ -54,6 +55,6 @@
     (catch clojure.lang.ExceptionInfo error
       (throw error))
     (catch Throwable cause
-      (throw (ex-info "Watermark must be valid base64 PNG content"
+      (throw (errors/raise! "Watermark must be valid base64 PNG content"
                       {:type ::invalid-png :limits limits}
                       cause)))))

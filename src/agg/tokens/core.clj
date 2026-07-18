@@ -1,5 +1,6 @@
 (ns agg.tokens.core
-  (:require [agg.admin.core :as admin]
+  (:require [agg.errors :as errors]
+            [agg.admin.core :as admin]
             [clojure.string :as str])
   (:import (java.nio.charset StandardCharsets)
            (java.security MessageDigest SecureRandom)
@@ -39,7 +40,7 @@
 (defn- require-token-name [value]
   (let [value (some-> value str/trim)]
     (when-not (and (string? value) (<= 1 (count value) 80))
-      (throw (ex-info "Token name must contain 1 to 80 characters"
+      (throw (errors/raise! "Token name must contain 1 to 80 characters"
                       {:type ::invalid-token-name})))
     value))
 
@@ -62,7 +63,7 @@
     (let [{:keys [subject email membership-version]}
           (token-identity subject-or-user)]
       (when (str/blank? subject)
-        (throw (ex-info "Token subject is required" {:type ::invalid-subject})))
+        (throw (errors/raise! "Token subject is required" {:type ::invalid-subject})))
       (let [id (str (UUID/randomUUID))
             secret (random-secret)
             token {:id id
@@ -91,7 +92,7 @@
                      (MessageDigest/isEqual
                       (.getBytes ^String (:hash stored) StandardCharsets/US_ASCII)
                       (.getBytes ^String expected StandardCharsets/US_ASCII)))
-        (throw (ex-info "Personal token is invalid or revoked"
+        (throw (errors/raise! "Personal token is invalid or revoked"
                         {:type ::invalid-token})))
       (cond-> {:subject (:subject stored)}
         (not (str/blank? (:email stored))) (assoc :email (:email stored))
@@ -100,7 +101,7 @@
   (revoke-token! [_ subject token-id]
     (let [stored (load-token store token-id)]
       (when-not (and stored (= subject (:subject stored)))
-        (throw (ex-info "Personal token does not exist"
+        (throw (errors/raise! "Personal token does not exist"
                         {:type ::token-not-found})))
       (mark-token-revoked! store token-id)
       (public-token (assoc stored :revoked true))))
@@ -131,7 +132,7 @@
   [{:keys [store pepper clock]
     :or {clock (Clock/systemUTC)}}]
   (when-not (and store (bytes? pepper) (<= 32 (alength ^bytes pepper)))
-    (throw (ex-info "A token store and 32-byte HMAC pepper are required"
+    (throw (errors/raise! "A token store and 32-byte HMAC pepper are required"
                     {:type ::invalid-configuration})))
   (->HmacTokenService store pepper clock))
 

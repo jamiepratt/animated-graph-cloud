@@ -1,4 +1,5 @@
-(ns agg.render.spec)
+(ns agg.render.spec
+  (:require [agg.errors :as errors]))
 
 (def ^:private presets
   {"1080p25" {:id "1080p25"
@@ -14,14 +15,14 @@
 
 (defn preset [id]
   (or (get presets id)
-      (throw (ex-info "Unsupported renderer preset"
+      (throw (errors/raise! "Unsupported renderer preset"
                       {:type ::unsupported-preset}))))
 
 (defn with-duration [preset-map duration-seconds]
   (when-not (and (integer? duration-seconds)
                  (pos? duration-seconds)
                  (<= duration-seconds (:duration-seconds preset-map)))
-    (throw (ex-info "Duration must be within the preset maximum"
+    (throw (errors/raise! "Duration must be within the preset maximum"
                     {:type ::invalid-duration})))
   (assoc preset-map :duration-seconds duration-seconds))
 

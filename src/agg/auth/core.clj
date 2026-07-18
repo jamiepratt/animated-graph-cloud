@@ -1,5 +1,6 @@
 (ns agg.auth.core
-  (:require [agg.admin.core :as admin]
+  (:require [agg.errors :as errors]
+            [agg.admin.core :as admin]
             [clojure.data.json :as json]
             [clojure.string :as str])
   (:import (java.net URLEncoder)
@@ -71,7 +72,7 @@
   (case flow
     :login login-scopes
     :drive drive-scopes
-    (throw (ex-info "Unknown OAuth flow" {:type ::invalid-flow}))))
+    (throw (errors/raise! "Unknown OAuth flow" {:type ::invalid-flow}))))
 
 (defn- authorization-url [{:keys [client-id authorization-endpoint] :as system}
                           flow state verifier]
@@ -113,13 +114,13 @@
                 (str/blank? payload)
                 (str/blank? signature)
                 (not (MessageDigest/isEqual expected (decode64 signature))))
-        (throw (ex-info "Signed value is invalid" {:type error-type})))
+        (throw (errors/raise! "Signed value is invalid" {:type error-type})))
       (json/read-str (String. (decode64 payload) StandardCharsets/UTF_8)
                      :key-fn keyword))
     (catch clojure.lang.ExceptionInfo error
       (throw error))
     (catch Throwable error
-      (throw (ex-info "Signed value is invalid" {:type error-type} error)))))
+      (throw (errors/raise! "Signed value is invalid" {:type error-type} error)))))
 
 (defn system
   [{:keys [client-id client-secret base-url allowlist session-key oauth clock
@@ -132,7 +133,7 @@
                  (not-empty base-url)
                  (seq session-key)
                  oauth)
-    (throw (ex-info "OAuth configuration is incomplete"
+    (throw (errors/raise! "OAuth configuration is incomplete"
                     {:type ::invalid-configuration})))
   {:client-id client-id
    :client-secret client-secret
@@ -159,7 +160,7 @@
                        ::admin/invalid-email
                        ::admin/invalid-subject}
                      (:type (ex-data error)))
-        (throw (ex-info "User is no longer allowlisted"
+        (throw (errors/raise! "User is no longer allowlisted"
                         {:type ::not-allowlisted}
                         error))
         (throw error)))))
@@ -224,7 +225,7 @@
                 (str/blank? email)
                 (not (number? exp))
                 (<= (long exp) (.getEpochSecond (Instant/now clock))))
-        (throw (ex-info "Session is expired" {:type ::invalid-session})))
+        (throw (errors/raise! "Session is expired" {:type ::invalid-session})))
       (if member-directory
         (select-keys
          (dynamic-member system {:subject sub
@@ -234,7 +235,7 @@
          [:subject :email :role :membership-version])
         (do
           (when-not (contains? allowlist (str/lower-case email))
-            (throw (ex-info "Session user is no longer allowlisted"
+            (throw (errors/raise! "Session user is no longer allowlisted"
                             {:type ::not-allowlisted})))
           (assoc {:subject sub :email email}
                  :role (cond
@@ -244,7 +245,7 @@
     (catch clojure.lang.ExceptionInfo error
       (throw error))
     (catch Throwable error
-      (throw (ex-info "Session is invalid" {:type ::invalid-session} error)))))
+      (throw (errors/raise! "Session is invalid" {:type ::invalid-session} error)))))
 
 (defn require-allowlisted!
   [{:keys [allowlist member-directory owner-email admin-emails] :as system}
@@ -255,7 +256,7 @@
       (when (or (str/blank? subject)
                 (str/blank? email)
                 (not (contains? allowlist (str/lower-case email))))
-        (throw (ex-info "User is no longer allowlisted"
+        (throw (errors/raise! "User is no longer allowlisted"
                         {:type ::not-allowlisted})))
       (assoc user
              :role (cond
@@ -279,17 +280,17 @@
                      (= subject sub)
                      (number? exp)
                      (> (long exp) (.getEpochSecond (Instant/now clock))))
-        (throw (ex-info "CSRF token is invalid or expired"
+        (throw (errors/raise! "CSRF token is invalid or expired"
                         {:type ::invalid-csrf})))
       true)
     (catch clojure.lang.ExceptionInfo error
       (if (= ::invalid-csrf (:type (ex-data error)))
         (throw error)
-        (throw (ex-info "CSRF token is invalid"
+        (throw (errors/raise! "CSRF token is invalid"
                         {:type ::invalid-csrf}
                         error))))
     (catch Throwable error
-      (throw (ex-info "CSRF token is invalid"
+      (throw (errors/raise! "CSRF token is invalid"
                       {:type ::invalid-csrf}
                       error)))))
 
@@ -320,7 +321,7 @@
                    (not (str/blank? verifier))
                    (number? exp)
                    (> (long exp) (.getEpochSecond (Instant/now clock))))
-      (throw (ex-info "OAuth state is invalid or expired"
+      (throw (errors/raise! "OAuth state is invalid or expired"
                       {:type ::invalid-state})))
     {:flow flow :verifier verifier :user user}))
 
@@ -329,13 +330,13 @@
         data (cond-> {:type type}
                (and (integer? status) (<= 100 status 599))
                (assoc :status status))]
-    (throw (ex-info message data error))))
+    (throw (errors/raise! message data error))))
 
 (defn finish-login!
   [{:keys [oauth allowlist member-directory] :as system}
    {:keys [code state state-cookie]}]
   (when (str/blank? code)
-    (throw (ex-info "OAuth code is required" {:type ::invalid-code})))
+    (throw (errors/raise! "OAuth code is required" {:type ::invalid-code})))
   (let [{:keys [verifier]} (consume-flow! system :login state state-cookie)
         {:keys [subject email email-verified?] :as identity}
         (exchange-code! oauth :login code verifier (redirect-uri system :login))
@@ -343,13 +344,13 @@
     (when-not (and email-verified?
                    (not (str/blank? subject))
                    (not (str/blank? email)))
-      (throw (ex-info "Google identity is not allowlisted"
+      (throw (errors/raise! "Google identity is not allowlisted"
                       {:type ::not-allowlisted})))
     (let [user (if member-directory
                  (dynamic-member system {:subject subject :email email} true)
                  (do
                    (when-not (contains? allowlist email)
-                     (throw (ex-info "Google identity is not allowlisted"
+                     (throw (errors/raise! "Google identity is not allowlisted"
                                      {:type ::not-allowlisted})))
                    {:subject subject :email email}))]
       {:user (select-keys user [:subject :email :role :membership-version])
@@ -360,19 +361,19 @@
   [{:keys [oauth cipher grant-store drive] :as system}
    {:keys [code state state-cookie]}]
   (when-not (and cipher grant-store drive)
-    (throw (ex-info "Drive authorization is not configured"
+    (throw (errors/raise! "Drive authorization is not configured"
                     {:type ::drive-not-configured})))
   (when (str/blank? code)
-    (throw (ex-info "OAuth code is required" {:type ::invalid-code})))
+    (throw (errors/raise! "OAuth code is required" {:type ::invalid-code})))
   (let [{:keys [verifier user]}
         (consume-flow! system :drive state state-cookie)
         {:keys [access-token refresh-token granted-scopes]}
         (exchange-code! oauth :drive code verifier (redirect-uri system :drive))]
     (when-not (= (set drive-scopes) (set granted-scopes))
-      (throw (ex-info "Drive grant has unexpected scopes"
+      (throw (errors/raise! "Drive grant has unexpected scopes"
                       {:type ::invalid-drive-scopes})))
     (when (str/blank? access-token)
-      (throw (ex-info "Drive grant did not return an access token"
+      (throw (errors/raise! "Drive grant did not return an access token"
                       {:type ::missing-access-token})))
     (let [user (require-allowlisted! system user)
           subject (:subject user)
@@ -394,7 +395,7 @@
                  "Drive grant could not be encrypted"
                  error))))]
       (when (str/blank? refresh-token-ciphertext)
-        (throw (ex-info "Drive grant did not return offline access"
+        (throw (errors/raise! "Drive grant did not return offline access"
                         {:type ::missing-refresh-token})))
       (let [folder-id (try
                         (ensure-output-folder! drive access-token
@@ -430,7 +431,7 @@
   (let [{:keys [refresh-token-ciphertext folder-id revoked?] :as grant}
         (when grant-store (load-grant grant-store subject))]
     (when (or (nil? grant) revoked? (str/blank? refresh-token-ciphertext))
-      (throw (ex-info "Drive authorization is required"
+      (throw (errors/raise! "Drive authorization is required"
                       {:type ::drive-grant-required})))
     (try
       (let [{:keys [access-token]}
@@ -438,14 +439,14 @@
              drive-token-client
              (decrypt-token! cipher refresh-token-ciphertext))]
         (when (str/blank? access-token)
-          (throw (ex-info "Drive token refresh returned no access token"
+          (throw (errors/raise! "Drive token refresh returned no access token"
                           {:type ::revoked-grant})))
         {:access-token access-token :folder-id folder-id})
       (catch clojure.lang.ExceptionInfo cause
         (if (= ::revoked-grant (:type (ex-data cause)))
           (do
             (revoke-grant! grant-store subject)
-            (throw (ex-info "Drive authorization is expired or revoked"
+            (throw (errors/raise! "Drive authorization is expired or revoked"
                             {:type ::drive-grant-required}
                             cause)))
           (throw cause))))))
