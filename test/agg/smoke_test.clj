@@ -104,7 +104,7 @@
                :telemetrySyncAt "2026-07-17T10:00:00Z"
                :cameraSyncAt "2026-07-17T09:00:00Z"
                :sectionStartAt "2026-07-17T09:00:00Z"
-               :sectionEndAt "2026-07-17T09:00:02Z"})]
+               :sectionEndAt "2026-07-17T09:00:01Z"})]
     (try
       (let [response (test-http/send-bytes!
                       :post (str "http://127.0.0.1:" port "/v1/overlay")

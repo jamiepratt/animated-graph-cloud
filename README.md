@@ -82,11 +82,12 @@ GitHub issue #3.
 ## Telemetry preview and overlay API
 
 `POST /v1/preview` returns `image/png`; `POST /v1/overlay` returns a seekable
-`video/quicktime` ProRes 4444 overlay with AAC heartbeat audio. Overlay-only
-behavior is synchronous, but Firebase Hosting returns HTTP 504 when its Cloud
-Run rewrite exceeds 60 seconds. Use durable jobs for renders that may not
-finish within that public limit. A preview may include a verified Drive source;
-compositing output is available only through durable jobs.
+`video/quicktime` ProRes 4444 overlay with AAC heartbeat audio. The synchronous
+route is limited to a one-second production diagnostic. Longer requests return
+HTTP 422 before rendering and identify `POST /v1/jobs` as the supported path.
+This keeps every public browser and API call same-origin while avoiding Firebase
+Hosting's 60-second backend limit. A preview may include a verified Drive
+source; compositing and every production-length render use durable jobs.
 
 ```json
 {
@@ -96,7 +97,7 @@ compositing output is available only through durable jobs.
   "telemetrySyncAt": "2026-07-17T10:00:00Z",
   "cameraSyncAt": "2026-07-17T09:00:00Z",
   "sectionStartAt": "2026-07-17T09:00:00Z",
-  "sectionEndAt": "2026-07-17T09:00:02Z"
+  "sectionEndAt": "2026-07-17T09:00:01Z"
 }
 ```
 

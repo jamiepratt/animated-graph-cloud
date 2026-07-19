@@ -138,10 +138,12 @@ evidence. The restricted protocol set, source-size cap, streamability rule,
 fixed render envelope, and output validation limit the resulting media and
 resource risk.
 
-The original transparent-overlay contract remains stable. The compositing path
-can use the same telemetry timeline and frame renderer, but its two-input
-FFmpeg orchestration, source streaming, output contracts, audio mix, and
-performance envelope require separate tests and production evidence.
+The transparent-overlay media format remains stable. ADR 0012 limits its public
+synchronous admission to a one-second diagnostic and directs longer work to
+durable jobs. The compositing path can use the same telemetry timeline and frame
+renderer, but its two-input FFmpeg orchestration, source streaming, output
+contracts, audio mix, and performance envelope require separate tests and
+production evidence.
 
 Only the dedicated overlay route uses the large service envelope; ordinary UI,
 API, administration, job, token, and Drive traffic stays on the small API

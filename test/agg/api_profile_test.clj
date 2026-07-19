@@ -4,6 +4,8 @@
             [agg.http-test-support :as test-http]
             [agg.jobs.lifecycle :as jobs]
             [agg.tokens.core :as tokens]
+            [clojure.data.json :as json]
+            [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]))
 
 (defn- request! [port method path body headers]
@@ -33,6 +35,15 @@
      :token (:token created)
      :session (auth/issue-session system user)
      :csrf (auth/issue-csrf-token system user)}))
+
+(defn- render-request [section-end]
+  {:telemetryFormat "polar-csv"
+   :telemetry (slurp (io/resource "fixtures/polar/valid.csv"))
+   :preset "1080p25"
+   :telemetrySyncAt "2026-07-17T10:00:00Z"
+   :cameraSyncAt "2026-07-17T09:00:00Z"
+   :sectionStartAt "2026-07-17T09:00:00Z"
+   :sectionEndAt section-end})
 
 (deftest overlay-profile-exposes-only-health-and-authenticated-overlay
   (let [port (test-http/available-port)
@@ -101,5 +112,47 @@
       (is (= 401 (.statusCode
                   (request! port :post "/v1/overlay" "{}"
                             {"Content-Type" "application/json"}))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest overlay-profile-rejects-unproven-duration-before-rendering
+  (let [port (test-http/available-port)
+        {:keys [auth-system token-service token]} (auth-fixture)
+        encoder-called? (atom false)
+        events (atom [])
+        server (api/start! port
+                           {:service-profile "overlay"
+                            :auth-system auth-system
+                            :token-service token-service
+                            :video-encoder (fn [& _]
+                                             (reset! encoder-called? true))
+                            :event-sink (fn [event fields]
+                                          (swap! events conj [event fields]))})]
+    (try
+      (let [response (request! port :post "/v1/overlay"
+                               (json/write-str
+                                (render-request "2026-07-17T09:00:02Z"))
+                               {"Content-Type" "application/json"
+                                "Authorization" (str "Bearer " token)})
+            request-id (some-> response .headers
+                               (.firstValue "x-request-id") .orElseThrow)
+            body (json/read-str (.body response) :key-fn keyword)]
+        (is (= 422 (.statusCode response)))
+        (is (= {:error "synchronous_overlay_duration_exceeded"
+                :requestId request-id
+                :maxDurationSeconds 1
+                :durableJobsPath "/v1/jobs"}
+               body))
+        (is (false? @encoder-called?))
+        (is (not (.isPresent
+                  (.firstValue (.headers response)
+                               "access-control-allow-origin"))))
+        (is (= [["admission_rejected"
+                 {:severity "WARNING"
+                  :requestId request-id
+                  :reason "synchronous_overlay_duration_exceeded"
+                  :durationSeconds 2
+                  :maxDurationSeconds 1}]]
+               @events)))
       (finally
         (.close ^java.lang.AutoCloseable server)))))

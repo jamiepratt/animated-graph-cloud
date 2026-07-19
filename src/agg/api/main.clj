@@ -42,6 +42,8 @@
 
 (def max-request-bytes contract/max-render-request-bytes)
 
+(def ^:private max-synchronous-overlay-duration-seconds 1)
+
 (def ^:private public-assets
   {"/openapi.yaml" ["openapi.yaml" "application/yaml; charset=utf-8"]
    "/alpha-compose-mark.svg" ["public/alpha-compose-mark.svg" "image/svg+xml; charset=utf-8"]
@@ -446,6 +448,12 @@
             (throw (errors/raise!
                     "Video compositing is available only through durable jobs"
                     {:type ::compositing-not-supported})))
+        _ (when (> (:duration-seconds render-spec)
+                   max-synchronous-overlay-duration-seconds)
+            (throw (errors/raise!
+                    "Synchronous overlays are limited to the production-proven diagnostic duration"
+                    {:type ::synchronous-overlay-duration-exceeded
+                     :reported (:duration-seconds render-spec)})))
         output-path (Files/createTempFile
                      "agg-overlay-"
                      ".mov"
@@ -1156,6 +1164,21 @@
 
                   ::compositing-not-supported
                   (respond-json! exchange 400 {:error "compositing_requires_durable_job"})
+
+                  ::synchronous-overlay-duration-exceeded
+                  (let [duration-seconds (:reported (ex-data error))]
+                    (emit-event! dependencies "admission_rejected"
+                                 {:severity "WARNING"
+                                  :requestId request-id
+                                  :reason "synchronous_overlay_duration_exceeded"
+                                  :durationSeconds duration-seconds
+                                  :maxDurationSeconds max-synchronous-overlay-duration-seconds})
+                    (respond-json!
+                     exchange 422
+                     {:error "synchronous_overlay_duration_exceeded"
+                      :requestId request-id
+                      :maxDurationSeconds max-synchronous-overlay-duration-seconds
+                      :durableJobsPath "/v1/jobs"}))
 
                   ::contract/source-too-large
                   (respond-json! exchange 413 {:error "source_video_too_large"

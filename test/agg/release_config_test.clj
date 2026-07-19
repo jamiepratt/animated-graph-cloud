@@ -84,6 +84,29 @@
     (is (= ["firebase-debug.log" "firebase-debug.*.log"] (:ignore hosting)))
     (is (re-find #"enable_firebase_hosting\s*=\s*true" production))))
 
+(deftest synchronous-overlays-have-one-same-origin-diagnostic-contract
+  (let [openapi (slurp "docs/openapi.yaml")
+        readme (slurp "README.md")
+        decision (slurp
+                  "docs/adr/0012-bound-synchronous-overlays-to-production-evidence.md")
+        runbook (slurp "docs/production-runbook.md")]
+    (is (= 1 (count (re-seq #"url: https://alphacompose.com(?:\n|$)" openapi))))
+    (doseq [contract ["synchronous_overlay_duration_exceeded"
+                      "maxDurationSeconds: {const: 1}"
+                      "durableJobsPath: {const: /v1/jobs}"
+                      "\"422\": {$ref: \"#/components/responses/SynchronousOverlayDurationExceeded\"}"]]
+      (testing contract
+        (is (str/includes? openapi contract))))
+    (doseq [implication ["global external load balancer"
+                         "No CORS response is added"
+                         "session cookie scope is\nnot broadened"]]
+      (testing implication
+        (is (str/includes? decision implication))))
+    (is (re-find #"(?s)one-second production diagnostic.*?\"sectionStartAt\": \"2026-07-17T09:00:00Z\",\s+\"sectionEndAt\": \"2026-07-17T09:00:01Z\""
+                 readme))
+    (is (str/includes? runbook "before encoder startup"))
+    (is (str/includes? runbook "direct `run.app` URL is not a public fallback"))))
+
 (deftest production-release-deploys-main-push-and-is-domain-aware
   (let [workflow (slurp ".github/workflows/deploy-production.yml")]
     (is (str/includes? workflow "push:"))

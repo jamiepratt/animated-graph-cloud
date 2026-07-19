@@ -70,10 +70,11 @@ invent record values from this runbook.
 
 The checked-in `firebase.json` rewrites exact `/v1/overlay` traffic to
 `agg-overlay` before rewriting every other route to `agg-api`. Both services
-run in Warsaw. Firebase Hosting has a hard limit of 60 seconds for a dynamic Cloud
-Run rewrite and returns HTTP 504 after that point. The 3,600-second Cloud Run
-timeout therefore does not make long synchronous overlays available through
-`alphacompose.com`; use durable jobs for work that may exceed 60 seconds. No
+run in Warsaw. Firebase Hosting has a hard limit of 60 seconds for a dynamic
+Cloud Run rewrite and returns HTTP 504 after that point. The public synchronous
+contract therefore accepts only one-second diagnostics and rejects longer
+sections before encoding; the 3,600-second Cloud Run timeout is not a public
+long-render contract. Use durable jobs for every production-length render. No
 default Firebase project is checked in: every deployment must pass `--project`
 explicitly. The production workflow invokes the pinned
 `firebase-tools@15.24.0` CLI only after both private candidates pass health and
@@ -184,6 +185,14 @@ checks activate the large service envelope. UI, preview, administration, job,
 token, Drive, and internal routes are unavailable on the overlay profile even
 through its direct `run.app` URL.
 
+The public synchronous contract accepts only one-second diagnostic overlays.
+After authentication and request validation, a longer section returns HTTP 422
+before encoder startup with `synchronous_overlay_duration_exceeded`, the
+response `X-Request-Id`, `maxDurationSeconds: 1`, and `durableJobsPath:
+/v1/jobs`. Production-length overlays and all composites use durable jobs. The
+direct `run.app` URL is not a public fallback: do not add CORS, broaden cookie
+scope, or publish it as a second client origin.
+
 Inspect overlay request volume, latency, failures, and memory separately using
 the Cloud Run service label. Never log request bodies, telemetry, tokens,
 filenames, subjects, or email addresses:
@@ -196,9 +205,11 @@ gcloud logging read \
 ```
 
 Use the same `service_name` label in Cloud Monitoring and billing reports to
-separate the large overlay envelope from ordinary API usage. A 60-second HTTP
-504 at the public domain is a Firebase Hosting boundary, not evidence that the
-Cloud Run service exceeded its own timeout.
+separate the large overlay envelope from ordinary API usage. Correlate rejected
+long requests by `requestId` and reason
+`synchronous_overlay_duration_exceeded`; logs may contain only bounded duration
+and limit numbers. An HTTP 504 for an accepted one-second diagnostic is a
+Firebase Hosting boundary, not evidence that Cloud Run exceeded its timeout.
 
 ## Secret Manager
 

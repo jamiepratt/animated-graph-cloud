@@ -20,7 +20,7 @@ security:
   - sessionCookie: []
 tags:
   - name: Rendering
-    description: Synchronous preview and overlay creation.
+    description: Preview creation and one-second synchronous overlay diagnostics.
   - name: Jobs
     description: Durable render submission and lifecycle.
   - name: Tokens
@@ -214,9 +214,10 @@ paths:
       tags: [Rendering]
       summary: Render an overlay synchronously.
       description: |
-        Prefer durable jobs for production-size renders. The production
-        Firebase Hosting route returns HTTP 504 if this synchronous response
-        takes longer than 60 seconds, regardless of the backend timeout.
+        Renders only one-second overlay diagnostics. Longer valid requests are
+        rejected before encoder startup and must use POST /v1/jobs. The route
+        remains same-origin through Firebase Hosting and does not support CORS
+        or the direct Cloud Run origin as a public API contract.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       requestBody:
@@ -233,10 +234,11 @@ paths:
         "400": {$ref: "#/components/responses/InvalidRequest"}
         "401": {$ref: "#/components/responses/AuthenticationRequired"}
         "413": {$ref: "#/components/responses/PayloadTooLarge"}
+        "422": {$ref: "#/components/responses/SynchronousOverlayDurationExceeded"}
         "504":
           description: >-
-            Firebase Hosting did not receive the synchronous response within
-            60 seconds.
+            Firebase Hosting did not receive an accepted one-second diagnostic
+            response within 60 seconds.
   /v1/jobs:
     post:
       operationId: submitJob
@@ -541,6 +543,11 @@ components:
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
+    SynchronousOverlayDurationExceeded:
+      description: The valid section exceeds the one-second synchronous diagnostic contract.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/SynchronousOverlayDurationExceeded"}
     Conflict:
       description: Idempotency conflict or invalid state transition.
       content:
@@ -752,6 +759,7 @@ components:
             - grant_persistence_failed
             - picker_not_configured
             - compositing_requires_durable_job
+            - synchronous_overlay_duration_exceeded
             - source_video_too_large
             - invalid_source_video
             - drive_source_unavailable
@@ -766,3 +774,12 @@ components:
             - token_not_found
             - admin_required
         retryable: {type: boolean}
+    SynchronousOverlayDurationExceeded:
+      type: object
+      additionalProperties: false
+      required: [error, requestId, maxDurationSeconds, durableJobsPath]
+      properties:
+        error: {const: synchronous_overlay_duration_exceeded}
+        requestId: {type: string, format: uuid}
+        maxDurationSeconds: {const: 1}
+        durableJobsPath: {const: /v1/jobs}
