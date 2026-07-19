@@ -10,8 +10,10 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]])
-  (:import (java.net URLEncoder)
-           (java.nio.charset StandardCharsets)))
+  (:import (java.io File)
+           (java.net URLEncoder)
+           (java.nio.charset StandardCharsets)
+           (java.util Base64)))
 
 (defn- available-port []
   (test-http/available-port))
@@ -57,6 +59,88 @@
       (.write writer source))
     (.readAllBytes (.getErrorStream process))
     (= 0 (.waitFor process))))
+
+(defn- chrome-executable []
+  (some (fn [candidate]
+          (when candidate
+            (let [file (File. candidate)]
+              (when (.canExecute file) candidate))))
+        [(System/getenv "CHROME_BIN")
+         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+         "/usr/bin/google-chrome"
+         "/usr/bin/google-chrome-stable"
+         "/usr/bin/chromium"
+         "/usr/bin/chromium-browser"]))
+
+(defn- picker-browser-outcome [page]
+  (let [chrome (chrome-executable)
+        fixture
+        (str
+         "<script>"
+         "window.__pickerState={loads:[],visible:[],diagnostics:[],callback:null};"
+         "window.fetch=(_path,options)=>{window.__pickerState.diagnostics.push(JSON.parse(options.body));return Promise.resolve({ok:true});};"
+         "class PickerView{setIncludeFolders(){return this;}setSelectFolderEnabled(){return this;}}"
+         "class PickerBuilder{"
+         "addView(){return this;}setSelectableMimeTypes(){return this;}setOAuthToken(){return this;}"
+         "setDeveloperKey(){return this;}setAppId(){return this;}setOrigin(){return this;}"
+         "setCallback(callback){window.__pickerState.callback=callback;return this;}"
+         "build(){return {setVisible(visible){window.__pickerState.visible.push(visible);}};}"
+         "}"
+         "window.google={picker:{DocsView:PickerView,DocsUploadView:PickerView,PickerBuilder,"
+         "Action:{LOADED:'loaded',PICKED:'picked',CANCEL:'cancel'}}};"
+         "window.gapi={load(_module,handlers){window.__pickerState.loads.push(handlers);}};"
+         "</script>")
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{"
+         "const state=window.__pickerState,button=document.getElementById('open-picker'),selection=document.getElementById('picker-selection');"
+         "button.click();const initialLoading=selection.textContent;"
+         "const firstLoad=state.loads.at(-1);if(typeof firstLoad?.onerror!=='function')throw new Error('Picker load has no error recovery');"
+         "firstLoad.onerror();const failureMessage=selection.textContent;"
+         "button.click();const failureRetryLoading=selection.textContent;"
+         "const timeoutLoad=state.loads.at(-1);if(typeof timeoutLoad?.ontimeout!=='function')throw new Error('Picker load has no timeout recovery');"
+         "timeoutLoad.ontimeout();const timeoutMessage=selection.textContent;"
+         "button.click();const timeoutRetryLoading=selection.textContent;"
+         "const retryLoad=state.loads.at(-1);if(typeof retryLoad?.callback!=='function')throw new Error('Picker load is not retriable');"
+         "retryLoad.callback();"
+         "state.callback({action:google.picker.Action.LOADED});"
+         "state.callback({action:google.picker.Action.PICKED,docs:[{id:'test-file-id',name:'video.mp4',mimeType:'video/mp4'}]});"
+         "const selected=selection.textContent;button.click();state.callback({action:google.picker.Action.CANCEL});"
+         "outcome={initialLoading,failureMessage,failureRetryLoading,timeoutMessage,timeoutRetryLoading,selected,visible:state.visible,diagnostics:state.diagnostics};"
+         "}catch(error){outcome={error:error.message};}"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));"
+         "document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "<script>(function(){"
+                              (str fixture "<script>(function(){"))
+                 (str/replace "</body>" (str scenario "</body>")))
+        temp (File/createTempFile "agg-picker-browser-" ".html")]
+    (is chrome "Browser-level Picker regression requires Chrome or Chromium")
+    (when chrome
+      (try
+        (spit temp html)
+        (let [builder (doto (ProcessBuilder.
+                             [chrome "--headless=new" "--disable-gpu"
+                              "--no-sandbox" "--dump-dom"
+                              "--virtual-time-budget=1000"
+                              (str (.toURI temp))])
+                        (.redirectErrorStream true))
+              process (.start builder)
+              output (slurp (.getInputStream process))
+              exit (.waitFor process)
+              encoded (second (re-find #"data-outcome=\"([^\"]+)\"" output))]
+          (is (= 0 exit) output)
+          (is encoded output)
+          (when encoded
+            (json/read-str
+             (String. (.decode (Base64/getDecoder) ^String encoded)
+                      StandardCharsets/UTF_8)
+             :key-fn keyword)))
+        (finally
+          (.delete temp))))))
 
 (deftest public-product-and-legal-pages-identify-alpha-compose
   (let [port (available-port)
@@ -122,6 +206,33 @@
             "The rendered compose initialization script must parse."))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
+
+(deftest picker-initialization-and-click-flow-recovers-in-a-browser
+  (let [outcome (picker-browser-outcome
+                 (ui/page {:user {:email "owner@example.com" :role :member}
+                           :csrf "csrf-test"
+                           :picker-config {:access-token "access-test"
+                                           :api-key "key-test"
+                                           :app-id "app-test"
+                                           :csrf "csrf-test"}
+                           :tokens []
+                           :members []
+                           :logs-enabled? false}))]
+    (is (nil? (:error outcome)) outcome)
+    (is (= "Loading Google Drive Picker…" (:initialLoading outcome)))
+    (is (= "Google Drive Picker failed to load. Try again."
+           (:failureMessage outcome)))
+    (is (= "Loading Google Drive Picker…" (:failureRetryLoading outcome)))
+    (is (= "Google Drive Picker failed to load. Try again."
+           (:timeoutMessage outcome)))
+    (is (= "Loading Google Drive Picker…" (:timeoutRetryLoading outcome)))
+    (is (= "video.mp4" (:selected outcome)))
+    (is (= [false true false true false] (:visible outcome)))
+    (is (= ["error" "error" "opened" "loaded" "selected" "opened"
+            "cancelled"]
+           (mapv :phase (:diagnostics outcome))))
+    (is (every? #(= #{:phase :view :listState} (set (keys %)))
+                (:diagnostics outcome)))))
 
 (deftest htmx-preview-failure-is-a-safe-correlated-html-fragment
   (let [port (available-port)
