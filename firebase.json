@@ -6,6 +6,14 @@
     ],
     "rewrites": [
       {
+        "source": "/v1/overlay",
+        "run": {
+          "serviceId": "agg-overlay",
+          "region": "europe-central2",
+          "pinTag": true
+        }
+      },
+      {
         "source": "**",
         "run": {
           "serviceId": "agg-api",

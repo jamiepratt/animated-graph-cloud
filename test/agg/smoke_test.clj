@@ -1,5 +1,6 @@
 (ns agg.smoke-test
   (:require [agg.api.main :as api]
+            [agg.auth.core :as auth]
             [agg.http-test-support :as test-http]
             [agg.render.frames :as frames]
             [agg.render.media :as media]
@@ -79,7 +80,22 @@
           (verify! [_ _render-spec _output-path]
             {:video {:codec "prores" :profile "4444" :alpha true}
              :audio {:codec "aac" :profile "LC" :channels 2}}))
-        server (api/start! port {:frame-renderer frame-renderer
+        auth-system (auth/system
+                     {:client-id "client-id"
+                      :client-secret "client-secret"
+                      :base-url "https://app.example.com"
+                      :allowlist #{"owner@example.com"}
+                      :session-key
+                      (.getBytes "01234567890123456789012345678901")
+                      :oauth (reify auth/OAuthClient
+                               (exchange-code! [_ _ _ _ _]
+                                 (throw (UnsupportedOperationException.))))})
+        user {:subject "owner-subject" :email "owner@example.com"}
+        session (auth/issue-session auth-system user)
+        csrf (auth/issue-csrf-token auth-system user)
+        server (api/start! port {:service-profile "overlay"
+                                 :auth-system auth-system
+                                 :frame-renderer frame-renderer
                                  :video-encoder video-encoder})
         body (json/write-str
               {:telemetryFormat "polar-csv"
@@ -92,7 +108,9 @@
     (try
       (let [response (test-http/send-bytes!
                       :post (str "http://127.0.0.1:" port "/v1/overlay")
-                      body {"Content-Type" "application/json"})]
+                      body {"Content-Type" "application/json"
+                            "Cookie" (str "agg_session=" session)
+                            "X-CSRF-Token" csrf})]
         (is (= 200 (.statusCode response)))
         (is (= "video/quicktime"
                (some-> response .headers (.firstValue "content-type")

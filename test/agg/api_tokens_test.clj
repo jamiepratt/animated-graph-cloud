@@ -51,7 +51,7 @@
                                  :token-service (:service token-system)})]
     (try
       (testing "every cookie-authenticated write route requires a valid CSRF token"
-        (doseq [path ["/v1/preview" "/v1/overlay" "/v1/jobs" "/v1/uploads"
+        (doseq [path ["/v1/preview" "/v1/jobs" "/v1/uploads"
                       "/v1/tokens" "/v1/tokens/missing/revoke"
                       "/v1/jobs/missing/cancel" "/v1/jobs/missing/retry"
                       "/ui/preview" "/ui/jobs" "/ui/tokens"

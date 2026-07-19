@@ -26,6 +26,8 @@
 
 (def ^:private health-body "{\"status\":\"ok\"}")
 
+(def ^:private service-profiles #{"api" "overlay"})
+
 (def ^:private picker-selectable-mime-types
   "video/mp4,video/quicktime,video/webm,video/mpeg,video/ogg,video/x-msvideo,video/x-matroska")
 
@@ -498,6 +500,12 @@
         (throw (errors/raise! "Authentication is required"
                               {:type ::auth/invalid-session}))))))
 
+(defn- authenticated-overlay-user! [exchange auth-system token-service]
+  (when-not auth-system
+    (throw (errors/raise! "Authentication is required"
+                          {:type ::auth/invalid-session})))
+  (authenticated-user! exchange auth-system token-service))
+
 (defn- require-csrf! [^HttpExchange exchange auth-system user]
   (when (= :session (:auth-kind user))
     (auth/verify-csrf!
@@ -875,7 +883,8 @@
 
 (defn- route-handler [{:keys [frame-renderer video-encoder job-service
                               upload-signer auth-system picker-api-key
-                              picker-app-id token-service admin-service log-store]
+                              picker-app-id token-service admin-service log-store
+                              service-profile]
                        :as dependencies}]
   (reify HttpHandler
     (handle [_ exchange]
@@ -886,12 +895,24 @@
         (try
           (observability/trace! ::api-request
                                 (cond
+                                  (and (= "GET" method) (= "/health" path))
+                                  (respond! exchange 200 "application/json; charset=utf-8" health-body)
+
+                                  (and (= "overlay" service-profile)
+                                       (= "POST" method)
+                                       (= "/v1/overlay" path))
+                                  (do (->> (authenticated-overlay-user!
+                                            exchange auth-system token-service)
+                                           (require-csrf! exchange auth-system))
+                                      (overlay! exchange frame-renderer video-encoder))
+
+                                  (= "overlay" service-profile)
+                                  (respond! exchange 404 "application/json; charset=utf-8"
+                                            "{\"error\":\"not_found\"}")
+
                                   (and (= "GET" method) (contains? public-assets path))
                                   (let [[resource content-type] (get public-assets path)]
                                     (respond-asset! exchange resource content-type))
-
-                                  (and (= "GET" method) (= "/health" path))
-                                  (respond! exchange 200 "application/json; charset=utf-8" health-body)
 
                                   (and auth-system (= "GET" method) (= "/" path))
                                   (landing! exchange auth-system token-service admin-service
@@ -1007,11 +1028,6 @@
                                   (let [user (authenticated-user! exchange auth-system token-service)]
                                     (require-csrf! exchange auth-system user)
                                     (preview! exchange frame-renderer video-encoder auth-system user))
-
-                                  (and (= "POST" method) (= "/v1/overlay" path))
-                                  (do (->> (authenticated-user! exchange auth-system token-service)
-                                           (require-csrf! exchange auth-system))
-                                      (overlay! exchange frame-renderer video-encoder))
 
                                   (and auth-system token-service (= "POST" method)
                                        (= "/v1/tokens" path))
@@ -1260,8 +1276,12 @@
    (start! port {}))
   ([port dependencies]
    (let [dependencies (merge {:frame-renderer frames/java2d-frame-renderer
-                              :video-encoder (media/ffmpeg-video-encoder)}
+                              :video-encoder (media/ffmpeg-video-encoder)
+                              :service-profile "api"}
                              dependencies)
+         _ (when-not (contains? service-profiles (:service-profile dependencies))
+             (throw (IllegalArgumentException.
+                     "service-profile must be api or overlay")))
          server (HttpServer/create (InetSocketAddress. (int port)) 0)]
      (.createContext server "/" (route-handler dependencies))
      (.start server)
@@ -1271,11 +1291,12 @@
 
 (defn -main [& _]
   (let [port (parse-long (get (System/getenv) "PORT" "8080"))
+        service-profile (get (System/getenv) "AGG_SERVICE_PROFILE" "api")
         dependencies (if (= "true" (get (System/getenv)
                                         "AGG_JOB_LIFECYCLE_ENABLED"))
                        (gcp/api-system)
                        {})]
-    (start! port dependencies)
+    (start! port (assoc dependencies :service-profile service-profile))
     (observability/emit-event! "api" "server_started"
                                {:message "API server started"
                                 :port port})))

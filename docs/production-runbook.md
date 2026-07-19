@@ -68,11 +68,16 @@ Copy the exact verification and routing records into Cloudflare DNS. Keep the
 Firebase records DNS-only while Firebase provisions and renews TLS; do not
 invent record values from this runbook.
 
-The checked-in `firebase.json` rewrites every route to the `agg-api` Cloud Run
-service in Warsaw. No default Firebase project is checked in: every deployment
-must pass `--project` explicitly. The production workflow invokes the pinned
-`firebase-tools@15.24.0` CLI only after the private Cloud Run candidate passes
-health verification.
+The checked-in `firebase.json` rewrites exact `/v1/overlay` traffic to
+`agg-overlay` before rewriting every other route to `agg-api`. Both services
+run in Warsaw. Firebase Hosting has a hard limit of 60 seconds for a dynamic Cloud
+Run rewrite and returns HTTP 504 after that point. The 3,600-second Cloud Run
+timeout therefore does not make long synchronous overlays available through
+`alphacompose.com`; use durable jobs for work that may exceed 60 seconds. No
+default Firebase project is checked in: every deployment must pass `--project`
+explicitly. The production workflow invokes the pinned
+`firebase-tools@15.24.0` CLI only after both private candidates pass health and
+profile-isolation verification.
 
 ## Production OAuth
 
@@ -157,15 +162,43 @@ The first release containing the Terraform-owned `agg-api` service performs a
 declarative import of the existing service. Before pushing that release, verify
 the production deployer can read and write the GCS state and review a saved
 plan with the live immutable image and origin. The plan must import `agg-api`,
-update only its 8 vCPU, 32 GiB, concurrency-one, 3,600-second envelope, update
-the renderer image when applicable, and contain no replacement or destroy.
-Do not push if state access or the import is unresolved.
+retain its 1 vCPU, 512 MiB, concurrency-80, 300-second envelope, create the new
+`agg-overlay` service with no replacement or destroy, and update the renderer
+image when applicable. Do not push if state access or the import is unresolved.
 
-Each later production workflow deploys the private candidate, then applies a
-saved Terraform plan targeted to the API service and durable renderer before
-public invocation is restored. It passes both the candidate's immutable digest
-and the live `run.app` origin, so runtime reconciliation cannot roll either
-input back. Other production Terraform drift remains a separate reviewed apply.
+The production workflow first ensures that the new Terraform-owned overlay
+service exists privately, then deploys the same immutable candidate to API and
+overlay. It configures and verifies both private candidates before applying a
+saved plan targeted only to API, overlay, and the durable renderer. Public
+invocation is restored afterward, followed by pinned Firebase routes. The plan
+passes the candidate digest and live API `run.app` origin so reconciliation
+cannot roll either input back. Other production Terraform drift remains a
+separate reviewed apply.
+
+## Overlay cost and observability
+
+`agg-api` remains at 1 vCPU and 512 MiB. `agg-overlay` uses 8 vCPU and 32 GiB,
+request-based billing, a minimum instance count of zero, a maximum of two, and
+concurrency of one. Only authenticated overlay rendering and release health
+checks activate the large service envelope. UI, preview, administration, job,
+token, Drive, and internal routes are unavailable on the overlay profile even
+through its direct `run.app` URL.
+
+Inspect overlay request volume, latency, failures, and memory separately using
+the Cloud Run service label. Never log request bodies, telemetry, tokens,
+filenames, subjects, or email addresses:
+
+```sh
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="agg-overlay"' \
+  --project=animated-graph-cloud-prod-jp \
+  --limit=100
+```
+
+Use the same `service_name` label in Cloud Monitoring and billing reports to
+separate the large overlay envelope from ordinary API usage. A 60-second HTTP
+504 at the public domain is a Firebase Hosting boundary, not evidence that the
+Cloud Run service exceeded its own timeout.
 
 ## Secret Manager
 
@@ -200,8 +233,9 @@ Confirm all four enabled versions and IAM bindings without printing payloads.
 
 Every push to protected `main` triggers **Deploy Alpha Compose production**. The
 workflow builds and scans the pushed commit, pushes an immutable digest,
-verifies the private service, publishes Hosting, updates the durable renderer,
-and verifies health/privacy/terms. It neither publishes OAuth nor adds ordinary
+verifies both private services, reconciles API, overlay, and the durable
+renderer through saved targeted Terraform plans, publishes Hosting, and
+verifies health/privacy/terms. It neither publishes OAuth nor adds ordinary
 members; configured administrators are bootstrapped from `AGG_ADMIN_EMAILS`.
 
 Afterward, apply the Scheduler step above, complete
@@ -224,6 +258,11 @@ ingress first (Firebase will receive a forbidden backend response):
 
 ```sh
 gcloud run services remove-iam-policy-binding agg-api \
+  --project=animated-graph-cloud-prod-jp \
+  --region=europe-central2 \
+  --member=allUsers \
+  --role=roles/run.invoker
+gcloud run services remove-iam-policy-binding agg-overlay \
   --project=animated-graph-cloud-prod-jp \
   --region=europe-central2 \
   --member=allUsers \

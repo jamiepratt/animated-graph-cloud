@@ -7,6 +7,7 @@
             [agg.api-auth-test]
             [agg.api-tokens-test]
             [agg.api-preview-test]
+            [agg.api-profile-test]
             [agg.api-ui-test]
             [agg.contracts-test]
             [agg.deploy-workflow-test]
@@ -39,6 +40,7 @@
                                              'agg.api-auth-test
                                              'agg.api-tokens-test
                                              'agg.api-preview-test
+                                             'agg.api-profile-test
                                              'agg.api-ui-test
                                              'agg.auth-gcp-test
                                              'agg.auth-test

@@ -3,8 +3,7 @@
 - Status: Accepted, amended 2026-07-19
 - Original date: 2026-07-16
 - Amendments: add streamable Drive-video compositing and the expanded FFmpeg
-  bundle; bind synchronous overlays to one measured render envelope per API
-  instance
+  bundle; isolate synchronous overlays in one measured service envelope
 
 ## Context
 
@@ -70,15 +69,25 @@ Terraform continues to own a generation-2 Warsaw `agg-renderer` Job with one
 task, no parallelism, zero retries, no GPU, 8 vCPU, 32 GiB memory, and a hard
 3,600-second timeout. Its image input must be an immutable digest.
 
-The synchronous `/v1/overlay` path accepts the same overlay-only presets and
-maximum durations as the durable renderer. Its generation-2 Cloud Run service
-therefore uses the same measured 8 vCPU, 32 GiB, and 3,600-second render
-envelope. Instance concurrency is one, so a second request cannot overlap the
-Java2D frame buffer, FFmpeg process, audio file, and in-memory temporary output
-filesystem of an active render. Cloud Run may create up to two isolated API
-instances; this limits overlap per cgroup without serializing the whole
-service. Terraform owns this service envelope, while deployment supplies the
-same immutable application image used by the durable job.
+The synchronous `/v1/overlay` path runs on a separate `agg-overlay` Cloud Run
+service. It uses the same immutable application image and API service identity,
+but an application profile exposes only health and authenticated exact
+`/v1/overlay` requests. The normal `agg-api` service cannot render overlays,
+including through its direct `run.app` origin.
+
+Terraform keeps `agg-api` at its conventional 1 vCPU, 512 MiB, 300-second,
+concurrency-80 envelope. `agg-overlay` is generation 2 with 8 vCPU, 32 GiB, a
+3,600-second Cloud Run timeout, request-based billing, a minimum of zero and
+maximum of two instances, and concurrency one. A second overlay request cannot
+overlap the Java2D frame buffer, FFmpeg process, audio file, and in-memory
+temporary output filesystem within one cgroup. Firebase Hosting routes only
+the exact public `/v1/overlay` path to this service before its API catch-all.
+
+Firebase Hosting terminates a dynamic Cloud Run rewrite after 60 seconds and
+returns HTTP 504. The 3,600-second Cloud Run timeout is therefore a compute
+envelope, not a claim that maximum-duration synchronous renders work through
+`alphacompose.com`. Callers should use durable jobs for work that may not
+finish inside the Hosting limit.
 
 ## Existing measurements and new acceptance
 
@@ -134,12 +143,11 @@ can use the same telemetry timeline and frame renderer, but its two-input
 FFmpeg orchestration, source streaming, output contracts, audio mix, and
 performance envelope require separate tests and production evidence.
 
-Sizing the API for the maximum synchronous contract is intentionally more
-expensive per active instance than a conventional request service. Scale to
-zero bounds idle cost, and concurrency one is required because increasing only
-memory would still permit overlapping FFmpeg processes to exhaust the cgroup.
-If the synchronous contract is narrowed later, its smaller envelope requires
-separate measured evidence before reducing these limits.
+Only the dedicated overlay route uses the large service envelope; ordinary UI,
+API, administration, job, token, and Drive traffic stays on the small API
+service. Request-based billing and scale to zero bound idle cost. Concurrency
+one is required because increasing only memory would still permit overlapping
+FFmpeg processes to exhaust the cgroup.
 
 Standard container finalization still needs local output space; the completed
 file is delivered through the existing resumable Drive path rather than being

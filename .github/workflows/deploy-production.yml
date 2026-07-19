@@ -18,6 +18,7 @@ env:
   REGION: europe-central2
   REPOSITORY: containers
   SERVICE: agg-api
+  OVERLAY_SERVICE: agg-overlay
   DURABLE_JOB: agg-renderer
   SMOKE_JOB: agg-renderer-smoke
   DEPLOYER_SERVICE_ACCOUNT: agg-github-deployer@animated-graph-cloud-prod-jp.iam.gserviceaccount.com
@@ -122,6 +123,29 @@ jobs:
           test -n "$digest"
           echo "uri=$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/animated-graph-cloud@$digest" >>"$GITHUB_OUTPUT"
 
+      - id: existing-service-url
+        name: Preserve live API origin for Terraform bootstrap
+        run: |
+          service_url="$(gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(status.url)')"
+          test -n "$service_url"
+          echo "url=$service_url" >>"$GITHUB_OUTPUT"
+
+      - name: Ensure Terraform-owned overlay service exists
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+          CLOUD_RUN_SERVICE_URL: ${{ steps.existing-service-url.outputs.url }}
+        run: |
+          terraform -chdir=infra/prod plan -input=false \
+            -var="renderer_image=$IMAGE_DIGEST" \
+            -var="api_service_url=$CLOUD_RUN_SERVICE_URL" \
+            -target=module.application.google_cloud_run_v2_service.overlay \
+            -out="$RUNNER_TEMP/prod-overlay-bootstrap.tfplan"
+          terraform -chdir=infra/prod apply -input=false \
+            "$RUNNER_TEMP/prod-overlay-bootstrap.tfplan"
+
       - name: Deploy private API candidate
         env:
           IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
@@ -132,11 +156,32 @@ jobs:
             --image "$IMAGE_DIGEST" \
             --service-account "$API_SERVICE_ACCOUNT" \
             --port 8080 \
+            --cpu 1 \
+            --memory 512Mi \
+            --concurrency 80 \
+            --timeout 300 \
+            --cpu-boost \
+            --min 0 \
+            --max 2 \
+            --no-allow-unauthenticated \
+            --quiet
+
+      - name: Deploy private overlay candidate
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+        run: |
+          gcloud run deploy "$OVERLAY_SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE_DIGEST" \
+            --service-account "$API_SERVICE_ACCOUNT" \
+            --port 8080 \
             --cpu 8 \
             --memory 32Gi \
             --concurrency 1 \
             --timeout 3600 \
             --execution-environment gen2 \
+            --cpu-boost \
             --min 0 \
             --max 2 \
             --no-allow-unauthenticated \
@@ -173,21 +218,17 @@ jobs:
           test -n "$service_url"
           echo "url=$service_url" >>"$GITHUB_OUTPUT"
 
-      - name: Reconcile production runtime through Terraform
-        env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
-          CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
+      - id: overlay-service-url
+        name: Discover private overlay origin
         run: |
-          terraform -chdir=infra/prod plan -input=false \
-            -var="renderer_image=$IMAGE_DIGEST" \
-            -var="api_service_url=$CLOUD_RUN_SERVICE_URL" \
-            -target=module.application.google_cloud_run_v2_service.api \
-            -target=module.application.google_cloud_run_v2_job.renderer \
-            -out="$RUNNER_TEMP/prod-runtime.tfplan"
-          terraform -chdir=infra/prod apply -input=false \
-            "$RUNNER_TEMP/prod-runtime.tfplan"
+          service_url="$(gcloud run services describe "$OVERLAY_SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(status.url)')"
+          test -n "$service_url"
+          echo "url=$service_url" >>"$GITHUB_OUTPUT"
 
-      - name: Configure multi-admin production runtime
+      - name: Configure API and overlay production runtimes
         env:
           CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
         run: |
@@ -195,12 +236,19 @@ jobs:
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --remove-env-vars "AGG_MONTHLY_BUDGET_CENTS,AGG_RENDER_RESERVATION_CENTS" \
-            --update-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=$DURABLE_JOB,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
+            --update-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGG_SERVICE_PROFILE=api,AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=$DURABLE_JOB,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
+            --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
+            --quiet
+          gcloud run services update "$OVERLAY_SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --remove-env-vars "AGG_MONTHLY_BUDGET_CENTS,AGG_RENDER_RESERVATION_CENTS" \
+            --update-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGG_SERVICE_PROFILE=overlay,AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=$DURABLE_JOB,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
             --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
             --quiet
 
-      - id: health-auth
-        name: Mint origin identity token through WIF
+      - id: api-health-auth
+        name: Mint API origin identity token through WIF
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           project_id: ${{ env.PROJECT_ID }}
@@ -210,24 +258,119 @@ jobs:
           id_token_audience: ${{ steps.service-url.outputs.url }}
           id_token_include_email: true
 
-      - name: Verify private candidate before opening ingress
+      - id: overlay-health-auth
+        name: Mint overlay origin identity token through WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud
+          service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.overlay-service-url.outputs.url }}
+          id_token_include_email: true
+
+      - name: Verify private API and overlay candidates
         env:
           CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
-          CLOUD_RUN_ID_TOKEN: ${{ steps.health-auth.outputs.id_token }}
+          CLOUD_RUN_ID_TOKEN: ${{ steps.api-health-auth.outputs.id_token }}
+          OVERLAY_RUN_SERVICE_URL: ${{ steps.overlay-service-url.outputs.url }}
+          OVERLAY_RUN_ID_TOKEN: ${{ steps.overlay-health-auth.outputs.id_token }}
         run: |
-          health="$(curl --fail --silent --show-error \
+          api_health="$(curl --fail --silent --show-error \
             --retry 5 --retry-all-errors \
             --header "Authorization: Bearer $CLOUD_RUN_ID_TOKEN" \
             "$CLOUD_RUN_SERVICE_URL/health")"
-          test "$health" = '{"status":"ok"}'
+          test "$api_health" = '{"status":"ok"}'
+          overlay_health="$(curl --fail --silent --show-error \
+            --retry 5 --retry-all-errors \
+            --header "Authorization: Bearer $OVERLAY_RUN_ID_TOKEN" \
+            "$OVERLAY_RUN_SERVICE_URL/health")"
+          test "$overlay_health" = '{"status":"ok"}'
+          test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --request POST \
+            --header "Authorization: Bearer $CLOUD_RUN_ID_TOKEN" \
+            --header 'Content-Type: application/json' \
+            --data '{}' \
+            "$CLOUD_RUN_SERVICE_URL/v1/overlay")" = 404
+          test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --header "Authorization: Bearer $OVERLAY_RUN_ID_TOKEN" \
+            "$OVERLAY_RUN_SERVICE_URL/privacy")" = 404
+          test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --request POST \
+            --header "X-Serverless-Authorization: Bearer $OVERLAY_RUN_ID_TOKEN" \
+            --header 'Content-Type: application/json' \
+            --data '{}' \
+            "$OVERLAY_RUN_SERVICE_URL/v1/overlay")" = 401
+
+      - name: Restore deployment credentials after candidate verification
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud
+          service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
+
+      - name: Reconcile production runtimes through Terraform
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+          CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
+        run: |
+          terraform -chdir=infra/prod plan -input=false \
+            -var="renderer_image=$IMAGE_DIGEST" \
+            -var="api_service_url=$CLOUD_RUN_SERVICE_URL" \
+            -target=module.application.google_cloud_run_v2_service.api \
+            -target=module.application.google_cloud_run_v2_service.overlay \
+            -target=module.application.google_cloud_run_v2_job.renderer \
+            -out="$RUNNER_TEMP/prod-runtime.tfplan"
+          terraform -chdir=infra/prod apply -input=false \
+            "$RUNNER_TEMP/prod-runtime.tfplan"
+
+      - name: Verify reconciled private services
+        env:
+          CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
+          CLOUD_RUN_ID_TOKEN: ${{ steps.api-health-auth.outputs.id_token }}
+          OVERLAY_RUN_SERVICE_URL: ${{ steps.overlay-service-url.outputs.url }}
+          OVERLAY_RUN_ID_TOKEN: ${{ steps.overlay-health-auth.outputs.id_token }}
+        run: |
+          test "$(curl --fail --silent --show-error \
+            --retry 5 --retry-all-errors \
+            --header "X-Serverless-Authorization: Bearer $CLOUD_RUN_ID_TOKEN" \
+            "$CLOUD_RUN_SERVICE_URL/health")" = '{"status":"ok"}'
+          test "$(curl --fail --silent --show-error \
+            --retry 5 --retry-all-errors \
+            --header "X-Serverless-Authorization: Bearer $OVERLAY_RUN_ID_TOKEN" \
+            "$OVERLAY_RUN_SERVICE_URL/health")" = '{"status":"ok"}'
+          test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --request POST \
+            --header "X-Serverless-Authorization: Bearer $CLOUD_RUN_ID_TOKEN" \
+            --header 'Content-Type: application/json' \
+            --data '{}' \
+            "$CLOUD_RUN_SERVICE_URL/v1/overlay")" = 404
+          test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --header "X-Serverless-Authorization: Bearer $OVERLAY_RUN_ID_TOKEN" \
+            "$OVERLAY_RUN_SERVICE_URL/privacy")" = 404
+          test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --request POST \
+            --header "X-Serverless-Authorization: Bearer $OVERLAY_RUN_ID_TOKEN" \
+            --header 'Content-Type: application/json' \
+            --data '{}' \
+            "$OVERLAY_RUN_SERVICE_URL/v1/overlay")" = 401
+
+      - name: Restore public invokers
+        run: |
           gcloud run services add-iam-policy-binding "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --member=allUsers \
             --role=roles/run.invoker \
             --quiet
+          gcloud run services add-iam-policy-binding "$OVERLAY_SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --member=allUsers \
+            --role=roles/run.invoker \
+            --quiet
 
-      - name: Publish pinned Firebase Hosting route
+      - name: Publish pinned Firebase Hosting routes
         run: >-
           npx --yes firebase-tools@15.24.0 deploy
           --only hosting
@@ -237,6 +380,11 @@ jobs:
       - name: Verify public release
         run: |
           test "$(curl --fail --silent --show-error --retry 5 --retry-all-errors "$PUBLIC_BASE_URL/health")" = '{"status":"ok"}'
+          test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --data '{}' \
+            "$PUBLIC_BASE_URL/v1/overlay")" = 401
           curl --fail --silent --show-error "$PUBLIC_BASE_URL/privacy" | grep -q 'Privacy policy'
           curl --fail --silent --show-error "$PUBLIC_BASE_URL/terms" | grep -q 'Terms of service'
           contract_headers="$RUNNER_TEMP/openapi.headers"

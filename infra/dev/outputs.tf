@@ -21,3 +21,7 @@ output "renderer_job" {
 output "api_service_url" {
   value = google_cloud_run_v2_service.api.uri
 }
+
+output "overlay_service_url" {
+  value = google_cloud_run_v2_service.overlay.uri
+}

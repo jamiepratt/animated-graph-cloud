@@ -21,3 +21,7 @@ output "renderer_job" {
 output "api_service_url" {
   value = module.application.api_service_url
 }
+
+output "overlay_service_url" {
+  value = module.application.overlay_service_url
+}
