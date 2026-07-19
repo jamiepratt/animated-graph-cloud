@@ -123,6 +123,26 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest authenticated-compose-page-orders-numbered-sections
+  (let [page (ui/page {:user {:email "member@example.com"
+                              :role :member}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})
+        optional-source "<h2>Optional source video</h2>"
+        step-1 "<div class=\"step\">Step 1</div><h2>Choose your data</h2>"
+        step-2 "<div class=\"step\">Step 2</div><h2>Line up the timeline</h2>"
+        step-3 "<div class=\"step\">Step 3</div><h2>Optional overlays</h2>"]
+    (is (every? #(str/includes? page %)
+                [optional-source step-1 step-2 step-3]))
+    (is (< (str/index-of page optional-source)
+           (str/index-of page step-1)
+           (str/index-of page step-2)
+           (str/index-of page step-3)))
+    (is (not (re-find #"<div class=\"step\">Step [^<]+</div><h2>Optional source video</h2>"
+                      page)))))
+
 (deftest htmx-preview-failure-is-a-safe-correlated-html-fragment
   (let [port (available-port)
         {:keys [auth-system owner-cookie owner-csrf]} (fixture)
