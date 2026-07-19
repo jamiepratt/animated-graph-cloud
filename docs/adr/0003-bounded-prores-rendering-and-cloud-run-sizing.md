@@ -35,6 +35,11 @@ enabling the in-tree demuxers, decoders, parsers, and bitstream filters needed
 to accept streamable source media. The PNG encoder and `image2pipe` muxer are
 enabled only for the bounded selected-source midpoint preview.
 
+Because dependency autodetection is disabled, the FFmpeg builder installs the
+builder-only `zlib1g-dev` package and configures `--enable-zlib` explicitly for
+the PNG encoder. Zlib is statically linked into FFmpeg; the final runtime image
+adds no zlib package or copied shared library.
+
 The bundle is built with Ubuntu Jammy's pinned
 `libx264-dev=2:0.163.3060+git5db6aa6-2build1` package. FFmpeg enables GPL and
 `libx264`; the final image carries the matching `libx264.so.163` runtime beside
