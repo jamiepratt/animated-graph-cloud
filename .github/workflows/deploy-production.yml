@@ -75,6 +75,13 @@ jobs:
         with:
           version: ">= 541.0.0"
 
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: 1.15.8
+
+      - name: Verify production Terraform state access
+        run: terraform -chdir=infra/prod init -input=false
+
       - name: Verify production Picker API key
         run: |
           set -euo pipefail
@@ -125,8 +132,11 @@ jobs:
             --image "$IMAGE_DIGEST" \
             --service-account "$API_SERVICE_ACCOUNT" \
             --port 8080 \
-            --cpu 1 \
-            --memory 512Mi \
+            --cpu 8 \
+            --memory 32Gi \
+            --concurrency 1 \
+            --timeout 3600 \
+            --execution-environment gen2 \
             --min 0 \
             --max 2 \
             --no-allow-unauthenticated \
@@ -162,6 +172,20 @@ jobs:
             --format='value(status.url)')"
           test -n "$service_url"
           echo "url=$service_url" >>"$GITHUB_OUTPUT"
+
+      - name: Reconcile production runtime through Terraform
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+          CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
+        run: |
+          terraform -chdir=infra/prod plan -input=false \
+            -var="renderer_image=$IMAGE_DIGEST" \
+            -var="api_service_url=$CLOUD_RUN_SERVICE_URL" \
+            -target=module.application.google_cloud_run_v2_service.api \
+            -target=module.application.google_cloud_run_v2_job.renderer \
+            -out="$RUNNER_TEMP/prod-runtime.tfplan"
+          terraform -chdir=infra/prod apply -input=false \
+            "$RUNNER_TEMP/prod-runtime.tfplan"
 
       - name: Configure multi-admin production runtime
         env:
@@ -210,16 +234,8 @@ jobs:
           --project "$PROJECT_ID"
           --non-interactive
 
-      - name: Promote durable renderer and verify public release
-        env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+      - name: Verify public release
         run: |
-          gcloud run jobs update "$DURABLE_JOB" \
-            --project "$PROJECT_ID" \
-            --region "$REGION" \
-            --image "$IMAGE_DIGEST" \
-            --update-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
-            --quiet
           test "$(curl --fail --silent --show-error --retry 5 --retry-all-errors "$PUBLIC_BASE_URL/health")" = '{"status":"ok"}'
           curl --fail --silent --show-error "$PUBLIC_BASE_URL/privacy" | grep -q 'Privacy policy'
           curl --fail --silent --show-error "$PUBLIC_BASE_URL/terms" | grep -q 'Terms of service'

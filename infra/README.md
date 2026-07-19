@@ -15,9 +15,12 @@ DNS, OAuth publication, and production applies are owner checkpoints.
 Terraform grants the keyless GitHub deployer only the roles needed to push
 images, deploy and invoke Cloud Run resources, read smoke-test logs, and attach
 the dedicated API and renderer runtime identities. The deployment workflow owns
-the smoke service and smoke job. Terraform owns the durable `agg-renderer` Job:
-one Warsaw generation-2 task, 8 vCPU, 32 GiB, zero retries, and a 60-minute
-timeout. `renderer_image` must be an immutable Artifact Registry digest. No GPU
+the smoke job. Terraform owns the durable `agg-renderer` Job and the `agg-api`
+service envelope. Both use generation 2, 8 vCPU, 32 GiB, and a 60-minute
+timeout. The renderer runs one task with zero retries. The API accepts one
+request per instance, scales from zero to at most two instances, and therefore
+cannot overlap synchronous FFmpeg renders within one cgroup. `renderer_image`
+must be an immutable Artifact Registry digest shared by both runtimes. No GPU
 is attached.
 
 The durable render path uses the Warsaw `agg-render` Cloud Tasks queue. Its

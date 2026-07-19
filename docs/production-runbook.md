@@ -153,6 +153,20 @@ workflow's promoted immutable digest. Create a saved plan with both
 audience-bound reconciliation schedule without reverting the renderer. Every
 later Terraform plan must use the currently promoted renderer digest.
 
+The first release containing the Terraform-owned `agg-api` service performs a
+declarative import of the existing service. Before pushing that release, verify
+the production deployer can read and write the GCS state and review a saved
+plan with the live immutable image and origin. The plan must import `agg-api`,
+update only its 8 vCPU, 32 GiB, concurrency-one, 3,600-second envelope, update
+the renderer image when applicable, and contain no replacement or destroy.
+Do not push if state access or the import is unresolved.
+
+Each later production workflow deploys the private candidate, then applies a
+saved Terraform plan targeted to the API service and durable renderer before
+public invocation is restored. It passes both the candidate's immutable digest
+and the live `run.app` origin, so runtime reconciliation cannot roll either
+input back. Other production Terraform drift remains a separate reviewed apply.
+
 ## Secret Manager
 
 Terraform creates containers only. Create independent production values; never

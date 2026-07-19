@@ -17,3 +17,7 @@ output "temporary_bucket" {
 output "renderer_job" {
   value = google_cloud_run_v2_job.renderer.id
 }
+
+output "api_service_url" {
+  value = google_cloud_run_v2_service.api.uri
+}

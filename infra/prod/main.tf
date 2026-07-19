@@ -11,5 +11,6 @@ module "application" {
   operations_alert_email   = "me@jamiep.org"
   environment_name         = "production"
   import_default_firestore = false
+  import_api_service       = true
   enable_firebase_hosting  = true
 }

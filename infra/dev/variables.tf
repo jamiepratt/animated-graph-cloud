@@ -77,6 +77,12 @@ variable "import_default_firestore" {
   default     = true
 }
 
+variable "import_api_service" {
+  description = "Import the pre-existing agg-api Cloud Run service into Terraform state."
+  type        = bool
+  default     = true
+}
+
 variable "enable_firebase_hosting" {
   description = "Enable Firebase APIs and grant the deployer Hosting administration."
   type        = bool

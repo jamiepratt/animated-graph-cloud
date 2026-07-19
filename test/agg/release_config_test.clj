@@ -93,9 +93,10 @@
     (is (str/includes? workflow "test \"$(git rev-parse HEAD)\" = \"$RELEASE_COMMIT\""))
     (is (str/includes? workflow "AGG_OWNER_EMAIL=$OWNER_EMAIL"))
     (is (str/includes? workflow "AGG_ADMIN_EMAILS=$ADMIN_EMAILS"))
-    (is (re-find
-         #"gcloud run jobs update \"\$DURABLE_JOB\"[\s\S]*?--update-env-vars \"GOOGLE_CLOUD_PROJECT=\$PROJECT_ID\""
-         workflow))
+    (is (str/includes? workflow
+                       "-target=module.application.google_cloud_run_v2_job.renderer"))
+    (is (str/includes? (slurp "infra/dev/main.tf")
+                       "name  = \"GOOGLE_CLOUD_PROJECT\""))
     (is (str/includes? workflow "AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL"))
     (is (str/includes? workflow "npx --yes firebase-tools@15.24.0 deploy"))
     (is (str/includes? workflow "--only hosting"))
@@ -108,10 +109,52 @@
     (doseq [reference
             ["actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7"
              "google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3"
-             "google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3"]]
+             "google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3"
+             "hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4"]]
       (testing reference (is (str/includes? workflow reference))))
     (is (not (re-find #"uses: (?:actions/checkout|google-github-actions/(?:auth|setup-gcloud))@v\u005cd+"
                       workflow)))))
+
+(deftest synchronous-overlay-runtime-has-one-proven-render-envelope-per-instance
+  (let [shared (slurp "infra/dev/main.tf")
+        workflow (slurp ".github/workflows/deploy-production.yml")]
+    (is (str/includes? shared
+                       "resource \"google_cloud_run_v2_service\" \"api\""))
+    (is (str/includes? shared "max_instance_request_concurrency = 1"))
+    (is (str/includes? shared "timeout                          = \"3600s\""))
+    (is (re-find #"(?s)resource \"google_cloud_run_v2_service\" \"api\".*?cpu\s*=\s*\"8\".*?memory\s*=\s*\"32Gi\""
+                 shared))
+    (doseq [argument ["--cpu 8" "--memory 32Gi" "--concurrency 1"
+                      "--timeout 3600" "--execution-environment gen2"]]
+      (testing argument
+        (is (str/includes? workflow argument))))))
+
+(deftest production-release-reconciles-runtime-through-terraform-before-promotion
+  (let [workflow (slurp ".github/workflows/deploy-production.yml")
+        terraform-init (str/index-of workflow
+                                     "terraform -chdir=infra/prod init")
+        private-deploy (str/index-of workflow "Deploy private API candidate")
+        terraform-apply (str/index-of workflow
+                                      "terraform -chdir=infra/prod apply")
+        public-ingress (str/index-of workflow "--member=allUsers")]
+    (is (str/includes? workflow
+                       "terraform -chdir=infra/prod init -input=false"))
+    (is (str/includes? workflow
+                       "-var=\"renderer_image=$IMAGE_DIGEST\""))
+    (is (str/includes? workflow
+                       "-var=\"api_service_url=$CLOUD_RUN_SERVICE_URL\""))
+    (is (str/includes? workflow
+                       "-target=module.application.google_cloud_run_v2_service.api"))
+    (is (str/includes? workflow
+                       "-target=module.application.google_cloud_run_v2_job.renderer"))
+    (is (number? terraform-apply))
+    (is (number? public-ingress))
+    (when (and (number? terraform-init) (number? private-deploy))
+      (is (< terraform-init private-deploy)))
+    (when (and (number? terraform-apply) (number? public-ingress))
+      (is (< terraform-apply public-ingress)))
+    (is (not (str/includes? workflow
+                            "gcloud run jobs update \"$DURABLE_JOB\"")))))
 
 (deftest production-release-validates-the-picker-key-before-deploying
   (let [workflow (slurp ".github/workflows/deploy-production.yml")

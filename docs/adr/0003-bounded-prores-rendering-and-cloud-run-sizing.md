@@ -1,8 +1,10 @@
 # 0003: Use bounded multi-input FFmpeg rendering on a sized Cloud Run Job
 
-- Status: Accepted, amended 2026-07-18
+- Status: Accepted, amended 2026-07-19
 - Original date: 2026-07-16
-- Amendment: add streamable Drive-video compositing and the expanded FFmpeg bundle
+- Amendments: add streamable Drive-video compositing and the expanded FFmpeg
+  bundle; bind synchronous overlays to one measured render envelope per API
+  instance
 
 ## Context
 
@@ -68,6 +70,16 @@ Terraform continues to own a generation-2 Warsaw `agg-renderer` Job with one
 task, no parallelism, zero retries, no GPU, 8 vCPU, 32 GiB memory, and a hard
 3,600-second timeout. Its image input must be an immutable digest.
 
+The synchronous `/v1/overlay` path accepts the same overlay-only presets and
+maximum durations as the durable renderer. Its generation-2 Cloud Run service
+therefore uses the same measured 8 vCPU, 32 GiB, and 3,600-second render
+envelope. Instance concurrency is one, so a second request cannot overlap the
+Java2D frame buffer, FFmpeg process, audio file, and in-memory temporary output
+filesystem of an active render. Cloud Run may create up to two isolated API
+instances; this limits overlap per cgroup without serializing the whole
+service. Terraform owns this service envelope, while deployment supplies the
+same immutable application image used by the durable job.
+
 ## Existing measurements and new acceptance
 
 The measurements below are historical baseline evidence for the original
@@ -121,6 +133,13 @@ The original transparent-overlay contract remains stable. The compositing path
 can use the same telemetry timeline and frame renderer, but its two-input
 FFmpeg orchestration, source streaming, output contracts, audio mix, and
 performance envelope require separate tests and production evidence.
+
+Sizing the API for the maximum synchronous contract is intentionally more
+expensive per active instance than a conventional request service. Scale to
+zero bounds idle cost, and concurrency one is required because increasing only
+memory would still permit overlapping FFmpeg processes to exhaust the cgroup.
+If the synchronous contract is narrowed later, its smaller envelope requires
+separate measured evidence before reducing these limits.
 
 Standard container finalization still needs local output space; the completed
 file is delivered through the existing resumable Drive path rather than being
