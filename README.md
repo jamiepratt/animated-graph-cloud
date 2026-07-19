@@ -274,12 +274,14 @@ replace or revoke the owner. Drive is connected separately at
 `GET /v1/auth/drive/start` with only `drive.file`; the callback
 encrypts the refresh token with the Warsaw KMS key and creates or reuses the
 user's `Alpha Compose` folder. `GET /v1/drive/picker` opens a no-store
-Google Picker bridge for the same restricted grant. The authenticated `/`
-entrypoint opens that bridge in a popup. The Drive view shows selectable video
-files and the Picker's Upload tab provides a supported path for adding a
-source video under `drive.file`; the bridge does not broaden the server grant
-or silently download selected files. If the Drive view is empty, the bridge
-offers a privacy-safe diagnostic report that records only bounded status
+Google Picker compatibility page for the same restricted grant. The
+authenticated `/` entrypoint initializes the Picker in the page, keeps it
+hidden until “Pick one video” is pressed, and shows the selected source after
+the Picker closes. The Drive view shows selectable video files and the Picker's
+Upload tab provides a supported path for adding a source video under
+`drive.file`; the page does not broaden the server grant, open a wrapper
+window, or silently download selected files. If the Drive view is empty, the
+Picker offers a privacy-safe diagnostic report that records only bounded status
 categories (token refresh, account binding, MIME selection, and Drive
 indexing probe), never tokens, account values, or filenames.
 
@@ -293,8 +295,8 @@ same file rather than creating duplicates. Polling success includes
 Authenticated users get a server-rendered HTMX workflow at `/`. Paste the render
 request JSON once, then preview or submit it. Returned HTML fragments poll the
 owned job and expose cancel or retry only when the current state permits it.
-The same page creates, lists, and revokes personal API tokens. The only custom
-browser JavaScript is the same-origin Google Picker bridge.
+The same page creates, lists, and revokes personal API tokens. The Picker is
+initialized and controlled by same-origin browser JavaScript in the main page.
 
 The owner and admin pages list, add, and revoke members. The equivalent JSON
 routes are `GET /v1/admin/members`, `POST /v1/admin/members`, and

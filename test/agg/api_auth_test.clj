@@ -446,10 +446,29 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
-(deftest browser-entrypoint-receives-picker-selections
+(deftest browser-entrypoint-launches-picker-in-place
   (let [port (available-port)
         {:keys [system session]} (auth-fixture)
-        server (api/start! port {:auth-system system})]
+        grants (reify auth/GrantStore
+                 (load-grant [_ _]
+                   {:refresh-token-ciphertext "kms:refresh"
+                    :folder-id "folder-1"})
+                 (save-grant! [_ _ grant] grant)
+                 (revoke-grant! [_ _]))
+        cipher (reify auth/TokenCipher
+                 (encrypt-token! [_ value] (str "kms:" value))
+                 (decrypt-token! [_ value] (subs value 4)))
+        token-client (reify auth/DriveTokenClient
+                       (refresh-drive-token! [_ token]
+                         (is (= "refresh" token))
+                         {:access-token "picker-access-token"}))
+        auth-system (assoc system
+                           :grant-store grants
+                           :cipher cipher
+                           :drive-token-client token-client)
+        server (api/start! port {:auth-system auth-system
+                                 :picker-api-key "picker-key"
+                                 :picker-app-id "891643499444"})]
     (try
       (let [anonymous (get! port "/" {})
             authenticated (get! port "/"
@@ -458,9 +477,18 @@
         (is (re-find #"/v1/auth/login/start" (.body anonymous)))
         (is (= 200 (.statusCode authenticated)))
         (is (re-find #"/v1/auth/drive/start" (.body authenticated)))
-        (is (re-find #"window\.open\('/v1/drive/picker'" (.body authenticated)))
-        (is (re-find #"addEventListener\('message'" (.body authenticated)))
-        (is (re-find #"id=\"picker-selection\"" (.body authenticated))))
+        (is (re-find #"gapi\.load\('picker'" (.body authenticated)))
+        (is (re-find #"google\.picker\.PickerBuilder" (.body authenticated)))
+        (is (re-find #"setOAuthToken" (.body authenticated)))
+        (is (re-find #"build\(\)\.setVisible\(false\)" (.body authenticated)))
+        (is (re-find #"picker\.setVisible\(true\)" (.body authenticated)))
+        (is (re-find #"google\.picker\.Action\.CANCEL" (.body authenticated)))
+        (is (re-find #"setSelectableMimeTypes" (.body authenticated)))
+        (is (re-find #"id=\"picker-selection\"" (.body authenticated)))
+        (is (re-find #"source-video-file-id.*file\.id" (.body authenticated)))
+        (is (not (re-find #"window\.open\('/v1/drive/picker'" (.body authenticated))))
+        (is (not (re-find #"addEventListener\('message'" (.body authenticated))))
+        (is (not (re-find #"Select Drive input" (.body authenticated)))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

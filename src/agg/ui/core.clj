@@ -1,5 +1,6 @@
 (ns agg.ui.core
   (:require [agg.admin.core :as admin]
+            [clojure.data.json :as json]
             [clojure.string :as str])
   (:import (java.net URLEncoder)
            (java.nio.charset StandardCharsets)))
@@ -82,6 +83,57 @@
 
 (defn- selected-attribute [value selected]
   (when (= value selected) " selected"))
+
+(defn- json-script [value]
+  (-> (json/write-str value)
+      (str/replace "<" "\\u003c")
+      (str/replace ">" "\\u003e")
+      (str/replace "&" "\\u0026")))
+
+(defn- picker-script [picker-config]
+  (let [config (when picker-config
+                 {"accessToken" (:access-token picker-config)
+                  "apiKey" (:api-key picker-config)
+                  "appId" (:app-id picker-config)})]
+    (str
+     "(function(){"
+     "const pickerConfig=" (json-script config) ";"
+     "const selection=document.getElementById('picker-selection');"
+     "function reportDiagnostic(phase,view='unknown',listState='unknown'){"
+     "fetch('/v1/drive/picker/diagnostic',{method:'POST',credentials:'same-origin',keepalive:true,"
+     "headers:{'Content-Type':'application/json','X-CSRF-Token':"
+     (json-script (:csrf picker-config)) "},"
+     "body:JSON.stringify({phase,view,listState})}).catch(()=>{});}"
+     "function pickerCallback(data){"
+     "if(data.action===google.picker.Action.LOADED){reportDiagnostic('loaded','drive','unknown');}"
+     "if(data.action===google.picker.Action.PICKED){"
+     "const d=data.docs&&data.docs[0];"
+     "const file=d?{id:d.id,name:d.name,mimeType:d.mimeType}:null;"
+     "if(!file||typeof file.id!=='string'||!file.id||typeof file.mimeType!=='string'||!file.mimeType.startsWith('video/')){"
+     "selection.textContent='Choose a video file';reportDiagnostic('error','drive','unknown');return;}"
+     "document.getElementById('source-video-file-id').value=file.id;"
+     "selection.textContent=file.name||'Selected video';"
+     "reportDiagnostic('selected','drive','selected');picker.setVisible(false);syncRequest(false);}"
+     "if(data.action===google.picker.Action.CANCEL){picker.setVisible(false);reportDiagnostic('cancelled','drive','unknown');}}"
+     "let picker=null,pickerRequested=false;"
+     "function showPicker(){"
+     "if(!picker){pickerRequested=true;selection.textContent='Loading Google Drive Picker…';return;}"
+     "pickerRequested=false;picker.setVisible(true);reportDiagnostic('opened','drive','unknown');}"
+     "function openPicker(){"
+     "if(!pickerConfig){selection.textContent='Connect Drive first';return;}"
+     "showPicker();}"
+     "if(pickerConfig){gapi.load('picker',()=>{"
+     "const view=new google.picker.DocsView().setIncludeFolders(false)"
+     ".setSelectFolderEnabled(false);"
+     "const upload=new google.picker.DocsUploadView().setIncludeFolders(false);"
+     "picker=new google.picker.PickerBuilder().addView(view).addView(upload)"
+     ".setSelectableMimeTypes('video/mp4,video/quicktime,video/webm,video/mpeg,video/ogg,video/x-msvideo,video/x-matroska')"
+     ".setOAuthToken(pickerConfig.accessToken).setDeveloperKey(pickerConfig.apiKey)"
+     ".setAppId(pickerConfig.appId).setOrigin(location.origin)"
+     ".setCallback(pickerCallback).build().setVisible(false);"
+     "if(pickerRequested)showPicker();});}"
+     "document.getElementById('open-picker').addEventListener('click',openPicker);"
+     "})();")))
 
 (defn- log-value [value]
   (if (vector? value)
@@ -194,7 +246,7 @@
          (str "<dt>Source line</dt><dd>" (escape-html line) "</dd>"))
        "</dl></article>"))
 
-(defn page [{:keys [user csrf tokens members logs-enabled?]}]
+(defn page [{:keys [user csrf picker-config tokens members logs-enabled?]}]
   (let [csrf-headers (escape-html
                       (str "{\"X-CSRF-Token\":\"" csrf "\"}"))]
     (str
@@ -205,6 +257,8 @@
      "<script src=\"https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js\" "
      "integrity=\"sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V\" "
      "crossorigin=\"anonymous\"></script>"
+     (when picker-config
+       "<script src=\"https://apis.google.com/js/api.js\"></script>")
      "<style>"
      ":root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;color:#152238;background:#f5f7fb;line-height:1.45}"
      "*{box-sizing:border-box}body{margin:0}.shell{max-width:78rem;margin:0 auto;padding:2rem 1.25rem 4rem}"
@@ -286,8 +340,8 @@
      "function applyRequest(request){if(!request||typeof request!=='object'||Array.isArray(request))throw new Error('JSON must be an object');['telemetryFormat','preset','outputFormat','fitMode','audioMode'].forEach(key=>{if(request[key]!==undefined&&byId(key.replace(/[A-Z]/g,letter=>'-'+letter.toLowerCase())))byId(key.replace(/[A-Z]/g,letter=>'-'+letter.toLowerCase())).value=request[key];});byId('source-video-file-id').value=request.sourceVideo?.fileId||'';byId('timezone').value='local';[['telemetrySyncAt','telemetry-sync-at'],['cameraSyncAt','camera-sync-at'],['sectionStartAt','section-start-at'],['sectionEndAt','section-end-at']].forEach(([key,id])=>{byId(id).value=request[key]?isoToLocal(request[key]):'';});clearFileBackedValue('telemetry');byId('telemetry').value=request.telemetry||'';byId('telemetry-file').value='';show(byId('telemetry-status'),request.telemetry?'Loaded from JSON.':'');const hasSpo2=!!request.spo2;byId('spo2-enabled').checked=hasSpo2;refreshOptional('spo2-enabled','spo2-fields');clearFileBackedValue('spo2-telemetry');byId('spo2-telemetry').value=hasSpo2?(request.spo2.telemetry||''):'';show(byId('spo2-status'),hasSpo2?'Loaded from JSON.':'');const hasTimer=!!request.timer;byId('timer-enabled').checked=hasTimer;refreshOptional('timer-enabled','timer-fields');byId('timer-start-at').value=hasTimer?isoToLocal(request.timer.startAt):'';byId('timer-end-at').value=hasTimer?isoToLocal(request.timer.endAt):'';const hasWatermark=!!request.watermark;byId('watermark-enabled').checked=hasWatermark;refreshOptional('watermark-enabled','watermark-fields');byId('watermark-file').value='';clearFileBackedValue('watermark-content');byId('watermark-content').value=hasWatermark?(request.watermark.contentBase64||''):'';show(byId('watermark-status'),hasWatermark?'Loaded from JSON.':'');updateTelemetryAccept();writeRequest(request);show(jsonStatus,'JSON applied to the form.','success');show(status,'Ready to preview or submit.','success');}"
      "byId('apply-json').addEventListener('click',()=>{try{const request=JSON.parse(raw.value),errors=validateRequest(request);if(errors.length){show(jsonStatus,errors.map((error,index)=>(index+1)+'. '+error).join('\\n'),'error');return;}applyRequest(request);}catch(error){show(jsonStatus,error.message,'error');}});byId('copy-json').addEventListener('click',()=>{const text=syncRequest(false)||raw.value;navigator.clipboard?navigator.clipboard.writeText(text).then(()=>show(jsonStatus,'Generated JSON copied.','success')):show(jsonStatus,'Copy is unavailable in this browser.');});"
      "form.addEventListener('input',event=>{if(event.target.id==='raw-json'||event.target.type==='file')return;clearFileBackedValue(event.target.id);syncRequest(false);});document.body.addEventListener('htmx:configRequest',event=>{if(!form.contains(event.target))return;const text=syncRequest(true);if(!text){event.preventDefault();return;}event.detail.parameters.request=text;});"
-     "const selection=byId('picker-selection');byId('open-picker').addEventListener('click',()=>{window.open('/v1/drive/picker','agg-picker','popup,width=960,height=720');});window.addEventListener('message',event=>{if(event.origin!==location.origin||event.data?.type!=='agg-picker')return;const file=event.data.file;byId('source-video-file-id').value=file?.id||'';selection.textContent=file?.name||'None';syncRequest(false);});"
-     "})();</script></div></body></html>")))
+     (picker-script picker-config)
+     "</script></div></body></html>")))
 
 (defn- public-page [title body]
   (str "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"

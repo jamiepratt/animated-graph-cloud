@@ -203,6 +203,11 @@
         (is (str/includes? (.body landing) "function contentValue(id)"))
         (is (str/includes? (.body landing) "event.target.type==='file'"))
         (is (str/includes? (.body landing) "setFileBackedValue(targetId"))
+        (is (str/includes? (.body landing) "function openPicker()"))
+        (is (not (str/includes? (.body landing)
+                                "window.open('/v1/drive/picker'")))
+        (is (not (str/includes? (.body landing)
+                                "addEventListener('message'")))
         (is (str/includes? (.body landing) "hx-post=\"/ui/tokens\""))
         (is (str/includes? (.body landing) "X-CSRF-Token")))
       (testing "preview is returned as an HTML fragment"

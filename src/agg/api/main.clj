@@ -597,14 +597,30 @@
     (admin/list-members admin-service user)
     user))
 
+(defn- landing-picker-config [auth-system user picker-api-key picker-app-id csrf]
+  (when (and user (not-empty picker-api-key) (not-empty picker-app-id))
+    (try
+      (let [{:keys [access-token]} (auth/drive-access! auth-system
+                                                       (:subject user))]
+        {:access-token access-token
+         :api-key picker-api-key
+         :app-id picker-app-id
+         :csrf csrf})
+      (catch Throwable _
+        nil))))
+
 (defn- landing! [^HttpExchange exchange auth-system token-service admin-service
-                 log-store]
+                 log-store picker-api-key picker-app-id]
   (let [user (when-let [session (session-token exchange auth-system)]
                (auth/session-user auth-system session))
+        csrf (when user (auth/issue-csrf-token auth-system user))
+        picker-config (landing-picker-config auth-system user picker-api-key
+                                             picker-app-id csrf)
         body
         (if user
           (ui/page {:user user
-                    :csrf (auth/issue-csrf-token auth-system user)
+                    :csrf csrf
+                    :picker-config picker-config
                     :tokens (when token-service
                               (tokens/list-tokens token-service
                                                   (:subject user)))
@@ -617,7 +633,9 @@
       (.set "Cache-Control" "no-store")
       (.set "Referrer-Policy" "no-referrer")
       (.set "Content-Security-Policy"
-            "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"))
+            (if picker-config
+              "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://apis.google.com https://www.gstatic.com; frame-src https://docs.google.com https://accounts.google.com; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://www.googleapis.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+              "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")))
     (respond! exchange 200 "text/html; charset=utf-8" body)))
 
 (defn- picker! [^HttpExchange exchange auth-system picker-api-key picker-app-id]
@@ -856,7 +874,8 @@
                                   (respond! exchange 200 "application/json; charset=utf-8" health-body)
 
                                   (and auth-system (= "GET" method) (= "/" path))
-                                  (landing! exchange auth-system token-service admin-service log-store)
+                                  (landing! exchange auth-system token-service admin-service
+                                            log-store picker-api-key picker-app-id)
 
                                   (and (= "GET" method) (= "/privacy" path))
                                   (respond! exchange 200 "text/html; charset=utf-8" ui/privacy-page)
