@@ -13,7 +13,7 @@ module "application" {
   import_default_firestore     = false
   import_api_service           = false
   enable_firebase_hosting      = true
-  enable_observability_log_ttl = false
+  enable_observability_log_ttl = true
   enable_terraform_deployments = true
   terraform_state_bucket       = "animated-graph-cloud-prod-jp-tfstate"
 }
