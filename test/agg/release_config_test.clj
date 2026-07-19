@@ -170,6 +170,14 @@
     (is (not (re-find #"to\s*=\s*module\.application\.google_cloud_run_v2_service\.overlay"
                       production)))))
 
+(deftest container-smoke-exercises-api-and-overlay-profiles-separately
+  (let [smoke (slurp "test/container_smoke.sh")]
+    (is (str/includes? smoke "api_container_id="))
+    (is (str/includes? smoke "overlay_container_id="))
+    (is (str/includes? smoke "-e AGG_SERVICE_PROFILE=overlay"))
+    (is (str/includes? smoke "$api_host_port/v1/preview"))
+    (is (str/includes? smoke "$overlay_host_port/v1/overlay"))))
+
 (deftest production-release-verifies-private-services-before-targeted-reconciliation-and-promotion
   (let [workflow (slurp ".github/workflows/deploy-production.yml")
         terraform-init (str/index-of workflow

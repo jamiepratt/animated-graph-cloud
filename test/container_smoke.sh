@@ -51,19 +51,21 @@ second_polar_media="$(mktemp)"
 complete_1080_media="$(mktemp)"
 complete_27_media="$(mktemp)"
 garmin_preview="$(mktemp)"
-container_id="$(docker run --rm -d -p 127.0.0.1::8080 "$image")"
+api_container_id="$(docker run --rm -d -p 127.0.0.1::8080 "$image")"
+overlay_container_id="$(docker run --rm -d -p 127.0.0.1::8080 \
+  -e AGG_SERVICE_PROFILE=overlay "$image")"
 cleanup() {
-  docker rm -f "$container_id" >/dev/null 2>&1 || true
+  docker rm -f "$api_container_id" "$overlay_container_id" >/dev/null 2>&1 || true
   rm -f "$health_file" "$first_polar_media" "$second_polar_media" \
     "$complete_1080_media" "$complete_27_media" "$garmin_preview"
 }
 trap cleanup EXIT INT TERM
 
-host_port="$(docker port "$container_id" 8080/tcp | sed -n 's/.*://p' | tail -1)"
+api_host_port="$(docker port "$api_container_id" 8080/tcp | sed -n 's/.*://p' | tail -1)"
 attempt=0
 while [ "$attempt" -lt 50 ]; do
   if curl --fail --silent --show-error \
-    "http://127.0.0.1:$host_port/health" >"$health_file" 2>/dev/null; then
+    "http://127.0.0.1:$api_host_port/health" >"$health_file" 2>/dev/null; then
     break
   fi
   attempt=$((attempt + 1))
@@ -72,15 +74,15 @@ done
 
 health_body="$(cat "$health_file")"
 if [ "$health_body" != "$expected_health" ]; then
-  echo "unexpected health response: $health_body" >&2
-  docker logs "$container_id" >&2
+  echo "unexpected API health response: $health_body" >&2
+  docker logs "$api_container_id" >&2
   exit 1
 fi
 
 curl --fail --silent --show-error \
   --header 'Content-Type: application/json' \
   --data-binary "@$root/test/fixtures/garmin/request.json" \
-  "http://127.0.0.1:$host_port/v1/preview" \
+  "http://127.0.0.1:$api_host_port/v1/preview" \
   --output "$garmin_preview"
 garmin_signature="$(od -An -t x1 -N 8 "$garmin_preview" | tr -d ' \n')"
 if [ "$garmin_signature" != '89504e470d0a1a0a' ]; then
@@ -88,11 +90,29 @@ if [ "$garmin_signature" != '89504e470d0a1a0a' ]; then
   exit 1
 fi
 
+overlay_host_port="$(docker port "$overlay_container_id" 8080/tcp | sed -n 's/.*://p' | tail -1)"
+attempt=0
+while [ "$attempt" -lt 50 ]; do
+  if curl --fail --silent --show-error \
+    "http://127.0.0.1:$overlay_host_port/health" >"$health_file" 2>/dev/null; then
+    break
+  fi
+  attempt=$((attempt + 1))
+  sleep 0.2
+done
+
+health_body="$(cat "$health_file")"
+if [ "$health_body" != "$expected_health" ]; then
+  echo "unexpected overlay health response: $health_body" >&2
+  docker logs "$overlay_container_id" >&2
+  exit 1
+fi
+
 for output in "$first_polar_media" "$second_polar_media"; do
   curl --fail --silent --show-error \
     --header 'Content-Type: application/json' \
     --data-binary "@$root/test/fixtures/polar/request.json" \
-    "http://127.0.0.1:$host_port/v1/overlay" \
+    "http://127.0.0.1:$overlay_host_port/v1/overlay" \
     --output "$output"
   test -s "$output"
 done
@@ -121,14 +141,14 @@ for preset in 1080p25 2.7k25; do
   curl --fail --silent --show-error \
     --header 'Content-Type: application/json' \
     --data-binary "@$root/test/fixtures/complete/$preset.json" \
-    "http://127.0.0.1:$host_port/v1/overlay" \
+    "http://127.0.0.1:$overlay_host_port/v1/overlay" \
     --output "$complete_media"
   test -s "$complete_media"
 
   chmod 0644 "$complete_media"
   container_media="/tmp/complete-$preset.mov"
-  docker cp "$complete_media" "$container_id:$container_media"
-  probe="$(docker exec "$container_id" ffprobe \
+  docker cp "$complete_media" "$overlay_container_id:$container_media"
+  probe="$(docker exec "$overlay_container_id" ffprobe \
     -v error \
     -show_entries \
     'format=format_name,duration:stream=codec_type,codec_name,profile,codec_tag_string,width,height,pix_fmt,r_frame_rate,sample_rate,channels' \
