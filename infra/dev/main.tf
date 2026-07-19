@@ -169,6 +169,113 @@ resource "google_service_account" "deployer" {
   display_name = "Animated Graph Cloud GitHub deployer"
 }
 
+resource "google_cloud_run_v2_service" "overlay" {
+  project             = var.project_id
+  location            = var.region
+  name                = "agg-overlay"
+  deletion_protection = var.environment_name == "production"
+  ingress             = "INGRESS_TRAFFIC_ALL"
+
+  scaling {
+    min_instance_count = 0
+    max_instance_count = 2
+  }
+
+  template {
+    execution_environment            = "EXECUTION_ENVIRONMENT_GEN2"
+    max_instance_request_concurrency = 1
+    service_account                  = google_service_account.api.email
+    timeout                          = "3600s"
+
+    containers {
+      image = var.renderer_image
+
+      env {
+        name  = "AGG_SERVICE_PROFILE"
+        value = "overlay"
+      }
+
+      ports {
+        name           = "http1"
+        container_port = 8080
+      }
+
+      resources {
+        limits = {
+          cpu    = "8"
+          memory = "32Gi"
+        }
+        cpu_idle          = true
+        startup_cpu_boost = true
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      client,
+      client_version,
+      template[0].containers[0].env,
+    ]
+  }
+
+  depends_on = [google_project_service.required["run.googleapis.com"]]
+}
+
+resource "google_cloud_run_v2_service" "api" {
+  project             = var.project_id
+  location            = var.region
+  name                = "agg-api"
+  deletion_protection = var.environment_name == "production"
+  ingress             = "INGRESS_TRAFFIC_ALL"
+
+  scaling {
+    min_instance_count = 0
+    max_instance_count = 2
+  }
+
+  template {
+    max_instance_request_concurrency = 80
+    service_account                  = google_service_account.api.email
+    timeout                          = "300s"
+
+    containers {
+      image = var.renderer_image
+
+      ports {
+        name           = "http1"
+        container_port = 8080
+      }
+
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "512Mi"
+        }
+        cpu_idle          = true
+        startup_cpu_boost = true
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      client,
+      client_version,
+      template[0].containers[0].env,
+    ]
+  }
+
+  depends_on = [google_project_service.required["run.googleapis.com"]]
+}
+
+import {
+  for_each = var.import_api_service ? toset([var.project_id]) : toset([])
+
+  to = google_cloud_run_v2_service.api
+  id = "projects/${each.value}/locations/${var.region}/services/agg-api"
+}
+
 resource "google_cloud_run_v2_job" "renderer" {
   project             = var.project_id
   location            = var.region
@@ -227,6 +334,10 @@ resource "google_cloud_run_v2_job" "renderer" {
         }
       }
     }
+  }
+
+  lifecycle {
+    ignore_changes = [client, client_version]
   }
 
   depends_on = [google_project_service.required["run.googleapis.com"]]

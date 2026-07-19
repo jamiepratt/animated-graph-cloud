@@ -6,6 +6,14 @@
 (defn- read-json [path]
   (json/read-str (slurp path) :key-fn keyword))
 
+(defn- config-section [text start-marker end-marker]
+  (let [start (str/index-of text start-marker)
+        end (some->> start
+                     (+ (count start-marker))
+                     (str/index-of text end-marker))]
+    (when (and start end)
+      (subs text start end))))
+
 (deftest production-infrastructure-is-isolated-and-main-only
   (let [production (slurp "infra/prod/main.tf")
         backend (slurp "infra/prod/versions.tf")
@@ -64,7 +72,11 @@
   (let [{:keys [hosting]} (read-json "firebase.json")
         production (slurp "infra/prod/main.tf")]
     (is (not (.exists (java.io.File. ".firebaserc"))))
-    (is (= [{:source "**"
+    (is (= [{:source "/v1/overlay"
+             :run {:serviceId "agg-overlay"
+                   :region "europe-central2"
+                   :pinTag true}}
+            {:source "**"
              :run {:serviceId "agg-api"
                    :region "europe-central2"
                    :pinTag true}}]
@@ -93,9 +105,10 @@
     (is (str/includes? workflow "test \"$(git rev-parse HEAD)\" = \"$RELEASE_COMMIT\""))
     (is (str/includes? workflow "AGG_OWNER_EMAIL=$OWNER_EMAIL"))
     (is (str/includes? workflow "AGG_ADMIN_EMAILS=$ADMIN_EMAILS"))
-    (is (re-find
-         #"gcloud run jobs update \"\$DURABLE_JOB\"[\s\S]*?--update-env-vars \"GOOGLE_CLOUD_PROJECT=\$PROJECT_ID\""
-         workflow))
+    (is (str/includes? workflow
+                       "-target=module.application.google_cloud_run_v2_job.renderer"))
+    (is (str/includes? (slurp "infra/dev/main.tf")
+                       "name  = \"GOOGLE_CLOUD_PROJECT\""))
     (is (str/includes? workflow "AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL"))
     (is (str/includes? workflow "npx --yes firebase-tools@15.24.0 deploy"))
     (is (str/includes? workflow "--only hosting"))
@@ -108,10 +121,130 @@
     (doseq [reference
             ["actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7"
              "google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3"
-             "google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3"]]
+             "google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3"
+             "hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4"]]
       (testing reference (is (str/includes? workflow reference))))
     (is (not (re-find #"uses: (?:actions/checkout|google-github-actions/(?:auth|setup-gcloud))@v\u005cd+"
                       workflow)))))
+
+(deftest api-and-overlay-have-distinct-terraform-owned-service-envelopes
+  (let [shared (slurp "infra/dev/main.tf")
+        production (slurp "infra/prod/main.tf")
+        overlay (or (config-section
+                     shared
+                     "resource \"google_cloud_run_v2_service\" \"overlay\""
+                     "resource \"google_cloud_run_v2_service\" \"api\"")
+                    "")
+        api (or (config-section
+                 shared
+                 "resource \"google_cloud_run_v2_service\" \"api\""
+                 "resource \"google_cloud_run_v2_job\" \"renderer\"")
+                "")]
+    (doseq [service [api overlay]]
+      (is (str/includes? service "min_instance_count = 0"))
+      (is (str/includes? service "image = var.renderer_image"))
+      (is (str/includes? service
+                         "service_account                  = google_service_account.api.email"))
+      (is (str/includes? service "cpu_idle          = true"))
+      (is (str/includes? service "startup_cpu_boost = true")))
+    (is (str/includes? api "name                = \"agg-api\""))
+    (is (not (str/includes? api "EXECUTION_ENVIRONMENT_GEN2")))
+    (is (str/includes? api "max_instance_count = 2"))
+    (is (str/includes? api "max_instance_request_concurrency = 80"))
+    (is (str/includes? api "timeout                          = \"300s\""))
+    (is (re-find #"cpu\s*=\s*\"1\"" api))
+    (is (re-find #"memory\s*=\s*\"512Mi\"" api))
+    (is (str/includes? overlay "name                = \"agg-overlay\""))
+    (is (str/includes? overlay
+                       "execution_environment            = \"EXECUTION_ENVIRONMENT_GEN2\""))
+    (is (str/includes? overlay "max_instance_count = 2"))
+    (is (str/includes? overlay "max_instance_request_concurrency = 1"))
+    (is (str/includes? overlay "timeout                          = \"3600s\""))
+    (is (str/includes? overlay "name  = \"AGG_SERVICE_PROFILE\""))
+    (is (str/includes? overlay "value = \"overlay\""))
+    (is (re-find #"cpu\s*=\s*\"8\"" overlay))
+    (is (re-find #"memory\s*=\s*\"32Gi\"" overlay))
+    (is (re-find #"(?s)import\s*\{.*?to\s*=\s*module\.application\.google_cloud_run_v2_service\.api"
+                 production))
+    (is (re-find #"import_api_service\s*=\s*false" production))
+    (is (not (re-find #"to\s*=\s*module\.application\.google_cloud_run_v2_service\.overlay"
+                      production)))))
+
+(deftest container-smoke-exercises-api-and-overlay-profiles-separately
+  (let [smoke (slurp "test/container_smoke.sh")]
+    (is (str/includes? smoke "api_container_id="))
+    (is (str/includes? smoke "overlay_container_id="))
+    (is (str/includes? smoke "-e AGG_SERVICE_PROFILE=overlay"))
+    (is (str/includes? smoke "$api_host_port/v1/preview"))
+    (is (str/includes? smoke "$overlay_host_port/v1/overlay"))))
+
+(deftest production-release-verifies-private-services-before-targeted-reconciliation-and-promotion
+  (let [workflow (slurp ".github/workflows/deploy-production.yml")
+        terraform-init (str/index-of workflow
+                                     "terraform -chdir=infra/prod init")
+        overlay-bootstrap (str/index-of workflow
+                                        "Ensure Terraform-owned overlay service exists")
+        api-deploy (str/index-of workflow "Deploy private API candidate")
+        overlay-deploy (str/index-of workflow "Deploy private overlay candidate")
+        private-verification (str/index-of workflow
+                                           "Verify private API and overlay candidates")
+        terraform-apply (str/index-of workflow
+                                      "Reconcile production runtimes through Terraform")
+        reconciled-verification (str/index-of workflow
+                                              "Verify reconciled private services")
+        public-ingress (str/index-of workflow "Restore public invokers")
+        firebase-deploy (str/index-of workflow "Publish pinned Firebase Hosting routes")
+        api-candidate (or (config-section workflow
+                                          "- name: Deploy private API candidate"
+                                          "- name: Deploy private overlay candidate") "")
+        overlay-candidate (or (config-section workflow
+                                              "- name: Deploy private overlay candidate"
+                                              "- name: Execute isolated renderer smoke") "")]
+    (is (str/includes? workflow
+                       "terraform -chdir=infra/prod init -input=false"))
+    (doseq [argument ["--cpu 1" "--memory 512Mi" "--concurrency 80"
+                      "--timeout 300" "--cpu-boost"
+                      "--min 0" "--max 2" "--no-allow-unauthenticated"]]
+      (testing (str "API " argument)
+        (is (str/includes? api-candidate argument))))
+    (doseq [argument ["--cpu 8" "--memory 32Gi" "--concurrency 1"
+                      "--timeout 3600" "--execution-environment gen2"
+                      "--cpu-boost" "--min 0" "--max 2"
+                      "--no-allow-unauthenticated"]]
+      (testing (str "overlay " argument)
+        (is (str/includes? overlay-candidate argument))))
+    (is (str/includes? api-candidate "--image \"$IMAGE_DIGEST\""))
+    (is (str/includes? overlay-candidate "--image \"$IMAGE_DIGEST\""))
+    (is (str/includes? overlay-candidate "--service-account \"$API_SERVICE_ACCOUNT\""))
+    (is (str/includes? workflow "AGG_SERVICE_PROFILE=api"))
+    (is (str/includes? workflow "AGG_SERVICE_PROFILE=overlay"))
+    (is (str/includes?
+         workflow
+         "X-Serverless-Authorization: Bearer $OVERLAY_RUN_ID_TOKEN"))
+    (is (str/includes? workflow
+                       "-var=\"renderer_image=$IMAGE_DIGEST\""))
+    (is (str/includes? workflow
+                       "-var=\"api_service_url=$CLOUD_RUN_SERVICE_URL\""))
+    (is (str/includes? workflow
+                       "-target=module.application.google_cloud_run_v2_service.api"))
+    (is (str/includes? workflow
+                       "-target=module.application.google_cloud_run_v2_service.overlay"))
+    (is (str/includes? workflow
+                       "-target=module.application.google_cloud_run_v2_job.renderer"))
+    (is (= 2 (count (re-seq #"--member=allUsers" workflow))))
+    (doseq [position [terraform-init overlay-bootstrap api-deploy overlay-deploy
+                      private-verification terraform-apply
+                      reconciled-verification public-ingress firebase-deploy]]
+      (is (number? position)))
+    (when (every? number? [terraform-init overlay-bootstrap api-deploy
+                           overlay-deploy private-verification terraform-apply
+                           reconciled-verification public-ingress
+                           firebase-deploy])
+      (is (< terraform-init overlay-bootstrap api-deploy overlay-deploy
+             private-verification terraform-apply reconciled-verification
+             public-ingress firebase-deploy)))
+    (is (not (str/includes? workflow
+                            "gcloud run jobs update \"$DURABLE_JOB\"")))))
 
 (deftest production-release-validates-the-picker-key-before-deploying
   (let [workflow (slurp ".github/workflows/deploy-production.yml")
@@ -234,6 +367,26 @@
     (is (not (str/includes? runbook "production environment")))
     (is (not (str/includes? runbook ".firebaserc")))
     (is (not (str/includes? runbook "service account key")))))
+
+(deftest dedicated-overlay-operation-is-cost-and-hosting-timeout-aware
+  (let [runbook (slurp "docs/production-runbook.md")
+        infrastructure (slurp "infra/README.md")
+        sizing-adr (slurp
+                    "docs/adr/0003-bounded-prores-rendering-and-cloud-run-sizing.md")]
+    (doseq [statement ["`agg-api` remains at 1 vCPU and 512 MiB"
+                       "`agg-overlay` uses 8 vCPU and 32 GiB"
+                       "request-based billing" "minimum instance count of zero"
+                       "concurrency of one"
+                       "resource.labels.service_name=\"agg-overlay\""
+                       "60 seconds" "HTTP 504"]]
+      (testing statement
+        (is (str/includes? runbook statement))))
+    (is (re-find #"Only\s+exact\s+`/v1/overlay` requests use `agg-overlay`"
+                 infrastructure))
+    (is (re-find #"separate\s+`agg-overlay` Cloud Run\s+service" sizing-adr))
+    (is (not (str/includes?
+              sizing-adr
+              "Sizing the API for the maximum synchronous contract")))))
 
 (deftest production-release-decision-is-contextual-and-discoverable
   (let [adr (slurp "docs/adr/0011-automatic-production-deployment.md")

@@ -52,7 +52,7 @@
   {"Content-Type" "application/x-www-form-urlencoded"})
 
 (defn- javascript-valid? [source]
-  (let [process (.start (ProcessBuilder. ["node" "--check" "/dev/stdin"]))]
+  (let [process (.start (ProcessBuilder. ["node" "--check" "-"]))]
     (with-open [writer (io/writer (.getOutputStream process))]
       (.write writer source))
     (.readAllBytes (.getErrorStream process))
@@ -102,14 +102,14 @@
                                     (.body landing)))
             configured-page (ui/page {:user {:email "owner@example.com"
                                              :role :member}
-                                     :csrf "csrf-test"
-                                     :picker-config {:access-token "access-test"
+                                      :csrf "csrf-test"
+                                      :picker-config {:access-token "access-test"
                                                       :api-key "key-test"
                                                       :app-id "app-test"
                                                       :csrf "csrf-test"}
-                                     :tokens []
-                                     :members []
-                                     :logs-enabled? false})
+                                      :tokens []
+                                      :members []
+                                      :logs-enabled? false})
             configured-script (second (re-find #"(?s)<script>(.*?)</script>"
                                                configured-page))
             valid? (and (string? script)

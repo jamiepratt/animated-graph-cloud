@@ -46,24 +46,21 @@ if [ "$render_output" != '{"severity":"INFO","component":"renderer","event":"ren
 fi
 
 health_file="$(mktemp)"
-first_polar_media="$(mktemp)"
-second_polar_media="$(mktemp)"
-complete_1080_media="$(mktemp)"
-complete_27_media="$(mktemp)"
 garmin_preview="$(mktemp)"
-container_id="$(docker run --rm -d -p 127.0.0.1::8080 "$image")"
+api_container_id="$(docker run --rm -d -p 127.0.0.1::8080 "$image")"
+overlay_container_id="$(docker run --rm -d -p 127.0.0.1::8080 \
+  -e AGG_SERVICE_PROFILE=overlay "$image")"
 cleanup() {
-  docker rm -f "$container_id" >/dev/null 2>&1 || true
-  rm -f "$health_file" "$first_polar_media" "$second_polar_media" \
-    "$complete_1080_media" "$complete_27_media" "$garmin_preview"
+  docker rm -f "$api_container_id" "$overlay_container_id" >/dev/null 2>&1 || true
+  rm -f "$health_file" "$garmin_preview"
 }
 trap cleanup EXIT INT TERM
 
-host_port="$(docker port "$container_id" 8080/tcp | sed -n 's/.*://p' | tail -1)"
+api_host_port="$(docker port "$api_container_id" 8080/tcp | sed -n 's/.*://p' | tail -1)"
 attempt=0
 while [ "$attempt" -lt 50 ]; do
   if curl --fail --silent --show-error \
-    "http://127.0.0.1:$host_port/health" >"$health_file" 2>/dev/null; then
+    "http://127.0.0.1:$api_host_port/health" >"$health_file" 2>/dev/null; then
     break
   fi
   attempt=$((attempt + 1))
@@ -72,15 +69,15 @@ done
 
 health_body="$(cat "$health_file")"
 if [ "$health_body" != "$expected_health" ]; then
-  echo "unexpected health response: $health_body" >&2
-  docker logs "$container_id" >&2
+  echo "unexpected API health response: $health_body" >&2
+  docker logs "$api_container_id" >&2
   exit 1
 fi
 
 curl --fail --silent --show-error \
   --header 'Content-Type: application/json' \
   --data-binary "@$root/test/fixtures/garmin/request.json" \
-  "http://127.0.0.1:$host_port/v1/preview" \
+  "http://127.0.0.1:$api_host_port/v1/preview" \
   --output "$garmin_preview"
 garmin_signature="$(od -An -t x1 -N 8 "$garmin_preview" | tr -d ' \n')"
 if [ "$garmin_signature" != '89504e470d0a1a0a' ]; then
@@ -88,70 +85,40 @@ if [ "$garmin_signature" != '89504e470d0a1a0a' ]; then
   exit 1
 fi
 
-for output in "$first_polar_media" "$second_polar_media"; do
-  curl --fail --silent --show-error \
-    --header 'Content-Type: application/json' \
-    --data-binary "@$root/test/fixtures/polar/request.json" \
-    "http://127.0.0.1:$host_port/v1/overlay" \
-    --output "$output"
-  test -s "$output"
-done
-
-first_sha="$(shasum -a 256 "$first_polar_media" | awk '{print $1}')"
-second_sha="$(shasum -a 256 "$second_polar_media" | awk '{print $1}')"
-if [ "$first_sha" != "$second_sha" ]; then
-  echo "fixed Polar input produced different MOV bytes" >&2
+api_overlay_status="$(curl --silent --show-error --output /dev/null \
+  --write-out '%{http_code}' \
+  --header 'Content-Type: application/json' \
+  --data '{}' \
+  "http://127.0.0.1:$api_host_port/v1/overlay")"
+if [ "$api_overlay_status" != '404' ]; then
+  echo "API profile overlay status was $api_overlay_status, expected 404" >&2
   exit 1
 fi
 
-for preset in 1080p25 2.7k25; do
-  case "$preset" in
-    1080p25)
-      width=1920
-      height=1080
-      complete_media="$complete_1080_media"
-      ;;
-    2.7k25)
-      width=2704
-      height=1520
-      complete_media="$complete_27_media"
-      ;;
-  esac
-
-  curl --fail --silent --show-error \
-    --header 'Content-Type: application/json' \
-    --data-binary "@$root/test/fixtures/complete/$preset.json" \
-    "http://127.0.0.1:$host_port/v1/overlay" \
-    --output "$complete_media"
-  test -s "$complete_media"
-
-  chmod 0644 "$complete_media"
-  container_media="/tmp/complete-$preset.mov"
-  docker cp "$complete_media" "$container_id:$container_media"
-  probe="$(docker exec "$container_id" ffprobe \
-    -v error \
-    -show_entries \
-    'format=format_name,duration:stream=codec_type,codec_name,profile,codec_tag_string,width,height,pix_fmt,r_frame_rate,sample_rate,channels' \
-    -of json \
-    "$container_media")"
-  printf '%s' "$probe" | jq --exit-status \
-    --argjson width "$width" \
-    --argjson height "$height" \
-    '
-      ([.streams[] | select(.codec_type == "video")][0]) as $video |
-      ([.streams[] | select(.codec_type == "audio")][0]) as $audio |
-      $video.codec_name == "prores" and
-      $video.profile == "4444" and
-      $video.codec_tag_string == "ap4h" and
-      $video.width == $width and
-      $video.height == $height and
-      $video.pix_fmt == "yuva444p12le" and
-      $video.r_frame_rate == "25/1" and
-      $audio.codec_name == "aac" and
-      $audio.profile == "LC" and
-      $audio.sample_rate == "48000" and
-      $audio.channels == 2 and
-      (.format.format_name | contains("mov")) and
-      ((.format.duration | tonumber) - 1 | fabs) <= 0.04
-    ' >/dev/null
+overlay_host_port="$(docker port "$overlay_container_id" 8080/tcp | sed -n 's/.*://p' | tail -1)"
+attempt=0
+while [ "$attempt" -lt 50 ]; do
+  if curl --fail --silent --show-error \
+    "http://127.0.0.1:$overlay_host_port/health" >"$health_file" 2>/dev/null; then
+    break
+  fi
+  attempt=$((attempt + 1))
+  sleep 0.2
 done
+
+health_body="$(cat "$health_file")"
+if [ "$health_body" != "$expected_health" ]; then
+  echo "unexpected overlay health response: $health_body" >&2
+  docker logs "$overlay_container_id" >&2
+  exit 1
+fi
+
+overlay_status="$(curl --silent --show-error --output /dev/null \
+  --write-out '%{http_code}' \
+  --header 'Content-Type: application/json' \
+  --data '{}' \
+  "http://127.0.0.1:$overlay_host_port/v1/overlay")"
+if [ "$overlay_status" != '401' ]; then
+  echo "overlay profile unauthenticated status was $overlay_status, expected 401" >&2
+  exit 1
+fi

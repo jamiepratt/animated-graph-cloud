@@ -213,7 +213,10 @@ paths:
       operationId: createOverlay
       tags: [Rendering]
       summary: Render an overlay synchronously.
-      description: Prefer durable jobs for production-size renders.
+      description: |
+        Prefer durable jobs for production-size renders. The production
+        Firebase Hosting route returns HTTP 504 if this synchronous response
+        takes longer than 60 seconds, regardless of the backend timeout.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       requestBody:
@@ -230,6 +233,10 @@ paths:
         "400": {$ref: "#/components/responses/InvalidRequest"}
         "401": {$ref: "#/components/responses/AuthenticationRequired"}
         "413": {$ref: "#/components/responses/PayloadTooLarge"}
+        "504":
+          description: >-
+            Firebase Hosting did not receive the synchronous response within
+            60 seconds.
   /v1/jobs:
     post:
       operationId: submitJob

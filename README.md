@@ -83,7 +83,9 @@ GitHub issue #3.
 
 `POST /v1/preview` returns `image/png`; `POST /v1/overlay` returns a seekable
 `video/quicktime` ProRes 4444 overlay with AAC heartbeat audio. Overlay-only
-behavior remains synchronous. A preview may include a verified Drive source;
+behavior is synchronous, but Firebase Hosting returns HTTP 504 when its Cloud
+Run rewrite exceeds 60 seconds. Use durable jobs for renders that may not
+finish within that public limit. A preview may include a verified Drive source;
 compositing output is available only through durable jobs.
 
 ```json

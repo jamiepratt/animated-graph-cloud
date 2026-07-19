@@ -1,0 +1,105 @@
+(ns agg.api-profile-test
+  (:require [agg.api.main :as api]
+            [agg.auth.core :as auth]
+            [agg.http-test-support :as test-http]
+            [agg.jobs.lifecycle :as jobs]
+            [agg.tokens.core :as tokens]
+            [clojure.test :refer [deftest is testing]]))
+
+(defn- request! [port method path body headers]
+  (test-http/send-string! method (str "http://127.0.0.1:" port path)
+                          body headers))
+
+(defn- auth-fixture []
+  (let [system (auth/system
+                {:client-id "client-id"
+                 :client-secret "client-secret"
+                 :base-url "https://app.example.com"
+                 :allowlist #{"owner@example.com"}
+                 :session-key (.getBytes "01234567890123456789012345678901")
+                 :oauth (reify auth/OAuthClient
+                          (exchange-code! [_ _ _ _ _]
+                            (throw (UnsupportedOperationException.))))})
+        token-system (tokens/in-memory-system
+                      {:pepper (.getBytes
+                                "abcdefghijklmnopqrstuvwxyz012345")})
+        created (tokens/create-token!
+                 (:service token-system)
+                 {:subject "owner-subject" :email "owner@example.com"}
+                 "overlay-test")
+        user {:subject "owner-subject" :email "owner@example.com"}]
+    {:auth-system system
+     :token-service (:service token-system)
+     :token (:token created)
+     :session (auth/issue-session system user)
+     :csrf (auth/issue-csrf-token system user)}))
+
+(deftest overlay-profile-exposes-only-health-and-authenticated-overlay
+  (let [port (test-http/available-port)
+        lifecycle (jobs/in-memory-system)
+        {:keys [auth-system token-service token session csrf]} (auth-fixture)
+        server (api/start! port {:service-profile "overlay"
+                                 :auth-system auth-system
+                                 :token-service token-service
+                                 :job-service (:service lifecycle)
+                                 :upload-signer (Object.)
+                                 :admin-service (Object.)})]
+    (try
+      (is (= 200 (.statusCode (request! port :get "/health" nil {}))))
+      (is (= 401 (.statusCode
+                  (request! port :post "/v1/overlay" "{}"
+                            {"Content-Type" "application/json"}))))
+      (is (= 403 (.statusCode
+                  (request! port :post "/v1/overlay" "{}"
+                            {"Content-Type" "application/json"
+                             "Cookie" (str "agg_session=" session)}))))
+      (is (= 400 (.statusCode
+                  (request! port :post "/v1/overlay" "{}"
+                            {"Content-Type" "application/json"
+                             "Cookie" (str "agg_session=" session)
+                             "X-CSRF-Token" csrf}))))
+      (is (= 400 (.statusCode
+                  (request! port :post "/v1/overlay" "{}"
+                            {"Content-Type" "application/json"
+                             "Authorization" (str "Bearer " token)}))))
+      (doseq [[method path]
+              [[:get "/"]
+               [:get "/privacy"]
+               [:get "/openapi.yaml"]
+               [:get "/v1/auth/login/start"]
+               [:get "/v1/drive/picker"]
+               [:post "/v1/preview"]
+               [:post "/v1/jobs"]
+               [:get "/v1/tokens"]
+               [:get "/v1/admin/members"]
+               [:post "/internal/v1/jobs/job-1/dispatch"]
+               [:post "/ui/jobs"]]]
+        (testing path
+          (let [response (request! port method path
+                                   (when (= :post method) "{}")
+                                   {"Content-Type" "application/json"})]
+            (is (= 404 (.statusCode response)))
+            (is (= "{\"error\":\"not_found\"}" (.body response))))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest api-profile-does-not-render-overlays
+  (let [port (test-http/available-port)
+        server (api/start! port {:service-profile "api"})]
+    (try
+      (let [response (request! port :post "/v1/overlay" "{}"
+                               {"Content-Type" "application/json"})]
+        (is (= 404 (.statusCode response)))
+        (is (= "{\"error\":\"not_found\"}" (.body response))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest overlay-profile-fails-closed-without-auth-dependencies
+  (let [port (test-http/available-port)
+        server (api/start! port {:service-profile "overlay"})]
+    (try
+      (is (= 401 (.statusCode
+                  (request! port :post "/v1/overlay" "{}"
+                            {"Content-Type" "application/json"}))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
