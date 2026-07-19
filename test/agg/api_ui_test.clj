@@ -100,7 +100,7 @@
             body (.body response)
             request-id (some-> response .headers (.firstValue "x-request-id")
                                (.orElse nil))]
-        (is (= 400 (.statusCode response)))
+        (is (= 200 (.statusCode response)))
         (is (= "text/html; charset=utf-8"
                (.orElse (.firstValue (.headers response) "content-type") nil)))
         (is (re-matches #"[0-9a-f-]{36}" request-id))

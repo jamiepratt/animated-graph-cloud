@@ -137,7 +137,7 @@
                     :requestId request-id
                     :category category}))
     (if (= "/ui/preview" (some-> exchange .getRequestURI .getPath))
-      (respond! exchange status "text/html; charset=utf-8"
+      (respond! exchange 200 "text/html; charset=utf-8"
                 (ui/preview-failure-fragment
                  (merge {:category category
                          :request-id request-id}
@@ -1061,7 +1061,7 @@
                 (case (:type (ex-data error))
                   ::request-too-large
                   (if (= "/ui/preview" path)
-                    (respond! exchange 413 "text/html; charset=utf-8"
+                    (respond! exchange 200 "text/html; charset=utf-8"
                               (ui/preview-failure-fragment
                                {:category "request_contract"
                                 :request-id request-id}))
