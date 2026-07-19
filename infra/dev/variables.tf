@@ -89,8 +89,26 @@ variable "enable_firebase_hosting" {
   default     = false
 }
 
+variable "enable_observability_log_ttl" {
+  description = "Manage the expireAt TTL policy for observability-log documents."
+  type        = bool
+  default     = true
+}
+
 variable "github_subject" {
   description = "Optional exact GitHub OIDC subject, used to bind a deployment to a specific ref or environment."
+  type        = string
+  default     = ""
+}
+
+variable "enable_terraform_deployments" {
+  description = "Grant the keyless GitHub deployer the infrastructure roles required to apply this module."
+  type        = bool
+  default     = false
+}
+
+variable "terraform_state_bucket" {
+  description = "State bucket whose objects the Terraform-enabled GitHub deployer may manage."
   type        = string
   default     = ""
 }

@@ -33,6 +33,20 @@ locals {
     "session-key",
     "token-hash-pepper",
   ])
+
+  terraform_deployer_project_roles = var.enable_terraform_deployments ? toset([
+    "roles/artifactregistry.admin",
+    "roles/cloudkms.admin",
+    "roles/cloudscheduler.admin",
+    "roles/cloudtasks.admin",
+    "roles/iam.roleAdmin",
+    "roles/iam.serviceAccountAdmin",
+    "roles/iam.workloadIdentityPoolAdmin",
+    "roles/logging.admin",
+    "roles/monitoring.admin",
+    "roles/resourcemanager.projectIamAdmin",
+    "roles/serviceusage.serviceUsageAdmin",
+  ]) : toset([])
 }
 
 data "google_project" "current" {
@@ -374,12 +388,19 @@ resource "google_firestore_field" "job_expiry" {
 }
 
 resource "google_firestore_field" "observability_logs_expiry" {
+  count = var.enable_observability_log_ttl ? 1 : 0
+
   project    = var.project_id
   database   = google_firestore_database.default.name
   collection = "observability-logs"
   field      = "expireAt"
 
   ttl_config {}
+}
+
+moved {
+  from = google_firestore_field.observability_logs_expiry
+  to   = google_firestore_field.observability_logs_expiry[0]
 }
 
 resource "google_firestore_index" "observability_logs_by_severity" {
@@ -1190,6 +1211,125 @@ resource "google_project_iam_member" "deployer_firebase_hosting_admin" {
   member  = "serviceAccount:${google_service_account.deployer.email}"
 }
 
+resource "google_project_iam_member" "deployer_terraform" {
+  for_each = local.terraform_deployer_project_roles
+
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_project_iam_custom_role" "terraform_firestore_admin" {
+  count = var.enable_terraform_deployments ? 1 : 0
+
+  project     = var.project_id
+  role_id     = "aggTerraformFirestoreAdmin"
+  title       = "Alpha Compose Terraform Firestore administrator"
+  description = "Manage Firestore databases, TTL fields, and indexes without reading application records"
+  permissions = [
+    "datastore.databases.create",
+    "datastore.databases.get",
+    "datastore.databases.getMetadata",
+    "datastore.databases.list",
+    "datastore.databases.update",
+    "datastore.locations.get",
+    "datastore.locations.list",
+    "datastore.operations.get",
+    "datastore.operations.list",
+    "datastore.schemas.create",
+    "datastore.schemas.delete",
+    "datastore.schemas.get",
+    "datastore.schemas.list",
+    "datastore.schemas.update",
+    "resourcemanager.projects.get",
+  ]
+}
+
+resource "google_project_iam_member" "deployer_terraform_firestore_admin" {
+  count = var.enable_terraform_deployments ? 1 : 0
+
+  project = var.project_id
+  role    = google_project_iam_custom_role.terraform_firestore_admin[0].id
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_project_iam_custom_role" "terraform_secret_admin" {
+  count = var.enable_terraform_deployments ? 1 : 0
+
+  project     = var.project_id
+  role_id     = "aggTerraformSecretAdmin"
+  title       = "Alpha Compose Terraform Secret Manager administrator"
+  description = "Manage secret containers and IAM without reading secret payloads"
+  permissions = [
+    "secretmanager.locations.get",
+    "secretmanager.locations.list",
+    "secretmanager.secrets.create",
+    "secretmanager.secrets.delete",
+    "secretmanager.secrets.get",
+    "secretmanager.secrets.getIamPolicy",
+    "secretmanager.secrets.list",
+    "secretmanager.secrets.setIamPolicy",
+    "secretmanager.secrets.update",
+  ]
+}
+
+resource "google_project_iam_member" "deployer_terraform_secret_admin" {
+  count = var.enable_terraform_deployments ? 1 : 0
+
+  project = var.project_id
+  role    = google_project_iam_custom_role.terraform_secret_admin[0].id
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_project_iam_custom_role" "terraform_storage_admin" {
+  count = var.enable_terraform_deployments ? 1 : 0
+
+  project     = var.project_id
+  role_id     = "aggTerraformStorageAdmin"
+  title       = "Alpha Compose Terraform Storage administrator"
+  description = "Manage bucket configuration and IAM without reading application objects"
+  permissions = [
+    "storage.buckets.create",
+    "storage.buckets.delete",
+    "storage.buckets.get",
+    "storage.buckets.getIamPolicy",
+    "storage.buckets.list",
+    "storage.buckets.setIamPolicy",
+    "storage.buckets.update",
+  ]
+}
+
+resource "google_project_iam_member" "deployer_terraform_storage_admin" {
+  count = var.enable_terraform_deployments ? 1 : 0
+
+  project = var.project_id
+  role    = google_project_iam_custom_role.terraform_storage_admin[0].id
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_storage_bucket_iam_member" "deployer_terraform_state" {
+  count = var.enable_terraform_deployments ? 1 : 0
+
+  bucket = var.terraform_state_bucket
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.deployer.email}"
+
+  lifecycle {
+    precondition {
+      condition     = var.terraform_state_bucket != ""
+      error_message = "terraform_state_bucket is required when Terraform deployments are enabled."
+    }
+  }
+}
+
+resource "google_billing_account_iam_member" "deployer_budget_manager" {
+  count = var.enable_terraform_deployments ? 1 : 0
+
+  billing_account_id = trimprefix(data.google_project.current.billing_account, "billingAccounts/")
+  role               = "roles/billing.costsManager"
+  member             = "serviceAccount:${google_service_account.deployer.email}"
+}
+
 resource "google_service_account_iam_member" "deployer_uses_api" {
   service_account_id = google_service_account.api.name
   role               = "roles/iam.serviceAccountUser"
@@ -1198,6 +1338,14 @@ resource "google_service_account_iam_member" "deployer_uses_api" {
 
 resource "google_service_account_iam_member" "deployer_uses_renderer" {
   service_account_id = google_service_account.renderer.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_service_account_iam_member" "deployer_uses_scheduler" {
+  count = var.enable_terraform_deployments ? 1 : 0
+
+  service_account_id = google_service_account.scheduler.name
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${google_service_account.deployer.email}"
 }

@@ -35,6 +35,70 @@
     (is (str/includes? shared "id = \"projects/${each.value}/databases/(default)\""))
     (is (str/includes? shared "count = var.api_service_url == \"\" ? 0 : 1"))))
 
+(deftest production-bootstrap-defers-only-observability-log-ttl
+  (let [production (slurp "infra/prod/main.tf")
+        shared (slurp "infra/dev/main.tf")
+        variables (slurp "infra/dev/variables.tf")]
+    (is (re-find #"(?s)variable \"enable_observability_log_ttl\".*?default\s*=\s*true"
+                 variables))
+    (is (re-find #"(?s)resource \"google_firestore_field\" \"observability_logs_expiry\".*?count\s*=\s*var\.enable_observability_log_ttl \? 1 : 0"
+                 shared))
+    (is (re-find #"(?s)moved \{\s*from\s*=\s*google_firestore_field\.observability_logs_expiry\s*to\s*=\s*google_firestore_field\.observability_logs_expiry\[0\]\s*\}"
+                 shared))
+    (is (re-find #"enable_observability_log_ttl\s*=\s*false" production))))
+
+(deftest production-bootstrap-documents-the-ttl-owner-checkpoint
+  (let [decision (slurp "docs/adr/0011-automatic-production-deployment.md")
+        runbook (slurp "docs/production-runbook.md")
+        saved-plan (str/index-of runbook
+                                 "-out=terraform-automation-bootstrap.tfplan")
+        show-plan (str/index-of runbook
+                                "terraform -chdir=infra/prod show terraform-automation-bootstrap.tfplan")
+        review (str/index-of runbook "Before applying, inspect the saved full plan")
+        apply-plan (str/index-of runbook
+                                 "terraform -chdir=infra/prod apply terraform-automation-bootstrap.tfplan")]
+    (doseq [contract ["enable_observability_log_ttl = false"
+                      "no TTL change, replacement, or destroy"
+                      "Do not push or merge"
+                      "exactly one `observability-logs.expireAt` TTL addition"
+                      "zero unrelated changes or destroys"]]
+      (testing contract
+        (is (str/includes? runbook contract))))
+    (is (str/includes? decision "#38"))
+    (is (str/includes? decision "permission-only bootstrap"))
+    (doseq [position [saved-plan show-plan review apply-plan]]
+      (is (number? position)))
+    (when (every? number? [saved-plan show-plan review apply-plan])
+      (is (< saved-plan show-plan review apply-plan)))))
+
+(deftest production-release-applies-full-infrastructure-before-code-promotion
+  (let [workflow (slurp ".github/workflows/deploy-production.yml")
+        runbook (slurp "docs/production-runbook.md")
+        full-terraform (or (config-section
+                            workflow
+                            "- name: Plan and apply production Terraform"
+                            "- name: Verify production Picker API key")
+                           "")
+        full-apply (str/index-of workflow
+                                 "- name: Plan and apply production Terraform")
+        image-push (str/index-of workflow
+                                 "name: Push and resolve immutable image digest")]
+    (is (str/includes? full-terraform "terraform -chdir=infra/prod plan"))
+    (is (str/includes? full-terraform "terraform -chdir=infra/prod apply"))
+    (is (not (str/includes? full-terraform "-target=")))
+    (is (str/includes? full-terraform
+                       "RENDERER_IMAGE: ${{ steps.terraform-context.outputs.renderer_image }}"))
+    (is (str/includes? full-terraform
+                       "API_SERVICE_URL: ${{ steps.terraform-context.outputs.service_url }}"))
+    (is (number? full-apply))
+    (is (number? image-push))
+    (when (and (number? full-apply) (number? image-push))
+      (is (< full-apply image-push)))
+    (is (not (str/includes? workflow
+                            "Ensure Terraform-owned overlay service exists")))
+    (is (not (str/includes? runbook
+                            "Other production Terraform drift remains a\nseparate reviewed apply.")))))
+
 (deftest artifact-registry-bootstrap-target-is-isolated-and-state-compatible
   (let [shared (slurp "infra/dev/main.tf")
         runbook (slurp "docs/production-runbook.md")
@@ -111,7 +175,9 @@
   (let [workflow (slurp ".github/workflows/deploy-production.yml")]
     (is (str/includes? workflow "push:"))
     (is (str/includes? workflow "branches: [main]"))
-    (is (not (str/includes? workflow "workflow_dispatch:")))
+    (is (str/includes? workflow "workflow_dispatch:"))
+    (is (str/includes? workflow "import_existing_firestore:"))
+    (is (str/includes? workflow "allow_destructive_terraform:"))
     (is (not (str/includes? workflow "environment: production")))
     (is (not (str/includes? workflow "confirmation")))
     (is (str/includes? workflow "PROJECT_ID: animated-graph-cloud-prod-jp"))
@@ -215,8 +281,6 @@
   (let [workflow (slurp ".github/workflows/deploy-production.yml")
         terraform-init (str/index-of workflow
                                      "terraform -chdir=infra/prod init")
-        overlay-bootstrap (str/index-of workflow
-                                        "Ensure Terraform-owned overlay service exists")
         api-deploy (str/index-of workflow "Deploy private API candidate")
         overlay-deploy (str/index-of workflow "Deploy private overlay candidate")
         private-verification (str/index-of workflow
@@ -265,15 +329,15 @@
     (is (str/includes? workflow
                        "-target=module.application.google_cloud_run_v2_job.renderer"))
     (is (= 2 (count (re-seq #"--member=allUsers" workflow))))
-    (doseq [position [terraform-init overlay-bootstrap api-deploy overlay-deploy
+    (doseq [position [terraform-init api-deploy overlay-deploy
                       private-verification terraform-apply
                       reconciled-verification public-ingress firebase-deploy]]
       (is (number? position)))
-    (when (every? number? [terraform-init overlay-bootstrap api-deploy
+    (when (every? number? [terraform-init api-deploy
                            overlay-deploy private-verification terraform-apply
                            reconciled-verification public-ingress
                            firebase-deploy])
-      (is (< terraform-init overlay-bootstrap api-deploy overlay-deploy
+      (is (< terraform-init api-deploy overlay-deploy
              private-verification terraform-apply reconciled-verification
              public-ingress firebase-deploy)))
     (is (not (str/includes? workflow

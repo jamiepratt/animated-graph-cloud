@@ -167,14 +167,15 @@ retain its 1 vCPU, 512 MiB, concurrency-80, 300-second envelope, create the new
 `agg-overlay` service with no replacement or destroy, and update the renderer
 image when applicable. Do not push if state access or the import is unresolved.
 
-The production workflow first ensures that the new Terraform-owned overlay
-service exists privately, then deploys the same immutable candidate to API and
-overlay. It configures and verifies both private candidates before applying a
-saved plan targeted only to API, overlay, and the durable renderer. Public
-invocation is restored afterward, followed by pinned Firebase routes. The plan
-passes the candidate digest and live API `run.app` origin so reconciliation
-cannot roll either input back. Other production Terraform drift remains a
-separate reviewed apply.
+Before uploading a candidate, the production workflow applies a complete saved
+Terraform plan with the currently promoted renderer digest and live API
+`run.app` origin. That full apply creates the Terraform-owned overlay if needed
+without exposing unverified candidate code. The workflow then deploys the same
+immutable candidate privately to API and overlay, configures and verifies both,
+and applies a later saved plan targeted only to API, overlay, and the durable
+renderer. Public invocation is restored afterward, followed by pinned Firebase
+routes. The targeted candidate reconciliation cannot conceal infrastructure
+drift because the complete plan already ran before candidate promotion.
 
 ## Overlay cost and observability
 
@@ -243,18 +244,80 @@ Confirm all four enabled versions and IAM bindings without printing payloads.
 ## Automatic production deployment
 
 Every push to protected `main` triggers **Deploy Alpha Compose production**. The
-workflow builds and scans the pushed commit, pushes an immutable digest,
-verifies both private services, reconciles API, overlay, and the durable
-renderer through saved targeted Terraform plans, publishes Hosting, and
+workflow builds and scans the pushed commit, applies the complete production
+Terraform configuration using the currently promoted renderer digest and API
+origin, pushes a new immutable digest, verifies both private services,
+reconciles API, overlay, and the durable renderer, publishes Hosting, and
 verifies health/privacy/terms. It neither publishes OAuth nor adds ordinary
 members; configured administrators are bootstrapped from `AGG_ADMIN_EMAILS`.
 
-Afterward, apply the Scheduler step above, complete
-`docs/release-acceptance.md`, and store a populated copy of the evidence
-template outside the repository or in the approved release record. Verify the
-operations dashboard and alerts before costed acceptance. The canonical public
-OpenAPI contract URL is `https://alphacompose.com/openapi.yaml`; the production
-workflow checks its `application/yaml` response and versioned document marker.
+Terraform automation needs a one-time owner apply after
+`enable_terraform_deployments` is introduced. That reviewed bootstrap grants the
+keyless production deployer its checked-in project roles and billing budget
+access. Production deliberately keeps
+`enable_observability_log_ttl = false` during this permission-only bootstrap so
+the owner does not approve the document-deleting TTL behavior from #38 at the
+same time. Use the current live renderer digest and API origin in the saved
+full plan.
+
+```sh
+renderer_image="$(gcloud run jobs describe agg-renderer \
+  --project=animated-graph-cloud-prod-jp \
+  --region=europe-central2 \
+  --format='value(spec.template.spec.template.spec.containers[0].image)')"
+api_service_url="$(gcloud run services describe agg-api \
+  --project=animated-graph-cloud-prod-jp \
+  --region=europe-central2 \
+  --format='value(status.url)')"
+terraform -chdir=infra/prod plan \
+  -var="renderer_image=$renderer_image" \
+  -var="api_service_url=$api_service_url" \
+  -out=terraform-automation-bootstrap.tfplan
+terraform -chdir=infra/prod show terraform-automation-bootstrap.tfplan
+```
+
+Before applying, inspect the saved full plan. It must contain only the intended
+deployer project roles, three least-privilege custom roles and bindings, state
+bucket object access, Scheduler service-account use, and billing budget access,
+with no TTL change, replacement, or destroy. Stop on any existing untracked
+resource and add a reviewed import path. Apply only that accepted saved plan,
+then require a zero-change full plan with the same live inputs:
+
+```sh
+terraform -chdir=infra/prod apply terraform-automation-bootstrap.tfplan
+terraform -chdir=infra/prod plan \
+  -detailed-exitcode \
+  -var="renderer_image=$renderer_image" \
+  -var="api_service_url=$api_service_url" \
+  -out=terraform-automation-steady-state.tfplan
+```
+
+The steady-state command must exit 0; exit 2 means it found changes and the
+checkpoint failed. Do not push or merge the workflow change until both the
+permission-only bootstrap apply and zero-change steady-state review succeed.
+
+Only then may #38 change the production input to
+`enable_observability_log_ttl = true`. Its saved full production plan must show
+exactly one `observability-logs.expireAt` TTL addition, with
+zero unrelated changes or destroys. The owner must separately approve the deletion
+of expired observability documents before applying that plan. Do not use a
+targeted apply for either checkpoint.
+
+Automatic pushes refuse Terraform delete and replacement actions. Review the
+plan summary, then manually dispatch the same workflow with
+`allow_destructive_terraform` only when the action is intended. If the default
+Firestore database exists but is absent from state, the workflow stops with an
+import warning. Never delete the database. Manually dispatch with
+`import_existing_firestore` to perform the exact state-only import before the
+plan. For any other `AlreadyExists` result, stop, identify the existing resource,
+and add a reviewed import path rather than replacing production state.
+
+Afterward, complete `docs/release-acceptance.md` and store a populated copy of
+the evidence template outside the repository or in the approved release
+record. Verify the operations dashboard and alerts before costed acceptance.
+The canonical public OpenAPI contract URL is
+`https://alphacompose.com/openapi.yaml`; the production workflow checks its
+`application/yaml` response and versioned document marker.
 
 ## Rollback
 

@@ -8,7 +8,17 @@ same resource module with production-specific project, WIF subject, budget,
 Firestore creation, and optional Firebase Hosting permissions. Secret
 containers are shared configuration; payloads and OAuth clients are always
 environment-specific. Follow `docs/production-runbook.md`; Firebase activation,
-DNS, OAuth publication, and production applies are owner checkpoints.
+DNS, OAuth publication, and initial production bootstraps are owner checkpoints.
+
+After its one-time Terraform-permission bootstrap, every production deployment
+plans and applies `infra/prod` before promoting application code. It reads the
+currently promoted renderer digest and Cloud Run origin so an infrastructure
+apply cannot roll application code backward. Delete/replacement plans are
+blocked on automatic pushes. An existing default Firestore database missing
+from state is never recreated or deleted; the workflow stops and requires its
+explicit manual import input. Production keeps the observability-log TTL input
+disabled for the permission bootstrap; issue #38 later enables that single
+input under its separate deletion approval and saved-plan review.
 
 `infra/dev` adopts the existing default Firestore database, manages required APIs, and creates foundational development resources. Secret containers intentionally have no versions; secret values are added only through a secure operator workflow.
 

@@ -3,6 +3,18 @@ name: Deploy Alpha Compose production
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      import_existing_firestore:
+        description: Import an existing untracked default Firestore database into Terraform state
+        required: false
+        default: false
+        type: boolean
+      allow_destructive_terraform:
+        description: Apply a reviewed Terraform plan containing delete or replacement actions
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -76,12 +88,102 @@ jobs:
         with:
           version: ">= 541.0.0"
 
-      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: 1.15.8
+          terraform_wrapper: false
 
-      - name: Verify production Terraform state access
-        run: terraform -chdir=infra/prod init -input=false
+      - id: terraform-context
+        name: Discover current Terraform release inputs
+        run: |
+          set -euo pipefail
+          service_url="$(gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(status.url)')"
+          renderer_image="$(gcloud run jobs describe "$DURABLE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(spec.template.spec.template.spec.containers[0].image)')"
+          if [ -z "$service_url" ] || [ -z "$renderer_image" ]; then
+            echo "::error title=Terraform bootstrap required::Production Cloud Run resources are missing. Follow docs/production-runbook.md before running automatic deployment."
+            exit 1
+          fi
+          echo "service_url=$service_url" >>"$GITHUB_OUTPUT"
+          echo "renderer_image=$renderer_image" >>"$GITHUB_OUTPUT"
+
+      - name: Plan and apply production Terraform
+        env:
+          ALLOW_DESTRUCTIVE_TERRAFORM: ${{ inputs.allow_destructive_terraform }}
+          API_SERVICE_URL: ${{ steps.terraform-context.outputs.service_url }}
+          IMPORT_EXISTING_FIRESTORE: ${{ inputs.import_existing_firestore }}
+          RENDERER_IMAGE: ${{ steps.terraform-context.outputs.renderer_image }}
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/prod init -input=false
+
+          state_resources="$(terraform -chdir=infra/prod state list)"
+          firestore_address='module.application.google_firestore_database.default'
+          if ! grep -Fxq "$firestore_address" <<<"$state_resources"; then
+            firestore_error="$RUNNER_TEMP/firestore-describe-error"
+            if gcloud firestore databases describe \
+              --database='(default)' \
+              --project="$PROJECT_ID" \
+              >/dev/null 2>"$firestore_error"; then
+              {
+                echo "## Terraform import required"
+                echo
+                echo "The default production Firestore database exists but is not tracked in Terraform state."
+                echo "Do not delete it. Manually dispatch this workflow with \`import_existing_firestore\` enabled."
+              } >>"$GITHUB_STEP_SUMMARY"
+              if [ "$IMPORT_EXISTING_FIRESTORE" != "true" ]; then
+                echo "::error title=Terraform import required::The existing default Firestore database is absent from Terraform state. Re-run this workflow manually with import_existing_firestore enabled."
+                exit 1
+              fi
+              terraform -chdir=infra/prod import \
+                -input=false \
+                -var="renderer_image=$RENDERER_IMAGE" \
+                -var="api_service_url=$API_SERVICE_URL" \
+                "$firestore_address" \
+                "projects/$PROJECT_ID/databases/(default)"
+            elif ! grep -Eq 'NOT_FOUND|does not exist' "$firestore_error"; then
+              cat "$firestore_error" >&2
+              exit 1
+            fi
+          fi
+
+          plan_path="$RUNNER_TEMP/prod.tfplan"
+          plan_json="$RUNNER_TEMP/prod.tfplan.json"
+          terraform -chdir=infra/prod plan \
+            -input=false \
+            -lock-timeout=5m \
+            -out="$plan_path" \
+            -var="renderer_image=$RENDERER_IMAGE" \
+            -var="api_service_url=$API_SERVICE_URL"
+          terraform -chdir=infra/prod show -json "$plan_path" >"$plan_json"
+
+          creates="$(jq '[.resource_changes[]? | select(.change.actions == ["create"])] | length' "$plan_json")"
+          updates="$(jq '[.resource_changes[]? | select(.change.actions == ["update"])] | length' "$plan_json")"
+          deletes="$(jq '[.resource_changes[]? | select(.change.actions | index("delete"))] | length' "$plan_json")"
+          {
+            echo "## Production Terraform plan"
+            echo
+            echo "- Create: $creates"
+            echo "- Update: $updates"
+            echo "- Delete or replace: $deletes"
+            echo
+            echo "| Resource | Actions |"
+            echo "| --- | --- |"
+            jq -r '.resource_changes[]? | select(.change.actions != ["no-op"]) | "| `\(.address)` | `\(.change.actions | join(" -> "))` |"' "$plan_json"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+          if [ "$deletes" -gt 0 ] && [ "$ALLOW_DESTRUCTIVE_TERRAFORM" != "true" ]; then
+            echo "::error title=Destructive Terraform plan blocked::Review the plan summary, then manually dispatch this workflow with allow_destructive_terraform enabled if the deletion or replacement is intended."
+            exit 1
+          fi
+
+          terraform -chdir=infra/prod apply -input=false "$plan_path"
 
       - name: Verify production Picker API key
         run: |
@@ -122,29 +224,6 @@ jobs:
           digest="$(gcloud artifacts docker images describe "$IMAGE_TAG" --format='value(image_summary.digest)')"
           test -n "$digest"
           echo "uri=$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/animated-graph-cloud@$digest" >>"$GITHUB_OUTPUT"
-
-      - id: existing-service-url
-        name: Preserve live API origin for Terraform bootstrap
-        run: |
-          service_url="$(gcloud run services describe "$SERVICE" \
-            --project "$PROJECT_ID" \
-            --region "$REGION" \
-            --format='value(status.url)')"
-          test -n "$service_url"
-          echo "url=$service_url" >>"$GITHUB_OUTPUT"
-
-      - name: Ensure Terraform-owned overlay service exists
-        env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
-          CLOUD_RUN_SERVICE_URL: ${{ steps.existing-service-url.outputs.url }}
-        run: |
-          terraform -chdir=infra/prod plan -input=false \
-            -var="renderer_image=$IMAGE_DIGEST" \
-            -var="api_service_url=$CLOUD_RUN_SERVICE_URL" \
-            -target=module.application.google_cloud_run_v2_service.overlay \
-            -out="$RUNNER_TEMP/prod-overlay-bootstrap.tfplan"
-          terraform -chdir=infra/prod apply -input=false \
-            "$RUNNER_TEMP/prod-overlay-bootstrap.tfplan"
 
       - name: Deploy private API candidate
         env:
@@ -405,5 +484,6 @@ jobs:
             echo "- Image: $IMAGE_DIGEST"
             echo "- Domain: $PUBLIC_BASE_URL"
             echo "- Administrators: $ADMIN_EMAILS"
+            echo "- Terraform: planned and applied before candidate promotion"
             echo "- Manual acceptance remains recorded separately"
           } >>"$GITHUB_STEP_SUMMARY"
