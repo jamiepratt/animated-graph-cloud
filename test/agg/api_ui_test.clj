@@ -72,9 +72,35 @@
          "/usr/bin/chromium"
          "/usr/bin/chromium-browser"]))
 
-(defn- picker-browser-outcome [page]
+(defn- browser-outcome [prefix requirement html]
   (let [chrome (chrome-executable)
-        fixture
+        temp (File/createTempFile prefix ".html")]
+    (is chrome requirement)
+    (when chrome
+      (try
+        (spit temp html)
+        (let [builder (doto (ProcessBuilder.
+                             [chrome "--headless=new" "--disable-gpu"
+                              "--no-sandbox" "--dump-dom"
+                              "--virtual-time-budget=1000"
+                              (str (.toURI temp))])
+                        (.redirectErrorStream true))
+              process (.start builder)
+              output (slurp (.getInputStream process))
+              exit (.waitFor process)
+              encoded (second (re-find #"data-outcome=\"([^\"]+)\"" output))]
+          (is (= 0 exit) output)
+          (is encoded output)
+          (when encoded
+            (json/read-str
+             (String. (.decode (Base64/getDecoder) ^String encoded)
+                      StandardCharsets/UTF_8)
+             :key-fn keyword)))
+        (finally
+          (.delete temp))))))
+
+(defn- picker-browser-outcome [page]
+  (let [fixture
         (str
          "<script>"
          "window.__pickerState={loads:[],visible:[],diagnostics:[],callback:null};"
@@ -116,31 +142,40 @@
                  (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
                  (str/replace "<script>(function(){"
                               (str fixture "<script>(function(){"))
-                 (str/replace "</body>" (str scenario "</body>")))
-        temp (File/createTempFile "agg-picker-browser-" ".html")]
-    (is chrome "Browser-level Picker regression requires Chrome or Chromium")
-    (when chrome
-      (try
-        (spit temp html)
-        (let [builder (doto (ProcessBuilder.
-                             [chrome "--headless=new" "--disable-gpu"
-                              "--no-sandbox" "--dump-dom"
-                              "--virtual-time-budget=1000"
-                              (str (.toURI temp))])
-                        (.redirectErrorStream true))
-              process (.start builder)
-              output (slurp (.getInputStream process))
-              exit (.waitFor process)
-              encoded (second (re-find #"data-outcome=\"([^\"]+)\"" output))]
-          (is (= 0 exit) output)
-          (is encoded output)
-          (when encoded
-            (json/read-str
-             (String. (.decode (Base64/getDecoder) ^String encoded)
-                      StandardCharsets/UTF_8)
-             :key-fn keyword)))
-        (finally
-          (.delete temp))))))
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome "agg-picker-browser-"
+                     "Browser-level Picker regression requires Chrome or Chromium"
+                     html)))
+
+(defn- preview-status-browser-outcome [page]
+  (let [scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{"
+         "const button=document.querySelector('[hx-post=\"/ui/preview\"]');"
+         "button.dispatchEvent(new CustomEvent('htmx:beforeRequest',{bubbles:true,detail:{elt:button}}));"
+         "const pending={text:document.getElementById('form-status').textContent,className:document.getElementById('form-status').className};"
+         "document.getElementById('preview-result').outerHTML='<article id=\"preview-result\" class=\"preview-error\"></article>';"
+         "const failure=document.getElementById('preview-result');"
+         "failure.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:failure}}));"
+         "const failed={text:document.getElementById('form-status').textContent,className:document.getElementById('form-status').className};"
+         "button.dispatchEvent(new CustomEvent('htmx:beforeRequest',{bubbles:true,detail:{elt:button}}));"
+         "failure.outerHTML='<figure id=\"preview-result\"><img></figure>';"
+         "const success=document.getElementById('preview-result');"
+         "success.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:success}}));"
+         "const succeeded={text:document.getElementById('form-status').textContent,className:document.getElementById('form-status').className};"
+         "outcome={pending,failed,succeeded};"
+         "}catch(error){outcome={error:error.message};}"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));"
+         "document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-preview-status-browser-"
+     "Browser-level preview status regression requires Chrome or Chromium"
+     html)))
 
 (deftest public-product-and-legal-pages-identify-alpha-compose
   (let [port (available-port)
@@ -233,6 +268,22 @@
            (mapv :phase (:diagnostics outcome))))
     (is (every? #(= #{:phase :view :listState} (set (keys %)))
                 (:diagnostics outcome)))))
+
+(deftest preview-request-status-tracks-pending-failure-and-success-in-a-browser
+  (let [outcome (preview-status-browser-outcome
+                 (ui/page {:user {:email "owner@example.com" :role :member}
+                           :csrf "csrf-test"
+                           :tokens []
+                           :members []
+                           :logs-enabled? false}))]
+    (is (nil? (:error outcome)) outcome)
+    (is (= {:text "Previewing…" :className "status"}
+           (:pending outcome)))
+    (is (= {:text "Preview failed. See details below."
+            :className "status error"}
+           (:failed outcome)))
+    (is (= {:text "Preview ready." :className "status success"}
+           (:succeeded outcome)))))
 
 (deftest htmx-preview-failure-is-a-safe-correlated-html-fragment
   (let [port (available-port)

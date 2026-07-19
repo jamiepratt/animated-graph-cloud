@@ -96,11 +96,13 @@
         (is (= 502 (.statusCode response)))
         (is (= "application/json; charset=utf-8"
                (.orElse (.firstValue (.headers response) "content-type") nil)))
-        (is (= #{:error :category :requestId :retryable}
+        (is (= #{:error :category :requestId :retryable :stage :elapsedMs}
                (set (keys body))))
         (is (= "preview_failed" (:error body)))
         (is (= "drive_source_content" (:category body)))
         (is (= request-id (:requestId body)))
+        (is (= "source_content" (:stage body)))
+        (is (<= 0 (:elapsedMs body) 45000))
         (is (re-matches #"[0-9a-f-]{36}" request-id))
         (is (= "request_failed" (:event event)))
         (is (= request-id (:requestId event)))
@@ -165,6 +167,90 @@
         (is (= "image/png"
                (.orElse (.firstValue (.headers response) "content-type") nil)))
         (is (= "composited-midpoint" (.body response))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest selected-drive-source-rendering-failure-exposes-safe-diagnostics
+  (let [events (atom [])
+        source-gateway
+        (reify drive/SourceGateway
+          (source-metadata! [_ _access-token file-id]
+            {:id file-id
+             :name "private-selected-source.mp4"
+             :mimeType "video/mp4"
+             :size 1024
+             :trashed false})
+          (stream-source! [_ _access-token _file-id output]
+            (.write ^java.io.OutputStream output
+                    (.getBytes "private-source-bytes"
+                               java.nio.charset.StandardCharsets/UTF_8))))
+        auth-system (auth-system source-gateway)
+        session (auth/issue-session auth-system
+                                    {:subject "google-subject-1"
+                                     :email "owner@example.com"})
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        port (available-port)
+        server
+        (api/start!
+         port
+         {:auth-system auth-system
+          :video-encoder
+          (reify media/CompositePreviewer
+            (render-composite-preview!
+              [_ _ source-stream! _overlay-png _output]
+              (with-open [output (java.io.OutputStream/nullOutputStream)]
+                (source-stream! output))
+              (Thread/sleep 5)
+              (throw (ex-info "private media tool detail"
+                              {:type ::media/composite-preview-failed
+                               :exit-status 1}))))
+          :event-sink (fn [event fields]
+                        (swap! events conj (assoc fields :event event)))})
+        request (assoc (fixture/render-request)
+                       :sourceVideo {:fileId "private-drive-file-id"}
+                       :outputFormat "h264-mp4"
+                       :fitMode "letterbox"
+                       :audioMode "source+heartbeat")]
+    (try
+      (let [response
+            (test-http/send-string!
+             :post
+             (str "http://127.0.0.1:" port "/ui/preview")
+             (str "request="
+                  (java.net.URLEncoder/encode
+                   (json/write-str request)
+                   java.nio.charset.StandardCharsets/UTF_8))
+             {"Content-Type" "application/x-www-form-urlencoded"
+              "Cookie" (str "agg_session=" session)
+              "X-CSRF-Token" csrf})
+            body (.body response)
+            event (first @events)
+            request-id (some-> response .headers (.firstValue "x-request-id")
+                               (.orElse nil))]
+        (is (= 200 (.statusCode response)))
+        (is (str/includes? body "preview_rendering"))
+        (is (str/includes? body "<dt>Stage</dt><dd><code>frame_compose</code>"))
+        (is (str/includes? body "<dt>Status</dt><dd>502</dd>"))
+        (is (str/includes? body "<dt>Elapsed</dt>"))
+        (is (str/includes? body request-id))
+        (is (= {:severity "ERROR"
+                :requestId request-id
+                :category "preview_rendering"
+                :status 502
+                :retryable true
+                :stage "frame_compose"
+                :event "request_failed"}
+               (dissoc event :elapsedMs)))
+        (is (<= 1 (:elapsedMs event) 45000))
+        (is (not-any? #(str/includes? body %)
+                      ["private-selected-source"
+                       "private-drive-file-id"
+                       "private media tool detail"
+                       "private-source-bytes"]))
+        (is (not-any? #(contains? event %)
+                      [:access-token :token :filename :file-id :fileId
+                       :name :body :request :exit-status])))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

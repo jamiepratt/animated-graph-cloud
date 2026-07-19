@@ -172,16 +172,17 @@
                    (merge
                     {:severity (if (= 400 status) "WARNING" "ERROR")
                      :requestId request-id
-                     :category category}
-                    (when (= "preview_timeout" category)
-                      {:status status
-                       :retryable true})
+                     :category category
+                     :status status}
+                    (when (not= 400 status)
+                      {:retryable true})
                     diagnostics)))
     (if (= "/ui/preview" (some-> exchange .getRequestURI .getPath))
       (respond! exchange 200 "text/html; charset=utf-8"
                 (ui/preview-failure-fragment
                  (merge {:category category
                          :request-id request-id
+                         :status status
                          :retryable (not= 400 status)}
                         diagnostics)))
       (respond-json! exchange status body))))
@@ -468,7 +469,20 @@
   (let [started (System/nanoTime)
         timeout-marker (Object.)
         task (future-call render-preview!)
-        result (deref task timeout-ms timeout-marker)]
+        result
+        (try
+          (deref task timeout-ms timeout-marker)
+          (catch Throwable error
+            (let [elapsed-ms
+                  (long (/ (- (System/nanoTime) started) 1000000))]
+              (throw (errors/raise!
+                      "Selected-source preview failed"
+                      {:type ::selected-source-preview-failed
+                       :stage @stage
+                       :status 502
+                       :elapsed-ms elapsed-ms
+                       :retryable true}
+                      error)))))]
     (if (identical? timeout-marker result)
       (do
         (future-cancel task)
