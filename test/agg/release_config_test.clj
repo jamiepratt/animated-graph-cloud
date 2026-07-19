@@ -127,6 +127,16 @@
     (is (not (re-find #"uses: (?:actions/checkout|google-github-actions/(?:auth|setup-gcloud))@v\u005cd+"
                       workflow)))))
 
+(deftest production-deployer-can-resolve-the-pushed-image-digest
+  (let [infrastructure (slurp "infra/dev/main.tf")
+        workflow (slurp ".github/workflows/deploy-production.yml")]
+    (is (str/includes?
+         infrastructure
+         "role    = \"roles/containeranalysis.occurrences.viewer\""))
+    (is (str/includes?
+         workflow
+         "gcloud artifacts docker images describe \"$IMAGE_TAG\""))))
+
 (deftest api-and-overlay-have-distinct-terraform-owned-service-envelopes
   (let [shared (slurp "infra/dev/main.tf")
         production (slurp "infra/prod/main.tf")
