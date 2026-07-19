@@ -251,7 +251,8 @@
   (str "<figure id=\"preview-result\"><img alt=\"Midpoint preview\" src=\"data:image/png;base64,"
        base64-png "\"></figure>"))
 
-(defn preview-failure-fragment [{:keys [category request-id failureCode line]}]
+(defn preview-failure-fragment
+  [{:keys [category request-id failureCode line stage elapsedMs timeoutMs retryable]}]
   (str "<article id=\"preview-result\" class=\"preview-error\" role=\"alert\"><h2>Preview failed</h2><dl>"
        "<dt>Category</dt><dd><code>" (escape-html category) "</code></dd>"
        "<dt>Request ID</dt><dd><code>" (escape-html request-id) "</code></dd>"
@@ -260,6 +261,14 @@
               (escape-html failureCode) "</code></dd>"))
        (when line
          (str "<dt>Source line</dt><dd>" (escape-html line) "</dd>"))
+       (when stage
+         (str "<dt>Stage</dt><dd><code>" (escape-html stage) "</code></dd>"))
+       (when elapsedMs
+         (str "<dt>Elapsed</dt><dd>" (escape-html elapsedMs) " ms</dd>"))
+       (when timeoutMs
+         (str "<dt>Deadline</dt><dd>" (escape-html timeoutMs) " ms</dd>"))
+       (when retryable
+         "<dt>Retryable</dt><dd>Yes</dd>")
        "</dl></article>"))
 
 (defn page [{:keys [user csrf picker-config tokens members logs-enabled?]}]

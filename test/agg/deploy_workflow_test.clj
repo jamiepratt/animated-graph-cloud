@@ -12,6 +12,10 @@
   (is (str/includes? dockerfile "COPY resources ./resources"))
   (is (str/includes? dockerfile "RUN clojure -T:build uber")))
 
+(deftest docker-build-includes-selected-source-preview-media-capabilities
+  (is (str/includes? dockerfile "--enable-muxer=image2pipe,mov,mp4"))
+  (is (str/includes? dockerfile "--enable-encoder=aac,libx264,png,prores_ks")))
+
 (deftest renderer-job-pins-the-runtime-project
   (is (str/includes? terraform
                      "name  = \"GOOGLE_CLOUD_PROJECT\""))

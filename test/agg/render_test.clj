@@ -102,7 +102,8 @@
 (deftest rendering-boundaries-are-protocol-backed
   (is (satisfies? frames/FrameRenderer frames/java2d-frame-renderer))
   (is (satisfies? media/VideoEncoder (media/ffmpeg-video-encoder)))
-  (is (satisfies? media/CompositeEncoder (media/ffmpeg-video-encoder))))
+  (is (satisfies? media/CompositeEncoder (media/ffmpeg-video-encoder)))
+  (is (satisfies? media/CompositePreviewer (media/ffmpeg-video-encoder))))
 
 (deftest compositing-command-keeps-drive-source-on-a-non-seekable-pipe
   (let [command (media/composite-command
@@ -122,6 +123,21 @@
     (is (str/includes? joined "volume=0.5[src]"))
     (is (str/includes? joined "volume=1.0[beat]"))
     (is (not (some #(str/includes? % "source.mp4") command)))))
+
+(deftest selected-source-preview-composites-only-the-midpoint-frame
+  (let [command (media/composite-preview-command
+                 "ffmpeg"
+                 {:width 1920 :height 1080 :duration-seconds 157
+                  :fit-mode "letterbox"}
+                 "/tmp/overlay.png")
+        joined (str/join " " command)]
+    (is (some #{"pipe:0"} command))
+    (is (some #{"/tmp/overlay.png"} command))
+    (is (str/includes? joined "force_original_aspect_ratio=decrease"))
+    (is (= "78.5" (second (drop-while #(not= "-ss" %) command))))
+    (is (= "1" (second (drop-while #(not= "-frames:v" %) command))))
+    (is (not (some #{"-t"} command)))
+    (is (= "pipe:1" (last command)))))
 
 (deftest polar-midpoint-preview-matches-the-golden-render
   (let [telemetry (slurp (io/resource "fixtures/polar/valid.csv"))
@@ -217,8 +233,8 @@
     (testing "the graph has opaque current pixels and half-alpha future pixels"
       (is (some #(= [255 55 82 255] %) colors))
       (is (some #(and (= [255 55 82] (subvec % 0 3))
-                       (pos? (last %))
-                       (< (last %) 255))
+                      (pos? (last %))
+                      (< (last %) 255))
                 colors)))
     (testing "axes and the readout render in white"
       (is (some #(= [255 255 255 255] %) colors)))

@@ -32,13 +32,15 @@ starts from `--disable-everything`, but is no longer limited to the
 overlay-only feature set. It remains network-free, uses only the `file` and
 `pipe` protocols, and keeps FFmpeg's own libraries statically built while
 enabling the in-tree demuxers, decoders, parsers, and bitstream filters needed
-to accept streamable source media.
+to accept streamable source media. The PNG encoder and `image2pipe` muxer are
+enabled only for the bounded selected-source midpoint preview.
 
 The bundle is built with Ubuntu Jammy's pinned
 `libx264-dev=2:0.163.3060+git5db6aa6-2build1` package. FFmpeg enables GPL and
 `libx264`; the final image carries the matching `libx264.so.163` runtime beside
 the FFmpeg and FFprobe binaries. Output encoders are limited to native AAC,
-`libx264`, and `prores_ks`. MOV and MP4 muxers are enabled. The filter set
+PNG, `libx264`, and `prores_ks`. MOV, MP4, and `image2pipe` muxers are enabled.
+The filter set
 includes source normalization, video overlay, frame-rate conversion, audio
 mixing, resampling, and limiting: `scale`, `crop`, `pad`, `fps`, `format`,
 `setsar`, `overlay`, `aformat`, `aresample`, `amix`, and `alimiter`.

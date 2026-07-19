@@ -45,6 +45,34 @@
     (is (not-any? #(contains? (:data signal) %)
                   [:requestBody :token :credential :filename :signedUrl]))))
 
+(deftest preview-timeout-event-keeps-only-bounded-diagnostics
+  (let [fields (observability/safe-event-fields
+                {:severity "ERROR"
+                 :component "api"
+                 :event "request_failed"
+                 :requestId "00000000-0000-0000-0000-000000000000"
+                 :category "preview_timeout"
+                 :stage "frame_compose"
+                 :status 504
+                 :elapsedMs 45001
+                 :timeoutMs 45000
+                 :retryable true
+                 :fileId "private-file"
+                 :filename "private.mov"
+                 :requestBody "private-telemetry"})]
+    (is (= {:severity "ERROR"
+            :component "api"
+            :event "request_failed"
+            :requestId "00000000-0000-0000-0000-000000000000"
+            :category "preview_timeout"
+            :stage "frame_compose"
+            :status 504
+            :elapsedMs 45001
+            :timeoutMs 45000
+            :retryable true}
+           fields))
+    (is (empty? (observability/safe-event-fields {:stage "private.mov"})))))
+
 (deftest tufte-emits-structured-profile-signal
   (let [signals (atom [])]
     (tufte/with-handler
@@ -54,7 +82,7 @@
         ([] nil))
       {:async nil}
       (tufte/profile {:id ::render}
-        (tufte/p ::audio-generation (+ 1 1))))
+                     (tufte/p ::audio-generation (+ 1 1))))
     (let [signal (some #(when (= ::render (:id %)) %) @signals)]
       (is signal)
       (is (:pstats signal)))))
