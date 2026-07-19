@@ -145,6 +145,18 @@
                         (preview-diagnostics error))))
       (respond-json! exchange status body))))
 
+(defn- respond-admin-logs-failure! [dependencies exchange request-id]
+  (emit-event! dependencies "request_failed"
+               {:severity "ERROR"
+                :requestId request-id
+                :category "admin_logs_query"
+                :reason "log_store_query"
+                :status 503})
+  (respond-json! exchange 503 {:error "admin_logs_unavailable"
+                               :category "admin_logs_query"
+                               :requestId request-id
+                               :retryable true}))
+
 (defn- oauth-callback-failure [type]
   (case type
     ::auth/revoked-grant
@@ -832,8 +844,16 @@
   (let [user (require-administrator-session-user! exchange auth-system
                                                   admin-service)
         options (log-options exchange)
-        entries (mapv logs/public-entry
-                      (logs/list-logs log-store options))]
+        entries (try
+                  (mapv logs/public-entry
+                        (logs/list-logs log-store options))
+                  (catch Throwable error
+                    (errors/raise! "Operational log query failed"
+                                   {:type ::log-store-query-failed
+                                    :status 503
+                                    :retryable true
+                                    :reason "log_store_query"}
+                                   error)))]
     (doto (.getResponseHeaders exchange)
       (.set "Referrer-Policy" "no-referrer")
       (.set "Content-Security-Policy"
@@ -1208,6 +1228,9 @@
 
                   ::admin/owner-cannot-be-revoked
                   (respond-json! exchange 409 {:error "owner_cannot_be_revoked"})
+
+                  ::log-store-query-failed
+                  (respond-admin-logs-failure! dependencies exchange request-id)
 
                   ::jobs/member-not-allowlisted
                   (respond-json! exchange 403 {:error "not_allowlisted"})

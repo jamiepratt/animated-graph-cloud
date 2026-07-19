@@ -128,6 +128,16 @@
                                          :event "job_failed"
                                          :message "Render request failed"}
                                         "{\"severity\":\"ERROR\",\"component\":\"api\",\"event\":\"job_failed\"}"))
+        _ (logs/append-log! log-store
+                            (logs/entry {:severity "ERROR"
+                                         :component "renderer"
+                                         :event "wrong_component"}
+                                        "{\"severity\":\"ERROR\",\"component\":\"renderer\",\"event\":\"wrong_component\"}"))
+        _ (logs/append-log! log-store
+                            (logs/entry {:severity "INFO"
+                                         :component "api"
+                                         :event "wrong_severity"}
+                                        "{\"severity\":\"INFO\",\"component\":\"api\",\"event\":\"wrong_severity\"}"))
         {:keys [directory service]}
         (admin/in-memory-system {:owner-email "owner@example.com"
                                  :initial-emails #{"member@example.com"
@@ -145,9 +155,11 @@
                                  :log-store log-store})]
     (try
       (let [landing (request! port :get "/" nil {"Cookie" owner-cookie})
-            formatted (request! port :get "/ui/admin/logs?severity=ERROR"
+            formatted (request! port :get
+                                "/ui/admin/logs?severity=ERROR&component=api"
                                 nil {"Cookie" admin-cookie})
-            raw (request! port :get "/ui/admin/logs?view=raw&component=api"
+            raw (request! port :get
+                          "/ui/admin/logs?view=raw&severity=ERROR&component=api"
                           nil {"Cookie" owner-cookie})
             member-response (request! port :get "/ui/admin/logs"
                                       nil {"Cookie" member-cookie})]
@@ -156,9 +168,59 @@
         (is (str/includes? (.body formatted) "Formatted events"))
         (is (str/includes? (.body formatted) "Job failed"))
         (is (str/includes? (.body formatted) "Render request failed"))
+        (is (not (str/includes? (.body formatted) "Wrong component")))
+        (is (not (str/includes? (.body formatted) "Wrong severity")))
         (is (= 200 (.statusCode raw)))
         (is (str/includes? (.body raw) "Raw JSON"))
         (is (str/includes? (.body raw) "&quot;event&quot;:&quot;job_failed&quot;"))
+        (is (not (str/includes? (.body raw) "wrong_component")))
+        (is (not (str/includes? (.body raw) "wrong_severity")))
         (is (= 403 (.statusCode member-response))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest admin-log-store-failures-are-safe-and-correlated
+  (let [port (available-port)
+        events (atom [])
+        log-store (reify logs/LogStore
+                    (append-log! [_ _]
+                      (throw (UnsupportedOperationException.)))
+                    (list-logs [_ _]
+                      (throw (ex-info "Firestore query failed for owner@example.com"
+                                      {:token "secret"
+                                       :file-id "private-file"}))))
+        {:keys [directory service]}
+        (admin/in-memory-system {:owner-email "owner@example.com"})
+        auth-system (auth-system directory)
+        owner {:subject "owner-subject" :email "owner@example.com"}
+        owner-cookie (str "agg_session=" (auth/issue-session auth-system owner))
+        server (api/start! port {:auth-system auth-system
+                                 :admin-service service
+                                 :log-store log-store
+                                 :event-sink (fn [event fields]
+                                               (swap! events conj
+                                                      (assoc fields :event event)))})]
+    (try
+      (let [response (request! port :get
+                               "/ui/admin/logs?view=raw&severity=ERROR&component=api"
+                               nil {"Cookie" owner-cookie})
+            body (json/read-str (.body response) :key-fn keyword)
+            request-id (some-> response .headers (.firstValue "x-request-id")
+                               (.orElse nil))]
+        (is (= 503 (.statusCode response)))
+        (is (= #{:error :category :requestId :retryable}
+               (set (keys body))))
+        (is (= "admin_logs_unavailable" (:error body)))
+        (is (= "admin_logs_query" (:category body)))
+        (is (= request-id (:requestId body)))
+        (is (= true (:retryable body)))
+        (is (re-matches #"[0-9a-f-]{36}" request-id))
+        (is (= [{:event "request_failed"
+                 :severity "ERROR"
+                 :requestId request-id
+                 :category "admin_logs_query"
+                 :reason "log_store_query"
+                 :status 503}]
+               @events)))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
