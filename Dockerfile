@@ -22,6 +22,7 @@ RUN apt-get update \
        pkg-config \
        libx264-dev=2:0.163.3060+git5db6aa6-2build1 \
        xz-utils \
+       zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl --fail --location --silent --show-error \
@@ -42,6 +43,7 @@ RUN curl --fail --location --silent --show-error \
        --enable-static \
        --enable-gpl \
        --enable-libx264 \
+       --enable-zlib \
        --pkg-config-flags=--static \
        --enable-ffmpeg \
        --enable-ffprobe \
@@ -51,11 +53,11 @@ RUN curl --fail --location --silent --show-error \
        --enable-swscale \
        --enable-protocol=file,pipe \
        --enable-demuxers \
-       --enable-muxer=mov,mp4 \
+       --enable-muxer=image2pipe,mov,mp4 \
        --enable-decoders \
        --enable-parsers \
        --enable-bsfs \
-       --enable-encoder=aac,libx264,prores_ks \
+       --enable-encoder=aac,libx264,png,prores_ks \
        --enable-filter=aformat,alimiter,amix,aresample,crop,fps,format,overlay,pad,scale,setsar \
     && make --jobs="$(nproc)" \
     && make install \

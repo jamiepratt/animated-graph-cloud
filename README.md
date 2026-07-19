@@ -87,7 +87,9 @@ route is limited to a one-second production diagnostic. Longer requests return
 HTTP 422 before rendering and identify `POST /v1/jobs` as the supported path.
 This keeps every public browser and API call same-origin while avoiding Firebase
 Hosting's 60-second backend limit. A preview may include a verified Drive
-source; compositing and every production-length render use durable jobs.
+source. A selected-source preview decodes and composites only its midpoint
+frame and has a 45-second application deadline. Full compositing and every
+production-length render use durable jobs.
 
 ```json
 {

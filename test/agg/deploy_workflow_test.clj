@@ -12,6 +12,17 @@
   (is (str/includes? dockerfile "COPY resources ./resources"))
   (is (str/includes? dockerfile "RUN clojure -T:build uber")))
 
+(deftest docker-build-includes-selected-source-preview-media-capabilities
+  (let [runtime-start (str/last-index-of dockerfile "\nFROM ")
+        ffmpeg-builder (subs dockerfile 0 runtime-start)
+        runtime (subs dockerfile runtime-start)]
+    (is (str/includes? ffmpeg-builder "zlib1g-dev"))
+    (is (str/includes? ffmpeg-builder "--enable-zlib"))
+    (is (str/includes? dockerfile "--enable-muxer=image2pipe,mov,mp4"))
+    (is (str/includes? dockerfile "--enable-encoder=aac,libx264,png,prores_ks"))
+    (is (not (str/includes? runtime "zlib1g-dev")))
+    (is (not (str/includes? runtime "apt-get install")))))
+
 (deftest renderer-job-pins-the-runtime-project
   (is (str/includes? terraform
                      "name  = \"GOOGLE_CLOUD_PROJECT\""))

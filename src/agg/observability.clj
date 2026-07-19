@@ -9,12 +9,16 @@
     :releasedLeases :targetMemberId :tokensRevoked :credentialsDeleted
     :jobsCancelled :cleanupErrors :components :failureCode :errorType :port
     :requestId :category :status :phase :view :listState :tokenStatus
-    :accountStatus :mimeFilter :indexStatus})
+    :accountStatus :mimeFilter :indexStatus :stage :elapsedMs :timeoutMs
+    :retryable})
 
 (def ^:private safe-value-keys
   #{:severity :component :event :message :reason :failureCode :errorType
     :requestId :category :phase :view :listState :tokenStatus :accountStatus
-    :mimeFilter :indexStatus})
+    :mimeFilter :indexStatus :stage})
+
+(def ^:private safe-stages
+  #{"source_metadata" "source_content" "frame_compose"})
 
 (defn- safe-string? [value]
   (and (string? value)
@@ -30,6 +34,7 @@
 (defn- safe-event-value? [key value]
   (cond
     (= :message key) (safe-message? value)
+    (= :stage key) (contains? safe-stages value)
     (contains? safe-value-keys key) (safe-string? value)
     (contains? #{:cleanupErrors :components} key)
     (and (vector? value) (<= (count value) 16) (every? safe-string? value))

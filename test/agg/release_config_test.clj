@@ -277,6 +277,17 @@
     (is (str/includes? smoke "$api_host_port/v1/preview"))
     (is (str/includes? smoke "$overlay_host_port/v1/overlay"))))
 
+(deftest container-smoke-bounds-selected-source-preview-capability-probes
+  (let [smoke (slurp "test/container_smoke.sh")]
+    (is (str/includes? smoke "-h encoder=png"))
+    (is (str/includes?
+         smoke
+         "Encoder png [PNG (Portable Network Graphics) image]:"))
+    (is (str/includes? smoke "-h muxer=image2pipe"))
+    (is (str/includes? smoke "Muxer image2pipe [piped image2 sequence]:"))
+    (is (not (re-find #"-encoders.*grep -q ' png '" smoke)))
+    (is (not (re-find #"-muxers.*grep -q ' image2pipe '" smoke)))))
+
 (deftest production-release-verifies-private-services-before-targeted-reconciliation-and-promotion
   (let [workflow (slurp ".github/workflows/deploy-production.yml")
         terraform-init (str/index-of workflow
