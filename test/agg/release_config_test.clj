@@ -35,7 +35,7 @@
     (is (str/includes? shared "id = \"projects/${each.value}/databases/(default)\""))
     (is (str/includes? shared "count = var.api_service_url == \"\" ? 0 : 1"))))
 
-(deftest production-bootstrap-defers-only-observability-log-ttl
+(deftest production-enables-observability-log-ttl-after-bootstrap
   (let [production (slurp "infra/prod/main.tf")
         shared (slurp "infra/dev/main.tf")
         variables (slurp "infra/dev/variables.tf")]
@@ -45,7 +45,7 @@
                  shared))
     (is (re-find #"(?s)moved \{\s*from\s*=\s*google_firestore_field\.observability_logs_expiry\s*to\s*=\s*google_firestore_field\.observability_logs_expiry\[0\]\s*\}"
                  shared))
-    (is (re-find #"enable_observability_log_ttl\s*=\s*false" production))))
+    (is (re-find #"enable_observability_log_ttl\s*=\s*true" production))))
 
 (deftest production-bootstrap-documents-the-ttl-owner-checkpoint
   (let [decision (slurp "docs/adr/0011-automatic-production-deployment.md")
