@@ -41,7 +41,8 @@
 (def max-request-bytes contract/max-render-request-bytes)
 
 (def ^:private public-assets
-  {"/alpha-compose-mark.svg" ["public/alpha-compose-mark.svg" "image/svg+xml; charset=utf-8"]
+  {"/openapi.yaml" ["openapi.yaml" "application/yaml; charset=utf-8"]
+   "/alpha-compose-mark.svg" ["public/alpha-compose-mark.svg" "image/svg+xml; charset=utf-8"]
    "/favicon.svg" ["public/favicon.svg" "image/svg+xml; charset=utf-8"]
    "/favicon-16.png" ["public/favicon-16.png" "image/png"]
    "/favicon-32.png" ["public/favicon-32.png" "image/png"]

@@ -12,6 +12,8 @@
   (clean nil)
   (b/copy-dir {:src-dirs ["src" "resources"]
                :target-dir class-dir})
+  (b/copy-file {:src "docs/openapi.yaml"
+                :target (str class-dir "/openapi.yaml")})
   (b/compile-clj {:basis @basis
                   :class-dir class-dir
                   :ns-compile '[agg.api.main agg.renderer.main]

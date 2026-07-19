@@ -5,6 +5,7 @@ COPY deps.edn build.clj ./
 RUN clojure -P -T:build
 COPY src ./src
 COPY resources ./resources
+COPY docs/openapi.yaml ./docs/openapi.yaml
 RUN clojure -T:build uber
 
 FROM eclipse-temurin:21-jre-jammy@sha256:d63bd8d9b171999cbed8576f2c76e874dd4856791a358536e5c4d407e77edc13 AS ffmpeg-build

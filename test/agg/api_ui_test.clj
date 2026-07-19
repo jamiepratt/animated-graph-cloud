@@ -151,6 +151,27 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest openapi-contract-is-served-as-a-public-read-only-asset
+  (let [port (available-port)
+        server (api/start! port)]
+    (try
+      (let [response (test-http/send-string! :get
+                                             (str "http://127.0.0.1:" port
+                                                  "/openapi.yaml")
+                                             nil
+                                             {})
+            body (.body response)]
+        (is (= 200 (.statusCode response)))
+        (is (= "application/yaml; charset=utf-8"
+               (.orElse (.firstValue (.headers response) "Content-Type") nil)))
+        (is (= "public, max-age=86400, immutable"
+               (.orElse (.firstValue (.headers response) "Cache-Control") nil)))
+        (is (= (slurp "docs/openapi.yaml") body))
+        (is (str/includes? body "openapi: 3.1.0"))
+        (is (not (str/includes? body "client_secret"))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest htmx-owner-workflow-previews-submits-polls-cancels-and-retries
   (let [port (available-port)
         lifecycle (jobs/in-memory-system)

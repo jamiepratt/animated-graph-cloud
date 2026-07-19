@@ -17,6 +17,10 @@ terraform -chdir=infra/dev init
 terraform -chdir=infra/dev validate
 ```
 
+The versioned production OpenAPI contract is publicly available at
+[`https://alphacompose.com/openapi.yaml`](https://alphacompose.com/openapi.yaml).
+This is the canonical published contract URL; its source is `docs/openapi.yaml`.
+
 The uberjar contains both entry points:
 
 ```sh

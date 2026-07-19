@@ -193,7 +193,9 @@ members; configured administrators are bootstrapped from `AGG_ADMIN_EMAILS`.
 Afterward, apply the Scheduler step above, complete
 `docs/release-acceptance.md`, and store a populated copy of the evidence
 template outside the repository or in the approved release record. Verify the
-operations dashboard and alerts before costed acceptance.
+operations dashboard and alerts before costed acceptance. The canonical public
+OpenAPI contract URL is `https://alphacompose.com/openapi.yaml`; the production
+workflow checks its `application/yaml` response and versioned document marker.
 
 ## Rollback
 
