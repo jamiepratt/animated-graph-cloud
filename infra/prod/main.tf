@@ -11,6 +11,11 @@ module "application" {
   operations_alert_email   = "me@jamiep.org"
   environment_name         = "production"
   import_default_firestore = false
-  import_api_service       = true
+  import_api_service       = false
   enable_firebase_hosting  = true
+}
+
+import {
+  to = module.application.google_cloud_run_v2_service.api
+  id = "projects/animated-graph-cloud-prod-jp/locations/europe-central2/services/agg-api"
 }

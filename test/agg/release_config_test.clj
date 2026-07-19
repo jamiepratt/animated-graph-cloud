@@ -117,6 +117,7 @@
 
 (deftest synchronous-overlay-runtime-has-one-proven-render-envelope-per-instance
   (let [shared (slurp "infra/dev/main.tf")
+        production (slurp "infra/prod/main.tf")
         workflow (slurp ".github/workflows/deploy-production.yml")]
     (is (str/includes? shared
                        "resource \"google_cloud_run_v2_service\" \"api\""))
@@ -124,6 +125,9 @@
     (is (str/includes? shared "timeout                          = \"3600s\""))
     (is (re-find #"(?s)resource \"google_cloud_run_v2_service\" \"api\".*?cpu\s*=\s*\"8\".*?memory\s*=\s*\"32Gi\""
                  shared))
+    (is (re-find #"(?s)import\s*\{.*?to\s*=\s*module\.application\.google_cloud_run_v2_service\.api"
+                 production))
+    (is (re-find #"import_api_service\s*=\s*false" production))
     (doseq [argument ["--cpu 8" "--memory 32Gi" "--concurrency 1"
                       "--timeout 3600" "--execution-environment gen2"]]
       (testing argument
