@@ -18,11 +18,33 @@ docker run --rm --entrypoint ffmpeg "$image" -version 2>&1 | grep -q 'ffmpeg ver
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -encoders 2>&1 | grep -q 'prores_ks'
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -encoders 2>&1 | grep -q 'libx264'
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -encoders 2>&1 | grep -q 'aac'
-docker run --rm --entrypoint ffmpeg "$image" -hide_banner -encoders 2>&1 | grep -q ' png '
+if ! png_encoder_help="$(docker run --rm --entrypoint ffmpeg "$image" \
+  -hide_banner -h encoder=png 2>&1)"; then
+  echo "could not inspect the container PNG encoder" >&2
+  exit 1
+fi
+case "$png_encoder_help" in
+  *'Encoder png [PNG (Portable Network Graphics) image]:'*) ;;
+  *)
+    echo "container FFmpeg lacks the PNG encoder" >&2
+    exit 1
+    ;;
+esac
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -decoders 2>&1 | grep -q ' h264 '
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -demuxers 2>&1 | grep -q ' matroska,webm '
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -muxers 2>&1 | grep -q ' mp4 '
-docker run --rm --entrypoint ffmpeg "$image" -hide_banner -muxers 2>&1 | grep -q ' image2pipe '
+if ! image2pipe_muxer_help="$(docker run --rm --entrypoint ffmpeg "$image" \
+  -hide_banner -h muxer=image2pipe 2>&1)"; then
+  echo "could not inspect the container image2pipe muxer" >&2
+  exit 1
+fi
+case "$image2pipe_muxer_help" in
+  *'Muxer image2pipe [piped image2 sequence]:'*) ;;
+  *)
+    echo "container FFmpeg lacks the image2pipe muxer" >&2
+    exit 1
+    ;;
+esac
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -h encoder=prores_ks 2>&1 | \
   grep -q 'Supported pixel formats:.*yuva444p10le'
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -h encoder=libx264 2>&1 | \
