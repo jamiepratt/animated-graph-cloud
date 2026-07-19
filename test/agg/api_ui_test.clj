@@ -178,6 +178,10 @@
         (is (str/includes? (.body landing) "validateRequest"))
         (is (str/includes? (.body landing) "contains unknown field"))
         (is (str/includes? (.body landing) "id=\"raw-json\""))
+        (is (str/includes? (.body landing) "const fileBackedValues=Object.create(null)"))
+        (is (str/includes? (.body landing) "function contentValue(id)"))
+        (is (str/includes? (.body landing) "event.target.type==='file'"))
+        (is (str/includes? (.body landing) "setFileBackedValue(targetId"))
         (is (str/includes? (.body landing) "hx-post=\"/ui/tokens\""))
         (is (str/includes? (.body landing) "X-CSRF-Token")))
       (testing "preview is returned as an HTML fragment"
