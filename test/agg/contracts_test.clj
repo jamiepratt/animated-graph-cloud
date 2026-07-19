@@ -1,5 +1,6 @@
 (ns agg.contracts-test
   (:require [agg.contracts.render :as contract]
+            [agg.telemetry.polar :as polar]
             [agg.telemetry.timeline :as timeline]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -28,6 +29,17 @@
             :duration-seconds 2}
            (select-keys prepared
                         [:id :width :height :fps :duration-seconds])))
+    (is (= [{:seconds 0.0 :heart-rate 120.0}
+            {:seconds 1.0 :heart-rate 124.0}
+            {:seconds 2.0 :heart-rate 128.0}]
+           (:telemetry prepared)))))
+
+(deftest polar-sensor-gap-zeros-after-the-requested-window-are-ignored
+  (let [prepared (contract/prepare
+                  (assoc (valid-request)
+                         :telemetry
+                         (slurp (io/resource
+                                 "fixtures/polar/zero-after-window.csv"))))]
     (is (= [{:seconds 0.0 :heart-rate 120.0}
             {:seconds 1.0 :heart-rate 124.0}
             {:seconds 2.0 :heart-rate 128.0}]
@@ -117,6 +129,34 @@
     nil
     (catch clojure.lang.ExceptionInfo error
       (:type (ex-data error)))))
+
+(deftest polar-sensor-gap-zeros-within-the-requested-window-are-rejected
+  (is (= ::polar/malformed-row
+         (error-type
+          (assoc (valid-request)
+                 :telemetry
+                 (slurp (io/resource
+                         "fixtures/polar/zero-inside-window.csv")))))))
+
+(deftest ignored-polar-zeros-still-participate-in-timestamp-ordering
+  (is (= ::contract/unordered-telemetry
+         (error-type
+          (assoc (valid-request)
+                 :telemetry
+                 (slurp
+                  (io/resource
+                   "fixtures/polar/out-of-order-zero-after-window.csv")))))))
+
+(deftest nonzero-invalid-polar-values-outside-the-requested-window-stay-strict
+  (is (= ::polar/malformed-row
+         (error-type
+          (assoc (valid-request)
+                 :telemetry
+                 (str "timestamp,heart_rate\n"
+                      "2026-07-17T10:00:00Z,120\n"
+                      "2026-07-17T10:00:01Z,124\n"
+                      "2026-07-17T10:00:02Z,128\n"
+                      "2026-07-17T10:00:03Z,10\n"))))))
 
 (deftest request-schema-rejects-each-locked-boundary
   (testing "telemetry format"

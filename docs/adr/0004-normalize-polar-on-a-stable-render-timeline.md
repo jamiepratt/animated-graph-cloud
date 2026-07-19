@@ -19,6 +19,14 @@ fit its selected preset, and be fully covered by strictly increasing telemetry.
 Heart rate is linearly interpolated at section boundaries and everywhere the
 renderer or heartbeat synthesizer samples it.
 
+Polar's numeric zero represents a sensor gap, not a heart rate. A render request
+ignores those rows only when their timestamps are strictly outside its mapped
+telemetry section. Their timestamps still participate in strict raw CSV
+ordering. Zero at either boundary or inside the section remains malformed, as
+do all other out-of-range values regardless of timestamp. The remaining valid
+samples must still cover both section boundaries, so ignoring an irrelevant
+sensor gap cannot manufacture coverage.
+
 The production trace uses a fixed 40–220 bpm vertical scale. It shows the whole
 section when it is at most 30 seconds; longer sections use a 30-second window
 centered on the current frame and clamped at section boundaries. The PNG preview

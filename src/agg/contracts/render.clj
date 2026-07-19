@@ -31,8 +31,8 @@
     (Instant/parse value)
     (catch Throwable cause
       (throw (errors/raise! (str field " must be an ISO-8601 instant")
-                      {:type ::invalid-timestamp :field field}
-                      cause)))))
+                            {:type ::invalid-timestamp :field field}
+                            cause)))))
 
 (defn- require! [condition message data]
   (when-not condition
@@ -73,20 +73,21 @@
                 "Unsupported source fit mode"
                 {:type ::unsupported-fit-mode})
       (require! (contains? #{"source+heartbeat" "source-only" "heartbeat-only"}
-                            audio-mode)
+                           audio-mode)
                 "Unsupported composited audio mode"
                 {:type ::unsupported-audio-mode})
       {:output-format output-format
        :fit-mode fit-mode
        :audio-mode audio-mode})))
 
-(defn- parse-heart-rate [format telemetry]
+(defn- parse-heart-rate [format telemetry required-start required-end]
   (case format
-    "polar-csv" (polar/parse-csv telemetry)
+    "polar-csv" (polar/parse-csv telemetry {:required-start required-start
+                                            :required-end required-end})
     "garmin-fit" (garmin/parse-fit-base64 telemetry)
     "oxiwear-hr-csv" (oxiwear/parse-heart-rate-csv telemetry)
     (throw (errors/raise! "Unsupported telemetry format"
-                    {:type ::unsupported-format}))))
+                          {:type ::unsupported-format}))))
 
 (defn- utf8-size [value]
   (alength (.getBytes ^String value StandardCharsets/UTF_8)))
@@ -112,122 +113,124 @@
                                (or outputFormat format)
                                (or fitMode fit)
                                (or audioMode audio))]
-  (require! (#{"polar-csv" "garmin-fit" "oxiwear-hr-csv"}
-             telemetryFormat)
-            "Unsupported telemetry format"
-            {:type ::unsupported-format})
-  (require! (string? telemetry)
-            "Telemetry must be CSV text or base64 FIT content"
-            {:type ::invalid-telemetry})
-  (let [telemetry-limit (if (= "garmin-fit" telemetryFormat)
-                          max-garmin-base64-characters
-                          max-telemetry-bytes)]
-    (require! (<= (utf8-size telemetry) telemetry-limit)
-              "Telemetry exceeds the size limit"
-              {:type ::telemetry-too-large :limit telemetry-limit}))
-  (when spo2
-    (require! (and (map? spo2)
-                   (= "oxiwear-spo2-csv" (:format spo2))
-                   (string? (:telemetry spo2)))
-              "Invalid optional SpO2 input"
-              {:type ::invalid-spo2})
-    (require! (<= (utf8-size (:telemetry spo2)) max-telemetry-bytes)
-              "SpO2 telemetry exceeds the size limit"
-              {:type ::spo2-too-large :limit max-telemetry-bytes}))
-  (when timer
-    (require! (and (map? timer)
-                   (string? (:startAt timer))
-                   (string? (:endAt timer)))
-              "Invalid timer interval"
-              {:type ::invalid-timer}))
-  (when watermark
-    (require! (and (map? watermark)
-                   (string? (:contentBase64 watermark)))
-              "Invalid watermark input"
-              {:type ::invalid-watermark}))
-  (let [render-preset (spec/preset preset)
-        telemetry-sync (instant telemetrySyncAt :telemetrySyncAt)
-        camera-sync (instant cameraSyncAt :cameraSyncAt)
-        section-start (instant sectionStartAt :sectionStartAt)
-        section-end (instant sectionEndAt :sectionEndAt)
-        timer-start (when timer (instant (:startAt timer) :timerStartAt))
-        timer-end (when timer (instant (:endAt timer) :timerEndAt))
-        duration-nanos (.toNanos (Duration/between section-start section-end))
-        duration-seconds (/ duration-nanos 1000000000)
-        telemetry-start (.plusNanos telemetry-sync
-                                    (.toNanos (Duration/between camera-sync
-                                                                section-start)))
-        telemetry-end (.plusNanos telemetry-sync
-                                  (.toNanos (Duration/between camera-sync
-                                                              section-end)))
-        samples (parse-heart-rate telemetryFormat telemetry)
-        spo2-samples (when spo2
-                       (oxiwear/parse-spo2-csv (:telemetry spo2)))
-        watermark-image (when watermark
-                          (watermark/decode-base64
-                           (:contentBase64 watermark)))]
-    (require! (and (not (.isAfter camera-sync section-start))
-                   (.isBefore section-start section-end))
-              "Timestamps must be ordered cameraSyncAt <= sectionStartAt < sectionEndAt"
-              {:type ::invalid-timestamp-order})
-    (require! (zero? (rem duration-nanos 1000000000))
-              "Section duration must be a whole number of seconds"
-              {:type ::fractional-duration})
-    (require! (<= duration-seconds (:duration-seconds render-preset))
-              "Section duration exceeds the preset maximum"
-              {:type ::duration-too-long})
+    (require! (#{"polar-csv" "garmin-fit" "oxiwear-hr-csv"}
+               telemetryFormat)
+              "Unsupported telemetry format"
+              {:type ::unsupported-format})
+    (require! (string? telemetry)
+              "Telemetry must be CSV text or base64 FIT content"
+              {:type ::invalid-telemetry})
+    (let [telemetry-limit (if (= "garmin-fit" telemetryFormat)
+                            max-garmin-base64-characters
+                            max-telemetry-bytes)]
+      (require! (<= (utf8-size telemetry) telemetry-limit)
+                "Telemetry exceeds the size limit"
+                {:type ::telemetry-too-large :limit telemetry-limit}))
+    (when spo2
+      (require! (and (map? spo2)
+                     (= "oxiwear-spo2-csv" (:format spo2))
+                     (string? (:telemetry spo2)))
+                "Invalid optional SpO2 input"
+                {:type ::invalid-spo2})
+      (require! (<= (utf8-size (:telemetry spo2)) max-telemetry-bytes)
+                "SpO2 telemetry exceeds the size limit"
+                {:type ::spo2-too-large :limit max-telemetry-bytes}))
     (when timer
-      (require! (and (not (.isBefore timer-start section-start))
-                     (.isBefore timer-start timer-end)
-                     (not (.isAfter timer-end section-end)))
-                "Timer must satisfy sectionStartAt <= startAt < endAt <= sectionEndAt"
-                {:type ::invalid-timer-order}))
-    (require! (>= (count samples) 2)
-              "Telemetry must contain at least two samples"
-              {:type ::insufficient-telemetry})
-    (require! (ordered? samples)
-              "Telemetry timestamps must be strictly increasing"
-              {:type ::unordered-telemetry})
-    (require! (covers? samples telemetry-start telemetry-end)
-              "Telemetry does not cover the requested section"
-              {:type ::insufficient-coverage})
-    (when spo2-samples
-      (require! (>= (count spo2-samples) 2)
-                "SpO2 telemetry must contain at least two samples"
-                {:type ::insufficient-spo2})
-      (require! (ordered? spo2-samples)
-                "SpO2 timestamps must be strictly increasing"
-                {:type ::unordered-spo2})
-      (require! (covers? spo2-samples telemetry-start telemetry-end)
-                "SpO2 telemetry does not cover the requested section"
-                {:type ::insufficient-spo2-coverage}))
-    (cond-> (assoc (spec/with-duration render-preset duration-seconds)
-                   :telemetry (timeline/section samples
-                                                telemetry-start
-                                                telemetry-end))
-      source
-      (merge source)
+      (require! (and (map? timer)
+                     (string? (:startAt timer))
+                     (string? (:endAt timer)))
+                "Invalid timer interval"
+                {:type ::invalid-timer}))
+    (when watermark
+      (require! (and (map? watermark)
+                     (string? (:contentBase64 watermark)))
+                "Invalid watermark input"
+                {:type ::invalid-watermark}))
+    (let [render-preset (spec/preset preset)
+          telemetry-sync (instant telemetrySyncAt :telemetrySyncAt)
+          camera-sync (instant cameraSyncAt :cameraSyncAt)
+          section-start (instant sectionStartAt :sectionStartAt)
+          section-end (instant sectionEndAt :sectionEndAt)
+          timer-start (when timer (instant (:startAt timer) :timerStartAt))
+          timer-end (when timer (instant (:endAt timer) :timerEndAt))
+          duration-nanos (.toNanos (Duration/between section-start section-end))
+          duration-seconds (/ duration-nanos 1000000000)
+          telemetry-start (.plusNanos telemetry-sync
+                                      (.toNanos (Duration/between camera-sync
+                                                                  section-start)))
+          telemetry-end (.plusNanos telemetry-sync
+                                    (.toNanos (Duration/between camera-sync
+                                                                section-end)))
+          parsed-samples (parse-heart-rate telemetryFormat telemetry
+                                           telemetry-start telemetry-end)
+          samples (filterv #(not (::polar/sensor-gap %)) parsed-samples)
+          spo2-samples (when spo2
+                         (oxiwear/parse-spo2-csv (:telemetry spo2)))
+          watermark-image (when watermark
+                            (watermark/decode-base64
+                             (:contentBase64 watermark)))]
+      (require! (and (not (.isAfter camera-sync section-start))
+                     (.isBefore section-start section-end))
+                "Timestamps must be ordered cameraSyncAt <= sectionStartAt < sectionEndAt"
+                {:type ::invalid-timestamp-order})
+      (require! (zero? (rem duration-nanos 1000000000))
+                "Section duration must be a whole number of seconds"
+                {:type ::fractional-duration})
+      (require! (<= duration-seconds (:duration-seconds render-preset))
+                "Section duration exceeds the preset maximum"
+                {:type ::duration-too-long})
+      (when timer
+        (require! (and (not (.isBefore timer-start section-start))
+                       (.isBefore timer-start timer-end)
+                       (not (.isAfter timer-end section-end)))
+                  "Timer must satisfy sectionStartAt <= startAt < endAt <= sectionEndAt"
+                  {:type ::invalid-timer-order}))
+      (require! (>= (count samples) 2)
+                "Telemetry must contain at least two samples"
+                {:type ::insufficient-telemetry})
+      (require! (ordered? parsed-samples)
+                "Telemetry timestamps must be strictly increasing"
+                {:type ::unordered-telemetry})
+      (require! (covers? samples telemetry-start telemetry-end)
+                "Telemetry does not cover the requested section"
+                {:type ::insufficient-coverage})
+      (when spo2-samples
+        (require! (>= (count spo2-samples) 2)
+                  "SpO2 telemetry must contain at least two samples"
+                  {:type ::insufficient-spo2})
+        (require! (ordered? spo2-samples)
+                  "SpO2 timestamps must be strictly increasing"
+                  {:type ::unordered-spo2})
+        (require! (covers? spo2-samples telemetry-start telemetry-end)
+                  "SpO2 telemetry does not cover the requested section"
+                  {:type ::insufficient-spo2-coverage}))
+      (cond-> (assoc (spec/with-duration render-preset duration-seconds)
+                     :telemetry (timeline/section samples
+                                                  telemetry-start
+                                                  telemetry-end))
+        source
+        (merge source)
 
-      sourceVideo
-      (assoc :source-video {:file-id (:fileId sourceVideo)})
+        sourceVideo
+        (assoc :source-video {:file-id (:fileId sourceVideo)})
 
-      sourceVideoServerMetadata
-      (attach-source-metadata sourceVideoServerMetadata)
+        sourceVideoServerMetadata
+        (attach-source-metadata sourceVideoServerMetadata)
 
-      spo2-samples
-      (assoc :spo2 (timeline/section-values spo2-samples
-                                            :spo2
-                                            telemetry-start
-                                            telemetry-end))
+        spo2-samples
+        (assoc :spo2 (timeline/section-values spo2-samples
+                                              :spo2
+                                              telemetry-start
+                                              telemetry-end))
 
-      timer
-      (assoc :timer {:start-seconds (timeline/seconds-between section-start
-                                                              timer-start)
-                     :end-seconds (timeline/seconds-between section-start
-                                                            timer-end)})
+        timer
+        (assoc :timer {:start-seconds (timeline/seconds-between section-start
+                                                                timer-start)
+                       :end-seconds (timeline/seconds-between section-start
+                                                              timer-end)})
 
-      watermark-image
-      (assoc :watermark watermark-image)))))
+        watermark-image
+        (assoc :watermark watermark-image)))))
 
 (defn attach-source-metadata
   "Attaches metadata fetched from Drive; request-supplied metadata is ignored."

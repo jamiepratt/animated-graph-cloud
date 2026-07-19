@@ -124,7 +124,13 @@ both mapped boundaries. The selected preset supplies size, 25 fps, and maximum
 duration. Telemetry is limited to 10 MiB and the JSON envelope to 10 MiB plus
 64 KiB. Accepted Polar CSV uses comma or semicolon delimiters, an absolute
 `timestamp`/`datetime` column, and `heart_rate`, `heart rate`, `HR`, or
-`HR (bpm)` values between 20 and 260 bpm.
+`HR (bpm)` values between 20 and 260 bpm. Polar sensor-gap values of exactly
+zero may remain in an uploaded export when their timestamps are strictly before
+or after the mapped requested section; their values are ignored, but their
+timestamps must remain strictly increasing with every CSV row. Zero values at
+either section boundary or within the section are malformed. Other invalid
+values remain malformed everywhere, and valid samples must still cover both
+mapped section boundaries.
 
 Heart rate is linearly interpolated on one shared section timeline. Preview and
 MOV use a fixed 40–220 bpm scale and a stable 30-second centered/clamped window
