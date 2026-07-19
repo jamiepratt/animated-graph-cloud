@@ -68,7 +68,38 @@
 (defn- preview-path? [path]
   (contains? #{"/v1/preview" "/ui/preview"} path))
 
-(declare respond-json!)
+(declare respond! respond-json!)
+
+(defn- error-data [error]
+  (loop [current error
+         data []]
+    (if current
+      (recur (.getCause ^Throwable current)
+             (conj data (ex-data current)))
+      data)))
+
+(defn- safe-failure-code? [value]
+  (and (string? value)
+       (<= 1 (count value) 128)
+       (re-matches #"[A-Za-z0-9_.:/-]+" value)))
+
+(defn- safe-source-line? [value]
+  (and (integer? value)
+       (<= 1 value 1000000000000)))
+
+(defn- preview-diagnostics [error]
+  (let [data (error-data error)
+        failure-code (some (fn [entry]
+                             (let [value (:failure-code entry)]
+                               (when (safe-failure-code? value) value)))
+                           data)
+        line (some (fn [entry]
+                     (let [value (:line entry)]
+                       (when (safe-source-line? value) value)))
+                   data)]
+    (cond-> {}
+      failure-code (assoc :failureCode failure-code)
+      line (assoc :line line))))
 
 (defn- preview-failure [error request-id]
   (let [types (error-types error)
@@ -98,13 +129,20 @@
      :log? true}))
 
 (defn- respond-preview-failure! [dependencies exchange request-id error]
-  (let [{:keys [status category body log?]} (preview-failure error request-id)]
+  (let [{:keys [status category body log?]}
+        (preview-failure error request-id)]
     (when log?
       (emit-event! dependencies "request_failed"
                    {:severity (if (= 400 status) "WARNING" "ERROR")
                     :requestId request-id
                     :category category}))
-    (respond-json! exchange status body)))
+    (if (= "/ui/preview" (some-> exchange .getRequestURI .getPath))
+      (respond! exchange status "text/html; charset=utf-8"
+                (ui/preview-failure-fragment
+                 (merge {:category category
+                         :request-id request-id}
+                        (preview-diagnostics error))))
+      (respond-json! exchange status body))))
 
 (defn- oauth-callback-failure [type]
   (case type
@@ -1022,8 +1060,13 @@
                   (respond-json! exchange (:status failure) (:body failure)))
                 (case (:type (ex-data error))
                   ::request-too-large
-                  (respond! exchange 413 "application/json; charset=utf-8"
-                            "{\"error\":\"payload_too_large\"}")
+                  (if (= "/ui/preview" path)
+                    (respond! exchange 413 "text/html; charset=utf-8"
+                              (ui/preview-failure-fragment
+                               {:category "request_contract"
+                                :request-id request-id}))
+                    (respond! exchange 413 "application/json; charset=utf-8"
+                              "{\"error\":\"payload_too_large\"}"))
 
                   ::invalid-request
                   (if (preview-path? path)

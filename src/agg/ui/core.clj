@@ -183,6 +183,17 @@
   (str "<figure id=\"preview-result\"><img alt=\"Midpoint preview\" src=\"data:image/png;base64,"
        base64-png "\"></figure>"))
 
+(defn preview-failure-fragment [{:keys [category request-id failureCode line]}]
+  (str "<article id=\"preview-result\" class=\"preview-error\" role=\"alert\"><h2>Preview failed</h2><dl>"
+       "<dt>Category</dt><dd><code>" (escape-html category) "</code></dd>"
+       "<dt>Request ID</dt><dd><code>" (escape-html request-id) "</code></dd>"
+       (when failureCode
+         (str "<dt>Failure code</dt><dd><code>"
+              (escape-html failureCode) "</code></dd>"))
+       (when line
+         (str "<dt>Source line</dt><dd>" (escape-html line) "</dd>"))
+       "</dl></article>"))
+
 (defn page [{:keys [user csrf tokens members logs-enabled?]}]
   (let [csrf-headers (escape-html
                       (str "{\"X-CSRF-Token\":\"" csrf "\"}"))]

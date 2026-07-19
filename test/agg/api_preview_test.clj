@@ -92,6 +92,10 @@
             request-id (some-> response .headers (.firstValue "x-request-id")
                                (.orElse nil))]
         (is (= 502 (.statusCode response)))
+        (is (= "application/json; charset=utf-8"
+               (.orElse (.firstValue (.headers response) "content-type") nil)))
+        (is (= #{:error :category :requestId :retryable}
+               (set (keys body))))
         (is (= "preview_failed" (:error body)))
         (is (= "drive_source_content" (:category body)))
         (is (= request-id (:requestId body)))
@@ -122,6 +126,10 @@
             request-id (some-> response .headers (.firstValue "x-request-id")
                                (.orElse nil))]
         (is (= 400 (.statusCode response)))
+        (is (= "application/json; charset=utf-8"
+               (.orElse (.firstValue (.headers response) "content-type") nil)))
+        (is (= #{:error :category :requestId}
+               (set (keys body))))
         (is (= "invalid_request" (:error body)))
         (is (= "request_contract" (:category body)))
         (is (= request-id (:requestId body)))

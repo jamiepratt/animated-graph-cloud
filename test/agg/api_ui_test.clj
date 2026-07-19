@@ -83,6 +83,39 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest htmx-preview-failure-is-a-safe-correlated-html-fragment
+  (let [port (available-port)
+        {:keys [auth-system owner-cookie owner-csrf]} (fixture)
+        server (api/start! port {:auth-system auth-system})
+        headers (merge form-content-type
+                       {"Cookie" owner-cookie "X-CSRF-Token" owner-csrf})
+        request (assoc (fixture/render-request)
+                       :telemetry
+                       (str "timestamp,heart_rate\n"
+                            "2026-07-17T10:00:00Z,19\n"))]
+    (try
+      (let [response (request! port :post "/ui/preview"
+                               (form {:request (json/write-str request)})
+                               headers)
+            body (.body response)
+            request-id (some-> response .headers (.firstValue "x-request-id")
+                               (.orElse nil))]
+        (is (= 400 (.statusCode response)))
+        (is (= "text/html; charset=utf-8"
+               (.orElse (.firstValue (.headers response) "content-type") nil)))
+        (is (re-matches #"[0-9a-f-]{36}" request-id))
+        (is (str/includes? body "<article id=\"preview-result\""))
+        (is (str/includes? body "Preview failed"))
+        (is (str/includes? body "request_contract"))
+        (is (str/includes? body request-id))
+        (is (str/includes? body "Source line"))
+        (is (str/includes? body ">2</dd>"))
+        (is (not (str/includes? body "{\"error\":\"invalid_request\"}")))
+        (is (not (str/includes? body "heart_rate")))
+        (is (not (str/includes? body "2026-07-17"))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest site-icon-assets-are-served-and-linked
   (let [port (available-port)
         {:keys [auth-system]} (fixture)
@@ -101,8 +134,8 @@
         (is (str/includes? (.body homepage) "href=\"/favicon.svg\""))
         (is (str/includes? (.body homepage) "href=\"/apple-touch-icon.png\""))
         (is (str/includes? (.orElse (.firstValue (.headers homepage)
-                                             "Content-Security-Policy")
-                                   nil)
+                                                 "Content-Security-Policy")
+                                    nil)
                            "img-src 'self' data:"))
         (is (= 200 (.statusCode svg)))
         (is (= "image/svg+xml; charset=utf-8"
