@@ -5,7 +5,9 @@
             [agg.jobs-test :as fixture]
             [agg.jobs.lifecycle :as jobs]
             [agg.tokens.core :as tokens]
+            [agg.ui.core :as ui]
             [clojure.data.json :as json]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]])
   (:import (java.net URLEncoder)
@@ -49,6 +51,13 @@
 (def form-content-type
   {"Content-Type" "application/x-www-form-urlencoded"})
 
+(defn- javascript-valid? [source]
+  (let [process (.start (ProcessBuilder. ["node" "--check" "/dev/stdin"]))]
+    (with-open [writer (io/writer (.getOutputStream process))]
+      (.write writer source))
+    (.readAllBytes (.getErrorStream process))
+    (= 0 (.waitFor process))))
+
 (deftest public-product-and-legal-pages-identify-alpha-compose
   (let [port (available-port)
         {:keys [auth-system]} (fixture)
@@ -80,6 +89,37 @@
         (is (= 200 (.statusCode terms)))
         (is (str/includes? (.body terms) "Terms of service"))
         (is (str/includes? (.body terms) "me@jamiep.org")))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest authenticated-compose-page-renders-parseable-inline-script
+  (let [port (available-port)
+        {:keys [auth-system owner-cookie]} (fixture)
+        server (api/start! port {:auth-system auth-system})]
+    (try
+      (let [landing (request! port :get "/" nil {"Cookie" owner-cookie})
+            script (second (re-find #"(?s)<script>(.*?)</script>"
+                                    (.body landing)))
+            configured-page (ui/page {:user {:email "owner@example.com"
+                                             :role :member}
+                                     :csrf "csrf-test"
+                                     :picker-config {:access-token "access-test"
+                                                      :api-key "key-test"
+                                                      :app-id "app-test"
+                                                      :csrf "csrf-test"}
+                                     :tokens []
+                                     :members []
+                                     :logs-enabled? false})
+            configured-script (second (re-find #"(?s)<script>(.*?)</script>"
+                                               configured-page))
+            valid? (and (string? script)
+                        (string? configured-script)
+                        (javascript-valid? script)
+                        (javascript-valid? configured-script))]
+        (is (= 200 (.statusCode landing)))
+        (is (string? script))
+        (is valid?
+            "The rendered compose initialization script must parse."))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

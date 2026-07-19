@@ -341,7 +341,7 @@
      "byId('apply-json').addEventListener('click',()=>{try{const request=JSON.parse(raw.value),errors=validateRequest(request);if(errors.length){show(jsonStatus,errors.map((error,index)=>(index+1)+'. '+error).join('\\n'),'error');return;}applyRequest(request);}catch(error){show(jsonStatus,error.message,'error');}});byId('copy-json').addEventListener('click',()=>{const text=syncRequest(false)||raw.value;navigator.clipboard?navigator.clipboard.writeText(text).then(()=>show(jsonStatus,'Generated JSON copied.','success')):show(jsonStatus,'Copy is unavailable in this browser.');});"
      "form.addEventListener('input',event=>{if(event.target.id==='raw-json'||event.target.type==='file')return;clearFileBackedValue(event.target.id);syncRequest(false);});document.body.addEventListener('htmx:configRequest',event=>{if(!form.contains(event.target))return;const text=syncRequest(true);if(!text){event.preventDefault();return;}event.detail.parameters.request=text;});"
      (picker-script picker-config)
-     "</script></div></body></html>")))
+     "})();</script></div></body></html>")))
 
 (defn- public-page [title body]
   (str "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
