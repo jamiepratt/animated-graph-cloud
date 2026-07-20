@@ -47,7 +47,7 @@
         ["https://www.googleapis.com/auth/userinfo.email"
          "https://www.googleapis.com/auth/userinfo.profile"]))
 
-(defn- valid-granted-scopes? [granted-scopes]
+(defn- required-scopes-granted? [granted-scopes]
   (let [granted (set granted-scopes)]
     (and (contains? granted "openid")
          (or (contains? granted "email")
@@ -56,8 +56,10 @@
          (or (contains? granted "profile")
              (contains? granted
                         "https://www.googleapis.com/auth/userinfo.profile"))
-         (contains? granted drive-file-scope)
-         (every? accepted-returned-scopes granted))))
+         (contains? granted drive-file-scope))))
+
+(defn- only-accepted-scopes-granted? [granted-scopes]
+  (every? accepted-returned-scopes granted-scopes))
 
 (def ^:private flow-seconds (* 10 60))
 (def ^:private session-seconds (* 12 60 60))
@@ -460,9 +462,12 @@
                    (not (str/blank? email)))
       (throw (errors/raise! "Google identity is not allowlisted"
                             {:type ::not-allowlisted})))
-    (when-not (valid-granted-scopes? granted-scopes)
-      (throw (errors/raise! "Drive grant has unexpected scopes"
-                            {:type ::invalid-drive-scopes})))
+    (when-not (required-scopes-granted? granted-scopes)
+      (throw (errors/raise! "Google grant is missing required scopes"
+                            {:type ::missing-required-scopes})))
+    (when-not (only-accepted-scopes-granted? granted-scopes)
+      (throw (errors/raise! "Google grant has unexpected scopes"
+                            {:type ::unexpected-scopes})))
     (when (str/blank? access-token)
       (throw (errors/raise! "Drive grant did not return an access token"
                             {:type ::missing-access-token})))

@@ -159,6 +159,54 @@
                                               :state-cookie
                                               (:stateCookie flow)}))))))
 
+(deftest combined-login-classifies-missing-required-scopes-before-side-effects
+  (let [{:keys [system grants encrypted folders]} (drive-fixture)
+        oauth (reify auth/OAuthClient
+                (exchange-code! [_ _ _ _ _]
+                  {:subject "private-google-subject"
+                   :email "private@example.com"
+                   :email-verified? true
+                   :access-token "private-access-token"
+                   :refresh-token "private-refresh-token"
+                   :granted-scopes #{"openid" "email" "profile"}}))
+        system (assoc system :oauth oauth)
+        flow (auth/begin-flow! system :login nil)
+        error (try
+                (auth/finish-login! system {:code "private-code"
+                                            :state (:state flow)
+                                            :state-cookie (:stateCookie flow)})
+                nil
+                (catch clojure.lang.ExceptionInfo error error))]
+    (is (= ::auth/missing-required-scopes (:type (ex-data error))))
+    (is (empty? @grants))
+    (is (empty? @encrypted))
+    (is (empty? @folders))))
+
+(deftest combined-login-classifies-unexpected-scopes-before-side-effects
+  (let [{:keys [system grants encrypted folders]} (drive-fixture)
+        oauth (reify auth/OAuthClient
+                (exchange-code! [_ _ _ _ _]
+                  {:subject "private-google-subject"
+                   :email "private@example.com"
+                   :email-verified? true
+                   :access-token "private-access-token"
+                   :refresh-token "private-refresh-token"
+                   :granted-scopes
+                   (conj (set auth/approved-scopes)
+                         "https://www.googleapis.com/auth/private.extra")}))
+        system (assoc system :oauth oauth)
+        flow (auth/begin-flow! system :login nil)
+        error (try
+                (auth/finish-login! system {:code "private-code"
+                                            :state (:state flow)
+                                            :state-cookie (:stateCookie flow)})
+                nil
+                (catch clojure.lang.ExceptionInfo error error))]
+    (is (= ::auth/unexpected-scopes (:type (ex-data error))))
+    (is (empty? @grants))
+    (is (empty? @encrypted))
+    (is (empty? @folders))))
+
 (deftest pkce-state-survives-scale-to-zero-and-session-rechecks-allowlist
   (let [{first-instance :system} (drive-fixture)
         callback-instance first-instance

@@ -244,15 +244,32 @@
      :body {:error "drive_grant_required"
             :recoveryPath "/v1/auth/login/start?recovery=true"}}
 
-    ::auth/invalid-drive-scopes
+    ::auth/missing-required-scopes
+    {:category "missing_required_scopes"
+     :status 400
+     :retry-path "/v1/auth/login/start?recovery=true"
+     :body {:error "invalid_drive_scopes"}}
+
+    ::auth/unexpected-scopes
     {:category "unexpected_scopes"
      :status 400
+     :retry-path "/v1/auth/login/start?recovery=true"
      :body {:error "invalid_drive_scopes"}}
 
     ::auth/invalid-code
     {:category "invalid_code"
      :status 400
      :body {:error "invalid_oauth_code"}}
+
+    ::auth/not-allowlisted
+    {:category "not_allowlisted"
+     :status 403
+     :body {:error "not_allowlisted"}}
+
+    ::auth/invalid-state
+    {:category "invalid_state"
+     :status 400
+     :body {:error "invalid_oauth_state"}}
 
     ::auth/oauth-exchange-failed
     {:category "oauth_exchange"
@@ -281,14 +298,29 @@
 
     nil))
 
-(defn- log-oauth-callback-failure! [dependencies request-id failure error]
+(def ^:private unexpected-oauth-callback-failure
+  {:category "unexpected"
+   :status 500
+   :body {:error "oauth_callback_failed" :retryable true}})
+
+(def ^:private safe-oauth-callback-reasons
+  #{"access_denied" "deadline_exceeded" "drive_disabled"
+    "failed_precondition" "internal" "permission_denied"
+    "resource_exhausted" "service_disabled" "temporarily_unavailable"
+    "unauthenticated" "unavailable" "workspace_restricted"})
+
+(defn- safe-oauth-callback-reason [error]
+  (let [reason (:reason (ex-data error))]
+    (when (contains? safe-oauth-callback-reasons reason)
+      reason)))
+
+(defn- log-oauth-callback-failure! [dependencies request-id failure]
   (emit-event! dependencies "oauth_callback_failed"
                (cond-> {:severity (if (>= (:status failure) 500) "ERROR" "WARNING")
                         :requestId request-id
                         :category (:category failure)
                         :status (:status failure)}
-                 (string? (:reason (ex-data error)))
-                 (assoc :reason (:reason (ex-data error))))))
+                 (:reason failure) (assoc :reason (:reason failure)))))
 
 (defn- respond-bytes! [^HttpExchange exchange status content-type bytes]
   (doto (.getResponseHeaders exchange)
@@ -322,6 +354,101 @@
 (defn- respond-json! [exchange status body]
   (respond! exchange status "application/json; charset=utf-8"
             (json/write-str body)))
+
+(defn- browser-html-request? [^HttpExchange exchange]
+  (some-> exchange .getRequestHeaders (.getFirst "Accept")
+          (.toLowerCase java.util.Locale/ROOT)
+          (.contains "text/html")))
+
+(defn- oauth-callback-error-page [{:keys [category reason retry-path]} request-id]
+  (let [{:keys [title explanation next-step]}
+        (case category
+          "missing_required_scopes"
+          {:title "Google Drive access could not be established"
+           :explanation
+           (str "Google did not return the restricted <code>drive.file</code> "
+                "permission required to select inputs and deliver renders. "
+                "Alpha Compose cannot tell from this response whether Drive is "
+                "disabled, unavailable, denied, or restricted by a Workspace administrator.")
+           :next-step
+           "Check that Drive is available for the intended account, then try again and approve the requested access."}
+          "unexpected_scopes"
+          {:title "Google Drive access could not be established"
+           :explanation
+           (str "Google returned an additional permission outside Alpha Compose's "
+                "restricted set, so the callback was rejected. Alpha Compose cannot "
+                "tell whether it came from the account, consent history, browser, or "
+                "Workspace policy.")
+           :next-step
+           "Try again with the intended account and approve only the access Alpha Compose requests."}
+          "not_allowlisted"
+          {:title "This Google account does not have Alpha Compose access"
+           :explanation
+           "The account was authenticated, but it is not on the administrator-managed access list."
+           :next-step
+           "Try again with an approved Google account, or ask an Alpha Compose administrator for access."}
+          "drive"
+          (cond
+            (= "workspace_restricted" reason)
+            {:title "Google Workspace restricted Drive access"
+             :explanation
+             "Google reported that a Workspace policy blocked the required Drive operation."
+             :next-step
+             "You can try again. If it continues, ask your Workspace administrator whether Alpha Compose is allowed."}
+
+            (contains? #{"drive_disabled" "service_disabled"} reason)
+            {:title "Google Drive is disabled for this account"
+             :explanation
+             "Google reported that the Drive service required by Alpha Compose is disabled."
+             :next-step
+             "Enable Drive or use an account where it is available, then try again."}
+
+            (contains? #{"access_denied" "permission_denied"} reason)
+            {:title "Google denied the required Drive operation"
+             :explanation
+             "Google reported a permission denial while Alpha Compose established restricted Drive access."
+             :next-step
+             "Try again with the intended account. If it continues, ask the Workspace administrator about Drive policy."}
+
+            (contains? #{"temporarily_unavailable" "unavailable"} reason)
+            {:title "Google Drive is temporarily unavailable"
+             :explanation
+             "Google reported that the required Drive operation is currently unavailable."
+             :next-step "Wait briefly, then try again."}
+
+            :else
+            {:title "Google Drive access could not be established"
+             :explanation
+             "The Drive operation failed, but Google did not provide bounded evidence of the account or Workspace cause."
+             :next-step
+             "Try again. If it continues, check Drive for the intended account and contact the Workspace administrator."})
+          {:title "Google authorization did not finish"
+           :explanation
+           "Alpha Compose could not safely establish the Google identity and Drive access required to continue."
+           :next-step "Try again. If the problem continues, contact the Alpha Compose administrator."})
+        retry-path (or retry-path "/v1/auth/login/start")]
+    (str "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+         "<title>Authorization error · Alpha Compose</title>"
+         "<style>:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#152238;background:#f5f7fb;line-height:1.5}"
+         "*{box-sizing:border-box}body{margin:0}.shell{max-width:48rem;margin:0 auto;padding:2rem 1.25rem 4rem}"
+         ".brand{color:#152238;font-weight:800;text-decoration:none}.card{margin-top:3rem;background:#fff;border:1px solid #e1e7f0;border-radius:1.1rem;padding:clamp(1.25rem,4vw,2.5rem);box-shadow:0 1rem 3rem #243b5a0d}"
+         ".eyebrow{color:#a13e3e;font-size:.75rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}"
+         "h1{font-size:clamp(2rem,6vw,3.5rem);line-height:1.05;letter-spacing:-.04em;margin:.6rem 0 1rem}"
+         ".muted{color:#5c6b82}.button{display:inline-block;margin-top:.75rem;border-radius:.65rem;padding:.75rem 1rem;background:#4374c5;color:#fff;font-weight:800;text-decoration:none}"
+         "small{display:block;margin-top:1.5rem;color:#6c7a90}</style></head>"
+         "<body><div class=\"shell\"><a class=\"brand\" href=\"/\">Alpha Compose</a>"
+         "<main class=\"card\" role=\"alert\"><div class=\"eyebrow\">Authorization incomplete</div>"
+         "<h1>" title "</h1><p>" explanation "</p><p class=\"muted\">"
+         next-step " No session, Drive grant, membership binding, or render was created.</p>"
+         "<a class=\"button\" href=\"" retry-path "\">Try Google again</a>"
+         "<small>Request ID: " request-id "</small></main></div></body></html>")))
+
+(defn- respond-oauth-callback-failure! [exchange failure request-id]
+  (if (browser-html-request? exchange)
+    (respond! exchange (:status failure) "text/html; charset=utf-8"
+              (oauth-callback-error-page failure request-id))
+    (respond-json! exchange (:status failure) (:body failure))))
 
 (defn- respond-redirect! [^HttpExchange exchange location cookies]
   (doto (.getResponseHeaders exchange)
@@ -1327,18 +1454,25 @@
                   callback? (= "/v1/auth/login/callback" path)
                   recovery-error? (contains? #{::auth/drive-grant-required
                                                ::auth/revoked-grant
-                                               ::auth/missing-refresh-token}
+                                               ::auth/missing-refresh-token
+                                               ::auth/missing-required-scopes
+                                               ::auth/unexpected-scopes}
                                              error-type)
                   _ (when callback?
                       (if recovery-error?
                         (set-drive-recovery-cookie! exchange auth-system)
                         (clear-browser-session! exchange)))
+                  callback-reason (when callback?
+                                    (safe-oauth-callback-reason error))
                   failure (when callback?
-                            (oauth-callback-failure error-type))]
+                            (cond-> (or (oauth-callback-failure error-type)
+                                        unexpected-oauth-callback-failure)
+                              callback-reason
+                              (assoc :reason callback-reason)))]
               (if failure
                 (do
-                  (log-oauth-callback-failure! dependencies request-id failure error)
-                  (respond-json! exchange (:status failure) (:body failure)))
+                  (log-oauth-callback-failure! dependencies request-id failure)
+                  (respond-oauth-callback-failure! exchange failure request-id))
                 (case (:type (ex-data error))
                   ::request-too-large
                   (if (= "/ui/preview" path)
@@ -1504,15 +1638,22 @@
                       (respond! exchange 500 "application/json; charset=utf-8"
                                 "{\"error\":\"render_failed\"}")))))))
           (catch Throwable error
-            (if (preview-path? path)
-              (respond-preview-failure! dependencies exchange request-id error)
+            (if (= "/v1/auth/login/callback" path)
               (do
-                (emit-event! dependencies "request_failed"
-                             {:severity "ERROR"
-                              :reason "unexpected_error"
-                              :errorType (some-> error ex-data :type str)})
-                (respond! exchange 500 "application/json; charset=utf-8"
-                          "{\"error\":\"render_failed\"}")))))))))
+                (clear-browser-session! exchange)
+                (log-oauth-callback-failure!
+                 dependencies request-id unexpected-oauth-callback-failure)
+                (respond-oauth-callback-failure!
+                 exchange unexpected-oauth-callback-failure request-id))
+              (if (preview-path? path)
+                (respond-preview-failure! dependencies exchange request-id error)
+                (do
+                  (emit-event! dependencies "request_failed"
+                               {:severity "ERROR"
+                                :reason "unexpected_error"
+                                :errorType (some-> error ex-data :type str)})
+                  (respond! exchange 500 "application/json; charset=utf-8"
+                            "{\"error\":\"render_failed\"}"))))))))))
 
 (defn start!
   ([port]

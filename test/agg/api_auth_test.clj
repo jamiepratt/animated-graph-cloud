@@ -51,7 +51,7 @@
 (defn- drive-callback-fixture
   ([oauth]
    (drive-callback-fixture oauth {}))
-  ([oauth {:keys [cipher drive grant-store drive-token-client]}]
+  ([oauth {:keys [allowlist cipher drive grant-store drive-token-client]}]
    (let [cipher (or cipher
                     (reify auth/TokenCipher
                       (encrypt-token! [_ value] (str "kms:" value))
@@ -73,7 +73,7 @@
          system (auth/system {:client-id "client-id"
                               :client-secret "client-secret"
                               :base-url "https://app.example.com"
-                              :allowlist #{"owner@example.com"}
+                              :allowlist (or allowlist #{"owner@example.com"})
                               :session-key (.getBytes "01234567890123456789012345678901")
                               :oauth oauth
                               :cipher cipher
@@ -163,7 +163,8 @@
         (.close ^java.lang.AutoCloseable server)))))
 
 (deftest combined-login-callback-returns-safe-categorized-errors
-  (doseq [{:keys [label oauth options expected-status expected-body category]
+  (doseq [{:keys [label oauth options expected-status expected-body category
+                  expected-reason]
            :or {options {}}}
           [{:label "revoked grant"
             :oauth (reify auth/OAuthClient
@@ -187,6 +188,18 @@
             :expected-body {"error" "drive_grant_required"
                             "recoveryPath" "/v1/auth/login/start?recovery=true"}
             :category "missing_refresh_token"}
+           {:label "missing required scopes"
+            :oauth (reify auth/OAuthClient
+                     (exchange-code! [_ _ _ _ _]
+                       {:access-token "drive-access"
+                        :subject "google-subject-1"
+                        :email "owner@example.com"
+                        :email-verified? true
+                        :refresh-token "drive-refresh"
+                        :granted-scopes #{"openid" "email" "profile"}}))
+            :expected-status 400
+            :expected-body {"error" "invalid_drive_scopes"}
+            :category "missing_required_scopes"}
            {:label "unexpected scopes"
             :oauth (reify auth/OAuthClient
                      (exchange-code! [_ _ _ _ _]
@@ -195,10 +208,18 @@
                         :email "owner@example.com"
                         :email-verified? true
                         :refresh-token "drive-refresh"
-                        :granted-scopes #{"https://www.googleapis.com/auth/drive"}}))
+                        :granted-scopes
+                        (conj (set auth/approved-scopes)
+                              "https://www.googleapis.com/auth/private.extra")}))
             :expected-status 400
             :expected-body {"error" "invalid_drive_scopes"}
             :category "unexpected_scopes"}
+           {:label "not allowlisted"
+            :oauth (valid-drive-oauth)
+            :options {:allowlist #{"approved@example.com"}}
+            :expected-status 403
+            :expected-body {"error" "not_allowlisted"}
+            :category "not_allowlisted"}
            {:label "OAuth service"
             :oauth (reify auth/OAuthClient
                      (exchange-code! [_ _ _ _ _]
@@ -220,6 +241,18 @@
             :expected-body {"error" "drive_unavailable"
                             "retryable" true}
             :category "drive"}
+           {:label "unsafe Drive diagnostic"
+            :oauth (valid-drive-oauth)
+            :options {:drive (reify auth/DriveClient
+                               (ensure-output-folder! [_ _ _]
+                                 (throw (ex-info "Drive unavailable"
+                                                 {:type ::drive-unavailable
+                                                  :status 403
+                                                  :reason "https://www.googleapis.com/auth/private.extra"}))))}
+            :expected-status 502
+            :expected-body {"error" "drive_unavailable"
+                            "retryable" true}
+            :category "drive"}
            {:label "KMS service"
             :oauth (valid-drive-oauth)
             :options {:cipher (reify auth/TokenCipher
@@ -232,7 +265,8 @@
             :expected-status 503
             :expected-body {"error" "kms_unavailable"
                             "retryable" true}
-            :category "kms"}
+            :category "kms"
+            :expected-reason "permission_denied"}
            {:label "grant persistence"
             :oauth (valid-drive-oauth)
             :options {:grant-store (reify auth/GrantStore
@@ -260,7 +294,8 @@
           (let [response (get! port
                                (str "/v1/auth/login/callback?code=code&state="
                                     (:state flow))
-                               {"Cookie" (str "__session=" browser-cookie)})
+                               {"Accept" "application/json"
+                                "Cookie" (str "__session=" browser-cookie)})
                 event (second (first @events))]
             (is (= expected-status (.statusCode response)))
             (is (= expected-body (json/read-str (.body response))))
@@ -274,14 +309,236 @@
             (is (= ["oauth_callback_failed"]
                    (mapv first @events)))
             (is (= category (:category event)))
-            (when (= "kms" category)
-              (is (= "permission_denied" (:reason event))))
+            (is (= expected-reason (:reason event)))
             (is (re-matches #"[0-9a-f-]{36}" (:requestId event)))
             (is (= expected-status (:status event)))
             (is (not-any? #(contains? event %)
-                          [:code :token :email :filename :message])))
+                          [:code :token :email :filename :message]))
+            (is (not (re-find #"private@example\.com|auth/private\.extra"
+                              (pr-str event)))))
           (finally
             (.close ^java.lang.AutoCloseable server)))))))
+
+(deftest browser-login-callback-renders-a-safe-actionable-drive-access-error
+  (let [port (available-port)
+        events (atom [])
+        oauth (reify auth/OAuthClient
+                (exchange-code! [_ _ _ _ _]
+                  {:access-token "private-access-token"
+                   :subject "private-google-subject"
+                   :email "private@example.com"
+                   :email-verified? true
+                   :refresh-token "private-refresh-token"
+                   :granted-scopes #{"openid" "email" "profile"}}))
+        {:keys [system]} (drive-callback-fixture oauth)
+        flow (auth/begin-flow! system :login nil)
+        browser-cookie (auth/issue-browser-cookie
+                        system {:oauth (:stateCookie flow)})
+        server (api/start! port
+                           {:auth-system system
+                            :event-sink #(swap! events conj [%1 %2])})]
+    (try
+      (let [response (get! port
+                           (str "/v1/auth/login/callback?code=private-code&state="
+                                (:state flow))
+                           {"Accept" "text/html"
+                            "Cookie" (str "__session=" browser-cookie)})
+            body (.body response)
+            event (second (first @events))
+            set-cookie (first (.allValues (.headers response) "Set-Cookie"))
+            cookie-value (some-> set-cookie
+                                 (.split "=" 2) second
+                                 (.split ";" 2) first)
+            retry-cookie (auth/browser-cookie system cookie-value)]
+        (is (= 400 (.statusCode response)))
+        (is (= "text/html; charset=utf-8"
+               (some-> response .headers (.firstValue "content-type")
+                       (.orElse nil))))
+        (is (re-find #"Alpha Compose" body))
+        (is (re-find #"Google Drive access could not be established" body))
+        (is (re-find #"drive\.file" body))
+        (is (re-find #"/v1/auth/login/start\?recovery=true" body))
+        (is (nil? (:session retry-cookie)))
+        (is (auth/drive-recovery-token? system (:oauth retry-cookie)))
+        (is (re-find #"cannot tell.*disabled.*unavailable.*denied.*Workspace"
+                     body))
+        (doseq [private-value ["private-code" "private-access-token"
+                               "private-refresh-token" "private-google-subject"
+                               "private@example.com" "openid email profile"]]
+          (is (not (re-find (re-pattern private-value) body))))
+        (is (= "missing_required_scopes" (:category event)))
+        (is (not-any? #(contains? event %)
+                      [:code :token :email :subject :scopes :message])))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest browser-login-callback-explains-an-unexpected-permission-without-exposing-it
+  (let [port (available-port)
+        extra-scope "https://www.googleapis.com/auth/private.extra"
+        oauth (reify auth/OAuthClient
+                (exchange-code! [_ _ _ _ _]
+                  {:access-token "private-access-token"
+                   :subject "private-google-subject"
+                   :email "private@example.com"
+                   :email-verified? true
+                   :refresh-token "private-refresh-token"
+                   :granted-scopes (conj (set auth/approved-scopes)
+                                         extra-scope)}))
+        {:keys [system]} (drive-callback-fixture oauth)
+        flow (auth/begin-flow! system :login nil)
+        browser-cookie (auth/issue-browser-cookie
+                        system {:oauth (:stateCookie flow)})
+        server (api/start! port {:auth-system system})]
+    (try
+      (let [response (get! port
+                           (str "/v1/auth/login/callback?code=private-code&state="
+                                (:state flow))
+                           {"Accept" "text/html"
+                            "Cookie" (str "__session=" browser-cookie)})
+            body (.body response)]
+        (is (= 400 (.statusCode response)))
+        (is (re-find #"Google Drive access could not be established" body))
+        (is (re-find #"additional permission" body))
+        (is (re-find #"cannot tell.*account.*Workspace" body))
+        (is (re-find #"/v1/auth/login/start\?recovery=true" body))
+        (is (not (re-find (re-pattern extra-scope) body))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest browser-login-callback-explains-allowlist-access-without-exposing-identity
+  (let [port (available-port)
+        events (atom [])
+        {:keys [system]} (drive-callback-fixture
+                          (valid-drive-oauth)
+                          {:allowlist #{"approved@example.com"}})
+        flow (auth/begin-flow! system :login nil)
+        browser-cookie (auth/issue-browser-cookie
+                        system {:oauth (:stateCookie flow)})
+        server (api/start! port
+                           {:auth-system system
+                            :event-sink #(swap! events conj [%1 %2])})]
+    (try
+      (let [response (get! port
+                           (str "/v1/auth/login/callback?code=private-code&state="
+                                (:state flow))
+                           {"Accept" "text/html"
+                            "Cookie" (str "__session=" browser-cookie)})
+            body (.body response)
+            set-cookie (first (.allValues (.headers response) "Set-Cookie"))]
+        (is (= 403 (.statusCode response)))
+        (is (re-find #"Google account does not have Alpha Compose access" body))
+        (is (re-find #"approved Google account" body))
+        (is (re-find #"administrator" body))
+        (is (re-find #"href=\"/v1/auth/login/start\"" body))
+        (is (not (re-find #"owner@example\.com|google-subject-1|private-code"
+                          body)))
+        (is (re-find #"^__session=.*Max-Age=0" set-cookie))
+        (is (= "not_allowlisted" (:category (second (first @events))))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest login-callback-negotiates-invalid-state-for-browser-and-api-clients
+  (let [port (available-port)
+        events (atom [])
+        {:keys [system]} (drive-callback-fixture (valid-drive-oauth))
+        server (api/start! port
+                           {:auth-system system
+                            :event-sink #(swap! events conj [%1 %2])})]
+    (try
+      (let [request! (fn [accept]
+                       (let [flow (auth/begin-flow! system :login nil)
+                             browser-cookie
+                             (auth/issue-browser-cookie
+                              system {:oauth (:stateCookie flow)})]
+                         (get! port
+                               "/v1/auth/login/callback?code=private-code&state=private-invalid-state"
+                               {"Accept" accept
+                                "Cookie" (str "__session=" browser-cookie)})))
+            browser-response (request! "text/html")
+            api-response (request! "application/json")]
+        (is (= 400 (.statusCode browser-response)))
+        (is (re-find #"Google authorization did not finish"
+                     (.body browser-response)))
+        (is (not (re-find #"private-code|private-invalid-state"
+                          (.body browser-response))))
+        (is (= 400 (.statusCode api-response)))
+        (is (= {"error" "invalid_oauth_state"}
+               (json/read-str (.body api-response))))
+        (is (= ["invalid_state" "invalid_state"]
+               (mapv (comp :category second) @events))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest browser-login-callback-uses-only-bounded-google-drive-evidence
+  (let [port (available-port)
+        events (atom [])
+        drive (reify auth/DriveClient
+                (ensure-output-folder! [_ _ _]
+                  (throw (ex-info "Drive unavailable"
+                                  {:type ::drive-unavailable
+                                   :status 403
+                                   :reason "workspace_restricted"}))))
+        {:keys [system]} (drive-callback-fixture (valid-drive-oauth)
+                                                 {:drive drive})
+        flow (auth/begin-flow! system :login nil)
+        browser-cookie (auth/issue-browser-cookie
+                        system {:oauth (:stateCookie flow)})
+        server (api/start! port
+                           {:auth-system system
+                            :event-sink #(swap! events conj [%1 %2])})]
+    (try
+      (let [response (get! port
+                           (str "/v1/auth/login/callback?code=private-code&state="
+                                (:state flow))
+                           {"Accept" "text/html"
+                            "Cookie" (str "__session=" browser-cookie)})
+            body (.body response)
+            event (second (first @events))]
+        (is (= 502 (.statusCode response)))
+        (is (re-find #"Google Workspace restricted Drive access" body))
+        (is (re-find #"try again.*administrator" body))
+        (is (= "workspace_restricted" (:reason event))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest unexpected-login-callback-failures-remain-bounded-for-browser-and-api
+  (let [port (available-port)
+        events (atom [])
+        oauth (reify auth/OAuthClient
+                (exchange-code! [_ _ _ _ _]
+                  (throw (RuntimeException.
+                          "private@example.com private-token private-code"))))
+        {:keys [system]} (drive-callback-fixture oauth)
+        server (api/start! port
+                           {:auth-system system
+                            :event-sink #(swap! events conj [%1 %2])})]
+    (try
+      (let [request! (fn [accept]
+                       (let [flow (auth/begin-flow! system :login nil)
+                             browser-cookie
+                             (auth/issue-browser-cookie
+                              system {:oauth (:stateCookie flow)})]
+                         (get! port
+                               (str "/v1/auth/login/callback?code=private-code&state="
+                                    (:state flow))
+                               {"Accept" accept
+                                "Cookie" (str "__session=" browser-cookie)})))
+            browser-response (request! "text/html")
+            api-response (request! "application/json")]
+        (is (= 500 (.statusCode browser-response)))
+        (is (re-find #"Google authorization did not finish"
+                     (.body browser-response)))
+        (is (not (re-find #"private@example\.com|private-token|private-code"
+                          (.body browser-response))))
+        (is (= {"error" "oauth_callback_failed" "retryable" true}
+               (json/read-str (.body api-response))))
+        (is (= ["unexpected" "unexpected"]
+               (mapv (comp :category second) @events)))
+        (is (every? #(not-any? (fn [key] (contains? (second %) key))
+                               [:message :reason :email :token :code])
+                    @events)))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
 
 (deftest forged-task-header-is-rejected-before-dispatch
   (let [port (available-port)
