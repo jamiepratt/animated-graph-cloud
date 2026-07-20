@@ -11,6 +11,12 @@
 (defn- available-port []
   (test-http/available-port))
 
+(defn- start-api!
+  ([port] (start-api! port {}))
+  ([port dependencies]
+   (api/start!
+    port (assoc dependencies :test-only-disable-preview-submit-gate? true))))
+
 (defn- post! [port path body headers]
   (test-http/send-string! :post (str "http://127.0.0.1:" port path)
                           (json/write-str body) headers))
@@ -101,7 +107,7 @@
         {:keys [system session]} (auth-fixture)
         browser-cookie (auth/issue-browser-cookie system {:session session})
         csrf (auth/issue-csrf-token system {:subject "google-subject-1"})
-        server (api/start! port {:job-service (:service lifecycle)
+        server (start-api! port {:job-service (:service lifecycle)
                                  :auth-system system
                                  :task-audience "https://app.example.com"
                                  :tasks-service-account "tasks@example.com"})]
@@ -140,7 +146,7 @@
         flow (auth/begin-flow! system :login nil)
         browser-cookie (auth/issue-browser-cookie
                         system {:oauth (:stateCookie flow)})
-        server (api/start! port {:auth-system system})]
+        server (start-api! port {:auth-system system})]
     (try
       (let [response (get! port
                            (str "/v1/auth/login/callback?code=code&state="
@@ -287,7 +293,7 @@
             flow (auth/begin-flow! system :login nil)
             browser-cookie (auth/issue-browser-cookie
                             system {:oauth (:stateCookie flow)})
-            server (api/start! port
+            server (start-api! port
                                {:auth-system system
                                 :event-sink #(swap! events conj [%1 %2])})]
         (try
@@ -334,7 +340,7 @@
         flow (auth/begin-flow! system :login nil)
         browser-cookie (auth/issue-browser-cookie
                         system {:oauth (:stateCookie flow)})
-        server (api/start! port
+        server (start-api! port
                            {:auth-system system
                             :event-sink #(swap! events conj [%1 %2])})]
     (try
@@ -388,7 +394,7 @@
         flow (auth/begin-flow! system :login nil)
         browser-cookie (auth/issue-browser-cookie
                         system {:oauth (:stateCookie flow)})
-        server (api/start! port {:auth-system system})]
+        server (start-api! port {:auth-system system})]
     (try
       (let [response (get! port
                            (str "/v1/auth/login/callback?code=private-code&state="
@@ -414,7 +420,7 @@
         flow (auth/begin-flow! system :login nil)
         browser-cookie (auth/issue-browser-cookie
                         system {:oauth (:stateCookie flow)})
-        server (api/start! port
+        server (start-api! port
                            {:auth-system system
                             :event-sink #(swap! events conj [%1 %2])})]
     (try
@@ -441,7 +447,7 @@
   (let [port (available-port)
         events (atom [])
         {:keys [system]} (drive-callback-fixture (valid-drive-oauth))
-        server (api/start! port
+        server (start-api! port
                            {:auth-system system
                             :event-sink #(swap! events conj [%1 %2])})]
     (try
@@ -483,7 +489,7 @@
         flow (auth/begin-flow! system :login nil)
         browser-cookie (auth/issue-browser-cookie
                         system {:oauth (:stateCookie flow)})
-        server (api/start! port
+        server (start-api! port
                            {:auth-system system
                             :event-sink #(swap! events conj [%1 %2])})]
     (try
@@ -509,7 +515,7 @@
                   (throw (RuntimeException.
                           "private@example.com private-token private-code"))))
         {:keys [system]} (drive-callback-fixture oauth)
-        server (api/start! port
+        server (start-api! port
                            {:auth-system system
                             :event-sink #(swap! events conj [%1 %2])})]
     (try
@@ -552,7 +558,7 @@
                         :audience "https://app.example.com"
                         :email "tasks@example.com"
                         :email-verified? true})))
-        server (api/start! port {:job-service (:service lifecycle)
+        server (start-api! port {:job-service (:service lifecycle)
                                  :auth-system system
                                  :task-token-verifier verifier
                                  :task-audience "https://app.example.com"
@@ -595,7 +601,7 @@
                         :audience "https://app.example.com"
                         :email email
                         :email-verified? true})))
-        server (api/start! port {:job-service (:service lifecycle)
+        server (start-api! port {:job-service (:service lifecycle)
                                  :auth-system system
                                  :task-token-verifier verifier
                                  :task-audience "https://app.example.com"
@@ -653,7 +659,7 @@
                            :grant-store grants
                            :cipher cipher
                            :drive-token-client token-client)
-        server (api/start! port {:auth-system auth-system
+        server (start-api! port {:auth-system auth-system
                                  :picker-api-key "picker-key"
                                  :picker-app-id "891643499444"})]
     (try
@@ -710,7 +716,7 @@
                            :drive-token-client token-client)
         csrf (auth/issue-csrf-token auth-system
                                     {:subject "google-subject-1"})
-        server (api/start! port {:auth-system auth-system
+        server (start-api! port {:auth-system auth-system
                                  :event-sink #(swap! events conj [%1 %2])})]
     (try
       (let [body {:phase "empty" :view "drive" :listState "empty"}
@@ -758,7 +764,7 @@
                            :grant-store grants
                            :cipher cipher
                            :drive-token-client token-client)
-        server (api/start! port {:auth-system auth-system
+        server (start-api! port {:auth-system auth-system
                                  :picker-api-key "picker-key"
                                  :picker-app-id "891643499444"})]
     (try
@@ -792,7 +798,7 @@
 (deftest removed-separate-drive-oauth-routes-return-not-found
   (let [port (available-port)
         {:keys [system]} (auth-fixture)
-        server (api/start! port {:auth-system system})]
+        server (start-api! port {:auth-system system})]
     (try
       (doseq [path ["/v1/auth/drive/start" "/v1/auth/drive/callback"]]
         (let [response (get! port path {})]
@@ -814,7 +820,7 @@
                                    {:type ::auth/revoked-grant})))))
         csrf (auth/issue-csrf-token revoked-system
                                     {:subject "google-subject-1"})
-        server (api/start! port {:auth-system revoked-system
+        server (start-api! port {:auth-system revoked-system
                                  :job-service (:service lifecycle)})]
     (try
       (let [response (post! port "/v1/jobs" (fixture/render-request)
@@ -856,7 +862,7 @@
         member-session (auth/issue-session auth-system
                                            {:subject "member-subject"
                                             :email "member@example.com"})
-        server (api/start! port {:job-service (:service lifecycle)
+        server (start-api! port {:job-service (:service lifecycle)
                                  :auth-system auth-system})]
     (try
       (let [submission (post! port "/v1/jobs" (fixture/render-request)

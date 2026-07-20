@@ -126,6 +126,74 @@
               (millis [] (.toEpochMilli ^Instant @now))))]
     (clock-for ZoneOffset/UTC)))
 
+(deftest firestore-preview-evidence-is-private-owner-bound-and-expiring
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId "animated-graph-cloud-preview-evidence-test")
+                        (.setEmulatorHost host)
+                        .build .getService)
+          requests (atom {})
+          now (atom (Instant/parse "2026-07-20T10:00:00Z"))
+          request-store
+          (reify jobs/RequestStore
+            (save-request! [_ job-id request]
+              (let [object (str "jobs/" job-id "/request.json")]
+                (swap! requests assoc object request)
+                object))
+            (load-request [_ object] (get @requests object)))
+          queue (reify jobs/JobQueue
+                  (enqueue-job! [_ _ _]))
+          service (gcp/job-service {:firestore firestore
+                                    :request-store request-store
+                                    :queue queue
+                                    :clock (mutable-clock now)})
+          identity {:subject "preview-owner"
+                    :membership-version "membership-1"}
+          request (assoc (fixture/render-request)
+                         :previewOperation jobs/preview-operation-version
+                         :requesterSubject (:subject identity)
+                         :requesterEmail "owner@example.com"
+                         :requesterMembershipVersion
+                         (:membership-version identity))]
+      (try
+        (doseq [collection ["jobs" "job-idempotency" "orchestration"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (let [operation-id
+              (get-in (jobs/submit-job! service "preview-evidence" request)
+                      [:job :id])
+              reference (.document (.collection firestore "jobs") operation-id)]
+          (.get (.update reference
+                         {"state" "succeeded"
+                          "updatedAt" (.toEpochMilli ^Instant @now)}))
+          (let [snapshot (.get (.get reference))
+                public (jobs/get-job service operation-id)]
+            (is (re-matches #"[0-9a-f]{64}"
+                            (.getString snapshot "requestDigest")))
+            (is (not (contains? public :requestDigest)))
+            (is (true? (jobs/require-preview-evidence!
+                        service operation-id (fixture/render-request)
+                        identity))))
+          (is (= ::jobs/preview-stale
+                 (try
+                   (jobs/require-preview-evidence!
+                    service operation-id (fixture/render-request)
+                    (assoc identity :membership-version "membership-2"))
+                   nil
+                   (catch clojure.lang.ExceptionInfo error
+                     (:type (ex-data error))))))
+          (swap! now #(.plusSeconds ^Instant %
+                                    (inc jobs/preview-evidence-seconds)))
+          (is (= ::jobs/preview-expired
+                 (try
+                   (jobs/require-preview-evidence!
+                    service operation-id (fixture/render-request) identity)
+                   nil
+                   (catch clojure.lang.ExceptionInfo error
+                     (:type (ex-data error)))))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
 (deftest cloud-run-override-replaces-args-without-an-invalid-clear-flag
   (let [request (#'gcp/run-job-request
                  "projects/test/locations/europe-central2/jobs/renderer"

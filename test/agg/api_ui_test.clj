@@ -18,6 +18,12 @@
 (defn- available-port []
   (test-http/available-port))
 
+(defn- start-api!
+  ([port] (start-api! port {}))
+  ([port dependencies]
+   (api/start!
+    port (assoc dependencies :test-only-disable-preview-submit-gate? true))))
+
 (defn- request! [port method path body headers]
   (test-http/send-string! method (str "http://127.0.0.1:" port path)
                           (when (= :post method) (or body "")) headers))
@@ -167,25 +173,25 @@
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
-         "const button=document.querySelector('[hx-post=\"/ui/preview\"]');"
+         "const button=document.querySelector('[hx-post=\"/ui/preview\"]'),submit=document.getElementById('submit-button'),receipt=document.getElementById('preview-operation-id');const initial={submitDisabled:submit.disabled,receipt:receipt.value,status:document.getElementById('preview-submit-status').textContent};"
          "document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
          "function configure(){const detail={elt:button,parameters:{},headers:{}};const event=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail});button.dispatchEvent(event);return {event,detail};}"
          "function transport(name,status=0){const target=document.getElementById('preview-result');target.dispatchEvent(new CustomEvent(name,{bubbles:true,detail:{elt:button,target,xhr:{status,getResponseHeader:()=>null}}}));return target;}"
          "const first=configure(),firstGeneration=first.detail.headers['X-Preview-Generation'],firstResult=document.getElementById('preview-result');"
-         "const pending={text:document.getElementById('form-status').textContent,disabled:button.disabled,cleared:!firstResult.textContent.includes('stale prior success'),className:firstResult.className};"
+         "const pending={text:document.getElementById('form-status').textContent,disabled:button.disabled,submitDisabled:submit.disabled,receipt:receipt.value,cleared:!firstResult.textContent.includes('stale prior success'),className:firstResult.className};"
          "const unrelated=document.getElementById('job-result');unrelated.dispatchEvent(new CustomEvent('htmx:sendError',{bubbles:true,detail:{elt:unrelated,target:unrelated,xhr:{status:0,getResponseHeader:()=>null}}}));const unrelatedIgnored=button.disabled&&document.getElementById('preview-result').classList.contains('preview-pending');"
          "const duplicate=configure();"
          "const duplicateSuppressed=duplicate.event.defaultPrevented&&duplicate.detail.headers['X-Preview-Generation']===undefined;"
-         "transport('htmx:responseError',504);const platform=document.getElementById('preview-result');const platformFailure={text:platform.textContent,disabled:button.disabled};"
+         "transport('htmx:responseError',504);const platform=document.getElementById('preview-result');const platformFailure={text:platform.textContent,disabled:button.disabled,submitDisabled:submit.disabled};"
          "configure();transport('htmx:responseError',502);const gateway=document.getElementById('preview-result');const gatewayFailure={text:gateway.textContent,disabled:button.disabled};"
          "const retryAfterPlatform=configure(),retryGeneration=retryAfterPlatform.detail.headers['X-Preview-Generation'];"
          "const lateDetail={target:document.getElementById('preview-result'),xhr:{getResponseHeader:()=>null},requestConfig:{headers:{'X-Preview-Generation':firstGeneration}},shouldSwap:true};lateDetail.target.dispatchEvent(new CustomEvent('htmx:beforeSwap',{bubbles:true,detail:lateDetail}));"
          "transport('htmx:sendError');const dropped=document.getElementById('preview-result');const connectionLoss={text:dropped.textContent,disabled:button.disabled,lateRejected:!lateDetail.shouldSwap};"
          "configure();transport('htmx:sendAbort');const aborted=document.getElementById('preview-result');const clientAbort={text:aborted.textContent,disabled:button.disabled};"
          "configure();transport('htmx:timeout');const timedOut=document.getElementById('preview-result');const browserTimeout={text:timedOut.textContent,disabled:button.disabled};"
-         "const successfulRetry=configure(),successGeneration=successfulRetry.detail.headers['X-Preview-Generation'];const target=document.getElementById('preview-result');target.outerHTML='<article id=\"preview-result\" class=\"preview-gallery\" data-preview-generation=\"'+successGeneration+'\"><img></article>';const success=document.getElementById('preview-result');success.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:success}}));"
-         "const succeeded={text:document.getElementById('form-status').textContent,disabled:button.disabled,retried:successGeneration!==retryGeneration};"
-         "outcome={pending,unrelatedIgnored,duplicateSuppressed,platformFailure,gatewayFailure,connectionLoss,clientAbort,browserTimeout,succeeded};"
+         "const successfulRetry=configure(),successGeneration=successfulRetry.detail.headers['X-Preview-Generation'];const target=document.getElementById('preview-result');target.outerHTML='<article id=\"preview-result\" class=\"preview-gallery\" data-preview-operation=\"00000000-0000-0000-0000-000000000063\" data-preview-receipt-expires-at=\"2099-07-20T10:15:00Z\" data-preview-generation=\"'+successGeneration+'\"><img></article>';const success=document.getElementById('preview-result');success.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:success}}));"
+         "const succeeded={text:document.getElementById('form-status').textContent,disabled:button.disabled,submitDisabled:submit.disabled,receipt:receipt.value,retried:successGeneration!==retryGeneration};const submitDetail={elt:submit,parameters:{},headers:{}};const submitEvent=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail:submitDetail});submit.dispatchEvent(submitEvent);const duplicateSubmitDetail={elt:submit,parameters:{},headers:{}};const duplicateSubmitEvent=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail:duplicateSubmitDetail});submit.dispatchEvent(duplicateSubmitEvent);const submitFlow={firstAllowed:!submitEvent.defaultPrevented,duplicateSuppressed:duplicateSubmitEvent.defaultPrevented,idempotencyKey:submitDetail.headers['Idempotency-Key'],operation:submitDetail.parameters.previewOperationId};const jobResult=document.getElementById('job-result');jobResult.innerHTML='<article class=\"preview-submit-blocked\" data-preview-gate=\"preview_expired\"><h2>Preview expired</h2></article>';jobResult.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:jobResult}}));const serverGate={submitDisabled:submit.disabled,receipt:receipt.value,status:document.getElementById('preview-submit-status').textContent};const raw=document.getElementById('raw-json');raw.value='changed';raw.dispatchEvent(new Event('input',{bubbles:true}));const rawInvalidated={submitDisabled:submit.disabled,receipt:receipt.value,className:document.getElementById('preview-result').className};"
+         "outcome={initial,pending,unrelatedIgnored,duplicateSuppressed,platformFailure,gatewayFailure,connectionLoss,clientAbort,browserTimeout,succeeded,submitFlow,serverGate,rawInvalidated};"
          "}catch(error){outcome={error:error.message};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));"
          "document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
@@ -205,6 +211,7 @@
    :operationKind "key-moment-gallery"
    :state "succeeded"
    :progressPercent 100
+   :receiptExpiresAt "2099-07-20T10:15:00Z"
    :result
    {:version 1
     :mode "source-final"
@@ -290,7 +297,7 @@
 (deftest public-product-and-legal-pages-identify-alpha-compose
   (let [port (available-port)
         {:keys [auth-system]} (fixture)
-        server (api/start! port {:auth-system auth-system})]
+        server (start-api! port {:auth-system auth-system})]
     (try
       (let [homepage (request! port :get "/" nil {})
             privacy (request! port :get "/privacy" nil {})
@@ -324,7 +331,7 @@
 (deftest authenticated-compose-page-renders-parseable-inline-script
   (let [port (available-port)
         {:keys [auth-system owner-cookie]} (fixture)
-        server (api/start! port {:auth-system auth-system})]
+        server (start-api! port {:auth-system auth-system})]
     (try
       (let [landing (request! port :get "/" nil {"Cookie" owner-cookie})
             script (second (re-find #"(?s)<script>(.*?)</script>"
@@ -372,6 +379,25 @@
     (is (not (re-find #"<div class=\"step\">Step [^<]+</div><h2>Optional source video</h2>"
                       page)))))
 
+(deftest compose-submit-starts-preview-gated-and-success-carries-private-evidence
+  (let [page (ui/page {:user {:email "member@example.com" :role :member}
+                       :csrf "csrf-test" :tokens [] :members []
+                       :logs-enabled? false})
+        fragment (ui/preview-operation-fragment
+                  (preview-gallery-operation) "generation-1")]
+    (is (str/includes? page
+                       "name=\"previewOperationId\" value=\"\""))
+    (is (str/includes? page
+                       "id=\"submit-button\" class=\"primary\" type=\"submit\" disabled"))
+    (is (str/includes? page "id=\"preview-submit-status\""))
+    (is (str/includes? page "Preview required"))
+    (is (not (str/includes? page "localStorage")))
+    (is (not (str/includes? page "sessionStorage")))
+    (is (str/includes? fragment
+                       "data-preview-receipt-expires-at=\"2099-07-20T10:15:00Z\""))
+    (is (not (str/includes? fragment "requestDigest")))
+    (is (not (str/includes? fragment "sourceVideo")))))
+
 (deftest picker-initialization-and-click-flow-recovers-in-a-browser
   (let [outcome (picker-browser-outcome
                  (ui/page {:user {:email "owner@example.com" :role :member}
@@ -407,14 +433,21 @@
                            :members []
                            :logs-enabled? false}))]
     (is (nil? (:error outcome)) outcome)
+    (is (= {:submitDisabled true
+            :receipt ""
+            :status "Preview required before Submit."}
+           (:initial outcome)))
     (is (= {:text "Preparing preview…"
             :disabled true
+            :submitDisabled true
+            :receipt ""
             :cleared true
             :className "preview-pending"}
            (:pending outcome)))
     (is (:unrelatedIgnored outcome))
     (is (:duplicateSuppressed outcome))
     (is (false? (get-in outcome [:platformFailure :disabled])))
+    (is (get-in outcome [:platformFailure :submitDisabled]))
     (is (str/includes? (get-in outcome [:platformFailure :text]) "504"))
     (is (str/includes? (get-in outcome [:platformFailure :text])
                        "No durable render was submitted or charged"))
@@ -429,8 +462,24 @@
     (is (= false (get-in outcome [:browserTimeout :disabled])))
     (is (str/includes? (get-in outcome [:browserTimeout :text])
                        "did not finish"))
-    (is (= {:text "Preview ready." :disabled false :retried true}
-           (:succeeded outcome)))))
+    (is (= {:text "Preview ready."
+            :disabled false
+            :submitDisabled false
+            :receipt "00000000-0000-0000-0000-000000000063"
+            :retried true}
+           (:succeeded outcome)))
+    (is (= {:firstAllowed true
+            :duplicateSuppressed true
+            :idempotencyKey
+            "ui-preview-00000000-0000-0000-0000-000000000063"
+            :operation "00000000-0000-0000-0000-000000000063"}
+           (:submitFlow outcome)))
+    (is (= {:submitDisabled true
+            :receipt ""
+            :status "Preview expired. Run Preview again."}
+           (:serverGate outcome)))
+    (is (= {:submitDisabled true :receipt "" :className "preview-stale"}
+           (:rawInvalidated outcome)))))
 
 (deftest preview-gallery-is-responsive-accessible-and-stale-safe-in-a-browser
   (let [desktop (preview-gallery-browser-outcome false)
@@ -535,7 +584,7 @@
 (deftest htmx-preview-failure-is-a-safe-correlated-html-fragment
   (let [port (available-port)
         {:keys [auth-system owner-cookie owner-csrf]} (fixture)
-        server (api/start! port {:auth-system auth-system})
+        server (start-api! port {:auth-system auth-system})
         headers (merge form-content-type
                        {"Cookie" owner-cookie "X-CSRF-Token" owner-csrf})
         request (assoc (fixture/render-request)
@@ -613,7 +662,7 @@
 (deftest site-icon-assets-are-served-and-linked
   (let [port (available-port)
         {:keys [auth-system]} (fixture)
-        server (api/start! port {:auth-system auth-system})]
+        server (start-api! port {:auth-system auth-system})]
     (try
       (let [homepage (request! port :get "/" nil {})
             svg (test-http/send-string! :get
@@ -647,7 +696,7 @@
 
 (deftest openapi-contract-is-served-as-a-public-read-only-asset
   (let [port (available-port)
-        server (api/start! port)]
+        server (start-api! port)]
     (try
       (let [response (test-http/send-string! :get
                                              (str "http://127.0.0.1:" port
@@ -672,7 +721,7 @@
         token-system (tokens/in-memory-system
                       {:pepper (.getBytes "abcdefghijklmnopqrstuvwxyz012345")})
         {:keys [auth-system owner-cookie owner-csrf member-cookie]} (fixture)
-        server (api/start! port {:job-service (:service lifecycle)
+        server (start-api! port {:job-service (:service lifecycle)
                                  :auth-system auth-system
                                  :token-service (:service token-system)})
         headers (merge form-content-type
@@ -760,7 +809,7 @@
         token-system (tokens/in-memory-system
                       {:pepper (.getBytes "abcdefghijklmnopqrstuvwxyz012345")})
         {:keys [auth-system owner-cookie owner-csrf]} (fixture)
-        server (api/start! port {:job-service (:service lifecycle)
+        server (start-api! port {:job-service (:service lifecycle)
                                  :auth-system auth-system
                                  :token-service (:service token-system)})
         headers (merge form-content-type

@@ -60,6 +60,7 @@
            "state" (name (:state job))
            "attempt" (long (:attempt job))
            "requestObject" (:request-object job)
+           "requestDigest" (:request-digest job)
            "createdAt" (long (:created-at job))
            "updatedAt" (long (:updated-at job))
            "expireAt" (Date/from
@@ -91,6 +92,7 @@
                :state (keyword (get data "state"))
                :attempt (long (get data "attempt"))
                :request-object (get data "requestObject")
+               :request-digest (get data "requestDigest")
                :created-at (long (get data "createdAt"))
                :updated-at (long (get data "updatedAt"))
                :expires-at (.getTime (.getDate snapshot "expireAt"))}
@@ -423,6 +425,19 @@
        (:requester-subject
         (snapshot-job
          (await! (.get (.document (.collection firestore "jobs") job-id)))))))
+  lifecycle/PreviewEvidence
+  (preview-evidence [_ operation-id]
+    (when-let [job
+               (snapshot-job
+                (await! (.get (.document (.collection firestore "jobs")
+                                         operation-id))))]
+      {:operation-kind (:operation-kind job)
+       :state (:state job)
+       :request-digest (:request-digest job)
+       :requester-subject (:requester-subject job)
+       :requester-membership-version (:requester-membership-version job)
+       :updated-at (Instant/ofEpochMilli (:updated-at job))
+       :now (Instant/now clock)}))
   lifecycle/JobReconciler
   (reconcile-jobs! [_]
     (let [jobs (.collection firestore "jobs")
@@ -599,6 +614,8 @@
           candidate (cond->
                      {:id job-id :state :queued :attempt 1
                       :request-object request-object
+                      :request-digest
+                      (lifecycle/render-request-digest request)
                       :requester-subject (:requesterSubject request)
                       :requester-email (:requesterEmail request)
                       :requester-membership-version

@@ -13,6 +13,12 @@
 (defn- available-port []
   (test-http/available-port))
 
+(defn- start-api!
+  ([port] (start-api! port {}))
+  ([port dependencies]
+   (api/start!
+    port (assoc dependencies :test-only-disable-preview-submit-gate? true))))
+
 (defn- valid-render-request []
   {:telemetryFormat "polar-csv"
    :telemetry (slurp (io/resource "fixtures/polar/valid.csv"))
@@ -124,7 +130,7 @@
           (retry-job! [_ _] nil)
           (run-job! [_ _] nil))
         port (available-port)
-        server (api/start! port {:job-service contention-service
+        server (start-api! port {:job-service contention-service
                                  :event-sink
                                  (fn [event fields]
                                    (swap! events conj
@@ -143,7 +149,7 @@
     (let [validation-events (atom [])
           validation-port (available-port)
           validation-server
-          (api/start! validation-port
+          (start-api! validation-port
                       {:job-service contention-service
                        :event-sink
                        (fn [event fields]

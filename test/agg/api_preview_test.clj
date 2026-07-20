@@ -12,10 +12,20 @@
             [agg.render.media :as media]
             [clojure.data.json :as json]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is]]))
+            [clojure.test :refer [deftest is testing]])
+  (:import (java.time Clock Instant ZoneOffset)))
 
 (defn- available-port []
   (test-http/available-port))
+
+(defn- mutable-clock [now]
+  (letfn [(clock-for [zone]
+            (proxy [Clock] []
+              (getZone [] zone)
+              (withZone [new-zone] (clock-for new-zone))
+              (instant [] @now)
+              (millis [] (.toEpochMilli ^Instant @now))))]
+    (clock-for ZoneOffset/UTC)))
 
 (defn- auth-system [source-gateway]
   (let [grant-store (reify auth/GrantStore
@@ -45,6 +55,125 @@
                   :grant-store grant-store
                   :drive source-gateway
                   :drive-token-client token-client})))
+
+(deftest durable-submit-requires-fresh-owner-bound-successful-preview
+  (let [now (atom (Instant/parse "2026-07-20T10:00:00Z"))
+        clock (mutable-clock now)
+        auth-system (auth-system nil)
+        owner {:subject "google-subject-1" :email "owner@example.com"}
+        other {:subject "google-subject-2" :email "other@example.com"}
+        owner-session (auth/issue-session auth-system owner)
+        owner-csrf (auth/issue-csrf-token auth-system owner)
+        other-session (auth/issue-session auth-system other)
+        other-csrf (auth/issue-csrf-token auth-system other)
+        worker (reify jobs/RenderWorker
+                 (perform-render! [_ _ _]
+                   {:output-bytes 0 :version 1 :mode "overlay"
+                    :sections [] :assets []}))
+        system (jobs/in-memory-system {:clock clock :worker worker})
+        events (atom [])
+        port (available-port)
+        server (api/start! port {:auth-system auth-system
+                                 :job-service (:service system)
+                                 :event-sink
+                                 (fn [event fields]
+                                   (swap! events conj (assoc fields :event event)))})
+        request (fixture/render-request)
+        post (fn [user-session csrf idempotency-key operation-id body]
+               (test-http/send-string!
+                :post (str "http://127.0.0.1:" port "/v1/jobs")
+                (json/write-str body)
+                (cond-> {"Content-Type" "application/json"
+                         "Cookie" (str "agg_session=" user-session)
+                         "X-CSRF-Token" csrf
+                         "Idempotency-Key" idempotency-key}
+                  operation-id
+                  (assoc "Preview-Operation-Id" operation-id))))]
+    (try
+      (testing "missing evidence is rejected before admission"
+        (let [response (post owner-session owner-csrf "missing" nil request)
+              body (json/read-str (.body response) :key-fn keyword)]
+          (is (= 428 (.statusCode response)))
+          (is (= "preview_required" (:error body)))
+          (is (= false (:retryable body)))
+          (is (= "/v1/preview" (:previewPath body)))
+          (is (= "no-store"
+                 (.orElse (.firstValue (.headers response) "Cache-Control")
+                          nil)))
+          (is (re-matches #"[0-9a-f-]{36}" (:requestId body)))
+          (is (empty? (get @(:state system) :jobs)))))
+      (let [started (test-http/send-string!
+                     :post (str "http://127.0.0.1:" port "/v1/preview")
+                     (json/write-str request)
+                     {"Content-Type" "application/json"
+                      "Cookie" (str "agg_session=" owner-session)
+                      "X-CSRF-Token" owner-csrf
+                      "Idempotency-Key" "preview-start"})
+            operation (json/read-str (.body started) :key-fn keyword)
+            duplicate-preview
+            (test-http/send-string!
+             :post (str "http://127.0.0.1:" port "/v1/preview")
+             (json/write-str request)
+             {"Content-Type" "application/json"
+              "Cookie" (str "agg_session=" owner-session)
+              "X-CSRF-Token" owner-csrf
+              "Idempotency-Key" "preview-start"})
+            duplicate-operation
+            (json/read-str (.body duplicate-preview) :key-fn keyword)
+            operation-id (:id operation)]
+        (is (= operation-id (:id duplicate-operation)))
+        (is (= 1 (count (get @(:state system) :jobs))))
+        (testing "pending evidence is retryable and creates nothing durable"
+          (let [response (post owner-session owner-csrf "pending"
+                               operation-id request)
+                body (json/read-str (.body response) :key-fn keyword)]
+            (is (= 409 (.statusCode response)))
+            (is (= "preview_pending" (:error body)))
+            (is (= true (:retryable body)))
+            (is (= 1 (count (get @(:state system) :jobs))))))
+        (jobs/dispatch-job! (:service system) operation-id)
+        (jobs/run-job! (:service system) operation-id)
+        (testing "success admits only the exact request and is idempotent"
+          (let [created (post owner-session owner-csrf "accepted"
+                              operation-id request)
+                duplicate (post owner-session owner-csrf "accepted"
+                                operation-id request)
+                created-body (json/read-str (.body created) :key-fn keyword)
+                duplicate-body (json/read-str (.body duplicate) :key-fn keyword)]
+            (is (= 202 (.statusCode created)))
+            (is (= 200 (.statusCode duplicate)))
+            (is (= (:id created-body) (:id duplicate-body)))
+            (is (= 2 (count (get @(:state system) :jobs))))))
+        (testing "request mismatch and wrong owner are stale without admission"
+          (doseq [[response label]
+                  [[(post owner-session owner-csrf "mismatch" operation-id
+                          (assoc request :preset "2.7k25"))
+                    "mismatch"]
+                   [(post other-session other-csrf "wrong-owner" operation-id
+                          request)
+                    "wrong-owner"]]]
+            (let [body (json/read-str (.body response) :key-fn keyword)]
+              (is (= 409 (.statusCode response)) label)
+              (is (= "preview_stale" (:error body)) label)
+              (is (= false (:retryable body)) label)))
+          (is (= 2 (count (get @(:state system) :jobs)))))
+        (testing "successful evidence expires independently of gallery retention"
+          (swap! now #(.plusSeconds ^Instant % (inc jobs/preview-evidence-seconds)))
+          (let [response (post owner-session owner-csrf "expired"
+                               operation-id request)
+                body (json/read-str (.body response) :key-fn keyword)]
+            (is (= 410 (.statusCode response)))
+            (is (= "preview_expired" (:error body)))
+            (is (= false (:retryable body)))
+            (is (= 2 (count (get @(:state system) :jobs))))))
+        (is (= ["preview_required" "preview_pending" "preview_stale"
+                "preview_stale" "preview_expired"]
+               (mapv :reason @events)))
+        (is (every? #(= #{:severity :reason :requestId :retryable :event}
+                        (set (keys %)))
+                    @events)))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
 
 (deftest preview-starts-an-owned-asynchronous-operation
   (let [auth-system (auth-system nil)

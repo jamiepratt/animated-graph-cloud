@@ -11,6 +11,12 @@
 (defn- available-port []
   (test-http/available-port))
 
+(defn- start-api!
+  ([port] (start-api! port {}))
+  ([port dependencies]
+   (api/start!
+    port (assoc dependencies :test-only-disable-preview-submit-gate? true))))
+
 (defn- request! [port method path body headers]
   (test-http/send-string! method (str "http://127.0.0.1:" port path)
                           (when (some? body) (json/write-str body)) headers))
@@ -60,7 +66,7 @@
         owner-csrf (auth/issue-csrf-token system owner)
         member-session (auth/issue-session system member)
         member-csrf (auth/issue-csrf-token system member)
-        server (api/start! port {:job-service (:service lifecycle)
+        server (start-api! port {:job-service (:service lifecycle)
                                  :auth-system system
                                  :upload-signer upload-signer
                                  :token-service (:service token-system)})]
@@ -121,7 +127,7 @@
                          (save-grant! [_ _ grant] grant)
                          (revoke-grant! [_ _] nil)))
                 missing-drive-server
-                (api/start! missing-drive-port
+                (start-api! missing-drive-port
                             {:job-service (:service lifecycle)
                              :auth-system missing-drive-auth
                              :upload-signer upload-signer
@@ -150,7 +156,7 @@
           (let [revoked-port (available-port)
                 revoked-auth (assoc system :allowlist #{"member@example.com"})
                 revoked-server
-                (api/start! revoked-port
+                (start-api! revoked-port
                             {:job-service (:service lifecycle)
                              :auth-system revoked-auth
                              :token-service (:service token-system)})]

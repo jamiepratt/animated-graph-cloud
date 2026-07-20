@@ -14,6 +14,12 @@
 (defn- available-port []
   (test-http/available-port))
 
+(defn- start-api!
+  ([port] (start-api! port {}))
+  ([port dependencies]
+   (api/start!
+    port (assoc dependencies :test-only-disable-preview-submit-gate? true))))
+
 (defn render-request []
   {:telemetryFormat "polar-csv"
    :telemetry (slurp (io/resource "fixtures/polar/valid.csv"))
@@ -219,7 +225,7 @@
   (letfn [(second-submission [options key-prefix]
             (let [port (available-port)
                   system (jobs/in-memory-system options)
-                  server (api/start! port {:job-service (:service system)})]
+                  server (start-api! port {:job-service (:service system)})]
               (try
                 (submit! port (str key-prefix "-1"))
                 (submit! port (str key-prefix "-2"))
@@ -251,7 +257,7 @@
           (cancel-job! [_ _] nil)
           (retry-job! [_ _] nil)
           (run-job! [_ _] nil))
-        server (api/start! port {:job-service service})]
+        server (start-api! port {:job-service service})]
     (try
       (let [response (submit! port "transaction-contention")]
         (is (= 503 (.statusCode response)))
@@ -293,7 +299,7 @@
         _ (jobs/dispatch-job! service job-id)
         _ (swap! (:state system) assoc-in
                  [:jobs job-id :lease :expires-at] Instant/EPOCH)
-        server (api/start! port {:job-service service})]
+        server (start-api! port {:job-service service})]
     (try
       (let [unauthenticated (request! port :post
                                       "/internal/v1/jobs/reconcile" {} {})
@@ -313,7 +319,7 @@
         events (atom [])
         system (jobs/in-memory-system {:daily-limit 1})
         service (:service system)
-        server (api/start! port {:job-service service
+        server (start-api! port {:job-service service
                                  :event-sink
                                  (fn [event fields]
                                    (swap! events conj (assoc fields :event event)))})]
@@ -344,7 +350,7 @@
 (deftest submission-is-idempotent-and-returns-a-polling-resource
   (let [port (available-port)
         system (jobs/in-memory-system)
-        server (api/start! port {:job-service (:service system)})]
+        server (start-api! port {:job-service (:service system)})]
     (try
       (let [headers {"Content-Type" "application/json"
                      "Idempotency-Key" "polar-render-20260717"}
@@ -368,7 +374,7 @@
 (deftest invalid-job-submission-is-rejected-before-enqueue
   (let [port (available-port)
         system (jobs/in-memory-system)
-        server (api/start! port {:job-service (:service system)})]
+        server (start-api! port {:job-service (:service system)})]
     (try
       (let [response (request! port :post "/v1/jobs"
                                (assoc (render-request) :preset "unknown")
@@ -383,7 +389,7 @@
 (deftest telemetry-job-rejections-share-the-preview-api-vocabulary
   (let [port (available-port)
         system (jobs/in-memory-system)
-        server (api/start! port {:job-service (:service system)})]
+        server (start-api! port {:job-service (:service system)})]
     (try
       (let [response (request! port :post "/v1/jobs"
                                (assoc (render-request)
@@ -415,7 +421,7 @@
 (deftest malformed-job-submission-is-an-invalid-request
   (let [port (available-port)
         system (jobs/in-memory-system)
-        server (api/start! port {:job-service (:service system)})]
+        server (start-api! port {:job-service (:service system)})]
     (try
       (let [response (raw-post! port "/v1/jobs" "{not-json"
                                 {"Content-Type" "application/json"
@@ -436,7 +442,7 @@
                     :object "jobs/original/output.mov"}))
         system (jobs/in-memory-system {:worker worker})
         service (:service system)
-        server (api/start! port {:job-service service})
+        server (start-api! port {:job-service service})
         submitted-request (render-request)]
     (try
       (let [submission (request! port :post "/v1/jobs" submitted-request
@@ -453,7 +459,7 @@
 (deftest authenticated-duplicate-dispatch-holds-at-most-five-leases
   (let [port (available-port)
         system (jobs/in-memory-system)
-        server (api/start! port {:job-service (:service system)})]
+        server (start-api! port {:job-service (:service system)})]
     (try
       (let [job-ids (mapv (fn [index]
                             (:id (response-json
@@ -498,7 +504,7 @@
                      (throw (ex-info "simulated launch failure" {})))
                    (cancel-execution! [_ _execution]))
         system (jobs/in-memory-system {:launcher launcher})
-        server (api/start! port {:job-service (:service system)})]
+        server (start-api! port {:job-service (:service system)})]
     (try
       (let [job-id (:id (response-json (submit! port "launch-failure")))
             dispatch (request! port :post
@@ -515,7 +521,7 @@
 (deftest queued-and-running-jobs-cancel-durably-and-can-be-explicitly-retried
   (let [port (available-port)
         system (jobs/in-memory-system)
-        server (api/start! port {:job-service (:service system)})]
+        server (start-api! port {:job-service (:service system)})]
     (try
       (let [queued-id (:id (response-json (submit! port "cancel-queued")))
             queued-cancel
@@ -609,7 +615,7 @@
                                    :retryable false})))
         system (jobs/in-memory-system {:worker worker})
         service (:service system)
-        server (api/start! port {:job-service service})]
+        server (start-api! port {:job-service service})]
     (try
       (let [job-id (:id (response-json (submit! port "nonretryable-retry")))]
         (jobs/dispatch-job! service job-id)
@@ -684,7 +690,7 @@
                    (str "https://upload.test/" object
                         "?content-type=" content-type
                         "&expires=" expires-seconds)))
-        server (api/start! port {:upload-signer signer})]
+        server (start-api! port {:upload-signer signer})]
     (try
       (let [before (java.time.Instant/now)
             response (request! port :post "/v1/uploads"
@@ -704,7 +710,7 @@
 (deftest idempotency-key-cannot-be-reused-for-a-different-request
   (let [port (available-port)
         system (jobs/in-memory-system)
-        server (api/start! port {:job-service (:service system)})]
+        server (start-api! port {:job-service (:service system)})]
     (try
       (let [headers {"Content-Type" "application/json"
                      "Idempotency-Key" "same-key"}
