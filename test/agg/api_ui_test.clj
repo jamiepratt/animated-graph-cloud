@@ -10,8 +10,9 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]])
-  (:import (java.io File)
-           (java.net URLEncoder)
+  (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
+           (java.io File)
+           (java.net InetSocketAddress URLEncoder)
            (java.nio.charset StandardCharsets)
            (java.util Base64)))
 
@@ -93,32 +94,145 @@
          "/usr/bin/chromium"
          "/usr/bin/chromium-browser"]))
 
-(defn- browser-outcome [prefix requirement html & browser-args]
-  (let [chrome (chrome-executable)
-        temp (File/createTempFile prefix ".html")]
+(defn- browser-location-outcome
+  [requirement location virtual-time-budget browser-args]
+  (let [chrome (chrome-executable)]
     (is chrome requirement)
     (when chrome
-      (try
-        (spit temp html)
-        (let [command (into [chrome "--headless=new" "--disable-gpu"
-                             "--no-sandbox" "--dump-dom"
-                             "--virtual-time-budget=1000"]
-                            (concat browser-args [(str (.toURI temp))]))
-              builder (doto (ProcessBuilder. ^java.util.List command)
-                        (.redirectErrorStream true))
-              process (.start builder)
-              output (slurp (.getInputStream process))
-              exit (.waitFor process)
-              encoded (second (re-find #"data-outcome=\"([^\"]+)\"" output))]
-          (is (= 0 exit) output)
-          (is encoded output)
-          (when encoded
-            (json/read-str
-             (String. (.decode (Base64/getDecoder) ^String encoded)
-                      StandardCharsets/UTF_8)
-             :key-fn keyword)))
-        (finally
-          (.delete temp))))))
+      (let [command (into [chrome "--headless=new" "--disable-gpu"
+                           "--no-sandbox" "--dump-dom"
+                           (str "--virtual-time-budget=" virtual-time-budget)]
+                          (concat browser-args [(str location)]))
+            builder (doto (ProcessBuilder. ^java.util.List command)
+                      (.redirectErrorStream true))
+            process (.start builder)
+            output (slurp (.getInputStream process))
+            exit (.waitFor process)
+            encoded (second (re-find #"data-outcome=\"([^\"]+)\"" output))]
+        (is (= 0 exit) output)
+        (is encoded output)
+        (when encoded
+          (json/read-str
+           (String. (.decode (Base64/getDecoder) ^String encoded)
+                    StandardCharsets/UTF_8)
+           :key-fn keyword))))))
+
+(defn- browser-outcome [prefix requirement html & browser-args]
+  (let [temp (File/createTempFile prefix ".html")]
+    (try
+      (spit temp html)
+      (browser-location-outcome requirement (.toURI temp) 1000 browser-args)
+      (finally
+        (.delete temp)))))
+
+(defn- respond-browser-fixture!
+  [^HttpExchange exchange status content-type body generation]
+  (let [bytes (.getBytes ^String body StandardCharsets/UTF_8)]
+    (doto (.getResponseHeaders exchange)
+      (.set "Content-Type" content-type)
+      (.set "Cache-Control" "no-store"))
+    (when generation
+      (.set (.getResponseHeaders exchange) "X-Preview-Generation" generation))
+    (.sendResponseHeaders exchange status (alength bytes))
+    (with-open [response (.getResponseBody exchange)]
+      (.write response bytes))))
+
+(defn- real-htmx-preview-outcome [page]
+  (let [operation-id "00000000-0000-0000-0000-000000000021"
+        generation (atom nil)
+        requests (atom [])
+        server-error (atom nil)
+        htmx-source
+        (slurp
+         (io/resource
+          "META-INF/resources/webjars/htmx.org/2.0.10/dist/htmx.min.js"))
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "function recordOutcome(outcome){const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));}"
+         "document.addEventListener('DOMContentLoaded',()=>{try{"
+         "const events=[];['htmx:beforeSwap','htmx:afterSwap','htmx:afterSettle','htmx:swapError'].forEach(type=>document.body.addEventListener(type,event=>events.push({type,eventTarget:event.target?.id||event.target?.tagName,detailElt:event.detail?.elt?.id||null,detailTarget:event.detail?.target?.id||null,className:event.detail?.elt?.className||'',connected:event.detail?.elt?.isConnected??null,xhrGeneration:event.detail?.xhr?.aggPreviewGeneration||null,elementGeneration:event.detail?.elt?.dataset?.previewGeneration||null})));"
+         "const button=document.getElementById('preview-button'),spinner=button.querySelector('.button-spinner'),submit=document.getElementById('submit-button');"
+         "document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
+         "button.click();const deadline=Date.now()+3500;function inspect(){const result=document.getElementById('preview-result'),finished=result?.classList.contains('preview-error')&&!button.disabled;if(finished||Date.now()>=deadline){recordOutcome({htmxVersion:window.htmx?.version||null,className:result?.className||'',text:result?.textContent||'',previewDisabled:button.disabled,spinnerHidden:spinner.hidden,submitDisabled:submit.disabled,submitStatus:document.getElementById('preview-submit-status').textContent,status:document.getElementById('form-status').textContent,events});return;}setTimeout(inspect,25);}setTimeout(inspect,25);"
+         "}catch(error){recordOutcome({error:error.message});}},{once:true});"
+         "</script>")
+        html
+        (-> page
+            (str/replace
+             #"<script src=\"https://cdn\.jsdelivr\.net/npm/htmx\.org@2\.0\.10/dist/htmx\.min\.js\"[^>]*></script>"
+             "<script src=\"/htmx.min.js\"></script>")
+            (str/replace "</body>" (str scenario "</body>")))
+        port (available-port)
+        server
+        (HttpServer/create (InetSocketAddress. "127.0.0.1" port) 0)]
+    (.createContext
+     server "/"
+     (reify HttpHandler
+       (handle [_ exchange]
+         (try
+           (let [method (.getRequestMethod exchange)
+                 path (.getPath (.getRequestURI exchange))]
+             (swap! requests conj [method path])
+             (cond
+               (and (= "GET" method) (= "/" path))
+               (respond-browser-fixture!
+                exchange 200 "text/html; charset=utf-8" html nil)
+
+               (and (= "GET" method) (= "/htmx.min.js" path))
+               (respond-browser-fixture!
+                exchange 200 "application/javascript; charset=utf-8"
+                htmx-source nil)
+
+               (and (= "POST" method) (= "/ui/preview" path))
+               (let [request-generation
+                     (.getFirst (.getRequestHeaders exchange)
+                                "X-Preview-Generation")]
+                 (reset! generation request-generation)
+                 (with-open [request (.getRequestBody exchange)]
+                   (.readAllBytes request))
+                 (respond-browser-fixture!
+                  exchange 202 "text/html; charset=utf-8"
+                  (ui/preview-operation-fragment
+                   {:id operation-id :state "running" :progressPercent 50}
+                   request-generation)
+                  request-generation))
+
+               (and (= "GET" method)
+                    (= (str "/ui/previews/" operation-id) path))
+               (respond-browser-fixture!
+                exchange 200 "text/html; charset=utf-8"
+                (ui/preview-operation-fragment
+                 {:id operation-id
+                  :state "failed"
+                  :progressPercent 100
+                  :error {:code "worker_failed"
+                          :category "preview_rendering"
+                          :requestId operation-id
+                          :stage "source_content"
+                          :elapsedMs 4378
+                          :retryable false}}
+                 @generation)
+                @generation)
+
+               :else
+               (respond-browser-fixture!
+                exchange 404 "text/plain; charset=utf-8" "not found" nil)))
+           (catch Throwable error
+             (reset! server-error error)
+             (respond-browser-fixture!
+              exchange 500 "text/plain; charset=utf-8" "fixture failed" nil))))))
+    (.setExecutor server nil)
+    (.start server)
+    (try
+      (let [outcome
+            (browser-location-outcome
+             "Real HTMX preview regression requires Chrome or Chromium"
+             (str "http://127.0.0.1:" port "/") 5000 [])]
+        (is (nil? @server-error) (some-> @server-error str))
+        (assoc outcome :requests @requests))
+      (finally
+        (.stop server 0)))))
 
 (defn- picker-browser-outcome [page]
   (let [fixture
@@ -202,8 +316,8 @@
          "transport('htmx:sendError');const dropped=document.getElementById('preview-result');const connectionLoss={text:dropped.textContent,disabled:button.disabled,lateRejected:!lateDetail.shouldSwap,presentation:buttonPresentation()};"
          "configure();transport('htmx:sendAbort');const aborted=document.getElementById('preview-result');const clientAbort={text:aborted.textContent,disabled:button.disabled,presentation:buttonPresentation()};"
          "configure();transport('htmx:timeout');const timedOut=document.getElementById('preview-result');const browserTimeout={text:timedOut.textContent,disabled:button.disabled,presentation:buttonPresentation()};"
-         "const successfulRetry=configure(),successGeneration=successfulRetry.detail.headers['X-Preview-Generation'];const target=document.getElementById('preview-result');target.outerHTML='<article id=\"preview-result\" class=\"preview-gallery\" data-preview-operation=\"00000000-0000-0000-0000-000000000063\" data-preview-receipt-expires-at=\"2099-07-20T10:15:00Z\" data-preview-generation=\"'+successGeneration+'\"><img></article>';const success=document.getElementById('preview-result');success.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:success}}));"
-         "const succeeded={text:document.getElementById('form-status').textContent,disabled:button.disabled,submitDisabled:submit.disabled,receipt:receipt.value,retried:successGeneration!==retryGeneration,presentation:buttonPresentation()};const submitDetail={elt:submit,parameters:{},headers:{}};const submitEvent=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail:submitDetail});submit.dispatchEvent(submitEvent);const duplicateSubmitDetail={elt:submit,parameters:{},headers:{}};const duplicateSubmitEvent=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail:duplicateSubmitDetail});submit.dispatchEvent(duplicateSubmitEvent);const submitFlow={firstAllowed:!submitEvent.defaultPrevented,duplicateSuppressed:duplicateSubmitEvent.defaultPrevented,idempotencyKey:submitDetail.headers['Idempotency-Key'],operation:submitDetail.parameters.previewOperationId};const jobResult=document.getElementById('job-result');jobResult.innerHTML='<article class=\"preview-submit-blocked\" data-preview-gate=\"preview_expired\"><h2>Preview expired</h2></article>';jobResult.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:jobResult}}));const serverGate={submitDisabled:submit.disabled,receipt:receipt.value,status:document.getElementById('preview-submit-status').textContent};const raw=document.getElementById('raw-json'),invalidationAttempt=configure(),invalidationWasPending=!spinner.hidden;raw.value='changed';raw.dispatchEvent(new Event('input',{bubbles:true}));const rawInvalidated={submitDisabled:submit.disabled,receipt:receipt.value,className:document.getElementById('preview-result').className,invalidationWasPending,presentation:buttonPresentation()};const terminalAttempt=configure(),terminalGeneration=terminalAttempt.detail.headers['X-Preview-Generation'],terminalPending=document.getElementById('preview-result');terminalPending.outerHTML=terminalFragment.replace('terminal-generation',terminalGeneration);const terminalError=document.getElementById('preview-result');document.body.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{elt:terminalError,target:terminalPending,xhr:{aggPreviewGeneration:terminalGeneration,getResponseHeader:()=>terminalGeneration}}}));const terminalFailure={className:terminalError.className,text:terminalError.textContent,previewDisabled:button.disabled,submitDisabled:submit.disabled,submitStatus:document.getElementById('preview-submit-status').textContent,status:document.getElementById('form-status').textContent,presentation:buttonPresentation()};"
+         "const successfulRetry=configure(),successGeneration=successfulRetry.detail.headers['X-Preview-Generation'];const target=document.getElementById('preview-result');target.outerHTML='<article id=\"preview-result\" class=\"preview-gallery\" data-preview-operation=\"00000000-0000-0000-0000-000000000063\" data-preview-receipt-expires-at=\"2099-07-20T10:15:00Z\" data-preview-generation=\"'+successGeneration+'\"><img></article>';const success=document.getElementById('preview-result');success.dispatchEvent(new CustomEvent('htmx:afterSettle',{bubbles:true,detail:{target:success}}));"
+         "const succeeded={text:document.getElementById('form-status').textContent,disabled:button.disabled,submitDisabled:submit.disabled,receipt:receipt.value,retried:successGeneration!==retryGeneration,presentation:buttonPresentation()};const submitDetail={elt:submit,parameters:{},headers:{}};const submitEvent=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail:submitDetail});submit.dispatchEvent(submitEvent);const duplicateSubmitDetail={elt:submit,parameters:{},headers:{}};const duplicateSubmitEvent=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail:duplicateSubmitDetail});submit.dispatchEvent(duplicateSubmitEvent);const submitFlow={firstAllowed:!submitEvent.defaultPrevented,duplicateSuppressed:duplicateSubmitEvent.defaultPrevented,idempotencyKey:submitDetail.headers['Idempotency-Key'],operation:submitDetail.parameters.previewOperationId};const jobResult=document.getElementById('job-result');jobResult.innerHTML='<article class=\"preview-submit-blocked\" data-preview-gate=\"preview_expired\"><h2>Preview expired</h2></article>';jobResult.dispatchEvent(new CustomEvent('htmx:afterSettle',{bubbles:true,detail:{target:jobResult}}));const serverGate={submitDisabled:submit.disabled,receipt:receipt.value,status:document.getElementById('preview-submit-status').textContent};const raw=document.getElementById('raw-json'),invalidationAttempt=configure(),invalidationWasPending=!spinner.hidden;raw.value='changed';raw.dispatchEvent(new Event('input',{bubbles:true}));const rawInvalidated={submitDisabled:submit.disabled,receipt:receipt.value,className:document.getElementById('preview-result').className,invalidationWasPending,presentation:buttonPresentation()};const terminalAttempt=configure(),terminalGeneration=terminalAttempt.detail.headers['X-Preview-Generation'],terminalPending=document.getElementById('preview-result');terminalPending.outerHTML=terminalFragment.replace('terminal-generation',terminalGeneration);const terminalError=document.getElementById('preview-result');document.body.dispatchEvent(new CustomEvent('htmx:afterSettle',{bubbles:true,detail:{elt:terminalError,target:terminalPending,xhr:{aggPreviewGeneration:terminalGeneration,getResponseHeader:()=>terminalGeneration}}}));const terminalFailure={className:terminalError.className,text:terminalError.textContent,previewDisabled:button.disabled,submitDisabled:submit.disabled,submitStatus:document.getElementById('preview-submit-status').textContent,status:document.getElementById('form-status').textContent,presentation:buttonPresentation()};"
          "outcome={initial,pending,unrelatedIgnored,duplicateSuppressed,platformFailure,gatewayFailure,connectionLoss,clientAbort,browserTimeout,terminalFailure,succeeded,submitFlow,serverGate,rawInvalidated};"
          "}catch(error){outcome={error:error.message};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));"
@@ -550,6 +664,27 @@
                          :invalidationWasPending])))
     (is (true? (get-in outcome
                        [:rawInvalidated :presentation :spinnerHidden])))))
+
+(deftest real-htmx-worker-failure-finishes-preview-in-a-browser
+  (let [outcome
+        (real-htmx-preview-outcome
+         (ui/page {:user {:email "owner@example.com" :role :member}
+                   :csrf "csrf-test"
+                   :tokens []
+                   :members []
+                   :logs-enabled? false}))]
+    (is (nil? (:error outcome)) outcome)
+    (is (= "2.0.10" (:htmxVersion outcome)) outcome)
+    (is (= "preview-error" (:className outcome)) outcome)
+    (is (false? (:previewDisabled outcome)) outcome)
+    (is (:spinnerHidden outcome) outcome)
+    (is (:submitDisabled outcome) outcome)
+    (is (= "Preview failed. Run Preview again." (:submitStatus outcome))
+        outcome)
+    (is (= "Preview failed. See details below." (:status outcome)) outcome)
+    (doseq [detail ["preview_rendering" "Source content" "worker_failed"
+                    "No durable render was submitted or charged"]]
+      (is (str/includes? (:text outcome) detail) outcome))))
 
 (deftest preview-gallery-is-responsive-accessible-and-stale-safe-in-a-browser
   (let [desktop (preview-gallery-browser-outcome false)
