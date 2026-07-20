@@ -3,6 +3,7 @@
             [agg.admin.gcp :as admin-gcp]
             [agg.auth.core :as auth]
             [agg.auth.gcp :as auth-gcp]
+            [agg.errors :as errors]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
             [agg.jobs-test :as fixture]
@@ -647,7 +648,51 @@
                               (fixture/render-request))
                              [:job :id])]
           (jobs/dispatch-job! render-service job-id)
-          (is (= "succeeded" (:state (jobs/run-job! render-service job-id)))))
+          (is (= ::jobs/invalid-render-attempt
+                 (try
+                   (jobs/run-job-attempt! render-service job-id 2)
+                   nil
+                   (catch clojure.lang.ExceptionInfo error
+                     (:type (ex-data error))))))
+          (is (= "running" (:state (jobs/get-job render-service job-id))))
+          (is (= "succeeded"
+                 (:state (jobs/run-job-attempt! render-service job-id 1)))))
+        (let [diagnostic-worker
+              (reify jobs/RenderWorker
+                (perform-render! [_ _job-id _request]
+                  (errors/raise! "private failure"
+                                 {:type ::typed-render-failure
+                                  :failure-code "composition_encode_failed"
+                                  :stage "composition_encode"
+                                  :status 422
+                                  :retryable false})))
+              diagnostic-service
+              (gcp/job-service {:firestore firestore
+                                :request-store request-store
+                                :queue queue
+                                :launcher successful-launcher
+                                :worker diagnostic-worker
+                                :clock (Clock/systemUTC)})
+              job-id (get-in (jobs/submit-job!
+                              diagnostic-service
+                              "terminal-worker-diagnostics"
+                              (fixture/render-request))
+                             [:job :id])]
+          (jobs/dispatch-job! diagnostic-service job-id)
+          (let [cause (try
+                        (jobs/run-job-attempt! diagnostic-service job-id 1)
+                        (catch clojure.lang.ExceptionInfo error error))
+                failed (jobs/get-job diagnostic-service job-id)]
+            (is (= 1 (:attempt (ex-data cause))))
+            (is (nil? (:job-id (ex-data cause))))
+            (is (= {:failureCode "composition_encode_failed"
+                    :stage "composition_encode"
+                    :status 422
+                    :retryable false
+                    :attempt 1}
+                   (select-keys failed [:failureCode :stage :status :retryable
+                                        :attempt])))
+            (is (nat-int? (:elapsedMs failed)))))
         (let [race-service (service blocking-launcher)
               job-id (get-in (jobs/submit-job!
                               race-service

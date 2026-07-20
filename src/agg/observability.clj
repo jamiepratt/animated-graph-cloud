@@ -10,7 +10,7 @@
     :jobsCancelled :cleanupErrors :components :failureCode :errorType :port
     :requestId :category :status :phase :view :listState :tokenStatus
     :accountStatus :mimeFilter :indexStatus :stage :elapsedMs :timeoutMs
-    :retryable})
+    :retryable :attempt})
 
 (def ^:private safe-value-keys
   #{:severity :component :event :message :reason :failureCode :errorType
@@ -18,7 +18,10 @@
     :mimeFilter :indexStatus :stage})
 
 (def ^:private safe-stages
-  #{"source_metadata" "source_content" "frame_compose"})
+  #{"source_metadata" "frame_compose"
+    "request_load" "request_prepare" "source_content" "overlay_render"
+    "composition_encode" "artifact_upload" "drive_delivery"
+    "completion_persistence"})
 
 (defn- safe-string? [value]
   (and (string? value)

@@ -689,7 +689,34 @@ components:
         statusUrl: {type: string}
         cancelUrl: {type: string}
         retryUrl: {type: string}
-        failureCode: {type: string}
+        failureCode:
+          type: string
+          enum:
+            - worker_failed
+            - request_load_failed
+            - request_prepare_failed
+            - source_metadata_failed
+            - source_download_failed
+            - source_content_failed
+            - drive_grant_required
+            - overlay_render_failed
+            - composition_encode_failed
+            - artifact_upload_failed
+            - drive_delivery_failed
+            - completion_persistence_failed
+            - output_too_large
+            - launch_failed
+            - stale_lease
+        stage:
+          type: string
+          enum: [request_load, request_prepare, source_content, overlay_render, composition_encode, artifact_upload, drive_delivery, completion_persistence]
+        status:
+          type: integer
+          minimum: 100
+          maximum: 599
+          description: Upstream numeric status when safely available.
+        retryable: {type: boolean}
+        elapsedMs: {type: integer, minimum: 0}
         output:
           type: object
           properties:

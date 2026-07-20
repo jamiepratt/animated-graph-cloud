@@ -67,6 +67,15 @@
     (:lease-expires-at job) (assoc "leaseExpiresAt" (long (:lease-expires-at job)))
     (:execution job) (assoc "execution" (:execution job))
     (:failure job) (assoc "failure" (:failure job))
+    (:failure-diagnostics job)
+    (assoc "failureRetryable" (boolean (get-in job [:failure-diagnostics
+                                                    :retryable]))
+           "failureElapsedMs" (long (get-in job [:failure-diagnostics
+                                                 :elapsed-ms])))
+    (get-in job [:failure-diagnostics :stage])
+    (assoc "failureStage" (get-in job [:failure-diagnostics :stage]))
+    (get-in job [:failure-diagnostics :status])
+    (assoc "failureStatus" (long (get-in job [:failure-diagnostics :status])))
     (:output job) (assoc "outputJson" (json/write-str (:output job)))
     (:requester-subject job) (assoc "requesterSubject" (:requester-subject job))
     (:requester-email job) (assoc "requesterEmail" (:requester-email job))
@@ -88,6 +97,14 @@
         (assoc :lease-expires-at (long (get data "leaseExpiresAt")))
         (get data "execution") (assoc :execution (get data "execution"))
         (get data "failure") (assoc :failure (get data "failure"))
+        (contains? data "failureElapsedMs")
+        (assoc :failure-diagnostics
+               (cond-> {:retryable (boolean (get data "failureRetryable"))
+                        :elapsed-ms (long (get data "failureElapsedMs"))}
+                 (get data "failureStage")
+                 (assoc :stage (get data "failureStage"))
+                 (contains? data "failureStatus")
+                 (assoc :status (long (get data "failureStatus")))))
         (get data "outputJson")
         (assoc :output (json/read-str (get data "outputJson") :key-fn keyword))
         (get data "requesterSubject")
@@ -118,7 +135,7 @@
 (defn- require-idempotency-key! [value]
   (when-not (and (string? value) (<= 1 (count value) 128))
     (throw (errors/raise! "A bounded Idempotency-Key header is required"
-                    {:type ::lifecycle/invalid-idempotency-key}))))
+                          {:type ::lifecycle/invalid-idempotency-key}))))
 
 (defrecord GcsRequestStore [^Storage storage bucket signer]
   lifecycle/RequestStore
@@ -143,7 +160,7 @@
   (signed-upload [_ object-name content-type expires-seconds]
     (when-not (<= 1 expires-seconds 900)
       (throw (errors/raise! "Signed uploads expire within fifteen minutes"
-                      {:type ::invalid-upload-expiry})))
+                            {:type ::invalid-upload-expiry})))
     (let [blob (-> (BlobInfo/newBuilder bucket object-name)
                    (.setContentType content-type)
                    (.build))
@@ -302,8 +319,8 @@
                          ::admin/invalid-subject}
                        (:type (ex-data error)))
           (throw (errors/raise! "Member is no longer allowlisted"
-                          {:type ::lifecycle/member-not-allowlisted}
-                          error))
+                                {:type ::lifecycle/member-not-allowlisted}
+                                error))
           (throw error))))))
 
 (defn- transaction-contention? [error]
@@ -343,12 +360,12 @@
               recheck-error)))]
     (if (membership-denied? membership-error)
       (throw (errors/raise! "Member is no longer allowlisted"
-                      {:type ::lifecycle/member-not-allowlisted}
-                      error))
+                            {:type ::lifecycle/member-not-allowlisted}
+                            error))
       (throw (errors/raise! "Firestore transaction contention"
-                      {:type ::lifecycle/transaction-contention
-                       :retryable true}
-                      error)))))
+                            {:type ::lifecycle/transaction-contention
+                             :retryable true}
+                            error)))))
 
 (defrecord FirestoreJobService [^Firestore firestore request-store queue launcher
                                 worker ^Clock clock daily-limit
@@ -580,7 +597,7 @@
                      (when (>= (count (capacity-leases capacity now))
                                lifecycle/max-active-leases)
                        (throw (errors/raise! "All render leases are held"
-                                       {:type ::lifecycle/capacity-exhausted})))
+                                             {:type ::lifecycle/capacity-exhausted})))
                      (when (>= submitted daily-limit)
                        (throw (errors/raise!
                                "Daily submission limit is exhausted"
@@ -589,8 +606,8 @@
                      (when (> (+ reserved render-reservation-minor-units)
                               monthly-budget-minor-units)
                        (throw (errors/raise! "Monthly compute budget is exhausted"
-                                       {:type
-                                        ::lifecycle/monthly-budget-exhausted})))
+                                             {:type
+                                              ::lifecycle/monthly-budget-exhausted})))
                      (.set ^Transaction transaction (.document jobs job-id)
                            (job-doc candidate))
                      (.set ^Transaction transaction idempotency-ref
@@ -641,7 +658,7 @@
                        leases (capacity-leases capacity now)]
                    (when (>= (count leases) lifecycle/max-active-leases)
                      (throw (errors/raise! "All render leases are held"
-                                     {:type ::lifecycle/capacity-exhausted})))
+                                           {:type ::lifecycle/capacity-exhausted})))
                    (let [expires-at (+ now (* 1000 lifecycle/lease-seconds))
                          admitted (assoc job
                                          :state :launching
@@ -699,8 +716,8 @@
                  (.set ^Transaction transaction capacity-ref
                        (released-capacity capacity job-id now)))))
             (throw (errors/raise! "Renderer launch failed"
-                            {:type ::lifecycle/launch-failed}
-                            cause)))))))
+                                  {:type ::lifecycle/launch-failed}
+                                  cause)))))))
   (cancel-job! [_ job-id]
     (let [job-ref (.document (.collection firestore "jobs") job-id)
           capacity-ref (.document (.collection firestore "orchestration") "capacity")
@@ -724,7 +741,7 @@
                    (.set ^Transaction transaction job-ref (job-doc updated))
                    updated)
                  (throw (errors/raise! "Terminal job cannot be cancelled"
-                                 {:type ::lifecycle/invalid-transition}))))))]
+                                       {:type ::lifecycle/invalid-transition}))))))]
       (if-let [execution (:execution requested)]
         (complete-cancellation! firestore launcher clock job-ref capacity-ref
                                 job-id (:attempt requested) execution)
@@ -746,7 +763,7 @@
                           (transaction-snapshot transaction job-ref))]
                  (when-not job
                    (throw (errors/raise! "Job does not exist"
-                                   {:type ::lifecycle/job-not-found})))
+                                         {:type ::lifecycle/job-not-found})))
                  (let [capacity (transaction-snapshot transaction capacity-ref)
                        budget (transaction-snapshot transaction budget-ref)
                        identity (job-member-identity job)
@@ -764,17 +781,18 @@
                    (when (>= (count (capacity-leases capacity now))
                              lifecycle/max-active-leases)
                      (throw (errors/raise! "All render leases are held"
-                                     {:type ::lifecycle/capacity-exhausted})))
+                                           {:type ::lifecycle/capacity-exhausted})))
                    (when (> (+ reserved render-reservation-minor-units)
                             monthly-budget-minor-units)
                      (throw (errors/raise! "Monthly compute budget is exhausted"
-                                     {:type
-                                      ::lifecycle/monthly-budget-exhausted})))
+                                           {:type
+                                            ::lifecycle/monthly-budget-exhausted})))
                    (let [updated (-> job
                                      (assoc :state :queued
                                             :attempt (inc (:attempt job))
                                             :updated-at now)
-                                     (dissoc :failure :output :execution
+                                     (dissoc :failure :failure-diagnostics
+                                             :output :execution
                                              :lease-token :lease-expires-at))]
                      (.set ^Transaction transaction job-ref (job-doc updated))
                      (.set ^Transaction transaction budget-ref
@@ -793,61 +811,95 @@
       (lifecycle/enqueue-job! queue job-id (:attempt retried))
       (public-job retried)))
   (run-job! [_ job-id]
-    (let [job-ref (.document (.collection firestore "jobs") job-id)
+    (let [started (System/nanoTime)
+          job-ref (.document (.collection firestore "jobs") job-id)
           capacity-ref (.document (.collection firestore "orchestration") "capacity")
           job (snapshot-job (await! (.get job-ref)))]
       (when-not job
         (throw (errors/raise! "Job does not exist" {:type ::lifecycle/job-not-found})))
       (when-not (= :running (:state job))
         (throw (errors/raise! "Only a running job can render"
-                        {:type ::lifecycle/invalid-transition})))
+                              {:type ::lifecycle/invalid-transition})))
       (try
-        (let [request (lifecycle/load-request request-store (:request-object job))
+        (let [request
+              (lifecycle/with-durable-stage
+                "request_load"
+                #(lifecycle/load-request request-store (:request-object job)))
               result (lifecycle/perform-render! worker job-id request)
               completed
-              (transaction!
-               firestore
-               (fn [transaction]
-                 (let [current (snapshot-job
-                                (transaction-snapshot transaction job-ref))
-                       capacity (transaction-snapshot transaction capacity-ref)
-                       now (now-ms clock)
-                       updated
-                       (cond
-                         (cancellation-state? current)
-                         (terminal-job current :cancelled now)
+              (lifecycle/with-durable-stage
+                "completion_persistence"
+                #(transaction!
+                  firestore
+                  (fn [transaction]
+                    (let [current (snapshot-job
+                                   (transaction-snapshot transaction job-ref))
+                          capacity (transaction-snapshot transaction capacity-ref)
+                          now (now-ms clock)
+                          updated
+                          (cond
+                            (cancellation-state? current)
+                            (terminal-job current :cancelled now)
 
-                         (> (long (or (:output-bytes result) 0))
-                            lifecycle/max-output-bytes)
-                         (assoc (terminal-job current :failed now)
-                                :failure "output_too_large")
+                            (> (long (or (:output-bytes result) 0))
+                               lifecycle/max-output-bytes)
+                            (assoc (terminal-job current :failed now)
+                                   :failure "output_too_large"
+                                   :failure-diagnostics
+                                   {:failure-code "output_too_large"
+                                    :stage "completion_persistence"
+                                    :retryable false
+                                    :elapsed-ms
+                                    (quot (- (System/nanoTime) started)
+                                          1000000)})
 
-                         :else
-                         (assoc (terminal-job current :succeeded now)
-                                :output (dissoc result :output-bytes)))]
-                   (.set ^Transaction transaction job-ref (job-doc updated))
-                   (.set ^Transaction transaction capacity-ref
-                         (released-capacity capacity job-id now))
-                   updated)))]
+                            :else
+                            (assoc (terminal-job current :succeeded now)
+                                   :output (dissoc result :output-bytes)))]
+                      (.set ^Transaction transaction job-ref (job-doc updated))
+                      (.set ^Transaction transaction capacity-ref
+                            (released-capacity capacity job-id now))
+                      updated))))]
           (public-job completed))
         (catch Throwable cause
-          (transaction!
-           firestore
-           (fn [transaction]
-             (let [current (snapshot-job
-                            (transaction-snapshot transaction job-ref))
-                   capacity (transaction-snapshot transaction capacity-ref)
-                   now (now-ms clock)
-                   failed (if (cancellation-state? current)
-                            (terminal-job current :cancelled now)
-                            (assoc (terminal-job current :failed now)
-                                   :failure "worker_failed"))]
-               (.set ^Transaction transaction job-ref (job-doc failed))
-               (.set ^Transaction transaction capacity-ref
-                     (released-capacity capacity job-id now)))))
+          (let [elapsed-ms (quot (- (System/nanoTime) started) 1000000)
+                diagnostics (lifecycle/failure-diagnostics cause elapsed-ms)]
+            (lifecycle/with-durable-stage
+              "completion_persistence"
+              #(transaction!
+                firestore
+                (fn [transaction]
+                  (let [current (snapshot-job
+                                 (transaction-snapshot transaction job-ref))
+                        capacity (transaction-snapshot transaction capacity-ref)
+                        now (now-ms clock)
+                        failed (if (cancellation-state? current)
+                                 (terminal-job current :cancelled now)
+                                 (assoc (terminal-job current :failed now)
+                                        :failure (:failure-code diagnostics)
+                                        :failure-diagnostics diagnostics))]
+                    (.set ^Transaction transaction job-ref (job-doc failed))
+                    (.set ^Transaction transaction capacity-ref
+                          (released-capacity capacity job-id now)))))))
           (throw (errors/raise! "Render worker failed"
-                          {:type ::lifecycle/worker-failed :job-id job-id}
-                          cause))))))
+                                {:type ::lifecycle/worker-failed :job-id job-id}
+                                cause))))))
+  lifecycle/JobAttemptRunner
+  (run-job-attempt! [this job-id attempt]
+    (let [job (snapshot-job
+               (await! (.get (.document (.collection firestore "jobs")
+                                        job-id))))]
+      (when-not job
+        (throw (errors/raise! "Job does not exist"
+                              {:type ::lifecycle/job-not-found})))
+      (lifecycle/require-render-attempt! (:attempt job) attempt)
+      (try
+        (lifecycle/run-job! this job-id)
+        (catch Throwable cause
+          (errors/raise! "Validated renderer attempt failed"
+                         {:type ::lifecycle/render-attempt-failed
+                          :attempt attempt}
+                         cause)))))
   admin/JobAdministration
   (cancel-member-jobs! [this {:keys [subject] :as cleanup-identity}]
     (let [job-ids
@@ -914,7 +966,7 @@
 (defn- env-long [name default]
   (or (parse-long (env name (str default)))
       (throw (errors/raise! (str name " must be an integer")
-                      {:type ::invalid-environment :name name}))))
+                            {:type ::invalid-environment :name name}))))
 
 (defn api-system []
   (let [project (env "GOOGLE_CLOUD_PROJECT" "animated-graph-cloud-jp")
@@ -929,7 +981,7 @@
              (str "agg-scheduler@" project ".iam.gserviceaccount.com"))]
     (when-not dispatcher-url
       (throw (errors/raise! "AGG_DISPATCHER_URL is required"
-                      {:type ::missing-dispatcher-url})))
+                            {:type ::missing-dispatcher-url})))
     (let [store (request-store bucket)
           firestore (.getService (FirestoreOptions/getDefaultInstance))
           log-store (logs-gcp/firestore-store firestore)
