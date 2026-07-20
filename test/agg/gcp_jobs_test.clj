@@ -11,7 +11,7 @@
             [agg.tokens.gcp :as tokens-gcp]
             [clojure.test :refer [deftest is]])
   (:import (com.google.api.gax.rpc AbortedException AlreadyExistsException
-                                   StatusCode StatusCode$Code)
+                                   CancelledException StatusCode StatusCode$Code)
            (com.google.cloud.firestore FirestoreException FirestoreOptions)
            (com.google.cloud.run.v2 Container Execution TaskTemplate)
            (com.google.cloud.storage StorageOptions)
@@ -19,7 +19,8 @@
            (io.grpc Status)
            (java.time Clock Instant ZoneOffset)
            (java.util Date)
-           (java.util.concurrent ExecutionException)))
+           (java.util.concurrent CancellationException CompletableFuture
+                                 ExecutionException)))
 
 (deftest duplicate-task-delivery-is-idempotent
   (let [status (reify StatusCode
@@ -233,6 +234,25 @@
     (is (nil? (#'gcp/active-execution-for-attempt
                [unrelated completed active] "job-id" 2))
         "a completed execution cannot be adopted by a later retry")))
+
+(deftest cloud-run-cancelled-operation-result-is-successful
+  (let [status (reify StatusCode
+                 (getCode [_] StatusCode$Code/CANCELLED)
+                 (getTransportCode [_] Status/CANCELLED))
+        operation (CompletableFuture.)
+        failed-status (reify StatusCode
+                        (getCode [_] StatusCode$Code/ABORTED)
+                        (getTransportCode [_] Status/ABORTED))
+        failed-operation (CompletableFuture.)]
+    (.completeExceptionally
+     operation
+     (CancelledException. "execution cancelled" nil status false))
+    (.completeExceptionally
+     failed-operation
+     (AbortedException. "remote cancellation failed" nil failed-status true))
+    (is (nil? (#'gcp/await-cancellation! operation)))
+    (is (thrown-with-msg? AbortedException #"remote cancellation failed"
+                          (#'gcp/await-cancellation! failed-operation)))))
 
 (deftest signed-upload-is-a-bounded-content-type-locked-v4-put
   (let [signer (reify com.google.auth.ServiceAccountSigner
@@ -557,7 +577,8 @@
             (cancel-execution! [_ execution]
               (swap! cancelled conj execution)
               (when (compare-and-set! fail-next-cancellation? true false)
-                (throw (ex-info "simulated cancellation failure" {}))))
+                (throw (ex-info "simulated cancellation failure" {})))
+              (throw (CancellationException. "execution cancelled")))
             jobs/RecoverableJobLauncher
             (launch-job-attempt! [_ job-id attempt]
               (let [execution (str "executions/" job-id "-attempt-" attempt)]
@@ -629,7 +650,7 @@
                  (jobs/reconcile-jobs! service)))
           (is (= "cancelled" (:state (jobs/get-job service job-id))))
           (is (= [execution execution] @cancelled)
-              "reconciliation retries the exact orphan execution")
+              "reconciliation accepts the cancelled operation future for the exact orphan execution")
           (is (= 2 (count @launched))
               "cancellation retry does not launch another renderer")
           (is (nil? (get-in (.getData (.get (.get capacity-ref)))

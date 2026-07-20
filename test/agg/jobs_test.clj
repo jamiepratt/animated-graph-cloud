@@ -9,7 +9,8 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]])
-  (:import (java.time Clock Instant ZoneOffset)))
+  (:import (java.time Clock Instant ZoneOffset)
+           (java.util.concurrent CancellationException)))
 
 (defn- available-port []
   (test-http/available-port))
@@ -111,7 +112,13 @@
       (is (not (retry-action? (fragment state)))))
     (doseq [state ["cancellation-requested" "succeeded"]]
       (is (not (cancel-action? (fragment state))))
-      (is (not (retry-action? (fragment state)))))))
+      (is (not (retry-action? (fragment state)))))
+    (let [requested (fragment "cancellation-requested")
+          cancelled (fragment "cancelled")]
+      (is (str/includes? requested "<h2>Cancellation requested</h2>"))
+      (is (str/includes? requested "hx-trigger=\"load delay:2s\""))
+      (is (str/includes? cancelled "<h2>Cancelled</h2>"))
+      (is (not (str/includes? cancelled "hx-get="))))))
 
 (deftest preview-work-is-distinguished-from-durable-render-jobs
   (let [service (:service (jobs/in-memory-system))
@@ -543,6 +550,41 @@
         (is (= "cancelled" (:state (response-json running-cancel))))
         (is (= 1 (count @(:cancelled system))))
         (is (= 3 (count @(:enqueued system)))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest cloud-run-cancelled-future-is-a-successful-idempotent-api-cancellation
+  (let [port (available-port)
+        cancellation-attempts (atom [])
+        launcher
+        (reify jobs/JobLauncher
+          (launch-job! [_ job-id] (str "executions/" job-id))
+          (cancel-execution! [_ execution]
+            (swap! cancellation-attempts conj execution)
+            (throw (CancellationException. "execution cancelled"))))
+        system (jobs/in-memory-system {:launcher launcher})
+        server (start-api! port {:job-service (:service system)})]
+    (try
+      (let [job-id (:id (response-json (submit! port "cancelled-future")))
+            dispatch
+            (request! port :post
+                      (str "/internal/v1/jobs/" job-id "/dispatch") {}
+                      {"X-CloudTasks-TaskName" "tasks/cancelled-future"})
+            first-cancel
+            (request! port :post (str "/v1/jobs/" job-id "/cancel") {} {})
+            repeated-cancel
+            (request! port :post (str "/v1/jobs/" job-id "/cancel") {} {})]
+        (is (= 202 (.statusCode dispatch)))
+        (is (= 200 (.statusCode first-cancel)))
+        (is (= "cancelled" (:state (response-json first-cancel))))
+        (is (= 200 (.statusCode repeated-cancel)))
+        (is (= (response-json first-cancel)
+               (response-json repeated-cancel)))
+        (is (= [(str "executions/" job-id)] @cancellation-attempts))
+        (is (= 1 (count @(:enqueued system)))
+            "cancellation cannot create another attempt")
+        (is (nil? (get-in @(:state system) [:jobs job-id :lease]))
+            "successful cancellation releases capacity"))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

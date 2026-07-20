@@ -4,7 +4,8 @@
             [agg.contracts.render :as contract])
   (:import (java.security MessageDigest)
            (java.time Clock Instant LocalDate YearMonth ZoneOffset)
-           (java.util HexFormat UUID)))
+           (java.util HexFormat UUID)
+           (java.util.concurrent CancellationException)))
 
 (defprotocol JobService
   (submit-job! [service idempotency-key request])
@@ -29,6 +30,14 @@
 (defprotocol JobLauncher
   (launch-job! [launcher job-id])
   (cancel-execution! [launcher execution]))
+
+(defn request-execution-cancellation!
+  "Treat a cancelled operation future as acknowledgement of execution cancellation."
+  [launcher execution]
+  (try
+    (cancel-execution! launcher execution)
+    (catch CancellationException _
+      nil)))
 
 (defprotocol RecoverableJobLauncher
   (launch-job-attempt! [launcher job-id attempt])
@@ -508,7 +517,7 @@
                         {:job updated}))))]
             (if (:cancel? launch-result)
               (do
-                (cancel-execution! launcher execution)
+                (request-execution-cancellation! launcher execution)
                 (let [cancelled
                       (locking state
                         (let [job (get-in @state [:jobs job-id])
@@ -558,7 +567,7 @@
                                        :state (:state job)})))))]
       (if-let [execution (:execution result)]
         (do
-          (cancel-execution! launcher execution)
+          (request-execution-cancellation! launcher execution)
           (let [cancelled
                 (locking state
                   (let [job (get-in @state [:jobs job-id])

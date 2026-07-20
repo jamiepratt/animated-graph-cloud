@@ -280,7 +280,12 @@ that dispatch accepted but did not record. Adoption writes the execution name,
 repairs running/cancellation state, and renews capacity atomically; a pending
 cancellation then cancels that exact execution. A failed external cancellation
 keeps the renewed lease and is retried by the next Scheduler run before any
-durable cancellation is recorded. Expired unmatched running or
+durable cancellation is recorded. A Cloud Run cancellation operation that
+reports its execution cancelled is terminal success: the API records
+`cancelled` and releases the render lease instead of returning a render failure.
+Thus a genuine cancellation failure converges on the next five-minute
+reconciliation, while an accepted cancellation converges in the original
+request. Expired unmatched running or
 launching jobs become `failed` with `stale_lease`; expired cancellations become
 `cancelled`; stale, terminal, and missing-job capacity leases are removed
 atomically. Operational events contain only bounded reasons, durations, and

@@ -24,7 +24,8 @@
                                       OidcToken QueueName Task TaskName)
            (java.time Clock Instant LocalDate YearMonth ZoneOffset)
            (java.util Date UUID)
-           (java.util.concurrent ExecutionException TimeUnit)))
+           (java.util.concurrent CancellationException ExecutionException
+                                 TimeUnit)))
 
 ;; The generated Cloud Tasks HttpMethod enum cannot be imported alongside the
 ;; Storage enum. Resolve it once without leaking that naming collision.
@@ -42,6 +43,17 @@
     (.get ^java.util.concurrent.Future future)
     (catch ExecutionException error
       (throw (.getCause error)))))
+
+(defn- await-cancellation! [future]
+  (try
+    (await! future)
+    (catch CancellationException _
+      nil)
+    (catch ApiException error
+      (if (= StatusCode$Code/CANCELLED
+             (some-> error .getStatusCode .getCode))
+        nil
+        (throw error)))))
 
 (defn- now-ms [^Clock clock]
   (.toEpochMilli (Instant/now clock)))
@@ -301,7 +313,8 @@
   (launch-job! [_ job-id]
     (launch-cloud-run! jobs-client renderer-job job-id 1))
   (cancel-execution! [_ execution]
-    (await! (.cancelExecutionAsync executions-client execution)))
+    (await-cancellation!
+     (.cancelExecutionAsync executions-client execution)))
   lifecycle/RecoverableJobLauncher
   (launch-job-attempt! [_ job-id attempt]
     (launch-cloud-run! jobs-client renderer-job job-id attempt))
@@ -336,7 +349,7 @@
 
 (defn- complete-cancellation! [^Firestore firestore launcher ^Clock clock
                                job-ref capacity-ref job-id attempt execution]
-  (lifecycle/cancel-execution! launcher execution)
+  (lifecycle/request-execution-cancellation! launcher execution)
   (public-job
    (transaction!
     firestore
