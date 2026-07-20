@@ -115,23 +115,39 @@
      "selection.textContent=file.name||'Selected video';"
      "reportDiagnostic('selected','drive','selected');picker.setVisible(false);syncRequest(false);}"
      "if(data.action===google.picker.Action.CANCEL){picker.setVisible(false);reportDiagnostic('cancelled','drive','unknown');}}"
-     "let picker=null,pickerRequested=false;"
+     "let picker=null,pickerRequested=false,pickerLoading=false,pickerLoadTimer=null,pickerLoadAttempt=0;"
+     "function failPickerInitialization(attempt){"
+     "if(!pickerLoading||attempt!==pickerLoadAttempt)return;"
+     "pickerLoading=false;picker=null;pickerRequested=false;"
+     "if(pickerLoadTimer){clearTimeout(pickerLoadTimer);pickerLoadTimer=null;}"
+     "selection.textContent='Google Drive Picker failed to load. Try again.';"
+     "reportDiagnostic('error','drive','unknown');}"
      "function showPicker(){"
-     "if(!picker){pickerRequested=true;selection.textContent='Loading Google Drive Picker…';return;}"
+     "if(!picker){pickerRequested=true;selection.textContent='Loading Google Drive Picker…';initializePicker();return;}"
      "pickerRequested=false;picker.setVisible(true);reportDiagnostic('opened','drive','unknown');}"
      "function openPicker(){"
      "if(!pickerConfig){selection.textContent='Connect Drive first';return;}"
      "showPicker();}"
-     "if(pickerConfig){gapi.load('picker',()=>{"
-     "const view=new google.picker.DocsView().setIncludeFolders(false)"
+     "function initializePicker(){"
+     "if(!pickerConfig||picker||pickerLoading)return;"
+     "pickerLoading=true;const attempt=++pickerLoadAttempt;"
+     "const failed=()=>failPickerInitialization(attempt);"
+     "pickerLoadTimer=setTimeout(failed,10000);"
+     "try{gapi.load('picker',{callback:()=>{"
+     "if(!pickerLoading||attempt!==pickerLoadAttempt)return;"
+     "try{const view=new google.picker.DocsView().setIncludeFolders(false)"
      ".setSelectFolderEnabled(false);"
      "const upload=new google.picker.DocsUploadView().setIncludeFolders(false);"
      "picker=new google.picker.PickerBuilder().addView(view).addView(upload)"
      ".setSelectableMimeTypes('video/mp4,video/quicktime,video/webm,video/mpeg,video/ogg,video/x-msvideo,video/x-matroska')"
      ".setOAuthToken(pickerConfig.accessToken).setDeveloperKey(pickerConfig.apiKey)"
      ".setAppId(pickerConfig.appId).setOrigin(location.origin)"
-     ".setCallback(pickerCallback).build().setVisible(false);"
-     "if(pickerRequested)showPicker();});}"
+     ".setCallback(pickerCallback).build();"
+     "picker.setVisible(false);pickerLoading=false;"
+     "if(pickerLoadTimer){clearTimeout(pickerLoadTimer);pickerLoadTimer=null;}"
+     "if(pickerRequested)showPicker();}catch(_error){failed();}},"
+     "onerror:failed,timeout:10000,ontimeout:failed});}catch(_error){failed();}}"
+     "if(pickerConfig)initializePicker();"
      "document.getElementById('open-picker').addEventListener('click',openPicker);"
      "})();")))
 
@@ -235,15 +251,27 @@
   (str "<figure id=\"preview-result\"><img alt=\"Midpoint preview\" src=\"data:image/png;base64,"
        base64-png "\"></figure>"))
 
-(defn preview-failure-fragment [{:keys [category request-id failureCode line]}]
+(defn preview-failure-fragment
+  [{:keys [category request-id status failureCode line stage elapsedMs timeoutMs
+           retryable]}]
   (str "<article id=\"preview-result\" class=\"preview-error\" role=\"alert\"><h2>Preview failed</h2><dl>"
        "<dt>Category</dt><dd><code>" (escape-html category) "</code></dd>"
        "<dt>Request ID</dt><dd><code>" (escape-html request-id) "</code></dd>"
+       (when status
+         (str "<dt>Status</dt><dd>" (escape-html status) "</dd>"))
        (when failureCode
          (str "<dt>Failure code</dt><dd><code>"
               (escape-html failureCode) "</code></dd>"))
        (when line
          (str "<dt>Source line</dt><dd>" (escape-html line) "</dd>"))
+       (when stage
+         (str "<dt>Stage</dt><dd><code>" (escape-html stage) "</code></dd>"))
+       (when elapsedMs
+         (str "<dt>Elapsed</dt><dd>" (escape-html elapsedMs) " ms</dd>"))
+       (when timeoutMs
+         (str "<dt>Deadline</dt><dd>" (escape-html timeoutMs) " ms</dd>"))
+       (when retryable
+         "<dt>Retryable</dt><dd>Yes</dd>")
        "</dl></article>"))
 
 (defn page [{:keys [user csrf picker-config tokens members logs-enabled?]}]
@@ -339,7 +367,8 @@
      "byId('watermark-content')||(()=>{const input=document.createElement('input');input.id='watermark-content';input.type='hidden';form.appendChild(input);})();readBinaryFile('watermark-file','watermark-content','watermark-status');"
      "function applyRequest(request){if(!request||typeof request!=='object'||Array.isArray(request))throw new Error('JSON must be an object');['telemetryFormat','preset','outputFormat','fitMode','audioMode'].forEach(key=>{if(request[key]!==undefined&&byId(key.replace(/[A-Z]/g,letter=>'-'+letter.toLowerCase())))byId(key.replace(/[A-Z]/g,letter=>'-'+letter.toLowerCase())).value=request[key];});byId('source-video-file-id').value=request.sourceVideo?.fileId||'';byId('timezone').value='local';[['telemetrySyncAt','telemetry-sync-at'],['cameraSyncAt','camera-sync-at'],['sectionStartAt','section-start-at'],['sectionEndAt','section-end-at']].forEach(([key,id])=>{byId(id).value=request[key]?isoToLocal(request[key]):'';});clearFileBackedValue('telemetry');byId('telemetry').value=request.telemetry||'';byId('telemetry-file').value='';show(byId('telemetry-status'),request.telemetry?'Loaded from JSON.':'');const hasSpo2=!!request.spo2;byId('spo2-enabled').checked=hasSpo2;refreshOptional('spo2-enabled','spo2-fields');clearFileBackedValue('spo2-telemetry');byId('spo2-telemetry').value=hasSpo2?(request.spo2.telemetry||''):'';show(byId('spo2-status'),hasSpo2?'Loaded from JSON.':'');const hasTimer=!!request.timer;byId('timer-enabled').checked=hasTimer;refreshOptional('timer-enabled','timer-fields');byId('timer-start-at').value=hasTimer?isoToLocal(request.timer.startAt):'';byId('timer-end-at').value=hasTimer?isoToLocal(request.timer.endAt):'';const hasWatermark=!!request.watermark;byId('watermark-enabled').checked=hasWatermark;refreshOptional('watermark-enabled','watermark-fields');byId('watermark-file').value='';clearFileBackedValue('watermark-content');byId('watermark-content').value=hasWatermark?(request.watermark.contentBase64||''):'';show(byId('watermark-status'),hasWatermark?'Loaded from JSON.':'');updateTelemetryAccept();writeRequest(request);show(jsonStatus,'JSON applied to the form.','success');show(status,'Ready to preview or submit.','success');}"
      "byId('apply-json').addEventListener('click',()=>{try{const request=JSON.parse(raw.value),errors=validateRequest(request);if(errors.length){show(jsonStatus,errors.map((error,index)=>(index+1)+'. '+error).join('\\n'),'error');return;}applyRequest(request);}catch(error){show(jsonStatus,error.message,'error');}});byId('copy-json').addEventListener('click',()=>{const text=syncRequest(false)||raw.value;navigator.clipboard?navigator.clipboard.writeText(text).then(()=>show(jsonStatus,'Generated JSON copied.','success')):show(jsonStatus,'Copy is unavailable in this browser.');});"
-     "form.addEventListener('input',event=>{if(event.target.id==='raw-json'||event.target.type==='file')return;clearFileBackedValue(event.target.id);syncRequest(false);});document.body.addEventListener('htmx:configRequest',event=>{if(!form.contains(event.target))return;const text=syncRequest(true);if(!text){event.preventDefault();return;}event.detail.parameters.request=text;});"
+     "function previewTrigger(event){const trigger=event.detail?.elt||event.target;return !!trigger?.matches?.('[hx-post=\"/ui/preview\"]');}function previewTarget(event){const target=event.detail?.target||event.target;return target?.id==='preview-result'?target:null;}"
+     "form.addEventListener('input',event=>{if(event.target.id==='raw-json'||event.target.type==='file')return;clearFileBackedValue(event.target.id);syncRequest(false);});document.body.addEventListener('htmx:configRequest',event=>{if(!form.contains(event.target))return;const text=syncRequest(true);if(!text){event.preventDefault();return;}event.detail.parameters.request=text;if(previewTrigger(event))show(status,'Previewing…');});document.body.addEventListener('htmx:beforeRequest',event=>{if(previewTrigger(event))show(status,'Previewing…');});document.body.addEventListener('htmx:afterSwap',event=>{const target=previewTarget(event);if(!target)return;show(status,target.matches('.preview-error')?'Preview failed. See details below.':'Preview ready.',target.matches('.preview-error')?'error':'success');});"
      (picker-script picker-config)
      "})();</script></div></body></html>")))
 

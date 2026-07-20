@@ -480,7 +480,10 @@
         (is (re-find #"gapi\.load\('picker'" (.body authenticated)))
         (is (re-find #"google\.picker\.PickerBuilder" (.body authenticated)))
         (is (re-find #"setOAuthToken" (.body authenticated)))
-        (is (re-find #"build\(\)\.setVisible\(false\)" (.body authenticated)))
+        (is (re-find #"build\(\);picker\.setVisible\(false\)"
+                     (.body authenticated)))
+        (is (not (re-find #"build\(\)\.setVisible\(false\)"
+                          (.body authenticated))))
         (is (re-find #"picker\.setVisible\(true\)" (.body authenticated)))
         (is (re-find #"google\.picker\.Action\.CANCEL" (.body authenticated)))
         (is (re-find #"setSelectableMimeTypes" (.body authenticated)))

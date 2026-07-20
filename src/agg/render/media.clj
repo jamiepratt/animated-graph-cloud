@@ -14,6 +14,10 @@
                       source-stream! write-overlay!])
   (verify-composite! [encoder render-spec output-path]))
 
+(defprotocol CompositePreviewer
+  (render-composite-preview! [previewer render-spec source-stream!
+                              overlay-png output]))
+
 (def prores-4444-contract
   {:encoder "prores_ks"
    :profile 4
@@ -71,38 +75,6 @@
                              :exit-status exit-status})))
     output))
 
-(defn extract-preview!
-  "Extracts one PNG from a completed local composite without retaining frames."
-  ([ffmpeg render-spec input-path output]
-   (let [builder (doto (ProcessBuilder. ^java.util.List
-                        [ffmpeg "-hide_banner" "-nostdin"
-                         "-loglevel" "error"
-                         "-ss" (str (/ (double (:duration-seconds
-                                                render-spec))
-                                       2.0))
-                         "-i" (str input-path)
-                         "-frames:v" "1"
-                         "-f" "image2pipe"
-                         "-vcodec" "png" "pipe:1"])
-                   (.redirectErrorStream false))
-         process (.start builder)
-         stdout (future
-                  (with-open [input (.getInputStream process)]
-                    (.readAllBytes input)))
-         stderr (future
-                  (with-open [input (.getErrorStream process)]
-                    (slurp input)))
-         status (.waitFor process)]
-     (when-not (zero? status)
-       @stderr
-       (throw (errors/raise! "Preview extraction failed"
-                             {:type ::preview-extraction-failed
-                              :exit-status status})))
-     (.write ^java.io.OutputStream output ^bytes @stdout)
-     (.flush ^java.io.OutputStream output)
-     {:width (:width render-spec) :height (:height render-spec)
-      :at-seconds (/ (double (:duration-seconds render-spec)) 2.0)})))
-
 (defn- encode-with-ffmpeg! [ffmpeg render-spec audio-path output-path write-frames!]
   (let [{:keys [width height fps]} render-spec
         command [ffmpeg
@@ -155,16 +127,18 @@
                             {:type ::pipe-creation-failed})))
     path))
 
+(defn- fit-filter [{:keys [width height fit-mode]}]
+  (if (= "crop" fit-mode)
+    (format "scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1"
+            width height width height)
+    (format "scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1"
+            width height width height)))
+
 (defn composite-command
   "Returns the bounded FFmpeg command shape used by the compositing path."
   [ffmpeg render-spec heartbeat-path overlay-pipe output-path]
-  (let [{:keys [width height fps duration-seconds output-format fit-mode audio-mode]} render-spec
-        fit-filter (if (= "crop" fit-mode)
-                     (format "scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1"
-                             width height width height)
-                     (format "scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1"
-                             width height width height))
-        video-filter (str "[0:v]" fit-filter "[base];"
+  (let [{:keys [width height fps duration-seconds output-format audio-mode]} render-spec
+        video-filter (str "[0:v]" (fit-filter render-spec) "[base];"
                           "[1:v]format=rgba[overlay];"
                           "[base][overlay]overlay=0:0:format=auto:eof_action=endall[v]")
         audio-filter (case audio-mode
@@ -204,6 +178,74 @@
            "-c:a" "aac"
            "-b:a" (:target-bitrate aac-lc-contract)]
           (concat video-args format-args ["-y" (str output-path)]))))
+
+(defn composite-preview-command
+  "Returns the FFmpeg command that composites only the selected midpoint frame."
+  [ffmpeg render-spec overlay-path]
+  (let [midpoint (/ (double (:duration-seconds render-spec)) 2.0)
+        video-filter (str "[0:v]" (fit-filter render-spec) "[base];"
+                          "[1:v]format=rgba[overlay];"
+                          "[base][overlay]overlay=0:0:format=auto[v]")]
+    [ffmpeg "-hide_banner" "-nostdin" "-loglevel" "error"
+     "-ss" (str midpoint) "-i" "pipe:0"
+     "-loop" "1" "-i" (str overlay-path)
+     "-filter_complex" video-filter
+     "-map" "[v]"
+     "-frames:v" "1"
+     "-an"
+     "-f" "image2pipe"
+     "-vcodec" "png"
+     "pipe:1"]))
+
+(defn- render-composite-preview-with-ffmpeg!
+  [ffmpeg render-spec source-stream! overlay-png output]
+  (let [overlay-path (Files/createTempFile
+                      "agg-preview-overlay-" ".png"
+                      (make-array java.nio.file.attribute.FileAttribute 0))]
+    (try
+      (Files/write overlay-path ^bytes overlay-png (make-array OpenOption 0))
+      (let [builder (doto (ProcessBuilder. ^java.util.List
+                           (composite-preview-command
+                            ffmpeg render-spec overlay-path))
+                      (.redirectErrorStream false))
+            process (.start builder)
+            stdout (future
+                     (with-open [input (.getInputStream process)]
+                       (.readAllBytes input)))
+            stderr (future
+                     (with-open [input (.getErrorStream process)]
+                       (slurp input)))
+            source-error (atom nil)]
+        (try
+          (with-open [source-input (.getOutputStream process)]
+            (try
+              (source-stream! source-input)
+              (catch Throwable error
+                (reset! source-error error))))
+          (let [exit-status (.waitFor process)
+                png @stdout]
+            @stderr
+            (when-not (zero? exit-status)
+              (throw (errors/raise!
+                      "Selected-source preview composition failed"
+                      {:type ::composite-preview-failed
+                       :exit-status exit-status}
+                      @source-error)))
+            (when (zero? (alength ^bytes png))
+              (throw (errors/raise! "Selected-source preview produced no image"
+                                    {:type ::composite-preview-failed})))
+            (.write ^java.io.OutputStream output ^bytes png)
+            (.flush ^java.io.OutputStream output)
+            {:width (:width render-spec)
+             :height (:height render-spec)
+             :at-seconds (/ (double (:duration-seconds render-spec)) 2.0)})
+          (catch Throwable error
+            (.destroyForcibly process)
+            (future-cancel stdout)
+            (future-cancel stderr)
+            (throw error))))
+      (finally
+        (Files/deleteIfExists overlay-path)))))
 
 (defn- write-pipe! [stream-fn output result]
   (try
@@ -449,7 +491,11 @@
                          "-of" "json"
                          (str output-path)])
           probe (json/read-str probe-output :key-fn keyword)]
-      (verified-composite-media render-spec probe))))
+      (verified-composite-media render-spec probe)))
+  CompositePreviewer
+  (render-composite-preview! [_ render-spec source-stream! overlay-png output]
+    (render-composite-preview-with-ffmpeg! ffmpeg render-spec source-stream!
+                                           overlay-png output)))
 
 (defn ffmpeg-video-encoder
   ([] (ffmpeg-video-encoder "ffmpeg" "ffprobe"))

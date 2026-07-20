@@ -44,6 +44,11 @@
 
 (def ^:private max-synchronous-overlay-duration-seconds 1)
 
+(def ^:private selected-source-preview-timeout-ms 45000)
+
+(def ^:private preview-stages
+  #{"source_metadata" "source_content" "frame_compose"})
+
 (def ^:private public-assets
   {"/openapi.yaml" ["openapi.yaml" "application/yaml; charset=utf-8"]
    "/alpha-compose-mark.svg" ["public/alpha-compose-mark.svg" "image/svg+xml; charset=utf-8"]
@@ -92,6 +97,10 @@
   (and (integer? value)
        (<= 1 value 1000000000000)))
 
+(defn- safe-preview-timing? [value]
+  (and (integer? value)
+       (<= 0 value 1000000000000)))
+
 (defn- preview-diagnostics [error]
   (let [data (error-data error)
         failure-code (some (fn [entry]
@@ -101,13 +110,29 @@
         line (some (fn [entry]
                      (let [value (:line entry)]
                        (when (safe-source-line? value) value)))
-                   data)]
+                   data)
+        stage (some (fn [entry]
+                      (let [value (:stage entry)]
+                        (when (contains? preview-stages value) value)))
+                    data)
+        elapsed-ms (some (fn [entry]
+                           (let [value (:elapsed-ms entry)]
+                             (when (safe-preview-timing? value) value)))
+                         data)
+        timeout-ms (some (fn [entry]
+                           (let [value (:timeout-ms entry)]
+                             (when (safe-preview-timing? value) value)))
+                         data)]
     (cond-> {}
       failure-code (assoc :failureCode failure-code)
-      line (assoc :line line))))
+      line (assoc :line line)
+      stage (assoc :stage stage)
+      elapsed-ms (assoc :elapsedMs elapsed-ms)
+      timeout-ms (assoc :timeoutMs timeout-ms))))
 
 (defn- preview-failure [error request-id]
   (let [types (error-types error)
+        timeout? (contains? types ::selected-source-preview-timeout)
         contract? (contains? types ::invalid-request)
         invalid-source? (contains? types ::contract/invalid-source-metadata)
         source-metadata? (or invalid-source?
@@ -116,37 +141,50 @@
         source-content? (contains? types
                                    :agg.drive.gcp/source-download-failed)
         category (cond
+                   timeout? "preview_timeout"
                    contract? "request_contract"
                    source-metadata? "drive_source_metadata"
                    source-content? "drive_source_content"
                    :else "preview_rendering")
         status (cond
+                 timeout? 504
                  contract? 400
                  invalid-source? 400
                  :else 502)
-        error-code (if contract? "invalid_request" "preview_failed")]
+        error-code (if contract? "invalid_request" "preview_failed")
+        diagnostics (preview-diagnostics error)]
     {:status status
      :category category
-     :body (cond-> {:error error-code
-                    :category category
-                    :requestId request-id}
-             (not contract?) (assoc :retryable true))
+     :diagnostics diagnostics
+     :body (merge
+            (cond-> {:error error-code
+                     :category category
+                     :requestId request-id}
+              (not contract?) (assoc :retryable true))
+            diagnostics)
      :log? true}))
 
 (defn- respond-preview-failure! [dependencies exchange request-id error]
-  (let [{:keys [status category body log?]}
+  (let [{:keys [status category diagnostics body log?]}
         (preview-failure error request-id)]
     (when log?
       (emit-event! dependencies "request_failed"
-                   {:severity (if (= 400 status) "WARNING" "ERROR")
-                    :requestId request-id
-                    :category category}))
+                   (merge
+                    {:severity (if (= 400 status) "WARNING" "ERROR")
+                     :requestId request-id
+                     :category category
+                     :status status}
+                    (when (not= 400 status)
+                      {:retryable true})
+                    diagnostics)))
     (if (= "/ui/preview" (some-> exchange .getRequestURI .getPath))
       (respond! exchange 200 "text/html; charset=utf-8"
                 (ui/preview-failure-fragment
                  (merge {:category category
-                         :request-id request-id}
-                        (preview-diagnostics error))))
+                         :request-id request-id
+                         :status status
+                         :retryable (not= 400 status)}
+                        diagnostics)))
       (respond-json! exchange status body))))
 
 (defn- respond-admin-logs-failure! [dependencies exchange request-id]
@@ -412,35 +450,89 @@
 (defn- source-aware-ui-request! [exchange auth-system user]
   (attach-source! auth-system user (ui-render-request exchange)))
 
+(defn- stage-source-stream [source-stream! stage]
+  (fn [output]
+    (reset! stage "source_content")
+    (source-stream!
+     (proxy [java.io.FilterOutputStream] [output]
+       (write
+         ([value]
+          (reset! stage "frame_compose")
+          (.write ^java.io.OutputStream output (int value)))
+         ([buffer offset length]
+          (reset! stage "frame_compose")
+          (.write ^java.io.OutputStream output
+                  ^bytes buffer (int offset) (int length))))))))
+
+(defn- bounded-selected-source-preview!
+  [timeout-ms stage render-preview!]
+  (let [started (System/nanoTime)
+        timeout-marker (Object.)
+        task (future-call render-preview!)
+        result
+        (try
+          (deref task timeout-ms timeout-marker)
+          (catch Throwable error
+            (let [elapsed-ms
+                  (long (/ (- (System/nanoTime) started) 1000000))]
+              (throw (errors/raise!
+                      "Selected-source preview failed"
+                      {:type ::selected-source-preview-failed
+                       :stage @stage
+                       :status 502
+                       :elapsed-ms elapsed-ms
+                       :retryable true}
+                      error)))))]
+    (if (identical? timeout-marker result)
+      (do
+        (future-cancel task)
+        (let [elapsed-ms (long (/ (- (System/nanoTime) started) 1000000))]
+          (throw (errors/raise!
+                  "Selected-source preview exceeded its synchronous deadline"
+                  {:type ::selected-source-preview-timeout
+                   :stage @stage
+                   :status 504
+                   :elapsed-ms elapsed-ms
+                   :timeout-ms timeout-ms
+                   :retryable true}))))
+      result)))
+
 (defn- preview-bytes [render-spec source-stream! frame-renderer video-encoder]
   (let [output (ByteArrayOutputStream.)]
     (if source-stream!
-      (let [composite-path (Files/createTempFile
-                            "agg-preview-composite-"
-                            (if (= "h264-mp4" (:output-format render-spec))
-                              ".mp4"
-                              ".mov")
-                            (make-array java.nio.file.attribute.FileAttribute 0))]
-        (try
-          (renderer/render! (assoc render-spec
-                                   :output-path composite-path
-                                   :profile? false)
-                            {:frame-renderer frame-renderer
-                             :video-encoder (or video-encoder
-                                                (media/ffmpeg-video-encoder))
-                             :source-stream! source-stream!})
-          (media/extract-preview! "ffmpeg" render-spec composite-path output)
-          (finally
-            (Files/deleteIfExists composite-path))))
+      (do
+        (when-not (satisfies? media/CompositePreviewer video-encoder)
+          (throw (errors/raise!
+                  "Selected-source preview dependencies are incomplete"
+                  {:type ::missing-composite-previewer})))
+        (let [overlay (ByteArrayOutputStream.)]
+          (frames/render-preview! frame-renderer render-spec overlay)
+          (media/render-composite-preview!
+           video-encoder render-spec source-stream! (.toByteArray overlay) output)))
       (frames/render-preview! frame-renderer render-spec output))
     (.toByteArray output)))
 
-(defn- preview! [exchange frame-renderer video-encoder auth-system user]
-  (let [{:keys [render-spec source-stream!]} (source-aware-request!
-                                              exchange auth-system user)]
+(defn- preview-request-bytes
+  [prepared frame-renderer video-encoder auth-system user timeout-ms]
+  (if-not (get-in prepared [:render-spec :source-video])
+    (preview-bytes (:render-spec prepared) nil frame-renderer video-encoder)
+    (let [stage (atom "source_metadata")]
+      (bounded-selected-source-preview!
+       timeout-ms stage
+       (fn []
+         (let [{:keys [render-spec source-stream!]}
+               (attach-source! auth-system user prepared)]
+           (reset! stage "frame_compose")
+           (preview-bytes render-spec
+                          (stage-source-stream source-stream! stage)
+                          frame-renderer video-encoder)))))))
+
+(defn- preview!
+  [exchange frame-renderer video-encoder auth-system user timeout-ms]
+  (let [prepared (request-render-request exchange)]
     (respond-bytes! exchange 200 "image/png"
-                    (preview-bytes render-spec source-stream!
-                                   frame-renderer video-encoder))))
+                    (preview-request-bytes prepared frame-renderer video-encoder
+                                           auth-system user timeout-ms))))
 
 (defn- overlay! [exchange frame-renderer video-encoder]
   (let [{:keys [render-spec]} (request-render-request exchange)
@@ -809,14 +901,15 @@
   (let [{:keys [email]} (request-json exchange)]
     (respond-json! exchange 200 (admin/revoke-member! admin-service user email))))
 
-(defn- preview-ui! [exchange frame-renderer video-encoder auth-system user]
-  (let [{:keys [render-spec source-stream!]}
-        (source-aware-ui-request! exchange auth-system user)]
+(defn- preview-ui!
+  [exchange frame-renderer video-encoder auth-system user timeout-ms]
+  (let [prepared (ui-render-request exchange)]
     (respond! exchange 200 "text/html; charset=utf-8"
               (ui/preview-fragment
                (.encodeToString (Base64/getEncoder)
-                                (preview-bytes render-spec source-stream!
-                                               frame-renderer video-encoder))))))
+                                (preview-request-bytes
+                                 prepared frame-renderer video-encoder
+                                 auth-system user timeout-ms))))))
 
 (defn- submit-job-ui! [exchange job-service auth-system user]
   (let [{:keys [request]} (source-aware-ui-request! exchange auth-system user)
@@ -892,7 +985,7 @@
 (defn- route-handler [{:keys [frame-renderer video-encoder job-service
                               upload-signer auth-system picker-api-key
                               picker-app-id token-service admin-service log-store
-                              service-profile]
+                              service-profile preview-timeout-ms]
                        :as dependencies}]
   (reify HttpHandler
     (handle [_ exchange]
@@ -960,7 +1053,8 @@
                                   (and auth-system (= "POST" method) (= "/ui/preview" path))
                                   (let [user (require-session-user! exchange auth-system)]
                                     (require-csrf! exchange auth-system user)
-                                    (preview-ui! exchange frame-renderer video-encoder auth-system user))
+                                    (preview-ui! exchange frame-renderer video-encoder
+                                                 auth-system user preview-timeout-ms))
 
                                   (and auth-system job-service (= "POST" method)
                                        (= "/ui/jobs" path))
@@ -1035,7 +1129,8 @@
                                   (and (= "POST" method) (= "/v1/preview" path))
                                   (let [user (authenticated-user! exchange auth-system token-service)]
                                     (require-csrf! exchange auth-system user)
-                                    (preview! exchange frame-renderer video-encoder auth-system user))
+                                    (preview! exchange frame-renderer video-encoder
+                                              auth-system user preview-timeout-ms))
 
                                   (and auth-system token-service (= "POST" method)
                                        (= "/v1/tokens" path))
@@ -1300,6 +1395,7 @@
   ([port dependencies]
    (let [dependencies (merge {:frame-renderer frames/java2d-frame-renderer
                               :video-encoder (media/ffmpeg-video-encoder)
+                              :preview-timeout-ms selected-source-preview-timeout-ms
                               :service-profile "api"}
                              dependencies)
          _ (when-not (contains? service-profiles (:service-profile dependencies))

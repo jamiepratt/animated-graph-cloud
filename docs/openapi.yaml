@@ -192,6 +192,11 @@ paths:
       operationId: createPreview
       tags: [Rendering]
       summary: Render a midpoint PNG preview.
+      description: |
+        Renders one midpoint overlay frame. When a verified Drive source is
+        selected, only its midpoint frame is decoded and composited. Selected
+        source preview work has a 45-second application deadline so a safe,
+        correlated failure reaches the caller before the public platform limit.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       requestBody:
@@ -208,6 +213,8 @@ paths:
         "400": {$ref: "#/components/responses/InvalidRequest"}
         "401": {$ref: "#/components/responses/AuthenticationRequired"}
         "413": {$ref: "#/components/responses/PayloadTooLarge"}
+        "502": {$ref: "#/components/responses/PreviewFailure"}
+        "504": {$ref: "#/components/responses/PreviewFailure"}
   /v1/overlay:
     post:
       operationId: createOverlay
@@ -543,6 +550,11 @@ components:
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
+    PreviewFailure:
+      description: Selected-source metadata, content, composition, or deadline failure.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/PreviewFailure"}
     SynchronousOverlayDurationExceeded:
       description: The valid section exceeds the one-second synchronous diagnostic contract.
       content:
@@ -774,6 +786,22 @@ components:
             - token_not_found
             - admin_required
         retryable: {type: boolean}
+    PreviewFailure:
+      type: object
+      additionalProperties: false
+      required: [error, category, requestId, retryable]
+      properties:
+        error: {const: preview_failed}
+        category:
+          type: string
+          enum: [drive_source_metadata, drive_source_content, preview_rendering, preview_timeout]
+        requestId: {type: string, format: uuid}
+        retryable: {const: true}
+        stage:
+          type: string
+          enum: [source_metadata, source_content, frame_compose]
+        elapsedMs: {type: integer, minimum: 0, maximum: 1000000000000}
+        timeoutMs: {type: integer, minimum: 1, maximum: 1000000000000}
     SynchronousOverlayDurationExceeded:
       type: object
       additionalProperties: false
