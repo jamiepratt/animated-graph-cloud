@@ -1,5 +1,6 @@
 (ns agg.api-auth-test
-  (:require [agg.api.main :as api]
+  (:require [agg.admin.core :as admin]
+            [agg.api.main :as api]
             [agg.auth.core :as auth]
             [agg.drive.core :as drive]
             [agg.http-test-support :as test-http]
@@ -324,6 +325,146 @@
                               (pr-str event)))))
           (finally
             (.close ^java.lang.AutoCloseable server)))))))
+
+(deftest post-allowlist-login-recovers-missing-refresh-token-with-signed-consent
+  (let [port (available-port)
+        events (atom [])
+        grants (atom {})
+        encrypted (atom [])
+        {:keys [directory service]}
+        (admin/in-memory-system {:owner-email "owner@example.com"})
+        owner (admin/authorize-member! directory "owner@example.com"
+                                       "owner-subject")
+        oauth (reify auth/OAuthClient
+                (exchange-code! [_ flow code _ _]
+                  (is (= :login flow))
+                  {:access-token "private-access-token"
+                   :subject "private-google-subject"
+                   :email "private@example.com"
+                   :email-verified? true
+                   :refresh-token (case code
+                                    "pre-membership-code" "private-pre-refresh"
+                                    "routine-code" nil
+                                    "recovery-code" "private-recovery-refresh")
+                   :granted-scopes (set auth/approved-scopes)}))
+        cipher (reify auth/TokenCipher
+                 (encrypt-token! [_ value]
+                   (swap! encrypted conj value)
+                   (str "kms:" value))
+                 (decrypt-token! [_ value] (subs value 4)))
+        grant-store
+        (reify auth/GrantStore
+          (load-grant [_ subject] (get @grants subject))
+          (save-grant! [_ subject grant]
+            (swap! grants assoc subject grant)
+            grant)
+          (revoke-grant! [_ subject]
+            (swap! grants dissoc subject))
+          auth/MemberGrantStore
+          (save-member-grant! [_ identity grant]
+            (swap! grants assoc (:subject identity) grant)
+            grant))
+        drive (reify auth/DriveClient
+                (ensure-output-folder! [_ _ existing-folder]
+                  (or existing-folder "folder-1")))
+        drive-token-client
+        (reify auth/DriveTokenClient
+          (refresh-drive-token! [_ _]
+            {:access-token "private-refreshed-access-token"}))
+        system (auth/system
+                {:client-id "client-id"
+                 :client-secret "client-secret"
+                 :base-url (str "http://127.0.0.1:" port)
+                 :allowlist #{}
+                 :member-directory directory
+                 :session-key (.getBytes "01234567890123456789012345678901")
+                 :oauth oauth
+                 :cipher cipher
+                 :grant-store grant-store
+                 :drive drive
+                 :drive-token-client drive-token-client})
+        callback! (fn [flow code accept]
+                    (let [browser-cookie
+                          (auth/issue-browser-cookie
+                           system {:oauth (:stateCookie flow)})]
+                      (get! port
+                            (str "/v1/auth/login/callback?code=" code
+                                 "&state=" (:state flow))
+                            {"Accept" accept
+                             "Cookie" (str "__session=" browser-cookie)})))
+        cookie-token (fn [response]
+                       (some-> (first (.allValues (.headers response)
+                                                  "Set-Cookie"))
+                               (.split "=" 2) second
+                               (.split ";" 2) first))
+        server (start-api! port
+                           {:auth-system system
+                            :event-sink #(swap! events conj [%1 %2])})]
+    (try
+      (let [pre-membership-flow (auth/begin-flow! system :login nil)
+            rejected (callback! pre-membership-flow
+                                "pre-membership-code" "text/html")]
+        (is (= 403 (.statusCode rejected)))
+        (is (re-find #"^__session=.*Max-Age=0"
+                     (first (.allValues (.headers rejected) "Set-Cookie"))))
+        (is (empty? @grants))
+        (is (empty? @encrypted))
+        (is (empty? (filter #(= "private@example.com" (:email %))
+                            (admin/list-member-records directory))))
+        (admin/add-member! service owner "private@example.com")
+        (let [routine-flow (auth/begin-flow! system :login nil)
+              missing-refresh (callback! routine-flow "routine-code" "text/html")
+              body (.body missing-refresh)
+              recovery-cookie-token (cookie-token missing-refresh)
+              recovery-browser-cookie
+              (auth/browser-cookie system recovery-cookie-token)
+              recovery-cookie (str "__session=" recovery-cookie-token)
+              recovery-start
+              (get! port "/v1/auth/login/start?recovery=true"
+                    {"Cookie" recovery-cookie})
+              forged-recovery-start
+              (get! port "/v1/auth/login/start?recovery=true" {})
+              recovery-location
+              (.orElse (.firstValue (.headers recovery-start) "Location") "")
+              recovery-state (second (re-find #"[?&]state=([^&]+)"
+                                              recovery-location))
+              recovery-flow-cookie (cookie-token recovery-start)]
+          (is (= 401 (.statusCode missing-refresh)))
+          (is (re-find #"Google Drive authorization needs to be renewed" body))
+          (is (re-find #"no stored reusable grant" body))
+          (is (re-find #"href=\"/v1/auth/login/start\?recovery=true\"" body))
+          (is (re-find #">Continue with Google<" body))
+          (is (nil? (:session recovery-browser-cookie)))
+          (is (auth/drive-recovery-token? system
+                                          (:oauth recovery-browser-cookie)))
+          (is (empty? @grants))
+          (is (empty? @encrypted))
+          (is (re-find #"prompt=consent" recovery-location))
+          (is (not (re-find #"prompt=consent"
+                            (.orElse
+                             (.firstValue (.headers forged-recovery-start)
+                                          "Location")
+                             ""))))
+          (let [recovered
+                (get! port
+                      (str "/v1/auth/login/callback?code=recovery-code&state="
+                           recovery-state)
+                      {"Accept" "text/html"
+                       "Cookie" (str "__session=" recovery-flow-cookie)})
+                recovered-user
+                (auth/session-user system (cookie-token recovered))]
+            (is (= 302 (.statusCode recovered)))
+            (is (= ["private-recovery-refresh"] @encrypted))
+            (is (= 1 (count @grants)))
+            (is (= "private@example.com" (:email recovered-user)))
+            (is (= :member (:role recovered-user)))))
+        (is (= ["not_allowlisted" "missing_refresh_token"]
+               (mapv (comp :category second) @events)))
+        (is (not (re-find
+                  #"pre-membership-code|routine-code|recovery-code|private@example.com|private-google-subject|private-access-token|private.*refresh"
+                  (pr-str @events)))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
 
 (deftest browser-login-callback-renders-a-safe-actionable-drive-access-error
   (let [port (available-port)

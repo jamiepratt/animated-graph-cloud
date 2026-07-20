@@ -287,6 +287,7 @@
     ::auth/missing-refresh-token
     {:category "missing_refresh_token"
      :status 401
+     :retry-path "/v1/auth/login/start?recovery=true"
      :body {:error "drive_grant_required"
             :recoveryPath "/v1/auth/login/start?recovery=true"}}
 
@@ -407,8 +408,17 @@
           (.contains "text/html")))
 
 (defn- oauth-callback-error-page [{:keys [category reason retry-path]} request-id]
-  (let [{:keys [title explanation next-step]}
+  (let [{:keys [title explanation next-step action-label no-effects]}
         (case category
+          "missing_refresh_token"
+          {:title "Google Drive authorization needs to be renewed"
+           :explanation
+           (str "Google did not return a refresh token, and Alpha Compose has "
+                "no stored reusable grant for this account.")
+           :next-step
+           "Continue with Google and approve Drive access again."
+           :action-label "Continue with Google"
+           :no-effects "No session, Drive grant, or render was created."}
           "missing_required_scopes"
           {:title "Google Drive access could not be established"
            :explanation
@@ -472,7 +482,10 @@
            :explanation
            "Alpha Compose could not safely establish the Google identity and Drive access required to continue."
            :next-step "Try again. If the problem continues, contact the Alpha Compose administrator."})
-        retry-path (or retry-path "/v1/auth/login/start")]
+        retry-path (or retry-path "/v1/auth/login/start")
+        action-label (or action-label "Try Google again")
+        no-effects (or no-effects
+                       "No session, Drive grant, membership binding, or render was created.")]
     (str "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
          "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
          "<title>Authorization error · Alpha Compose</title>"
@@ -486,8 +499,8 @@
          "<body><div class=\"shell\"><a class=\"brand\" href=\"/\">Alpha Compose</a>"
          "<main class=\"card\" role=\"alert\"><div class=\"eyebrow\">Authorization incomplete</div>"
          "<h1>" title "</h1><p>" explanation "</p><p class=\"muted\">"
-         next-step " No session, Drive grant, membership binding, or render was created.</p>"
-         "<a class=\"button\" href=\"" retry-path "\">Try Google again</a>"
+         next-step " " no-effects "</p>"
+         "<a class=\"button\" href=\"" retry-path "\">" action-label "</a>"
          "<small>Request ID: " request-id "</small></main></div></body></html>")))
 
 (defn- respond-oauth-callback-failure! [exchange failure request-id]
