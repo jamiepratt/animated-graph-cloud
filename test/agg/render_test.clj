@@ -1,6 +1,7 @@
 (ns agg.render-test
   (:require [agg.render.audio :as audio]
             [agg.contracts.render :as contract]
+            [agg.jobs.lifecycle :as jobs]
             [agg.render.frames :as frames]
             [agg.render.media :as media]
             [agg.render.spec :as spec]
@@ -10,7 +11,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]])
-  (:import (java.io ByteArrayOutputStream OutputStream)
+  (:import (java.io ByteArrayOutputStream IOException OutputStream)
            (java.nio.file Files OpenOption)
            (java.security MessageDigest)
            (java.util HexFormat)))
@@ -34,6 +35,35 @@
   (let [output (ByteArrayOutputStream.)]
     {:result (frames/stream! render-spec output)
      :rgba (.toByteArray output)}))
+
+(defn- executable-script! [contents]
+  (let [path (Files/createTempFile
+              "agg-media-test-" ".sh"
+              (make-array java.nio.file.attribute.FileAttribute 0))]
+    (Files/writeString path contents (make-array OpenOption 0))
+    (when-not (.setExecutable (.toFile path) true)
+      (throw (IOException. "Could not make the media test script executable")))
+    path))
+
+(defn- short-source-reader-script [exit-status]
+  (str "#!/bin/sh\n"
+       "input_number=0\n"
+       "while [ \"$#\" -gt 0 ]; do\n"
+       "  if [ \"$1\" = \"-i\" ]; then\n"
+       "    shift\n"
+       "    input_number=$((input_number + 1))\n"
+       "    if [ \"$input_number\" -eq 2 ]; then\n"
+       "      overlay=$1\n"
+       "      break\n"
+       "    fi\n"
+       "  fi\n"
+       "  shift\n"
+       "done\n"
+       "head -c 1 \"$overlay\" >/dev/null &\n"
+       "overlay_reader=$!\n"
+       "head -c 1 >/dev/null\n"
+       "wait \"$overlay_reader\"\n"
+       "exit " exit-status "\n"))
 
 (defn- alpha-bounds [^bytes rgba width]
   (loop [pixel 0
@@ -123,6 +153,106 @@
     (is (str/includes? joined "volume=0.5[src]"))
     (is (str/includes? joined "volume=1.0[beat]"))
     (is (not (some #(str/includes? % "source.mp4") command)))))
+
+(deftest successful-duration-bounded-composite-accepts-a-closed-source-pipe
+  (let [ffmpeg (executable-script!
+                (short-source-reader-script 0))
+        encoder (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
+        output (Files/createTempFile
+                "agg-duration-bounded-composite-" ".mp4"
+                (make-array java.nio.file.attribute.FileAttribute 0))
+        source-block (byte-array 65536)
+        source-invocations (atom 0)]
+    (try
+      (is (= {:exit-status 0}
+             (media/encode-composite!
+              encoder
+              {:width 64 :height 36 :fps 25 :duration-seconds 2
+               :output-format "h264-mp4"
+               :fit-mode "letterbox"
+               :audio-mode "source+heartbeat"}
+              "/tmp/heartbeat.wav"
+              output
+              (fn [source-output]
+                (swap! source-invocations inc)
+                (jobs/with-durable-stage
+                  "source_content"
+                  #(loop []
+                     (.write ^OutputStream source-output source-block)
+                     (recur))))
+              (fn [overlay-output]
+                (.write ^OutputStream overlay-output (byte-array [0]))))))
+      (is (= 1 @source-invocations))
+      (finally
+        (Files/deleteIfExists output)
+        (Files/deleteIfExists ffmpeg)))))
+
+(deftest successful-composite-still-reports-a-genuine-source-failure
+  (let [ffmpeg (executable-script! (short-source-reader-script 0))
+        encoder (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
+        output (Files/createTempFile
+                "agg-source-failure-composite-" ".mp4"
+                (make-array java.nio.file.attribute.FileAttribute 0))]
+    (try
+      (let [error
+            (try
+              (media/encode-composite!
+               encoder
+               {:width 64 :height 36 :fps 25 :duration-seconds 2
+                :output-format "h264-mp4"
+                :fit-mode "letterbox"
+                :audio-mode "heartbeat-only"}
+               "/tmp/heartbeat.wav"
+               output
+               (fn [_]
+                 (jobs/with-durable-stage
+                   "source_content"
+                   #(throw (IOException. "Source read failed"))))
+               (fn [overlay-output]
+                 (.write ^OutputStream overlay-output (byte-array [0]))))
+              (catch Throwable cause cause))]
+        (is (= ::media/compositing-failed (:type (ex-data error))))
+        (is (= 0 (:exit-status (ex-data error))))
+        (is (= "worker_failed" (:failure-code (ex-data (.getCause error)))))
+        (is (= "source_content" (:stage (ex-data (.getCause error)))))
+        (is (false? (:retryable (ex-data (.getCause error)))))
+        (is (instance? IOException (some-> error .getCause .getCause))))
+      (finally
+        (Files/deleteIfExists output)
+        (Files/deleteIfExists ffmpeg)))))
+
+(deftest failed-composite-reports-ffmpeg-exit-after-source-pipe-closes
+  (let [ffmpeg (executable-script! (short-source-reader-script 7))
+        encoder (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
+        output (Files/createTempFile
+                "agg-ffmpeg-failure-composite-" ".mp4"
+                (make-array java.nio.file.attribute.FileAttribute 0))
+        source-block (byte-array 65536)]
+    (try
+      (let [error
+            (try
+              (media/encode-composite!
+               encoder
+               {:width 64 :height 36 :fps 25 :duration-seconds 2
+                :output-format "h264-mp4"
+                :fit-mode "letterbox"
+                :audio-mode "heartbeat-only"}
+               "/tmp/heartbeat.wav"
+               output
+               (fn [source-output]
+                 (jobs/with-durable-stage
+                   "source_content"
+                   #(loop []
+                      (.write ^OutputStream source-output source-block)
+                      (recur))))
+               (fn [overlay-output]
+                 (.write ^OutputStream overlay-output (byte-array [0]))))
+              (catch Throwable cause cause))]
+        (is (= ::media/compositing-failed (:type (ex-data error))))
+        (is (= 7 (:exit-status (ex-data error)))))
+      (finally
+        (Files/deleteIfExists output)
+        (Files/deleteIfExists ffmpeg)))))
 
 (deftest selected-source-preview-composites-only-the-midpoint-frame
   (let [command (media/composite-preview-command
