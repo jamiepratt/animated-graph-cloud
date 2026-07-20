@@ -310,7 +310,9 @@ generation is rechecked on every authenticated request. `AGG_OWNER_EMAIL`
 bootstraps the non-revocable owner, while
 `AGG_ADMIN_EMAILS` (comma- or semicolon-separated) bootstraps any number of
 active administrators. Administrators can manage the allowlist but cannot
-replace or revoke the owner. `GET /v1/drive/picker` opens a no-store
+replace or revoke the owner. The authenticated page exposes a CSRF-protected
+`POST /v1/auth/logout` form that expires the browser session and returns to the
+signed-out homepage. `GET /v1/drive/picker` opens a no-store
 Google Picker compatibility page for the same restricted grant. The
 authenticated `/` entrypoint initializes the Picker in the page, keeps it
 hidden until “Pick one video” is pressed, and shows the selected source after

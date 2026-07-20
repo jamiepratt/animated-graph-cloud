@@ -582,6 +582,9 @@
 (defn- clear-session-cookie []
   "__session=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax")
 
+(defn- clear-legacy-session-cookie []
+  "agg_session=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax")
+
 (def ^:private drive-recovery-path
   "/v1/auth/login/start?recovery=true")
 
@@ -948,6 +951,12 @@
     (respond-redirect! exchange "/"
                        [(session-cookie (:session result))
                         (clear-legacy-oauth-cookie)])))
+
+(defn- logout! [exchange auth-system]
+  (let [user (require-session-user! exchange auth-system)]
+    (auth/verify-csrf! auth-system user (get (request-form exchange) "csrf"))
+    (respond-redirect! exchange "/" [(clear-session-cookie)
+                                     (clear-legacy-session-cookie)])))
 
 (defn- log-options [^HttpExchange exchange]
   (let [params (query-params exchange)
@@ -1331,6 +1340,10 @@
                                   (and auth-system (= "GET" method)
                                        (= "/v1/auth/login/callback" path))
                                   (finish-login! exchange auth-system)
+
+                                  (and auth-system (= "POST" method)
+                                       (= "/v1/auth/logout" path))
+                                  (logout! exchange auth-system)
 
                                   (and auth-system (= "GET" method)
                                        (= "/v1/drive/picker" path))
