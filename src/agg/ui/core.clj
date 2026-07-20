@@ -218,7 +218,8 @@
      "</section><footer><a href=\"/privacy\">Privacy</a> · <a href=\"/terms\">Terms</a></footer>"
      "</div></body></html>")))
 
-(defn job-fragment [{:keys [id state attempt failureCode output]}]
+(defn job-fragment
+  [{:keys [id state attempt failureCode stage status retryable elapsedMs output]}]
   (let [path (str "/ui/jobs/" id)
         polling? (contains? #{"queued" "launching" "running"
                               "cancellation-requested"}
@@ -234,6 +235,14 @@
          "</h2><p>Attempt " (long attempt) "</p>"
          (when failureCode
            (str "<p>Failure: " (escape-html failureCode) "</p>"))
+         (when stage
+           (str "<p>Stage: " (escape-html (title-case stage)) "</p>"))
+         (when (some? status)
+           (str "<p>Status: " (long status) "</p>"))
+         (when (some? retryable)
+           (str "<p>Retryable: " (if retryable "yes" "no") "</p>"))
+         (when (some? elapsedMs)
+           (str "<p>Elapsed: " (long elapsedMs) " ms</p>"))
          (when drive-link
            (str "<p><a href=\"" (escape-html drive-link)
                 "\" rel=\"noopener noreferrer\">Open result in Google Drive</a></p>"))

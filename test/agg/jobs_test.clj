@@ -1,10 +1,13 @@
 (ns agg.jobs-test
   (:require [agg.admin.core :as admin]
             [agg.api.main :as api]
+            [agg.errors :as errors]
             [agg.http-test-support :as test-http]
             [agg.jobs.lifecycle :as jobs]
+            [agg.ui.core :as ui]
             [clojure.data.json :as json]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is]])
   (:import (java.time Clock Instant ZoneOffset)))
 
@@ -83,7 +86,7 @@
   (is (= "launch_failed"
          (:failureCode (jobs/job-resource {:state :failed
                                            :failure ::jobs/launch-failed}))))
-  (is (= "existing_code"
+  (is (= "worker_failed"
          (:failureCode (jobs/job-resource {:state :failed
                                            :failure "existing_code"})))))
 
@@ -491,6 +494,47 @@
     (is (= "worker_failed" (:failureCode (jobs/get-job service job-id))))
     (is (nil? (get-in @(:state system) [:jobs job-id :lease])))))
 
+(deftest typed-render-failure-has-one-privacy-safe-public-diagnosis
+  (let [worker (reify jobs/RenderWorker
+                 (perform-render! [_ _job-id _request]
+                   (throw
+                    (errors/raise!
+                     "private-source.mov secret-token"
+                     {:type ::source-download-failed
+                      :failure-code "source_download_failed"
+                      :stage "source_content"
+                      :status 503
+                      :retryable true}
+                     (ex-info "nested private-file-id" {:token "secret"})))))
+        system (jobs/in-memory-system {:worker worker})
+        service (:service system)
+        job-id (get-in (jobs/submit-job! service "typed-render-failure"
+                                         (render-request))
+                       [:job :id])]
+    (jobs/dispatch-job! service job-id)
+    (try
+      (jobs/run-job! service job-id)
+      (catch clojure.lang.ExceptionInfo _))
+    (let [failed (jobs/get-job service job-id)
+          html (ui/job-fragment failed)
+          serialized (pr-str failed)]
+      (is (= {:failureCode "source_download_failed"
+              :stage "source_content"
+              :status 503
+              :retryable true
+              :attempt 1}
+             (select-keys failed [:failureCode :stage :status :retryable
+                                  :attempt])))
+      (is (nat-int? (:elapsedMs failed)))
+      (is (str/includes? html "Source content"))
+      (is (str/includes? html "Retryable: yes"))
+      (is (not (re-find #"private|secret|token|file-id" serialized))))
+    (is (= {:state "queued" :attempt 2}
+           (select-keys (jobs/retry-job! service job-id) [:state :attempt])))
+    (is (empty? (select-keys (jobs/get-job service job-id)
+                             [:failureCode :stage :status :retryable
+                              :elapsedMs])))))
+
 (deftest worker-output-completes-or-fails-at-the-durable-size-boundary
   (let [result (atom {:output-bytes 1024
                       :object "jobs/sized/output.mov"
@@ -513,7 +557,30 @@
     (let [failed (run! "oversized-output")]
       (is (= "failed" (:state failed)))
       (is (= "output_too_large" (:failureCode failed)))
+      (is (= "completion_persistence" (:stage failed)))
+      (is (false? (:retryable failed)))
+      (is (nat-int? (:elapsedMs failed)))
       (is (nil? (:output failed))))))
+
+(deftest renderer-attempt-must-match-the-durable-job-attempt
+  (let [rendered (atom 0)
+        worker (reify jobs/RenderWorker
+                 (perform-render! [_ _job-id _request]
+                   (swap! rendered inc)
+                   {:output-bytes 10}))
+        system (jobs/in-memory-system {:worker worker})
+        service (:service system)
+        job-id (get-in (jobs/submit-job! service "attempt-correlation"
+                                         (render-request))
+                       [:job :id])]
+    (jobs/dispatch-job! service job-id)
+    (is (= ::jobs/invalid-render-attempt
+           (exception-type #(jobs/run-job-attempt! service job-id 2))))
+    (is (zero? @rendered))
+    (is (= "running" (:state (jobs/get-job service job-id))))
+    (is (= "succeeded"
+           (:state (jobs/run-job-attempt! service job-id 1))))
+    (is (= 1 @rendered))))
 
 (deftest upload-grant-is-put-only-content-locked-and-short-lived
   (let [port (available-port)

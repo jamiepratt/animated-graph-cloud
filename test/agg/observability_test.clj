@@ -73,6 +73,29 @@
            fields))
     (is (empty? (observability/safe-event-fields {:stage "private.mov"})))))
 
+(deftest cloud-render-event-keeps-the-bounded-durable-diagnosis
+  (is (= {:severity "ERROR"
+          :component "renderer"
+          :event "cloud_render_failed"
+          :failureCode "composition_encode_failed"
+          :stage "composition_encode"
+          :status 422
+          :retryable false
+          :attempt 2
+          :elapsedMs 9123}
+         (observability/safe-event-fields
+          {:severity "ERROR"
+           :component "renderer"
+           :event "cloud_render_failed"
+           :failureCode "composition_encode_failed"
+           :stage "composition_encode"
+           :status 422
+           :retryable false
+           :attempt 2
+           :elapsedMs 9123
+           :filename "private.mov"
+           :token "secret"}))))
+
 (deftest tufte-emits-structured-profile-signal
   (let [signals (atom [])]
     (tufte/with-handler

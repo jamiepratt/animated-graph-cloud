@@ -3,11 +3,14 @@
 (def ^:private max-diagnostic-number 1000000000000)
 (def ^:private max-diagnostic-string-length 128)
 (def ^:private safe-stages
-  #{"source_metadata" "source_content" "frame_compose"})
+  #{"source_metadata" "frame_compose"
+    "request_load" "request_prepare" "source_content" "overlay_render"
+    "composition_encode" "artifact_upload" "drive_delivery"
+    "completion_persistence"})
 (def ^:private safe-context-keys
   #{:status :offset :size :reported :sent-through :line :limit :limits
     :retryable :job-id :field :component :exit-status :failure-code
-    :state :components :reason :stage :elapsed-ms :timeout-ms})
+    :state :components :reason :stage :attempt :elapsed-ms :timeout-ms})
 
 (defn- finite-number? [value]
   (and (number? value)

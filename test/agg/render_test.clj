@@ -341,3 +341,23 @@
       (finally
         (Files/deleteIfExists output)
         (Files/deleteIfExists report)))))
+
+(deftest durable-cloud-options-require-one-positive-attempt
+  (is (= {:job-id "00000000-0000-0000-0000-000000000001"
+          :attempt 2}
+         (renderer/parse-cloud-options
+          ["--job-id" "00000000-0000-0000-0000-000000000001"
+           "--attempt" "2"])))
+  (doseq [args [["--job-id" "00000000-0000-0000-0000-000000000001"]
+                ["--job-id" "private-file-id" "--attempt" "1"]
+                ["--job-id" "00000000-0000-0000-0000-000000000001"
+                 "--attempt" "0"]
+                ["--attempt" "1" "--job-id"
+                 "00000000-0000-0000-0000-000000000001" "--secret"
+                 "token"]]]
+    (let [error (try
+                  (renderer/parse-cloud-options args)
+                  (catch Throwable cause cause))]
+      (is (= ::renderer/invalid-cloud-options (:type (ex-data error))))
+      (is (not (re-find #"private|secret|token|file-id"
+                        (pr-str (ex-data error))))))))

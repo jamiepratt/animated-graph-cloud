@@ -219,8 +219,13 @@ resource. State progresses through `queued`, `launching`, and `running` to
 `succeeded`, `failed`, or `cancelled`; a running cancellation may briefly show
 `cancellation-requested`. Only failed and cancelled jobs accept an explicit
 retry. Successful polls include the private temporary object name, SHA-256, and
-content type. Failed polls include a bounded `failureCode` and never a signed
-URL, telemetry value, or filename.
+content type. Failed render polls include a bounded `failureCode`, `stage`,
+optional numeric upstream `status`, `retryable`, and `elapsedMs`; `attempt`
+correlates the diagnosis with the exact Cloud Run execution. The same bounded
+fields appear in the renderer failure event and server-rendered job fragment.
+They never include exception messages, stack traces, signed URLs, Drive IDs,
+telemetry values, request bodies, tokens, or filenames. Unknown exceptions
+remain `worker_failed` while retaining only the allowlisted stage.
 
 Firestore transactions bind idempotency and cap active render leases at five.
 Cloud Tasks calls only the private authenticated dispatcher. Each Cloud Run Job
