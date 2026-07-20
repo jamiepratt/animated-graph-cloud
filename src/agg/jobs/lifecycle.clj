@@ -232,6 +232,17 @@
                                :elapsedMs (:elapsed-ms failure-diagnostics))
     output (assoc :output output)))
 
+(defn retry-eligible?
+  "Returns whether a public or stored durable job may start another attempt."
+  [{:keys [state retryable failure-diagnostics] :as job}]
+  (let [failed? (contains? #{:failed "failed"} state)
+        cancelled? (contains? #{:cancelled "cancelled"} state)
+        failure-retryable (if (contains? job :retryable)
+                            retryable
+                            (:retryable failure-diagnostics))]
+    (or cancelled?
+        (and failed? (not (false? failure-retryable))))))
+
 (defn- active-lease? [now job]
   (when-let [expires-at (get-in job [:lease :expires-at])]
     (.isAfter ^Instant expires-at now)))
@@ -494,8 +505,8 @@
             (fn []
               (locking state
                 (let [job (get-in @state [:jobs job-id])]
-                  (when-not (contains? #{:cancelled :failed} (:state job))
-                    (throw (errors/raise! "Only failed or cancelled jobs can be retried"
+                  (when-not (retry-eligible? job)
+                    (throw (errors/raise! "Job is not eligible for retry"
                                           {:type ::invalid-transition
                                            :state (:state job)})))
                   (let [reserved (get-in @state [:admission :monthly month] 0)

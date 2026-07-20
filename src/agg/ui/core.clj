@@ -1,5 +1,6 @@
 (ns agg.ui.core
   (:require [agg.admin.core :as admin]
+            [agg.jobs.lifecycle :as jobs]
             [clojure.data.json :as json]
             [clojure.string :as str])
   (:import (java.net URLEncoder)
@@ -219,13 +220,14 @@
      "</div></body></html>")))
 
 (defn job-fragment
-  [{:keys [id state attempt failureCode stage status retryable elapsedMs output]}]
+  [{:keys [id state attempt failureCode stage status retryable elapsedMs output]
+    :as job}]
   (let [path (str "/ui/jobs/" id)
         polling? (contains? #{"queued" "launching" "running"
                               "cancellation-requested"}
                             state)
         cancellable? (contains? #{"queued" "launching" "running"} state)
-        retryable? (contains? #{"failed" "cancelled"} state)
+        retryable? (jobs/retry-eligible? job)
         drive-link (:driveWebViewLink output)]
     (str "<article id=\"job-" (escape-html id) "\" class=\"job\""
          (when polling?

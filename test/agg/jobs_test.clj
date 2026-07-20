@@ -90,6 +90,23 @@
          (:failureCode (jobs/job-resource {:state :failed
                                            :failure "existing_code"})))))
 
+(deftest durable-job-actions-follow-server-retry-eligibility
+  (let [fragment (fn [state & [retryable]]
+                   (ui/job-fragment
+                    (cond-> {:id "job-id" :state state :attempt 1}
+                      (some? retryable) (assoc :retryable retryable))))
+        retry-action? #(str/includes? % "/ui/jobs/job-id/retry")
+        cancel-action? #(str/includes? % "/ui/jobs/job-id/cancel")]
+    (is (retry-action? (fragment "failed" true)))
+    (is (not (retry-action? (fragment "failed" false))))
+    (is (retry-action? (fragment "cancelled")))
+    (doseq [state ["queued" "launching" "running"]]
+      (is (cancel-action? (fragment state)))
+      (is (not (retry-action? (fragment state)))))
+    (doseq [state ["cancellation-requested" "succeeded"]]
+      (is (not (cancel-action? (fragment state))))
+      (is (not (retry-action? (fragment state)))))))
+
 (deftest preview-work-is-distinguished-from-durable-render-jobs
   (let [service (:service (jobs/in-memory-system))
         preview (get-in (jobs/submit-job!
@@ -548,6 +565,38 @@
     (is (empty? (select-keys (jobs/get-job service job-id)
                              [:failureCode :stage :status :retryable
                               :elapsedMs])))))
+
+(deftest nonretryable-failure-rejects-a-stale-direct-retry
+  (let [port (available-port)
+        worker (reify jobs/RenderWorker
+                 (perform-render! [_ _job-id _request]
+                   (errors/raise! "fixture failure"
+                                  {:type ::nonretryable-failure
+                                   :failure-code "composition_encode_failed"
+                                   :stage "composition_encode"
+                                   :retryable false})))
+        system (jobs/in-memory-system {:worker worker})
+        service (:service system)
+        server (api/start! port {:job-service service})]
+    (try
+      (let [job-id (:id (response-json (submit! port "nonretryable-retry")))]
+        (jobs/dispatch-job! service job-id)
+        (try
+          (jobs/run-job! service job-id)
+          (catch clojure.lang.ExceptionInfo _))
+        (is (false? (:retryable (jobs/get-job service job-id))))
+        (let [enqueued-before (count @(:enqueued system))
+              retry-response
+              (request! port :post (str "/v1/jobs/" job-id "/retry") {} {})]
+          (is (= 409 (.statusCode retry-response)))
+          (is (= {:error "invalid_job_transition"}
+                 (response-json retry-response)))
+          (is (= {:state "failed" :attempt 1 :retryable false}
+                 (select-keys (jobs/get-job service job-id)
+                              [:state :attempt :retryable])))
+          (is (= enqueued-before (count @(:enqueued system))))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
 
 (deftest worker-output-completes-or-fails-at-the-durable-size-boundary
   (let [result (atom {:output-bytes 1024

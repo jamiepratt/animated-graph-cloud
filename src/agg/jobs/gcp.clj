@@ -826,9 +826,9 @@
                    (reset! retry-identity identity)
                    (require-transaction-member! member-directory transaction
                                                 identity)
-                   (when-not (contains? #{:cancelled :failed} (:state job))
+                   (when-not (lifecycle/retry-eligible? job)
                      (throw (errors/raise!
-                             "Only failed or cancelled jobs can be retried"
+                             "Job is not eligible for retry"
                              {:type ::lifecycle/invalid-transition})))
                    (when (>= (count (capacity-leases capacity now))
                              lifecycle/max-active-leases)
