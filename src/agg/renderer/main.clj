@@ -9,6 +9,7 @@
             [agg.logs.core :as logs]
             [agg.logs.gcp :as logs-gcp]
             [agg.observability :as observability]
+            [agg.preview.core :as preview]
             [agg.render.audio :as audio]
             [agg.render.frames :as frames]
             [agg.render.media :as media]
@@ -280,66 +281,79 @@
                          render-spec
                          (jobs/with-durable-stage
                            "request_prepare"
-                           #(tufte/p ::telemetry-parsing (contract/prepare request)))
-                         output-suffix (if (= "h264-mp4"
-                                              (:output-format render-spec))
-                                         ".mp4"
-                                         ".mov")
-                         output-path
-                         (jobs/with-durable-stage
-                           "request_prepare"
-                           #(Files/createTempFile
-                             "agg-cloud-output-" output-suffix
-                             (make-array
-                              java.nio.file.attribute.FileAttribute 0)))
-                         report-path
-                         (jobs/with-durable-stage
-                           "request_prepare"
-                           #(Files/createTempFile
-                             "agg-cloud-report-" ".json"
-                             (make-array
-                              java.nio.file.attribute.FileAttribute 0)))
-                         object-prefix (str "jobs/" job-id "/output-"
-                                            (java.util.UUID/randomUUID))]
-                     (try
-                       (let [result
+                           #(tufte/p ::telemetry-parsing (contract/prepare request)))]
+                     (if (jobs/preview-request? request)
+                       (jobs/with-durable-stage
+                         "composition_encode"
+                         #((or render-cloud! run-job!)
+                           render-spec
+                           {:preview-operation-id job-id
+                            :original-request request}))
+                       (let [output-suffix
+                             (if (= "h264-mp4" (:output-format render-spec))
+                               ".mp4"
+                               ".mov")
+                             output-path
                              (jobs/with-durable-stage
-                               "composition_encode"
-                               #((or render-cloud! run-job!)
-                                 (assoc render-spec
-                                        :output-path output-path
-                                        :report-path report-path
-                                        :profile? false
-                                        :delete-local? false)
-                                 {:artifact-store
-                                  (storage/gcs-store bucket object-prefix)}))
-                             delivered
-                             (when drive-delivery
-                               (jobs/with-durable-stage
-                                 "drive_delivery"
-                                 #(do
-                                    (when-not subject
-                                      (throw (errors/raise!
-                                              "Drive delivery requires a requester"
-                                              {:type ::missing-requester})))
-                                    (tufte/p
-                                     ::drive-delivery
-                                     (drive/deliver-output! drive-delivery
-                                                            job-id
-                                                            subject
-                                                            output-path)))))]
-                         (cond-> {:output-bytes (:output-bytes result)
-                                  :object (get-in result [:objects :media :object])
-                                  :sha256 (:sha256 result)
-                                  :contentType (:content-type result "video/quicktime")}
-                           delivered (assoc :driveFileId (:fileId delivered)
-                                            :driveWebViewLink (:webViewLink delivered))))
-                       (finally
-                         (jobs/with-durable-stage
-                           "artifact_upload"
-                           #(do
-                              (Files/deleteIfExists output-path)
-                              (Files/deleteIfExists report-path)))))))))
+                               "request_prepare"
+                               #(Files/createTempFile
+                                 "agg-cloud-output-" output-suffix
+                                 (make-array
+                                  java.nio.file.attribute.FileAttribute 0)))
+                             report-path
+                             (jobs/with-durable-stage
+                               "request_prepare"
+                               #(Files/createTempFile
+                                 "agg-cloud-report-" ".json"
+                                 (make-array
+                                  java.nio.file.attribute.FileAttribute 0)))
+                             object-prefix (str "jobs/" job-id "/output-"
+                                                (java.util.UUID/randomUUID))]
+                         (try
+                           (let [result
+                                 (jobs/with-durable-stage
+                                   "composition_encode"
+                                   #((or render-cloud! run-job!)
+                                     (assoc render-spec
+                                            :output-path output-path
+                                            :report-path report-path
+                                            :profile? false
+                                            :delete-local? false)
+                                     {:artifact-store
+                                      (storage/gcs-store bucket object-prefix)
+                                      :original-request request}))
+                                 delivered
+                                 (when drive-delivery
+                                   (jobs/with-durable-stage
+                                     "drive_delivery"
+                                     #(do
+                                        (when-not subject
+                                          (throw (errors/raise!
+                                                  "Drive delivery requires a requester"
+                                                  {:type ::missing-requester})))
+                                        (tufte/p
+                                         ::drive-delivery
+                                         (drive/deliver-output!
+                                          drive-delivery job-id subject
+                                          output-path)))))]
+                             (let [base-result
+                                   {:output-bytes (:output-bytes result)
+                                    :object
+                                    (get-in result [:objects :media :object])
+                                    :sha256 (:sha256 result)
+                                    :contentType
+                                    (:content-type result "video/quicktime")}]
+                               (if delivered
+                                 (assoc base-result
+                                        :driveFileId (:fileId delivered)
+                                        :driveWebViewLink (:webViewLink delivered))
+                                 base-result)))
+                           (finally
+                             (jobs/with-durable-stage
+                               "artifact_upload"
+                               #(do
+                                  (Files/deleteIfExists output-path)
+                                  (Files/deleteIfExists report-path)))))))))))
 
 (defn require-cloud-success! [result]
   (when (= "failed" (:state result))
@@ -377,20 +391,43 @@
             (get (System/getenv) "AGG_OAUTH_CLIENT_CREDENTIALS")}))
         render-cloud!
         (fn [request dependencies]
-          (let [source-stream!
-                (when (and source-system (:source-video request))
-                  (let [{:keys [access-token]}
-                        (jobs/with-durable-stage
-                          "source_content"
-                          #((:access-provider source-system)
-                            (:requesterSubject request)))
-                        file-id (get-in request [:source-video :file-id])]
-                    (fn [output]
-                      (jobs/with-durable-stage
-                        "source_content"
-                        #(drive/stream-source! (:gateway source-system)
-                                               access-token file-id output)))))]
-            (run-job! request (assoc dependencies :source-stream! source-stream!))))]
+          (let [original-request (or (:original-request dependencies) request)
+                preview? (some? (:preview-operation-id dependencies))
+                source-video (:source-video request)
+                _ (when (and source-video (nil? source-system))
+                    (throw (errors/raise! "Drive source dependencies are incomplete"
+                                          {:type ::missing-source-system})))
+                access-token
+                (when source-video
+                  (:access-token
+                   (jobs/with-durable-stage
+                     "source_content"
+                     #((:access-provider source-system)
+                       (:requesterSubject original-request)))))
+                file-id (get-in source-video [:file-id])
+                request
+                (if (and preview? source-video)
+                  (jobs/with-durable-stage
+                    "request_prepare"
+                    #(contract/attach-source-metadata
+                      request
+                      (drive/source-metadata! (:gateway source-system)
+                                              access-token file-id)))
+                  request)
+                source-stream!
+                (when source-video
+                  (fn [output]
+                    (jobs/with-durable-stage
+                      "source_content"
+                      #(drive/stream-source! (:gateway source-system)
+                                             access-token file-id output))))]
+            (if-let [operation-id (:preview-operation-id dependencies)]
+              (preview/render-gallery!
+               operation-id request (gcp/request-store bucket)
+               frames/java2d-frame-renderer (media/ffmpeg-video-encoder)
+               source-stream!)
+              (run-job! request
+                        (assoc dependencies :source-stream! source-stream!)))))]
     (require-cloud-success!
      (jobs/run-job-attempt!
       (gcp/renderer-job-service

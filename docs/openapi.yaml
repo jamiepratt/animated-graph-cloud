@@ -157,30 +157,82 @@ paths:
     post:
       operationId: createPreview
       tags: [Rendering]
-      summary: Render a midpoint PNG preview.
+      summary: Start an asynchronous key-moment gallery preview.
       description: |
-        Renders one midpoint overlay frame. When a verified Drive source is
-        selected, only its midpoint frame is decoded and composited. Selected
-        source preview work has a 45-second application deadline so a safe,
-        correlated failure reaches the caller before the public platform limit.
+        Starts a bounded asynchronous operation that selects prominent moments
+        from every rendered trace. Selected-source previews batch-decode each
+        unique output frame once and return fitted Source and exact composited
+        Final image references. This is a breaking replacement for the former
+        synchronous `image/png` midpoint response. Clients must poll `statusUrl`
+        and consume the structured result after `state` becomes `succeeded`.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         $ref: "#/components/requestBodies/RenderRequest"
       responses:
+        "202":
+          description: Preview operation accepted.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PreviewOperation"}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "403": {$ref: "#/components/responses/CsrfRequired"}
+        "413": {$ref: "#/components/responses/PayloadTooLarge"}
+  /v1/previews/{previewId}:
+    get:
+      operationId: getPreview
+      tags: [Rendering]
+      summary: Get an owned preview operation and its completed manifest.
+      description: Preview operations and assets expire 24 hours after creation.
+      parameters:
+        - name: previewId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
         "200":
-          description: Transparent PNG preview.
+          description: Current operation state, progress, safe failure, or completed gallery.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PreviewOperation"}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "404": {$ref: "#/components/responses/NotFound"}
+  /v1/previews/{previewId}/images/{assetId}/{size}:
+    get:
+      operationId: getPreviewImage
+      tags: [Rendering]
+      summary: Get an owned preview thumbnail or full-size PNG.
+      description: |
+        Returns one bounded private image. URLs contain only opaque operation and
+        asset IDs. Responses are never shared or cached and expire with the
+        operation after 24 hours.
+      parameters:
+        - name: previewId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: assetId
+          in: path
+          required: true
+          schema: {type: string, pattern: "^[A-Za-z0-9_-]{1,64}$"}
+        - name: size
+          in: path
+          required: true
+          schema: {type: string, enum: [thumbnail, full]}
+      responses:
+        "200":
+          description: PNG thumbnail up to 4 MiB or full image up to 32 MiB.
           headers:
             Cache-Control:
               schema: {const: no-store}
+            X-Content-Type-Options:
+              schema: {const: nosniff}
           content:
             image/png:
               schema: {type: string, contentEncoding: binary}
-        "400": {$ref: "#/components/responses/InvalidRequest"}
         "401": {$ref: "#/components/responses/AuthenticationRequired"}
-        "413": {$ref: "#/components/responses/PayloadTooLarge"}
-        "502": {$ref: "#/components/responses/PreviewFailure"}
-        "504": {$ref: "#/components/responses/PreviewFailure"}
+        "404": {$ref: "#/components/responses/NotFound"}
   /v1/overlay:
     post:
       operationId: createOverlay
@@ -520,11 +572,6 @@ components:
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
-    PreviewFailure:
-      description: Selected-source metadata, content, composition, or deadline failure.
-      content:
-        application/json:
-          schema: {$ref: "#/components/schemas/PreviewFailure"}
     SynchronousOverlayDurationExceeded:
       description: The valid section exceeds the one-second synchronous diagnostic contract.
       content:
@@ -677,6 +724,98 @@ components:
       type: string
       format: date-time
       description: ISO-8601 instant with `Z` or an explicit UTC offset.
+    PreviewOperation:
+      type: object
+      additionalProperties: false
+      required: [id, operationKind, state, progressPercent, statusUrl, resultUrl, createdAt, updatedAt, expiresAt]
+      properties:
+        id: {type: string, format: uuid}
+        operationKind: {const: key-moment-gallery}
+        state:
+          type: string
+          enum: [queued, launching, running, cancellation-requested, succeeded, failed, cancelled]
+        progressPercent: {type: integer, minimum: 0, maximum: 100}
+        statusUrl: {type: string, pattern: "^/v1/previews/"}
+        resultUrl: {type: string, pattern: "^/v1/previews/"}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        expiresAt:
+          type: string
+          format: date-time
+          description: Operation and image retention boundary, 24 hours after creation.
+        result: {$ref: "#/components/schemas/PreviewGallery"}
+        error: {$ref: "#/components/schemas/PreviewOperationError"}
+    PreviewOperationError:
+      type: object
+      additionalProperties: false
+      required: [code, retryable]
+      properties:
+        code: {type: string, maxLength: 128}
+        retryable: {type: boolean}
+        stage: {type: string, maxLength: 128}
+        status: {type: integer, minimum: 100, maximum: 599}
+    PreviewGallery:
+      type: object
+      additionalProperties: false
+      required: [version, mode, sections, assets]
+      properties:
+        version: {const: 1}
+        mode: {type: string, enum: [overlay, source-final]}
+        sections:
+          type: array
+          items: {$ref: "#/components/schemas/PreviewTraceSection"}
+        assets:
+          type: array
+          description: One entry per unique output frame, shared across trace sections.
+          items: {$ref: "#/components/schemas/PreviewFrameAsset"}
+    PreviewTraceSection:
+      type: object
+      additionalProperties: false
+      required: [id, name, unit, moments]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        unit: {type: string}
+        moments:
+          type: array
+          items: {$ref: "#/components/schemas/PreviewMoment"}
+    PreviewMoment:
+      type: object
+      additionalProperties: false
+      required: [frameIndex, elapsedSeconds, elapsed, labels, eventLabel, value, title, frameRef]
+      properties:
+        frameIndex: {type: integer, minimum: 0}
+        elapsedSeconds: {type: number, minimum: 0}
+        elapsed: {type: string, pattern: "^[0-9]+:[0-5][0-9]\\.[0-9]{3}$"}
+        labels:
+          type: array
+          minItems: 1
+          items: {type: string}
+        eventLabel: {type: string}
+        value: {type: number}
+        title: {type: string}
+        frameRef: {type: string, pattern: "^[A-Za-z0-9_-]{1,64}$"}
+    PreviewFrameAsset:
+      type: object
+      additionalProperties: false
+      required: [id, frameIndex, kind]
+      properties:
+        id: {type: string, pattern: "^[A-Za-z0-9_-]{1,64}$"}
+        frameIndex: {type: integer, minimum: 0}
+        kind: {type: string, enum: [overlay, source-final]}
+        merged:
+          type: boolean
+          description: True when the complete overlay is transparent and Source equals Final.
+        image: {$ref: "#/components/schemas/PreviewImageReference"}
+        source: {$ref: "#/components/schemas/PreviewImageReference"}
+        final: {$ref: "#/components/schemas/PreviewImageReference"}
+    PreviewImageReference:
+      type: object
+      additionalProperties: false
+      required: [thumbnailUrl, fullUrl]
+      properties:
+        thumbnailUrl: {type: string, pattern: "^/v1/previews/"}
+        fullUrl: {type: string, pattern: "^/v1/previews/"}
     Job:
       type: object
       required: [id, state, attempt, statusUrl, cancelUrl, retryUrl]
@@ -774,27 +913,13 @@ components:
             - capacity_exhausted
             - transaction_contention
             - job_not_found
+            - preview_not_found
+            - preview_image_not_found
             - invalid_job_transition
             - token_not_found
             - admin_required
         retryable: {type: boolean}
         recoveryPath: {type: string, const: "/v1/auth/login/start?recovery=true"}
-    PreviewFailure:
-      type: object
-      additionalProperties: false
-      required: [error, category, requestId, retryable]
-      properties:
-        error: {const: preview_failed}
-        category:
-          type: string
-          enum: [drive_source_metadata, drive_source_content, preview_rendering, preview_timeout]
-        requestId: {type: string, format: uuid}
-        retryable: {const: true}
-        stage:
-          type: string
-          enum: [source_metadata, source_content, frame_compose]
-        elapsedMs: {type: integer, minimum: 0, maximum: 1000000000000}
-        timeoutMs: {type: integer, minimum: 1, maximum: 1000000000000}
     SynchronousOverlayDurationExceeded:
       type: object
       additionalProperties: false

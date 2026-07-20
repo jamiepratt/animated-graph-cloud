@@ -2,8 +2,11 @@
   (:require [agg.errors :as errors]
             [clojure.data.json :as json]
             [clojure.string :as str])
-  (:import (java.io IOException OutputStream RandomAccessFile)
-           (java.nio.file Files OpenOption Path)))
+  (:import (java.awt.image BufferedImage)
+           (java.io ByteArrayInputStream ByteArrayOutputStream IOException OutputStream RandomAccessFile)
+           (java.nio.file Files OpenOption Path)
+           (java.util Arrays)
+           (javax.imageio ImageIO)))
 
 (defprotocol VideoEncoder
   (encode! [encoder render-spec audio-path output-path write-frames!])
@@ -14,9 +17,10 @@
                       source-stream! write-overlay!])
   (verify-composite! [encoder render-spec output-path]))
 
-(defprotocol CompositePreviewer
-  (render-composite-preview! [previewer render-spec source-stream!
-                              overlay-png output]))
+(defprotocol CompositeGalleryRenderer
+  (render-composite-gallery! [renderer render-spec source-stream! overlays
+                              consume-frame!]
+    "Batch-decodes selected source frames and emits source/final PNG pairs."))
 
 (def prores-4444-contract
   {:encoder "prores_ks"
@@ -179,66 +183,168 @@
            "-b:a" (:target-bitrate aac-lc-contract)]
           (concat video-args format-args ["-y" (str output-path)]))))
 
-(defn composite-preview-command
-  "Returns the FFmpeg command that composites only the selected midpoint frame."
-  [ffmpeg render-spec overlay-path]
-  (let [midpoint (/ (double (:duration-seconds render-spec)) 2.0)
-        video-filter (str "[0:v]" (fit-filter render-spec) "[base];"
-                          "[1:v]format=rgba[overlay];"
-                          "[base][overlay]overlay=0:0:format=auto[v]")]
+(defn composite-gallery-command
+  "Returns one bounded source-decode command for all selected output frames."
+  [ffmpeg render-spec frame-indexes overlay-path]
+  (let [{:keys [width height fps]} render-spec
+        selection (str/join "+" (map #(format "eq(n\\,%d)" %)
+                                     frame-indexes))
+        video-filter
+        (str "[0:v]" (fit-filter render-spec) ",fps=" fps
+             ",select='" selection "',setpts=N/(" fps "*TB),split=2[base][source];"
+             "[1:v]format=rgba[overlay];"
+             "[base][overlay]overlay=0:0:format=auto:eof_action=endall[final];"
+             "[source][final]hstack=inputs=2[v]")]
     [ffmpeg "-hide_banner" "-nostdin" "-loglevel" "error"
-     "-ss" (str midpoint) "-i" "pipe:0"
-     "-loop" "1" "-i" (str overlay-path)
+     "-i" "pipe:0"
+     "-f" "rawvideo"
+     "-pixel_format" "rgba"
+     "-video_size" (str width "x" height)
+     "-framerate" (str fps)
+     "-i" (str overlay-path)
      "-filter_complex" video-filter
      "-map" "[v]"
-     "-frames:v" "1"
+     "-frames:v" (str (count frame-indexes))
      "-an"
+     "-fps_mode" "passthrough"
      "-f" "image2pipe"
      "-vcodec" "png"
      "pipe:1"]))
 
-(defn- render-composite-preview-with-ffmpeg!
-  [ffmpeg render-spec source-stream! overlay-png output]
-  (let [overlay-path (Files/createTempFile
-                      "agg-preview-overlay-" ".png"
-                      (make-array java.nio.file.attribute.FileAttribute 0))]
+(defn- write-overlay-rgba! [path overlays width height]
+  (with-open [output (Files/newOutputStream
+                      path (make-array OpenOption 0))]
+    (doseq [{:keys [overlay]} overlays]
+      (let [image (ImageIO/read (ByteArrayInputStream. overlay))]
+        (when-not (and image (= width (.getWidth image)) (= height (.getHeight image)))
+          (throw (errors/raise! "Preview overlay dimensions are invalid"
+                                {:type ::invalid-gallery-overlay})))
+        (let [row (int-array width)
+              rgba (byte-array (* width 4))]
+          (dotimes [y height]
+            (.getRGB image 0 y width 1 row 0 width)
+            (dotimes [x width]
+              (let [argb (aget row x)
+                    offset (* x 4)]
+                (aset-byte rgba offset (unchecked-byte (bit-shift-right argb 16)))
+                (aset-byte rgba (inc offset) (unchecked-byte (bit-shift-right argb 8)))
+                (aset-byte rgba (+ offset 2) (unchecked-byte argb))
+                (aset-byte rgba (+ offset 3)
+                           (unchecked-byte (unsigned-bit-shift-right argb 24)))))
+            (.write output rgba 0 (alength rgba))))))))
+
+(def ^:private png-signature
+  (byte-array [(unchecked-byte 137) 80 78 71 13 10 26 10]))
+
+(defn- bytes-match? [bytes offset expected]
+  (and (<= (+ offset (alength ^bytes expected)) (alength ^bytes bytes))
+       (every? (fn [index]
+                 (= (aget ^bytes bytes (+ offset index))
+                    (aget ^bytes expected index)))
+               (range (alength ^bytes expected)))))
+
+(defn- unsigned-int-at [bytes offset]
+  (+ (bit-shift-left (bit-and 0xff (aget ^bytes bytes offset)) 24)
+     (bit-shift-left (bit-and 0xff (aget ^bytes bytes (inc offset))) 16)
+     (bit-shift-left (bit-and 0xff (aget ^bytes bytes (+ offset 2))) 8)
+     (bit-and 0xff (aget ^bytes bytes (+ offset 3)))))
+
+(defn- concatenated-pngs [bytes expected-count]
+  (loop [offset 0
+         images []]
+    (if (= offset (alength ^bytes bytes))
+      (if (= expected-count (count images))
+        images
+        (throw (errors/raise! "Source gallery emitted an incomplete image set"
+                              {:type ::incomplete-gallery-output
+                               :limit expected-count})))
+      (do
+        (when-not (bytes-match? bytes offset png-signature)
+          (throw (errors/raise! "Source gallery emitted invalid PNG data"
+                                {:type ::invalid-gallery-output})))
+        (let [end
+              (loop [chunk-offset (+ offset 8)]
+                (when (> (+ chunk-offset 12) (alength ^bytes bytes))
+                  (throw (errors/raise! "Source gallery PNG is truncated"
+                                        {:type ::invalid-gallery-output})))
+                (let [length (unsigned-int-at bytes chunk-offset)
+                      chunk-end (+ chunk-offset 12 length)]
+                  (when (> chunk-end (alength ^bytes bytes))
+                    (throw (errors/raise! "Source gallery PNG is truncated"
+                                          {:type ::invalid-gallery-output})))
+                  (if (= [73 69 78 68]
+                         (mapv #(bit-and 0xff (aget ^bytes bytes %))
+                               (range (+ chunk-offset 4) (+ chunk-offset 8))))
+                    chunk-end
+                    (recur chunk-end))))]
+          (recur end (conj images (Arrays/copyOfRange bytes offset end))))))))
+
+(defn- image-png [^BufferedImage image]
+  (let [output (ByteArrayOutputStream.)]
+    (when-not (ImageIO/write image "png" output)
+      (throw (errors/raise! "PNG encoder unavailable"
+                            {:type ::png-unavailable})))
+    (.toByteArray output)))
+
+(defn- consume-gallery-png! [render-spec frame-index combined-png consume-frame!]
+  (let [{:keys [width height]} render-spec
+        image (ImageIO/read (ByteArrayInputStream. combined-png))]
+    (when-not (and image (= (* 2 width) (.getWidth image))
+                   (= height (.getHeight image)))
+      (throw (errors/raise! "Source gallery frame dimensions are invalid"
+                            {:type ::invalid-gallery-output})))
+    (consume-frame! frame-index
+                    (image-png (.getSubimage image 0 0 width height))
+                    (image-png (.getSubimage image width 0 width height)))))
+
+(defn- render-composite-gallery-with-ffmpeg!
+  [ffmpeg render-spec source-stream! overlays consume-frame!]
+  (let [{:keys [width height]} render-spec
+        frame-indexes (mapv :frameIndex overlays)
+        overlay-path (Files/createTempFile
+                      "agg-preview-overlays-" ".rgba"
+                      (make-array java.nio.file.attribute.FileAttribute 0))
+        maximum-output-bytes (* (count overlays)
+                                (+ (* width height 8) (* 1024 1024)))]
     (try
-      (Files/write overlay-path ^bytes overlay-png (make-array OpenOption 0))
-      (let [builder (doto (ProcessBuilder. ^java.util.List
-                           (composite-preview-command
-                            ffmpeg render-spec overlay-path))
-                      (.redirectErrorStream false))
-            process (.start builder)
+      (write-overlay-rgba! overlay-path overlays width height)
+      (let [process (.start
+                     (doto (ProcessBuilder. ^java.util.List
+                            (composite-gallery-command
+                             ffmpeg render-spec frame-indexes
+                             overlay-path))
+                       (.redirectErrorStream false)))
             stdout (future
                      (with-open [input (.getInputStream process)]
-                       (.readAllBytes input)))
+                       (.readNBytes input (inc maximum-output-bytes))))
             stderr (future
                      (with-open [input (.getErrorStream process)]
-                       (slurp input)))
+                       (.readAllBytes input)))
             source-error (atom nil)]
         (try
-          (with-open [source-input (.getOutputStream process)]
+          (with-open [source-output (.getOutputStream process)]
             (try
-              (source-stream! source-input)
+              (source-stream! source-output)
               (catch Throwable error
                 (reset! source-error error))))
           (let [exit-status (.waitFor process)
-                png @stdout]
+                output @stdout]
             @stderr
             (when-not (zero? exit-status)
-              (throw (errors/raise!
-                      "Selected-source preview composition failed"
-                      {:type ::composite-preview-failed
-                       :exit-status exit-status}
-                      @source-error)))
-            (when (zero? (alength ^bytes png))
-              (throw (errors/raise! "Selected-source preview produced no image"
-                                    {:type ::composite-preview-failed})))
-            (.write ^java.io.OutputStream output ^bytes png)
-            (.flush ^java.io.OutputStream output)
-            {:width (:width render-spec)
-             :height (:height render-spec)
-             :at-seconds (/ (double (:duration-seconds render-spec)) 2.0)})
+              (throw (errors/raise! "Selected-source gallery composition failed"
+                                    {:type ::composite-gallery-failed
+                                     :exit-status exit-status}
+                                    @source-error)))
+            (when (> (alength ^bytes output) maximum-output-bytes)
+              (throw (errors/raise! "Selected-source gallery output is too large"
+                                    {:type ::gallery-output-too-large
+                                     :limit maximum-output-bytes})))
+            (doseq [[frame-index png]
+                    (map vector frame-indexes
+                         (concatenated-pngs output (count frame-indexes)))]
+              (consume-gallery-png! render-spec frame-index png consume-frame!))
+            {:frame-count (count frame-indexes)
+             :source-decodes 1})
           (catch Throwable error
             (.destroyForcibly process)
             (future-cancel stdout)
@@ -533,10 +639,10 @@
                          (str output-path)])
           probe (json/read-str probe-output :key-fn keyword)]
       (verified-composite-media render-spec probe)))
-  CompositePreviewer
-  (render-composite-preview! [_ render-spec source-stream! overlay-png output]
-    (render-composite-preview-with-ffmpeg! ffmpeg render-spec source-stream!
-                                           overlay-png output)))
+  CompositeGalleryRenderer
+  (render-composite-gallery! [_ render-spec source-stream! overlays consume-frame!]
+    (render-composite-gallery-with-ffmpeg! ffmpeg render-spec source-stream!
+                                           overlays consume-frame!)))
 
 (defn ffmpeg-video-encoder
   ([] (ffmpeg-video-encoder "ffmpeg" "ffprobe"))

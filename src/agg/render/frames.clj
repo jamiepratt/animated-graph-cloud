@@ -20,9 +20,11 @@
 
 (defprotocol FrameRenderer
   (stream-frames! [renderer render-spec output]
-    "Streams RGBA frames without retaining a frame collection.")
-  (render-preview! [renderer render-spec output]
-    "Writes the section midpoint as one deterministic PNG."))
+    "Streams RGBA frames without retaining a frame collection."))
+
+(defprotocol PreviewFrameRenderer
+  (render-frame-png! [renderer render-spec frame-index output]
+    "Writes one real production-timeline output frame as PNG."))
 
 (defn- rgba-surface [width height]
   (let [rgba (byte-array (* width height 4))
@@ -72,12 +74,11 @@
   (int (clamp (Math/round (* height ratio)) minimum maximum)))
 
 (defn- x-for [graph-left graph-right duration-seconds seconds]
-  (int (Math/round (+ graph-left
-                      (* (clamp (/ (double seconds)
-                                   (max 1.0 (double duration-seconds)))
-                                  0.0
-                                  1.0)
-                         (- graph-right graph-left))))))
+  (let [ratio (clamp (/ (double seconds)
+                        (max 1.0 (double duration-seconds)))
+                     0.0
+                     1.0)]
+    (int (Math/round (+ graph-left (* ratio (- graph-right graph-left)))))))
 
 (defn- interpolate-value [left right key seconds]
   (let [left-seconds (double (:seconds left))
@@ -112,9 +113,9 @@
                  (conj result {:seconds target-seconds
                                key value})))))))
 
-(defn- series-samples [{:keys [duration-seconds] :as render-spec}
-                      source-key value-key graph-left graph-right]
-  (let [sample-count (max 64
+(defn- series-samples [render-spec source-key value-key graph-left graph-right]
+  (let [duration-seconds (:duration-seconds render-spec)
+        sample-count (max 64
                           (min 720
                                (inc (quot (- graph-right graph-left) 2))))
         samples (get render-spec source-key)
@@ -266,8 +267,7 @@
                         (- x label-gap (.stringWidth metrics title))))
                  (int (+ graph-top (.getAscent metrics))))))
 
-(defn- draw-x-axis! [graphics graph-left graph-right graph-bottom duration-seconds
-                   font]
+(defn- draw-x-axis! [graphics graph-left graph-right graph-bottom duration-seconds font]
   (let [metrics (.getFontMetrics graphics font)
         tick-count (max 2 (min 8 (inc (long duration-seconds))))
         tick-size (max 2 (int (Math/round (* (.getSize font) 0.22))))
@@ -368,7 +368,7 @@
                 axis-font heart-rate-samples spo2-samples
                 heart-rate-axis spo2-axis watermark]} layout
         heart-rate-y (fn [value]
-                      (y-for heart-rate-axis graph-top graph-bottom value))
+                       (y-for heart-rate-axis graph-top graph-bottom value))
         spo2-y (fn [value]
                  (y-for spo2-axis graph-top graph-bottom value))
         stroke (BasicStroke. (float (max 1.5 (* height 0.0032)))
@@ -388,18 +388,18 @@
       (draw-x-axis! g graph-left graph-right graph-bottom (:duration-seconds layout)
                     axis-font)
       (draw-future-aware-series! g
-                                (value-key-samples heart-rate-samples :heart-rate)
-                                heart-rate-y
-                                seconds
-                                heart-rate-color
-                                stroke)
+                                 (value-key-samples heart-rate-samples :heart-rate)
+                                 heart-rate-y
+                                 seconds
+                                 heart-rate-color
+                                 stroke)
       (when spo2-samples
         (draw-future-aware-series! g
-                                  (value-key-samples spo2-samples :spo2)
-                                  spo2-y
-                                  seconds
-                                  (:color spo2-contract)
-                                  stroke))
+                                   (value-key-samples spo2-samples :spo2)
+                                   spo2-y
+                                   seconds
+                                   (:color spo2-contract)
+                                   stroke))
       (let [heart-rate-seconds (clamp seconds 0.0 (:duration-seconds layout))
             heart-rate-point {:x (x-for graph-left graph-right
                                         (:duration-seconds layout)
@@ -427,6 +427,135 @@
       (finally
         (.dispose g)))))
 
+(defn- plateau-runs [samples value-key]
+  (loop [start 0
+         runs []]
+    (if (>= start (count samples))
+      runs
+      (let [value (double (get (nth samples start) value-key))
+            end (loop [index (inc start)]
+                  (if (and (< index (count samples))
+                           (= value (double (get (nth samples index) value-key))))
+                    (recur (inc index))
+                    (dec index)))]
+        (recur (inc end) (conj runs {:start start :end end :value value}))))))
+
+(defn- side-minimum [values start step peak]
+  (loop [index start
+         minimum peak]
+    (if (or (neg? index) (>= index (count values)))
+      minimum
+      (let [value (nth values index)]
+        (if (> value peak)
+          minimum
+          (recur (+ index step) (min minimum value)))))))
+
+(defn- prominent-events [samples value-key event-label invert?]
+  (let [samples (vec samples)
+        values (mapv (fn [sample]
+                       (* (if invert? -1.0 1.0)
+                          (double (get sample value-key))))
+                     samples)
+        candidates
+        (keep
+         (fn [{:keys [start end]}]
+           (when (and (pos? start) (< end (dec (count samples))))
+             (let [peak (nth values start)
+                   left (nth values (dec start))
+                   right (nth values (inc end))]
+               (when (and (> peak left) (> peak right))
+                 (let [index (quot (+ start end) 2)
+                       left-minimum (side-minimum values (dec start) -1 peak)
+                       right-minimum (side-minimum values (inc end) 1 peak)]
+                   {:seconds (double (:seconds (nth samples index)))
+                    :label event-label
+                    :prominence (- peak (max left-minimum right-minimum))})))))
+         (plateau-runs samples value-key))]
+    (->> candidates
+         (sort-by (juxt (comp - :prominence) :seconds))
+         (take 3))))
+
+(defn- frame-index [fps frame-count seconds]
+  (-> (Math/round (* (double seconds) (double fps)))
+      (max 0)
+      (min (dec frame-count))
+      long))
+
+(defn- first-present-frame [fps frame-count seconds]
+  (-> (Math/ceil (* (double seconds) (double fps)))
+      long
+      (max 0)
+      (min (dec frame-count))))
+
+(defn- last-present-frame [fps frame-count seconds]
+  (-> (Math/floor (* (double seconds) (double fps)))
+      long
+      (max 0)
+      (min (dec frame-count))))
+
+(defn- elapsed-milliseconds [frame fps]
+  (Math/round (* 1000.0 (/ (double frame) (double fps)))))
+
+(defn- elapsed-moment-text [frame fps]
+  (let [milliseconds (elapsed-milliseconds frame fps)
+        minutes (quot milliseconds 60000)
+        seconds (quot (rem milliseconds 60000) 1000)
+        millis (rem milliseconds 1000)]
+    (format "%02d:%02d.%03d" minutes seconds millis)))
+
+(defn- trace-section [render-spec {:keys [id name unit samples value-key]}]
+  (let [fps (:fps render-spec)
+        frame-count (spec/frame-count render-spec)
+        first-frame (first-present-frame fps frame-count (:seconds (first samples)))
+        last-frame (last-present-frame fps frame-count (:seconds (last samples)))
+        extrema (concat (prominent-events samples value-key
+                                          "Prominent minimum" true)
+                        (prominent-events samples value-key
+                                          "Prominent maximum" false))
+        events (concat [{:frame 0 :label "Video start"}]
+                       (when (not= 0 first-frame)
+                         [{:frame first-frame :label "Trace start"}])
+                       (map (fn [{:keys [seconds label]}]
+                              {:frame (frame-index fps frame-count seconds)
+                               :label label})
+                            extrema)
+                       [{:frame last-frame :label "Trace stop"}]
+                       (when (not= last-frame (dec frame-count))
+                         [{:frame (dec frame-count) :label "Video end"}]))
+        by-frame (reduce (fn [result {:keys [frame label]}]
+                           (update result frame (fnil conj []) label))
+                         (sorted-map)
+                         events)]
+    {:id id
+     :name name
+     :unit unit
+     :moments
+     (mapv (fn [[frame labels]]
+             (let [seconds (/ (double frame) fps)]
+               {:frameIndex frame
+                :elapsedSeconds seconds
+                :elapsed (elapsed-moment-text frame fps)
+                :labels (vec (distinct labels))
+                :value (value-at-series samples value-key seconds)}))
+           by-frame)}))
+
+(defn preview-sections
+  "Selects deterministic, frame-aligned key moments for every rendered trace."
+  [render-spec]
+  (cond-> [(trace-section render-spec
+                          {:id "heart-rate"
+                           :name "Heart rate"
+                           :unit "bpm"
+                           :samples (:telemetry render-spec)
+                           :value-key :heart-rate})]
+    (seq (:spo2 render-spec))
+    (conj (trace-section render-spec
+                         {:id "spo2"
+                          :name "SpO2"
+                          :unit "%"
+                          :samples (:spo2 render-spec)
+                          :value-key :spo2}))))
+
 (defrecord Java2dFrameRenderer []
   FrameRenderer
   (stream-frames! [_ {:keys [width height fps] :as render-spec} output]
@@ -439,16 +568,29 @@
       (.flush output)
       {:frame-count frames
        :buffer-count 1}))
-  (render-preview! [_ {:keys [width height duration-seconds] :as render-spec}
-                    output]
-    (let [{:keys [image]} (rgba-surface width height)
-          layout (render-layout render-spec)
-          midpoint (/ (double duration-seconds) 2.0)]
-      (render-frame! image layout midpoint)
-      (when-not (ImageIO/write image "png" output)
-        (throw (errors/raise! "PNG encoder unavailable" {:type ::png-unavailable})))
-      (.flush ^OutputStream output)
-      {:width width :height height :at-seconds midpoint})))
+  PreviewFrameRenderer
+  (render-frame-png! [_ {:keys [width height fps] :as render-spec}
+                      frame-index output]
+    (let [frame-count (spec/frame-count render-spec)]
+      (when-not (and (integer? frame-index)
+                     (<= 0 frame-index)
+                     (< frame-index frame-count))
+        (throw (errors/raise! "Preview moment must map to a real output frame"
+                              {:type ::invalid-preview-frame
+                               :reported frame-index
+                               :limit frame-count})))
+      (let [seconds (/ (double frame-index) fps)
+            {:keys [image]} (rgba-surface width height)
+            layout (render-layout render-spec)]
+        (render-frame! image layout seconds)
+        (when-not (ImageIO/write image "png" output)
+          (throw (errors/raise! "PNG encoder unavailable"
+                                {:type ::png-unavailable})))
+        (.flush ^OutputStream output)
+        {:width width
+         :height height
+         :frameIndex frame-index
+         :elapsedSeconds seconds}))))
 
 (def java2d-frame-renderer (->Java2dFrameRenderer))
 

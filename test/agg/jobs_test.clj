@@ -90,6 +90,20 @@
          (:failureCode (jobs/job-resource {:state :failed
                                            :failure "existing_code"})))))
 
+(deftest preview-work-is-distinguished-from-durable-render-jobs
+  (let [service (:service (jobs/in-memory-system))
+        preview (get-in (jobs/submit-job!
+                         service "preview-operation"
+                         (assoc (render-request)
+                                :previewOperation "key-moment-gallery-v1"))
+                        [:job])
+        render (get-in (jobs/submit-job! service "durable-render"
+                                         (render-request))
+                       [:job])]
+    (is (= "preview" (:operationKind preview)))
+    (is (nil? (:operationKind render)))
+    (is (= (* 24 60 60) jobs/preview-retention-seconds))))
+
 (deftest member-cleanup-cancels-only-its-generation-and-legacy-jobs
   (let [service (:service (jobs/in-memory-system))
         request (assoc (render-request)

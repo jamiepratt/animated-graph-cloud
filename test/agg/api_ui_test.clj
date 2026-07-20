@@ -87,18 +87,18 @@
          "/usr/bin/chromium"
          "/usr/bin/chromium-browser"]))
 
-(defn- browser-outcome [prefix requirement html]
+(defn- browser-outcome [prefix requirement html & browser-args]
   (let [chrome (chrome-executable)
         temp (File/createTempFile prefix ".html")]
     (is chrome requirement)
     (when chrome
       (try
         (spit temp html)
-        (let [builder (doto (ProcessBuilder.
-                             [chrome "--headless=new" "--disable-gpu"
-                              "--no-sandbox" "--dump-dom"
-                              "--virtual-time-budget=1000"
-                              (str (.toURI temp))])
+        (let [command (into [chrome "--headless=new" "--disable-gpu"
+                             "--no-sandbox" "--dump-dom"
+                             "--virtual-time-budget=1000"]
+                            (concat browser-args [(str (.toURI temp))]))
+              builder (doto (ProcessBuilder. ^java.util.List command)
                         (.redirectErrorStream true))
               process (.start builder)
               output (slurp (.getInputStream process))
@@ -168,14 +168,15 @@
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
          "const button=document.querySelector('[hx-post=\"/ui/preview\"]');"
-         "button.dispatchEvent(new CustomEvent('htmx:beforeRequest',{bubbles:true,detail:{elt:button}}));"
+         "document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
+         "button.dispatchEvent(new CustomEvent('htmx:configRequest',{bubbles:true,detail:{elt:button,parameters:{},headers:{}}}));"
          "const pending={text:document.getElementById('form-status').textContent,className:document.getElementById('form-status').className};"
          "document.getElementById('preview-result').outerHTML='<article id=\"preview-result\" class=\"preview-error\"></article>';"
          "const failure=document.getElementById('preview-result');"
          "failure.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:failure}}));"
          "const failed={text:document.getElementById('form-status').textContent,className:document.getElementById('form-status').className};"
-         "button.dispatchEvent(new CustomEvent('htmx:beforeRequest',{bubbles:true,detail:{elt:button}}));"
-         "failure.outerHTML='<figure id=\"preview-result\"><img></figure>';"
+         "button.dispatchEvent(new CustomEvent('htmx:configRequest',{bubbles:true,detail:{elt:button,parameters:{},headers:{}}}));"
+         "failure.outerHTML='<article id=\"preview-result\" class=\"preview-gallery\"><img></article>';"
          "const success=document.getElementById('preview-result');"
          "success.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:success}}));"
          "const succeeded={text:document.getElementById('form-status').textContent,className:document.getElementById('form-status').className};"
@@ -191,6 +192,57 @@
      "agg-preview-status-browser-"
      "Browser-level preview status regression requires Chrome or Chromium"
      html)))
+
+(defn- preview-gallery-operation []
+  {:id "00000000-0000-0000-0000-000000000061"
+   :operationKind "key-moment-gallery"
+   :state "succeeded"
+   :progressPercent 100
+   :result
+   {:version 1
+    :mode "source-final"
+    :sections
+    [{:id "heart-rate" :name "Heart rate" :unit "bpm"
+      :moments [{:frameIndex 25 :elapsedSeconds 1.0 :elapsed "00:01.000"
+                 :labels ["Prominent maximum"]
+                 :eventLabel "Prominent maximum"
+                 :value 168.0
+                 :title "Prominent maximum - 168.0 bpm - 00:01.000"
+                 :frameRef "a000"}]}]
+    :assets
+    [{:id "a000" :frameIndex 25 :kind "source-final" :merged false
+      :source {:thumbnailUrl "/v1/previews/x/images/a000-source/thumbnail"
+               :fullUrl "/v1/previews/x/images/a000-source/full"}
+      :final {:thumbnailUrl "/v1/previews/x/images/a000-final/thumbnail"
+              :fullUrl "/v1/previews/x/images/a000-final/full"}}]}})
+
+(defn- preview-gallery-browser-outcome [narrow?]
+  (let [fragment (ui/preview-operation-fragment
+                  (preview-gallery-operation) "generation-1")
+        page (-> (ui/page {:user {:email "owner@example.com" :role :member}
+                           :csrf "csrf-test"
+                           :tokens [] :members [] :logs-enabled? false})
+                 (str/replace "<div id=\"preview-result\"></div>" fragment)
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" ""))
+        request-json (json/write-str (fixture/render-request))
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{const moments=document.querySelector('.preview-moments'),source=document.querySelector('.preview-cell .frame-role'),final=[...document.querySelectorAll('.frame-role')].find(node=>node.textContent==='Final'),buttons=[...document.querySelectorAll('.preview-open')],open=buttons[0],dialog=document.getElementById('preview-dialog');"
+         "const display=getComputedStyle(moments).display,roles=[...document.querySelectorAll('.frame-role')].map(node=>node.textContent),noOverflow=document.documentElement.scrollWidth<=window.innerWidth,meaningfulAlts=buttons.every(button=>button.querySelector('img').alt.length>12),eagerImages=buttons.every(button=>button.querySelector('img').loading==='eager'),nativeButtons=buttons.every(button=>button.tagName==='BUTTON');"
+         "open.focus();open.click();const dialogOpened=dialog.open&&dialog.querySelector('img').alt===open.dataset.alt;dialog.querySelector('.preview-dialog-close').click();const focusReturned=document.activeElement===open;"
+         "let stale=false,staleSwapRejected=false;if(!" narrow? "){const raw=document.getElementById('raw-json');raw.value=" (json/write-str request-json) ";document.getElementById('apply-json').click();const staleTarget=document.querySelector('.preview-stale');stale=!!staleTarget;const detail={target:staleTarget,xhr:{getResponseHeader:()=>\"generation-1\"},shouldSwap:true};staleTarget.dispatchEvent(new CustomEvent('htmx:beforeSwap',{bubbles:true,detail}));staleSwapRejected=!detail.shouldSwap;}"
+         "outcome={display,roles,noOverflow,meaningfulAlts,eagerImages,nativeButtons,dialogOpened,focusReturned,stale,staleSwapRejected,sourceBeforeFinal:source&&final&&source.compareDocumentPosition(final)&Node.DOCUMENT_POSITION_FOLLOWING};"
+         "}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (str/replace page "</body>" (str scenario "</body>"))]
+    (if narrow?
+      (browser-outcome "agg-preview-narrow-"
+                       "Narrow preview regression requires Chrome or Chromium"
+                       html "--window-size=390,844")
+      (browser-outcome "agg-preview-desktop-"
+                       "Desktop preview regression requires Chrome or Chromium"
+                       html "--window-size=1280,900"))))
 
 (defn- telemetry-file-browser-outcome [page]
   (let [fit-base64 (str/trim
@@ -348,13 +400,57 @@
                            :members []
                            :logs-enabled? false}))]
     (is (nil? (:error outcome)) outcome)
-    (is (= {:text "Previewing…" :className "status"}
+    (is (= {:text "Preparing preview…" :className "status"}
            (:pending outcome)))
     (is (= {:text "Preview failed. See details below."
             :className "status error"}
            (:failed outcome)))
     (is (= {:text "Preview ready." :className "status success"}
            (:succeeded outcome)))))
+
+(deftest preview-gallery-is-responsive-accessible-and-stale-safe-in-a-browser
+  (let [desktop (preview-gallery-browser-outcome false)
+        narrow (preview-gallery-browser-outcome true)]
+    (is (nil? (:error desktop)) desktop)
+    (is (= "grid" (:display desktop)))
+    (is (= ["Source" "Final"] (:roles desktop)))
+    (is (every? true? (map desktop
+                           [:noOverflow :meaningfulAlts :eagerImages
+                            :nativeButtons :dialogOpened :focusReturned :stale
+                            :staleSwapRejected])))
+    (is (pos? (:sourceBeforeFinal desktop)))
+    (is (nil? (:error narrow)) narrow)
+    (is (= "block" (:display narrow)))
+    (is (= ["Source" "Final"] (:roles narrow)))
+    (is (every? true? (map narrow
+                           [:noOverflow :meaningfulAlts :eagerImages
+                            :nativeButtons :dialogOpened :focusReturned])))
+    (is (pos? (:sourceBeforeFinal narrow)))))
+
+(deftest overlay-only-hr-and-spo2-gallery-has-trace-sections-and-overlay-row
+  (let [operation (preview-gallery-operation)
+        moment (get-in operation [:result :sections 0 :moments 0])
+        operation (-> operation
+                      (assoc-in [:result :mode] "overlay")
+                      (assoc-in [:result :sections]
+                                [{:id "heart-rate" :name "Heart rate"
+                                  :unit "bpm" :moments [moment]}
+                                 {:id "spo2" :name "SpO2" :unit "%"
+                                  :moments [(assoc moment
+                                                   :value 97.0
+                                                   :title "Video start - 97 % - 00:01.000")]}])
+                      (assoc-in [:result :assets]
+                                [{:id "a000" :frameIndex 25 :kind "overlay"
+                                  :image {:thumbnailUrl "/v1/previews/x/images/a000-overlay/thumbnail"
+                                          :fullUrl "/v1/previews/x/images/a000-overlay/full"}}]))
+        fragment (ui/preview-operation-fragment operation "generation-1")]
+    (is (= 2 (count (re-seq #"class=\"trace-preview\"" fragment))))
+    (is (str/includes? fragment ">Heart rate</h2>"))
+    (is (str/includes? fragment ">SpO2</h2>"))
+    (is (= 2 (count (re-seq #">Overlay</span>" fragment))))
+    (is (= 2 (count (re-seq #"class=\"checkerboard\"" fragment))))
+    (is (not (str/includes? fragment ">Source</span>")))
+    (is (not (str/includes? fragment ">Final</span>")))))
 
 (deftest telemetry-files-follow-the-selected-format-in-a-browser
   (let [outcome (telemetry-file-browser-outcome
@@ -503,12 +599,23 @@
                                 "addEventListener('message'")))
         (is (str/includes? (.body landing) "hx-post=\"/ui/tokens\""))
         (is (str/includes? (.body landing) "X-CSRF-Token")))
-      (testing "preview is returned as an HTML fragment"
+      (testing "preview submission returns an async HTML fragment"
         (let [preview (request! port :post "/ui/preview"
-                                (form {:request request-json}) headers)]
-          (is (= 200 (.statusCode preview)))
-          (is (str/includes? (.body preview) "data:image/png;base64,"))
-          (is (str/includes? (.body preview) "Midpoint preview"))))
+                                (form {:request request-json}) headers)
+              operation-id (second
+                            (re-find #"data-preview-operation=\"([^\"]+)\""
+                                     (.body preview)))
+              status-path (str "/ui/previews/" operation-id)]
+          (is (= 202 (.statusCode preview)))
+          (is (string? operation-id))
+          (is (str/includes? (.body preview) "Preparing preview"))
+          (is (str/includes? (.body preview) status-path))
+          (is (= 200 (.statusCode
+                      (request! port :get status-path nil
+                                {"Cookie" owner-cookie}))))
+          (is (= 404 (.statusCode
+                      (request! port :get status-path nil
+                                {"Cookie" member-cookie}))))))
       (testing "missing CSRF is rejected before submission"
         (is (= 403
                (.statusCode

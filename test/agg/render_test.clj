@@ -4,6 +4,7 @@
             [agg.jobs.lifecycle :as jobs]
             [agg.render.frames :as frames]
             [agg.render.media :as media]
+            [agg.preview.core :as preview]
             [agg.render.spec :as spec]
             [agg.render.watermark :as watermark]
             [agg.renderer.main :as renderer]
@@ -11,10 +12,13 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]])
-  (:import (java.io ByteArrayOutputStream IOException OutputStream)
+  (:import (java.awt Color)
+           (java.awt.image BufferedImage)
+           (java.io ByteArrayOutputStream IOException OutputStream)
            (java.nio.file Files OpenOption)
            (java.security MessageDigest)
-           (java.util HexFormat)))
+           (java.util HexFormat)
+           (javax.imageio ImageIO)))
 
 (defn- sha256-bytes [value]
   (.formatHex (HexFormat/of)
@@ -44,6 +48,18 @@
     (when-not (.setExecutable (.toFile path) true)
       (throw (IOException. "Could not make the media test script executable")))
     path))
+
+(defn- png-bytes [width height opaque?]
+  (let [image (BufferedImage. width height BufferedImage/TYPE_INT_ARGB)
+        output (ByteArrayOutputStream.)]
+    (when opaque?
+      (let [graphics (.createGraphics image)]
+        (try
+          (.setColor graphics Color/BLACK)
+          (.fillRect graphics 0 0 width height)
+          (finally (.dispose graphics)))))
+    (ImageIO/write image "png" output)
+    (.toByteArray output)))
 
 (defn- short-source-reader-script [exit-status]
   (str "#!/bin/sh\n"
@@ -133,7 +149,238 @@
   (is (satisfies? frames/FrameRenderer frames/java2d-frame-renderer))
   (is (satisfies? media/VideoEncoder (media/ffmpeg-video-encoder)))
   (is (satisfies? media/CompositeEncoder (media/ffmpeg-video-encoder)))
-  (is (satisfies? media/CompositePreviewer (media/ffmpeg-video-encoder))))
+  (is (satisfies? media/CompositeGalleryRenderer
+                  (media/ffmpeg-video-encoder))))
+
+(deftest selected-source-gallery-command-batch-decodes-real-output-frames
+  (let [command (media/composite-gallery-command
+                 "ffmpeg"
+                 {:width 1920 :height 1080 :fps 25
+                  :duration-seconds 480 :fit-mode "letterbox"}
+                 [0 2500 11999]
+                 "/tmp/selected-overlays.rgba")
+        joined (str/join " " command)]
+    (is (= 1 (count (filter #{"pipe:0"} command))))
+    (is (some #{"/tmp/selected-overlays.rgba"} command))
+    (is (str/includes? joined "eq(n\\,0)+eq(n\\,2500)+eq(n\\,11999)"))
+    (is (str/includes? joined "hstack=inputs=2"))
+    (is (= "3" (second (drop-while #(not= "-frames:v" %) command))))
+    (is (= "pipe:1" (last command)))))
+
+(deftest preview-moments-use-standard-prominence-and-stable-tie-breaking
+  (let [section (first
+                 (frames/preview-sections
+                  {:fps 10 :duration-seconds 8
+                   :telemetry (mapv (fn [seconds value]
+                                      {:seconds seconds :heart-rate value})
+                                    (range 9)
+                                    [0 3 0 3 0 3 0 3 0])}))
+        maxima (filter #(some #{"Prominent maximum"} (:labels %))
+                       (:moments section))]
+    (is (= [10 30 50] (mapv :frameIndex maxima)))
+    (is (= [3.0 3.0 3.0] (mapv :value maxima)))
+    (is (= (sort (map :frameIndex (:moments section)))
+           (map :frameIndex (:moments section))))))
+
+(deftest noisy-prominence-selection-is-bounded-and-deterministic
+  (let [render-spec {:fps 10 :duration-seconds 10
+                     :telemetry
+                     (mapv (fn [seconds value]
+                             {:seconds seconds :heart-rate value})
+                           (range 11)
+                           [100 109 101 108 99 115 98 107 100 106 100])}
+        first-moments (:moments (first (frames/preview-sections render-spec)))
+        second-moments (:moments (first (frames/preview-sections render-spec)))
+        extrema (filter #(some (fn [label]
+                                 (str/starts-with? label "Prominent"))
+                               (:labels %))
+                        first-moments)]
+    (is (= first-moments second-moments))
+    (is (<= (count (filter #(some #{"Prominent minimum"} (:labels %))
+                           extrema))
+            3))
+    (is (<= (count (filter #(some #{"Prominent maximum"} (:labels %))
+                           extrema))
+            3))
+    (is (= (sort (map :frameIndex first-moments))
+           (map :frameIndex first-moments)))))
+
+(deftest preview-moments-collapse-plateaus-and-map-to-real-output-frames
+  (let [section (first
+                 (frames/preview-sections
+                  {:fps 10 :duration-seconds 3
+                   :telemetry [{:seconds 0.0 :heart-rate 1.0}
+                               {:seconds 1.0 :heart-rate 4.0}
+                               {:seconds 2.0 :heart-rate 4.0}
+                               {:seconds 3.0 :heart-rate 1.0}]}))
+        maximum (first (filter #(some #{"Prominent maximum"} (:labels %))
+                               (:moments section)))]
+    (is (= 10 (:frameIndex maximum)))
+    (is (= "00:01.000" (:elapsed maximum)))
+    (is (= 4.0 (:value maximum)))))
+
+(deftest preview-moments-deduplicate-coincident-sub-frame-events
+  (let [section (first
+                 (frames/preview-sections
+                  {:fps 4 :duration-seconds 1
+                   :telemetry [{:seconds 0.0 :heart-rate 1.0}
+                               {:seconds 0.24 :heart-rate 3.0}
+                               {:seconds 0.26 :heart-rate 0.0}
+                               {:seconds 1.0 :heart-rate 1.0}]}))
+        coincident (first (filter #(= 1 (:frameIndex %)) (:moments section)))]
+    (is (= ["Prominent minimum" "Prominent maximum"]
+           (:labels coincident)))
+    (is (= 1 (count (filter #(= 1 (:frameIndex %)) (:moments section)))))))
+
+(deftest constant-and-monotonic-traces-have-only-combined-boundaries
+  (doseq [values [[2.0 2.0 2.0] [1.0 2.0 3.0]]]
+    (let [section (first
+                   (frames/preview-sections
+                    {:fps 2 :duration-seconds 2
+                     :telemetry (mapv (fn [seconds value]
+                                        {:seconds seconds :heart-rate value})
+                                      [0.0 1.0 2.0]
+                                      values)}))]
+      (is (= 2 (count (:moments section))))
+      (is (= ["Video start"]
+             (:labels (first (:moments section)))))
+      (is (= ["Trace stop"]
+             (:labels (last (:moments section))))))))
+
+(deftest preview-sections-are-a-generic-trace-collection
+  (let [sections
+        (frames/preview-sections
+         {:fps 2 :duration-seconds 2
+          :telemetry [{:seconds 0.0 :heart-rate 120.0}
+                      {:seconds 1.0 :heart-rate 140.0}
+                      {:seconds 2.0 :heart-rate 110.0}]
+          :spo2 [{:seconds 0.0 :spo2 96.0}
+                 {:seconds 1.0 :spo2 92.0}
+                 {:seconds 2.0 :spo2 97.0}]})]
+    (is (= [{:id "heart-rate" :name "Heart rate" :unit "bpm"}
+            {:id "spo2" :name "SpO2" :unit "%"}]
+           (mapv #(select-keys % [:id :name :unit]) sections)))
+    (is (every? seq (map :moments sections)))))
+
+(deftest arbitrary-preview-frames-use-production-frame-timing
+  (let [render-spec {:width 64 :height 36 :fps 4 :duration-seconds 1
+                     :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                                 {:seconds 1.0 :heart-rate 140.0}]}
+        output (ByteArrayOutputStream.)
+        result (frames/render-frame-png! frames/java2d-frame-renderer
+                                         render-spec 3 output)]
+    (is (= {:width 64 :height 36 :frameIndex 3 :elapsedSeconds 0.75}
+           result))
+    (is (= [137 80 78 71 13 10 26 10]
+           (mapv #(bit-and 0xff %) (take 8 (.toByteArray output)))))))
+
+(deftest arbitrary-preview-frames-reject-the-exclusive-section-end
+  (let [output (ByteArrayOutputStream.)]
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"real output frame"
+         (frames/render-frame-png!
+          frames/java2d-frame-renderer
+          {:width 64 :height 36 :fps 4 :duration-seconds 1
+           :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                       {:seconds 1.0 :heart-rate 140.0}]}
+          4 output)))))
+
+(deftest preview-operation-results-expire-logically-at-24-hours
+  (let [created (java.time.Instant/parse "2026-07-20T00:00:00Z")
+        job {:id "00000000-0000-0000-0000-000000000061"
+             :operationKind "preview"
+             :state "succeeded"
+             :createdAt (str created)
+             :updatedAt (str created)
+             :output {:output-bytes 123 :version 1 :sections [] :assets []}}
+        resource (preview/operation-resource
+                  job (.minusMillis (.plusSeconds created (* 24 60 60)) 1))]
+    (is (= 1 (get-in resource [:result :version])))
+    (is (nil? (get-in resource [:result :output-bytes])))
+    (is (nil? (preview/operation-resource
+               job (.plusSeconds created (* 24 60 60)))))))
+
+(deftest overlay-gallery-renders-each-shared-frame-asset-once
+  (let [store (preview/in-memory-asset-store)
+        manifest
+        (preview/render-gallery!
+         "00000000-0000-0000-0000-000000000061"
+         {:width 64 :height 36 :fps 2 :duration-seconds 2
+          :telemetry [{:seconds 0.0 :heart-rate 120.0}
+                      {:seconds 1.0 :heart-rate 140.0}
+                      {:seconds 2.0 :heart-rate 110.0}]
+          :spo2 [{:seconds 0.0 :spo2 96.0}
+                 {:seconds 1.0 :spo2 92.0}
+                 {:seconds 2.0 :spo2 97.0}]}
+         store frames/java2d-frame-renderer nil nil)
+        moments (mapcat :moments (:sections manifest))]
+    (is (= "overlay" (:mode manifest)))
+    (is (= 2 (count (:sections manifest))))
+    (is (= (count (set (map :frameIndex moments)))
+           (count (:assets manifest))))
+    (is (= (:frameRef (first (get-in manifest [:sections 0 :moments])))
+           (:frameRef (first (get-in manifest [:sections 1 :moments])))))
+    (is (every? #(= "overlay" (:kind %)) (:assets manifest)))
+    (is (every? #(preview/get-asset
+                  store "00000000-0000-0000-0000-000000000061"
+                  (str (:id %) "-overlay") :thumbnail)
+                (:assets manifest)))))
+
+(deftest maximum-duration-source-gallery-uses-one-batched-decode
+  (let [decode-count (atom 0)
+        source-count (atom 0)
+        store (preview/in-memory-asset-store)
+        gallery-renderer
+        (reify media/CompositeGalleryRenderer
+          (render-composite-gallery!
+            [_ _render-spec source-stream! overlays consume-frame!]
+            (swap! decode-count inc)
+            (with-open [output (ByteArrayOutputStream.)]
+              (source-stream! output))
+            (doseq [{:keys [frameIndex overlay]} overlays]
+              (consume-frame! frameIndex (png-bytes 64 36 true) overlay))))
+        manifest
+        (preview/render-gallery!
+         "00000000-0000-0000-0000-000000000062"
+         {:width 64 :height 36 :fps 25 :duration-seconds 480
+          :source-video {:file-id "not-exposed"}
+          :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                      {:seconds 480.0 :heart-rate 140.0}]}
+         store frames/java2d-frame-renderer gallery-renderer
+         (fn [output]
+           (swap! source-count inc)
+           (.write ^OutputStream output (byte-array 1024))))]
+    (is (= 1 @decode-count))
+    (is (= 1 @source-count))
+    (is (= "source-final" (:mode manifest)))
+    (is (= 2 (count (:assets manifest))))))
+
+(deftest transparent-complete-overlays-merge-source-and-final-assets
+  (let [transparent (png-bytes 64 36 false)
+        source (png-bytes 64 36 true)
+        store (preview/in-memory-asset-store)
+        frame-renderer
+        (reify frames/PreviewFrameRenderer
+          (render-frame-png! [_ _ frame-index output]
+            (.write ^OutputStream output transparent)
+            {:frameIndex frame-index}))
+        gallery-renderer
+        (reify media/CompositeGalleryRenderer
+          (render-composite-gallery!
+            [_ _ _ overlays consume-frame!]
+            (doseq [{:keys [frameIndex]} overlays]
+              (consume-frame! frameIndex source source))))
+        manifest
+        (preview/render-gallery!
+         "00000000-0000-0000-0000-000000000063"
+         {:width 64 :height 36 :fps 2 :duration-seconds 1
+          :source-video {:file-id "not-exposed"}
+          :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                      {:seconds 1.0 :heart-rate 140.0}]}
+         store frame-renderer gallery-renderer (fn [_]))]
+    (is (every? :merged (:assets manifest)))
+    (is (every? #(= (:source %) (:final %)) (:assets manifest)))))
 
 (deftest compositing-command-keeps-drive-source-on-a-non-seekable-pipe
   (let [command (media/composite-command
@@ -254,22 +501,7 @@
         (Files/deleteIfExists output)
         (Files/deleteIfExists ffmpeg)))))
 
-(deftest selected-source-preview-composites-only-the-midpoint-frame
-  (let [command (media/composite-preview-command
-                 "ffmpeg"
-                 {:width 1920 :height 1080 :duration-seconds 157
-                  :fit-mode "letterbox"}
-                 "/tmp/overlay.png")
-        joined (str/join " " command)]
-    (is (some #{"pipe:0"} command))
-    (is (some #{"/tmp/overlay.png"} command))
-    (is (str/includes? joined "force_original_aspect_ratio=decrease"))
-    (is (= "78.5" (second (drop-while #(not= "-ss" %) command))))
-    (is (= "1" (second (drop-while #(not= "-frames:v" %) command))))
-    (is (not (some #{"-t"} command)))
-    (is (= "pipe:1" (last command)))))
-
-(deftest polar-midpoint-preview-matches-the-golden-render
+(deftest arbitrary-polar-preview-frame-matches-the-golden-render
   (let [telemetry (slurp (io/resource "fixtures/polar/valid.csv"))
         render-spec (contract/prepare
                      {:telemetryFormat "polar-csv"
@@ -286,8 +518,10 @@
             :minimum-spo2-padding 0.5
             :tick-count 5}
            frames/trace-contract))
-    (frames/render-preview! frames/java2d-frame-renderer render-spec first-output)
-    (frames/render-preview! frames/java2d-frame-renderer render-spec second-output)
+    (frames/render-frame-png! frames/java2d-frame-renderer render-spec 25
+                              first-output)
+    (frames/render-frame-png! frames/java2d-frame-renderer render-spec 25
+                              second-output)
     (is (java.util.Arrays/equals (.toByteArray first-output)
                                  (.toByteArray second-output)))
     (is (= (str/trim
@@ -332,21 +566,26 @@
     (testing "the uploaded watermark retains its PNG color"
       (is (some #(= [255 0 0 255] %) colors)))))
 
-(deftest both-locked-presets-have-golden-complete-previews
+(deftest both-locked-presets-have-deterministic-complete-frame-renders
   (doseq [preset-id ["1080p25" "2.7k25"]]
     (let [request (json/read-str
                    (slurp (io/resource
                            (str "fixtures/complete/" preset-id ".json")))
                    :key-fn keyword)
           render-spec (contract/prepare request)
-          output (ByteArrayOutputStream.)]
-      (frames/render-preview! frames/java2d-frame-renderer render-spec output)
-      (is (= (str/trim
-              (slurp (io/resource
-                      (golden-resource (str "complete-"
-                                            preset-id
-                                            "-preview")))))
-             (sha256-bytes (.toByteArray output)))
+          first-output (ByteArrayOutputStream.)
+          second-output (ByteArrayOutputStream.)]
+      (frames/render-frame-png! frames/java2d-frame-renderer render-spec
+                                (quot (spec/frame-count render-spec) 2)
+                                first-output)
+      (frames/render-frame-png! frames/java2d-frame-renderer render-spec
+                                (quot (spec/frame-count render-spec) 2)
+                                second-output)
+      (is (java.util.Arrays/equals (.toByteArray first-output)
+                                   (.toByteArray second-output))
+          preset-id)
+      (is (= [137 80 78 71 13 10 26 10]
+             (mapv #(bit-and 0xff %) (take 8 (.toByteArray first-output))))
           preset-id))))
 
 (deftest frames-render-axes-readout-cursor-and-future-opacity

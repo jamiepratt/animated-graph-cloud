@@ -70,13 +70,13 @@ if [ "$render_output" != '{"severity":"INFO","component":"renderer","event":"ren
 fi
 
 health_file="$(mktemp)"
-garmin_preview="$(mktemp)"
+garmin_preview_operation="$(mktemp)"
 api_container_id="$(docker run --rm -d -p 127.0.0.1::8080 "$image")"
 overlay_container_id="$(docker run --rm -d -p 127.0.0.1::8080 \
   -e AGG_SERVICE_PROFILE=overlay "$image")"
 cleanup() {
   docker rm -f "$api_container_id" "$overlay_container_id" >/dev/null 2>&1 || true
-  rm -f "$health_file" "$garmin_preview"
+  rm -f "$health_file" "$garmin_preview_operation"
 }
 trap cleanup EXIT INT TERM
 
@@ -98,14 +98,19 @@ if [ "$health_body" != "$expected_health" ]; then
   exit 1
 fi
 
-curl --fail --silent --show-error \
+garmin_preview_status="$(curl --silent --show-error \
+  --write-out '%{http_code}' \
   --header 'Content-Type: application/json' \
   --data-binary "@$root/test/fixtures/garmin/request.json" \
   "http://127.0.0.1:$api_host_port/v1/preview" \
-  --output "$garmin_preview"
-garmin_signature="$(od -An -t x1 -N 8 "$garmin_preview" | tr -d ' \n')"
-if [ "$garmin_signature" != '89504e470d0a1a0a' ]; then
-  echo "Garmin FIT preview is not PNG" >&2
+  --output "$garmin_preview_operation")"
+if [ "$garmin_preview_status" != '202' ]; then
+  echo "Garmin FIT preview status was $garmin_preview_status, expected 202" >&2
+  exit 1
+fi
+if ! grep -q '"operationKind":"key-moment-gallery"' "$garmin_preview_operation" || \
+   ! grep -q '"statusUrl":"/v1/previews/' "$garmin_preview_operation"; then
+  echo "Garmin FIT preview operation response is invalid" >&2
   exit 1
 fi
 

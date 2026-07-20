@@ -52,6 +52,12 @@
 (def lease-seconds (* 65 60))
 (def max-output-bytes (* 18 1024 1024 1024))
 
+(def preview-operation-version "key-moment-gallery-v1")
+(def preview-retention-seconds (* 24 60 60))
+
+(defn preview-request? [request]
+  (= preview-operation-version (:previewOperation request)))
+
 (def ^:private durable-failure-codes
   #{"request_load_failed"
     "request_prepare_failed"
@@ -209,7 +215,7 @@
 
 (defn job-resource
   [{:keys [id state attempt created-at updated-at failure failure-diagnostics
-           output]}]
+           output operation-kind]}]
   (cond-> {:id id
            :state (name state)
            :attempt attempt
@@ -218,6 +224,7 @@
            :retryUrl (str "/v1/jobs/" id "/retry")
            :createdAt (str created-at)
            :updatedAt (str updated-at)}
+    operation-kind (assoc :operationKind (name operation-kind))
     failure (assoc :failureCode (public-failure-code failure))
     (:stage failure-diagnostics) (assoc :stage (:stage failure-diagnostics))
     (:status failure-diagnostics) (assoc :status (:status failure-diagnostics))
@@ -336,12 +343,14 @@
                                  monthly-budget-minor-units)
                           (throw (errors/raise! "Monthly compute budget is exhausted"
                                                 {:type ::monthly-budget-exhausted})))
-                      job {:id job-id
-                           :state :queued
-                           :attempt 1
-                           :request request
-                           :created-at now
-                           :updated-at now}]
+                      job (cond-> {:id job-id
+                                   :state :queued
+                                   :attempt 1
+                                   :request request
+                                   :created-at now
+                                   :updated-at now}
+                            (preview-request? request)
+                            (assoc :operation-kind :preview))]
                   (swap! state (fn [current]
                                  (-> current
                                      (assoc-in [:jobs job-id] job)

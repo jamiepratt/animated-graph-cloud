@@ -38,6 +38,47 @@
            (:driveWebViewLink result)))
     (is (= "jobs/job-1/output.mov" (:object result)))))
 
+(deftest cloud-preview-worker-persists-a-gallery-without-durable-delivery
+  (let [delivered (atom 0)
+        delivery (reify drive/OutputDelivery
+                   (deliver-output! [_ _ _ _]
+                     (swap! delivered inc)))
+        calls (atom [])
+        render-cloud!
+        (fn [render-spec dependencies]
+          (swap! calls conj {:duration (:duration-seconds render-spec)
+                             :spo2-count (count (:spo2 render-spec))
+                             :operation-id (:preview-operation-id dependencies)
+                             :request-kind
+                             (get-in dependencies
+                                     [:original-request :previewOperation])})
+          {:output-bytes 42
+           :version 1
+           :mode "overlay"
+           :sections []
+           :assets []})
+        worker (renderer/->CloudRenderWorker "temporary-bucket" delivery
+                                             render-cloud!)
+        result (jobs/perform-render!
+                worker "preview-operation-1"
+                (assoc (fixture/render-request)
+                       :previewOperation jobs/preview-operation-version
+                       :spo2 {:format "oxiwear-spo2-csv"
+                              :telemetry
+                              (str "reading_time,spo2\n"
+                                   "2026-07-17T10:00:00Z,96\n"
+                                   "2026-07-17T10:00:01Z,92\n"
+                                   "2026-07-17T10:00:02Z,97\n")}
+                       :requesterSubject "google-subject-1"))]
+    (is (= 0 @delivered))
+    (is (= [{:duration 2
+             :spo2-count 3
+             :operation-id "preview-operation-1"
+             :request-kind jobs/preview-operation-version}]
+           @calls))
+    (is (= "overlay" (:mode result)))
+    (is (= 42 (:output-bytes result)))))
+
 (deftest drive-reauthorization-has-a-data-free-operational-event
   (let [revoked (ex-info "secret-token filename.mov"
                          {:type ::auth/drive-grant-required

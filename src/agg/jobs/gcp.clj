@@ -7,6 +7,7 @@
             [agg.logs.core :as logs]
             [agg.logs.gcp :as logs-gcp]
             [agg.observability :as observability]
+            [agg.preview.core :as preview]
             [clojure.data.json :as json]
             [clojure.string :as str])
   (:import (com.google.api.gax.rpc ApiException StatusCode$Code)
@@ -16,7 +17,7 @@
            (com.google.cloud.run.v2 Execution ExecutionsClient JobsClient RunJobRequest
                                     RunJobRequest$Overrides
                                     RunJobRequest$Overrides$ContainerOverride)
-           (com.google.cloud.storage BlobInfo HttpMethod Storage
+           (com.google.cloud.storage Blob Blob$BlobSourceOption BlobInfo HttpMethod Storage
                                      Storage$BlobTargetOption
                                      Storage$SignUrlOption StorageOptions)
            (com.google.cloud.tasks.v2 CloudTasksClient HttpRequest
@@ -77,6 +78,7 @@
     (get-in job [:failure-diagnostics :status])
     (assoc "failureStatus" (long (get-in job [:failure-diagnostics :status])))
     (:output job) (assoc "outputJson" (json/write-str (:output job)))
+    (:operation-kind job) (assoc "operationKind" (name (:operation-kind job)))
     (:requester-subject job) (assoc "requesterSubject" (:requester-subject job))
     (:requester-email job) (assoc "requesterEmail" (:requester-email job))
     (:requester-membership-version job)
@@ -107,6 +109,8 @@
                  (assoc :status (long (get data "failureStatus")))))
         (get data "outputJson")
         (assoc :output (json/read-str (get data "outputJson") :key-fn keyword))
+        (get data "operationKind")
+        (assoc :operation-kind (keyword (get data "operationKind")))
         (get data "requesterSubject")
         (assoc :requester-subject (get data "requesterSubject"))
         (get data "requesterEmail")
@@ -171,7 +175,46 @@
                             {"content-type" content-type})]
                     signer (conj (Storage$SignUrlOption/signWith signer)))]
       (str (.signUrl storage blob expires-seconds TimeUnit/SECONDS
-                     (into-array Storage$SignUrlOption options))))))
+                     (into-array Storage$SignUrlOption options)))))
+  preview/AssetStore
+  (put-asset! [_ operation-id asset-id size bytes]
+    (let [limit (if (= :thumbnail size)
+                  preview/max-thumbnail-bytes
+                  preview/max-full-image-bytes)]
+      (when-not (and (preview/valid-asset-id? asset-id)
+                     (contains? #{:thumbnail :full} size)
+                     (bytes? bytes)
+                     (<= (alength ^bytes bytes) limit))
+        (throw (errors/raise! "Preview asset is invalid or too large"
+                              {:type ::invalid-preview-asset
+                               :limit limit})))
+      (let [object-name (str "previews/" operation-id "/assets/"
+                             asset-id "-" (name size) ".png")
+            blob (-> (BlobInfo/newBuilder bucket object-name)
+                     (.setContentType "image/png")
+                     (.setCacheControl "no-store")
+                     (.build))]
+        (.create storage blob bytes (make-array Storage$BlobTargetOption 0))
+        {:asset-id asset-id :size size})))
+  (get-asset [_ operation-id asset-id size]
+    (when (and (preview/valid-asset-id? asset-id)
+               (contains? #{:thumbnail :full} size))
+      (let [object-name (str "previews/" operation-id "/assets/"
+                             asset-id "-" (name size) ".png")
+            ^Blob blob (.get storage bucket object-name
+                             (make-array
+                              com.google.cloud.storage.Storage$BlobGetOption
+                              0))]
+        (when blob
+          (let [limit (if (= :thumbnail size)
+                        preview/max-thumbnail-bytes
+                        preview/max-full-image-bytes)]
+            (when (> (.getSize blob) limit)
+              (throw (errors/raise! "Stored preview asset is too large"
+                                    {:type ::invalid-preview-asset
+                                     :limit limit})))
+            {:bytes (.getContent blob (make-array Blob$BlobSourceOption 0))
+             :content-type "image/png"}))))))
 
 (defrecord CloudTaskQueue [^CloudTasksClient client project region queue-name
                            dispatcher-url dispatcher-service-account]
@@ -551,14 +594,21 @@
           month (billing-month clock)
           day-ref (.document orchestration (str "submissions-" day))
           budget-ref (.document orchestration (str "budget-" month))
-          candidate {:id job-id :state :queued :attempt 1
-                     :request-object request-object
-                     :requester-subject (:requesterSubject request)
-                     :requester-email (:requesterEmail request)
-                     :requester-membership-version
-                     (:requesterMembershipVersion request)
-                     :created-at now :updated-at now
-                     :expires-at (+ now (* 90 24 60 60 1000))}
+          candidate (cond->
+                     {:id job-id :state :queued :attempt 1
+                      :request-object request-object
+                      :requester-subject (:requesterSubject request)
+                      :requester-email (:requesterEmail request)
+                      :requester-membership-version
+                      (:requesterMembershipVersion request)
+                      :created-at now :updated-at now
+                      :expires-at
+                      (+ now (* 1000
+                                (if (lifecycle/preview-request? request)
+                                  lifecycle/preview-retention-seconds
+                                  (* 90 24 60 60))))}
+                      (lifecycle/preview-request? request)
+                      (assoc :operation-kind :preview))
           result
           (try
             (transaction!
@@ -1029,7 +1079,10 @@
             (env-long "AGG_RENDER_RESERVATION_MINOR_UNITS"
                       lifecycle/default-render-reservation-minor-units)
             :member-directory (:member-directory auth-dependencies)})
-          job-dependencies {:upload-signer store :job-service service}]
+          job-dependencies {:upload-signer store
+                            :job-service service
+                            :preview-job-service service
+                            :preview-asset-store store}]
       (if auth-enabled?
         (assoc (merge job-dependencies auth-dependencies)
                :log-store log-store

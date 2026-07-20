@@ -113,7 +113,7 @@
      "selection.textContent='Choose a video file';reportDiagnostic('error','drive','unknown');return;}"
      "document.getElementById('source-video-file-id').value=file.id;"
      "selection.textContent=file.name||'Selected video';"
-     "reportDiagnostic('selected','drive','selected');picker.setVisible(false);syncRequest(false);}"
+     "reportDiagnostic('selected','drive','selected');picker.setVisible(false);invalidatePreview();syncRequest(false);}"
      "if(data.action===google.picker.Action.CANCEL){picker.setVisible(false);reportDiagnostic('cancelled','drive','unknown');}}"
      "let picker=null,pickerRequested=false,pickerLoading=false,pickerLoadTimer=null,pickerLoadAttempt=0;"
      "function failPickerInitialization(attempt){"
@@ -256,10 +256,6 @@
                 "\" hx-swap=\"outerHTML\">Retry</button>"))
          "</article>")))
 
-(defn preview-fragment [base64-png]
-  (str "<figure id=\"preview-result\"><img alt=\"Midpoint preview\" src=\"data:image/png;base64,"
-       base64-png "\"></figure>"))
-
 (defn preview-failure-fragment
   [{:keys [category request-id status failureCode line stage elapsedMs timeoutMs
            retryable]}]
@@ -282,6 +278,97 @@
        (when retryable
          "<dt>Retryable</dt><dd>Yes</dd>")
        "</dl></article>"))
+
+(defn preview-operation-fragment
+  [{:keys [id state progressPercent error result]} generation]
+  (let [path (str "/ui/previews/" id "?generation="
+                  (url-value generation))]
+    (cond
+      (= "succeeded" state)
+      (if (seq (:sections result))
+        (let [assets (into {} (map (juxt :id identity)) (:assets result))
+              image-button
+              (fn [reference alt checkerboard?]
+                (str "<button type=\"button\" class=\"preview-open\" data-full=\""
+                     (escape-html (:fullUrl reference)) "\" data-alt=\""
+                     (escape-html alt) "\" aria-label=\"Open larger image: "
+                     (escape-html alt) "\"><img loading=\"eager\" src=\""
+                     (escape-html (:thumbnailUrl reference)) "\" alt=\""
+                     (escape-html alt) "\""
+                     (when checkerboard? " class=\"checkerboard\"")
+                     "></button>"))
+              moment-html
+              (fn [section moment]
+                (let [asset (get assets (:frameRef moment))
+                      title (:title moment)
+                      subject (str (:name section) ", " title)]
+                  (str "<article class=\"preview-moment\"><h3>"
+                       (escape-html title) "</h3>"
+                       (case (:kind asset)
+                         "overlay"
+                         (str "<div class=\"preview-cell overlay-cell\"><span class=\"frame-role\">Overlay</span>"
+                              (image-button (:image asset)
+                                            (str subject ", transparent overlay")
+                                            true)
+                              "</div>")
+                         "source-final"
+                         (if (:merged asset)
+                           (str "<div class=\"preview-cell merged-cell\"><span class=\"frame-role\">Source and Final - identical</span>"
+                                (image-button (:source asset)
+                                              (str subject
+                                                   ", fitted source and identical final frame")
+                                              false)
+                                "</div>")
+                           (str "<div class=\"preview-cell\"><span class=\"frame-role\">Source</span>"
+                                (image-button (:source asset)
+                                              (str subject ", fitted source frame")
+                                              false)
+                                "</div><div class=\"preview-cell\"><span class=\"frame-role\">Final</span>"
+                                (image-button (:final asset)
+                                              (str subject ", final composited frame")
+                                              false)
+                                "</div>"))))))]
+          (str "<article id=\"preview-result\" class=\"preview-gallery\" data-preview-operation=\""
+               (escape-html id) "\" data-preview-generation=\""
+               (escape-html generation) "\" aria-live=\"polite\"><header><h2>Preview ready</h2>"
+               "<p class=\"muted\">Key moments are ordered on the exact 25 fps output timeline.</p></header>"
+               (apply str
+                      (for [section (:sections result)]
+                        (str "<section class=\"trace-preview\" aria-labelledby=\"trace-"
+                             (escape-html (:id section)) "\"><h2 id=\"trace-"
+                             (escape-html (:id section)) "\">"
+                             (escape-html (:name section)) "</h2>"
+                             "<div class=\"preview-scroll\"><div class=\"preview-moments\" style=\"--moment-count:"
+                             (count (:moments section)) "\">"
+                             (apply str (map #(moment-html section %)
+                                             (:moments section)))
+                             "</div></div></section>")))
+               "<dialog id=\"preview-dialog\" aria-labelledby=\"preview-dialog-title\"><div class=\"dialog-head\"><h2 id=\"preview-dialog-title\">Larger preview image</h2><button type=\"button\" class=\"preview-dialog-close\">Close</button></div><img alt=\"\"></dialog>"
+               "</article>"))
+        (str "<article id=\"preview-result\" class=\"preview-empty\" role=\"status\" data-preview-generation=\""
+             (escape-html generation) "\"><h2>No preview moments</h2><p>The normalized traces contain no renderable frames.</p></article>"))
+
+      (contains? #{"failed" "cancelled"} state)
+      (str "<article id=\"preview-result\" class=\"preview-error\" role=\"alert\" data-preview-generation=\""
+           (escape-html generation) "\"><h2>Preview failed</h2><p><code>"
+           (escape-html (or (:code error) "preview_cancelled")) "</code></p>"
+           (when (:stage error)
+             (str "<p>Stage: " (escape-html (title-case (:stage error))) "</p>"))
+           (when (:retryable error) "<p>You can retry this preview.</p>")
+           "</article>")
+
+      :else
+      (str "<article id=\"preview-result\" class=\"preview-pending\" role=\"status\" aria-live=\"polite\" data-preview-operation=\""
+           (escape-html id) "\" data-preview-generation=\""
+           (escape-html generation) "\" hx-get=\"" (escape-html path)
+           "\" hx-trigger=\"load delay:1s\" hx-swap=\"outerHTML\"><h2>Preparing preview</h2><p>"
+           (escape-html (title-case state)) " - " (long progressPercent)
+           "%</p><progress max=\"100\" value=\"" (long progressPercent)
+           "\">" (long progressPercent) "%</progress></article>"))))
+
+(defn preview-stale-fragment [generation]
+  (str "<article id=\"preview-result\" class=\"preview-stale\" role=\"status\" data-preview-generation=\""
+       (escape-html generation) "\"><h2>Preview expired</h2><p>Start a new preview to refresh these images.</p></article>"))
 
 (defn page [{:keys [user csrf picker-config tokens members logs-enabled?]}]
   (let [csrf-headers (escape-html
@@ -316,10 +403,10 @@
      ".button.primary,button.primary{background:#4374c5;color:white;box-shadow:0 .35rem .8rem #4374c533}.button:hover,button:hover{filter:brightness(.97)}"
      ".status{min-height:1.4rem;color:#5c6b82;font-size:.9rem}.status.error{color:#b42318}.status.success{color:#16734a}"
      "details summary{cursor:pointer;font-weight:800;color:#315b9d}.raw-panel textarea{min-height:18rem}.raw-actions{display:flex;gap:.65rem;flex-wrap:wrap;margin-top:.7rem}.json-errors{white-space:pre-line}.field-reference{margin:.75rem 0 0;padding-left:1.25rem}.field-reference li{margin:.35rem 0}.field-reference code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}"
-     ".results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.results figure{margin:0}.results img{max-width:100%;border:1px solid #d9e1ed;border-radius:.75rem;background:#eef2f7}"
+     ".results{display:block;min-width:0}.results img{max-width:100%;border:1px solid #d9e1ed;border-radius:.75rem;background:#eef2f7}.preview-gallery{min-width:0}.trace-preview{background:white;border:1px solid #e1e7f0;border-radius:1rem;padding:1rem;margin:1rem 0;min-width:0}.preview-scroll{max-width:100%;overflow-x:auto}.preview-moments{display:grid;grid-template-columns:repeat(var(--moment-count),minmax(13rem,1fr));grid-template-rows:auto auto auto;gap:.8rem;min-width:max-content}.preview-moment{display:grid;grid-template-rows:subgrid;grid-row:1/span 3;gap:.65rem;min-width:0}.preview-moment h3{font-size:.9rem;overflow-wrap:anywhere;margin:0}.preview-cell{min-width:0}.preview-cell .preview-open{display:block;width:100%;padding:.3rem;background:#f8fafc}.preview-cell img{display:block;width:100%;height:auto}.frame-role{display:block;font-size:.75rem;font-weight:800;letter-spacing:.04em;margin-bottom:.35rem}.merged-cell{grid-row:span 2}.checkerboard{background-color:#fff;background-image:linear-gradient(45deg,#d9e1ed 25%,transparent 25%),linear-gradient(-45deg,#d9e1ed 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#d9e1ed 75%),linear-gradient(-45deg,transparent 75%,#d9e1ed 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}.preview-pending,.preview-error,.preview-stale,.preview-empty{background:white;border:1px solid #e1e7f0;border-radius:1rem;padding:1rem;margin:1rem 0}.preview-pending progress{width:min(24rem,100%)}#preview-dialog{width:min(92vw,72rem);max-height:92vh;border:0;border-radius:1rem;padding:1rem}#preview-dialog::backdrop{background:#10213acc}#preview-dialog img{display:block;max-width:100%;max-height:78vh;margin:auto}.dialog-head{display:flex;justify-content:space-between;align-items:center;gap:1rem}.dialog-head h2{margin:0}"
      ".job{margin:0}.notice{border:2px solid #d8a94d;padding:1rem;overflow-wrap:anywhere}.notice code{display:block;margin-top:.6rem;white-space:pre-wrap}"
      ".inline{display:inline}footer{margin-top:2rem;color:#6c7a90}footer a{color:#315b9d;margin-right:.75rem}"
-     "@media(max-width:680px){.shell{padding:1rem .8rem 3rem}header,.drive-card,.section-head{display:block}.field-grid,.results{grid-template-columns:1fr}.drive-actions{margin-top:1rem}}"
+     "@media(max-width:680px){.shell{padding:1rem .8rem 3rem}header,.drive-card,.section-head{display:block}.field-grid{grid-template-columns:1fr}.drive-actions{margin-top:1rem}.preview-scroll{overflow:visible}.preview-moments{display:block;min-width:0}.preview-moment{display:block;border-top:1px solid #e1e7f0;padding:1rem 0}.preview-moment:first-child{border-top:0;padding-top:0}.preview-cell{margin-top:.75rem}}"
      "</style>"
      "</head><body hx-headers=\"" csrf-headers "\">"
      "<div class=\"shell\"><header><div><div class=\"eyebrow\">Telemetry overlays for video</div><h1>Compose your overlay</h1><p class=\"muted\">Configure a render, preview it, then send the finished overlay to Drive. Finished renders use durable jobs, including full-length sections.</p></div>"
@@ -358,7 +445,7 @@
      "function dateParts(instant,zone){const parts=new Intl.DateTimeFormat('en-US',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(new Date(instant));return Object.fromEntries(parts.filter(part=>part.type!=='literal').map(part=>[part.type,Number(part.value)]));}"
      "function localToIso(input){const text=value(input);if(!text)throw new Error(input+' is required');const [date,time]=text.split('T'),dateValues=date.split('-').map(Number),timeValues=time.split(':');if(dateValues.length!==3||timeValues.length<2)throw new Error('Enter a valid date and time');const seconds=Number(timeValues[2]||0),wholeSeconds=Math.trunc(seconds),milliseconds=Math.round((seconds-wholeSeconds)*1000),target=Date.UTC(dateValues[0],dateValues[1]-1,dateValues[2],Number(timeValues[0]),Number(timeValues[1]),wholeSeconds)+milliseconds;let guess=target;for(let i=0;i<4;i++){const parts=dateParts(guess,activeZone()),shown=Date.UTC(parts.year,parts.month-1,parts.day,parts.hour,parts.minute,parts.second)+milliseconds;guess+=target-shown;}const result=new Date(guess);if(Number.isNaN(result.getTime()))throw new Error('Enter a valid date and time');return result.toISOString();}"
      "function isoToLocal(instant){const date=new Date(instant);if(Number.isNaN(date.getTime()))throw new Error('Invalid ISO-8601 timestamp: '+instant);const parts=dateParts(date.getTime(),activeZone()),milliseconds=date.getUTCMilliseconds(),fraction=milliseconds?'.'+String(milliseconds).padStart(3,'0'):'';return [parts.year,String(parts.month).padStart(2,'0'),String(parts.day).padStart(2,'0')].join('-')+'T'+[String(parts.hour).padStart(2,'0'),String(parts.minute).padStart(2,'0'),String(parts.second).padStart(2,'0')].join(':')+fraction;}"
-     "const fileBackedValues=Object.create(null);function contentValue(id){return Object.prototype.hasOwnProperty.call(fileBackedValues,id)?String(fileBackedValues[id]).trim():value(id);}function setFileBackedValue(id,content){fileBackedValues[id]=content;byId(id).value=content;}function clearFileBackedValue(id){delete fileBackedValues[id];}"
+     "const fileBackedValues=Object.create(null);function contentValue(id){return Object.prototype.hasOwnProperty.call(fileBackedValues,id)?String(fileBackedValues[id]).trim():value(id);}function setFileBackedValue(id,content){fileBackedValues[id]=content;byId(id).value=content;invalidatePreview();}function clearFileBackedValue(id){delete fileBackedValues[id];}"
      "function required(id,label){const result=contentValue(id);if(!result)throw new Error(label+' is required');return result;}"
      "function buildRequest(){const request={telemetryFormat:required('telemetry-format','Telemetry format'),telemetry:required('telemetry','Telemetry'),preset:required('preset','Render preset'),telemetrySyncAt:localToIso('telemetry-sync-at'),cameraSyncAt:localToIso('camera-sync-at'),sectionStartAt:localToIso('section-start-at'),sectionEndAt:localToIso('section-end-at')};const source=value('source-video-file-id');if(source){request.sourceVideo={fileId:source};request.outputFormat=value('output-format');request.fitMode=value('fit-mode');request.audioMode=value('audio-mode');}if(byId('spo2-enabled').checked){request.spo2={format:'oxiwear-spo2-csv',telemetry:required('spo2-telemetry','SpO₂ telemetry')};}if(byId('timer-enabled').checked){request.timer={startAt:localToIso('timer-start-at'),endAt:localToIso('timer-end-at')};}if(byId('watermark-enabled').checked){request.watermark={contentBase64:required('watermark-content','Watermark file')};}return request;}"
      "const requestFields=['telemetryFormat','telemetry','preset','telemetrySyncAt','cameraSyncAt','sectionStartAt','sectionEndAt','spo2','timer','watermark','sourceVideo','outputFormat','fitMode','audioMode'],requiredRequestFields=['telemetryFormat','telemetry','preset','telemetrySyncAt','cameraSyncAt','sectionStartAt','sectionEndAt'],isoPattern=/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$/;"
@@ -377,10 +464,12 @@
      "readTelemetryFile();readTextFile('spo2-file','spo2-telemetry','spo2-status');"
      "function updateTelemetryAccept(){telemetryFile.accept=telemetryFormat.value==='garmin-fit'?'.fit,application/octet-stream':'.csv,text/csv';}telemetryFormat.addEventListener('change',()=>{clearTelemetryFile();updateTelemetryAccept();syncRequest(false);});updateTelemetryAccept();"
      "byId('watermark-content')||(()=>{const input=document.createElement('input');input.id='watermark-content';input.type='hidden';form.appendChild(input);})();readBinaryFile('watermark-file','watermark-content','watermark-status');"
-     "function applyRequest(request){if(!request||typeof request!=='object'||Array.isArray(request))throw new Error('JSON must be an object');['telemetryFormat','preset','outputFormat','fitMode','audioMode'].forEach(key=>{if(request[key]!==undefined&&byId(key.replace(/[A-Z]/g,letter=>'-'+letter.toLowerCase())))byId(key.replace(/[A-Z]/g,letter=>'-'+letter.toLowerCase())).value=request[key];});byId('source-video-file-id').value=request.sourceVideo?.fileId||'';byId('timezone').value='local';[['telemetrySyncAt','telemetry-sync-at'],['cameraSyncAt','camera-sync-at'],['sectionStartAt','section-start-at'],['sectionEndAt','section-end-at']].forEach(([key,id])=>{byId(id).value=request[key]?isoToLocal(request[key]):'';});clearFileBackedValue('telemetry');byId('telemetry').value=request.telemetry||'';byId('telemetry-file').value='';show(byId('telemetry-status'),request.telemetry?'Loaded from JSON.':'');const hasSpo2=!!request.spo2;byId('spo2-enabled').checked=hasSpo2;refreshOptional('spo2-enabled','spo2-fields');clearFileBackedValue('spo2-telemetry');byId('spo2-telemetry').value=hasSpo2?(request.spo2.telemetry||''):'';show(byId('spo2-status'),hasSpo2?'Loaded from JSON.':'');const hasTimer=!!request.timer;byId('timer-enabled').checked=hasTimer;refreshOptional('timer-enabled','timer-fields');byId('timer-start-at').value=hasTimer?isoToLocal(request.timer.startAt):'';byId('timer-end-at').value=hasTimer?isoToLocal(request.timer.endAt):'';const hasWatermark=!!request.watermark;byId('watermark-enabled').checked=hasWatermark;refreshOptional('watermark-enabled','watermark-fields');byId('watermark-file').value='';clearFileBackedValue('watermark-content');byId('watermark-content').value=hasWatermark?(request.watermark.contentBase64||''):'';show(byId('watermark-status'),hasWatermark?'Loaded from JSON.':'');updateTelemetryAccept();writeRequest(request);show(jsonStatus,'JSON applied to the form.','success');show(status,'Ready to preview or submit.','success');}"
+     "function applyRequest(request){if(!request||typeof request!=='object'||Array.isArray(request))throw new Error('JSON must be an object');['telemetryFormat','preset','outputFormat','fitMode','audioMode'].forEach(key=>{if(request[key]!==undefined&&byId(key.replace(/[A-Z]/g,letter=>'-'+letter.toLowerCase())))byId(key.replace(/[A-Z]/g,letter=>'-'+letter.toLowerCase())).value=request[key];});byId('source-video-file-id').value=request.sourceVideo?.fileId||'';byId('timezone').value='local';[['telemetrySyncAt','telemetry-sync-at'],['cameraSyncAt','camera-sync-at'],['sectionStartAt','section-start-at'],['sectionEndAt','section-end-at']].forEach(([key,id])=>{byId(id).value=request[key]?isoToLocal(request[key]):'';});clearFileBackedValue('telemetry');byId('telemetry').value=request.telemetry||'';byId('telemetry-file').value='';show(byId('telemetry-status'),request.telemetry?'Loaded from JSON.':'');const hasSpo2=!!request.spo2;byId('spo2-enabled').checked=hasSpo2;refreshOptional('spo2-enabled','spo2-fields');clearFileBackedValue('spo2-telemetry');byId('spo2-telemetry').value=hasSpo2?(request.spo2.telemetry||''):'';show(byId('spo2-status'),hasSpo2?'Loaded from JSON.':'');const hasTimer=!!request.timer;byId('timer-enabled').checked=hasTimer;refreshOptional('timer-enabled','timer-fields');byId('timer-start-at').value=hasTimer?isoToLocal(request.timer.startAt):'';byId('timer-end-at').value=hasTimer?isoToLocal(request.timer.endAt):'';const hasWatermark=!!request.watermark;byId('watermark-enabled').checked=hasWatermark;refreshOptional('watermark-enabled','watermark-fields');byId('watermark-file').value='';clearFileBackedValue('watermark-content');byId('watermark-content').value=hasWatermark?(request.watermark.contentBase64||''):'';show(byId('watermark-status'),hasWatermark?'Loaded from JSON.':'');updateTelemetryAccept();writeRequest(request);invalidatePreview();show(jsonStatus,'JSON applied to the form.','success');show(status,'Ready to preview or submit.','success');}"
      "byId('apply-json').addEventListener('click',()=>{try{const request=JSON.parse(raw.value),errors=validateRequest(request);if(errors.length){show(jsonStatus,errors.map((error,index)=>(index+1)+'. '+error).join('\\n'),'error');return;}applyRequest(request);}catch(error){show(jsonStatus,error.message,'error');}});byId('copy-json').addEventListener('click',()=>{const text=syncRequest(false)||raw.value;navigator.clipboard?navigator.clipboard.writeText(text).then(()=>show(jsonStatus,'Generated JSON copied.','success')):show(jsonStatus,'Copy is unavailable in this browser.');});"
+     "function newPreviewGeneration(){return crypto.randomUUID?crypto.randomUUID():String(Date.now())+'-'+Math.random();}let previewGeneration=newPreviewGeneration();function invalidatePreview(){previewGeneration=newPreviewGeneration();const result=byId('preview-result');if(result?.dataset?.previewOperation){result.outerHTML='<article id=\"preview-result\" class=\"preview-stale\" role=\"status\"><h2>Preview settings changed</h2><p>Start a new preview for the current settings.</p></article>';show(status,'Preview settings changed.','');}}"
      "function previewTrigger(event){const trigger=event.detail?.elt||event.target;return !!trigger?.matches?.('[hx-post=\"/ui/preview\"]');}function previewTarget(event){const target=event.detail?.target||event.target;return target?.id==='preview-result'?target:null;}"
-     "form.addEventListener('input',event=>{if(event.target.id==='raw-json'||event.target.type==='file')return;clearFileBackedValue(event.target.id);syncRequest(false);});document.body.addEventListener('htmx:configRequest',event=>{if(!form.contains(event.target))return;const text=syncRequest(true);if(!text){event.preventDefault();return;}event.detail.parameters.request=text;if(previewTrigger(event))show(status,'Previewing…');});document.body.addEventListener('htmx:beforeRequest',event=>{if(previewTrigger(event))show(status,'Previewing…');});document.body.addEventListener('htmx:afterSwap',event=>{const target=previewTarget(event);if(!target)return;show(status,target.matches('.preview-error')?'Preview failed. See details below.':'Preview ready.',target.matches('.preview-error')?'error':'success');});"
+     "form.addEventListener('input',event=>{if(event.target.id==='raw-json'||event.target.type==='file')return;clearFileBackedValue(event.target.id);invalidatePreview();syncRequest(false);});document.body.addEventListener('htmx:configRequest',event=>{if(!form.contains(event.target))return;const text=syncRequest(true);if(!text){event.preventDefault();return;}event.detail.parameters.request=text;if(previewTrigger(event)){previewGeneration=newPreviewGeneration();event.detail.headers['X-Preview-Generation']=previewGeneration;show(status,'Preparing preview…');}});document.body.addEventListener('htmx:beforeSwap',event=>{const target=previewTarget(event);if(!target)return;const generation=event.detail.xhr?.getResponseHeader('X-Preview-Generation');if(generation&&generation!==previewGeneration)event.detail.shouldSwap=false;});document.body.addEventListener('htmx:afterSwap',event=>{const target=previewTarget(event);if(!target)return;if(target.matches('.preview-error'))show(status,'Preview failed. See details below.','error');else if(target.matches('.preview-pending'))show(status,'Preparing preview…');else if(target.matches('.preview-gallery'))show(status,'Preview ready.','success');});"
+     "let previewOpener=null;document.body.addEventListener('click',event=>{const open=event.target.closest?.('.preview-open');if(open){const dialog=byId('preview-dialog'),image=dialog?.querySelector('img');if(!dialog||!image)return;previewOpener=open;image.src=open.dataset.full;image.alt=open.dataset.alt;dialog.showModal();return;}if(event.target.closest?.('.preview-dialog-close'))byId('preview-dialog')?.close();});document.body.addEventListener('close',event=>{if(event.target.id==='preview-dialog'&&previewOpener){previewOpener.focus();previewOpener=null;}},true);"
      (picker-script picker-config)
      "})();</script></div></body></html>")))
 

@@ -171,6 +171,28 @@
     (is (str/includes? runbook "before encoder startup"))
     (is (str/includes? runbook "direct `run.app` URL is not a public fallback"))))
 
+(deftest preview-contract-publishes-the-async-gallery-migration
+  (let [openapi (slurp "docs/openapi.yaml")
+        readme (slurp "README.md")]
+    (doseq [contract ["/v1/previews/{previewId}:"
+                      "/v1/previews/{previewId}/images/{assetId}/{size}:"
+                      "PreviewOperation"
+                      "PreviewGallery"
+                      "PreviewTraceSection"
+                      "PreviewFrameAsset"
+                      "operationKind: {const: key-moment-gallery}"
+                      "schema: {const: no-store}"
+                      "synchronous `image/png` midpoint response"]]
+      (testing contract
+        (is (str/includes? openapi contract))))
+    (doseq [migration ["breaking API change"
+                       "Poll its `statusUrl`"
+                       "authenticated image retrieval"
+                       "retained for 24 hours"
+                       "narrow screens use vertical moment cards"]]
+      (testing migration
+        (is (str/includes? readme migration))))))
+
 (deftest production-release-deploys-main-push-and-is-domain-aware
   (let [workflow (slurp ".github/workflows/deploy-production.yml")]
     (is (str/includes? workflow "push:"))

@@ -81,15 +81,34 @@ GitHub issue #3.
 
 ## Telemetry preview and overlay API
 
-`POST /v1/preview` returns `image/png`; `POST /v1/overlay` returns a seekable
-`video/quicktime` ProRes 4444 overlay with AAC heartbeat audio. The synchronous
-route is limited to a one-second production diagnostic. Longer requests return
-HTTP 422 before rendering and identify `POST /v1/jobs` as the supported path.
-This keeps every public browser and API call same-origin while avoiding Firebase
-Hosting's 60-second backend limit. A preview may include a verified Drive
-source. A selected-source preview decodes and composites only its midpoint
-frame and has a 45-second application deadline. Full compositing and every
-production-length render use durable jobs.
+`POST /v1/preview` starts an authenticated asynchronous key-moment gallery and
+returns HTTP 202. Poll its `statusUrl` until `state` is `succeeded`, then read the
+structured `result`. This is a breaking API change: clients that expected the
+former synchronous midpoint `image/png` response must switch to operation
+polling and authenticated image retrieval.
+
+The result enumerates one generic section per rendered telemetry trace. Each
+section contains chronological, actual-frame moments for video and trace
+boundaries plus up to three prominent minima and maxima. Coincident events share
+one frame reference and combine labels. Assets are deduplicated across sections.
+Overlay-only requests expose checkerboard-ready transparent Overlay images.
+Selected-source requests expose fitted Source and exact production-composited
+Final images, merging them when the complete overlay is transparent. Thumbnail
+and full-size PNG URLs are opaque, authenticated, owner-bound, bounded,
+`Cache-Control: no-store`, and retained for 24 hours.
+
+The browser renders eager responsive thumbnails. Desktop aligns Source and Final
+rows across moment columns; narrow screens use vertical moment cards. A native
+dialog provides keyboard-accessible larger images and restores focus when
+closed. Starting a new preview or editing its request invalidates the old result.
+The source video remains streamed and unpersisted; all unique requested frames
+are batch-decoded in one worker workflow.
+
+`POST /v1/overlay` still returns a seekable `video/quicktime` ProRes 4444 overlay
+with AAC heartbeat audio. That synchronous route is limited to a one-second production diagnostic.
+Longer requests return HTTP 422 before rendering and
+identify `POST /v1/jobs` as the supported path. Full production renders use
+durable jobs.
 
 ```json
 {

@@ -7,6 +7,7 @@
             [agg.renderer.main :as renderer]
             [clojure.data.json :as json]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is]])
   (:import (java.io OutputStream)
            (java.nio.file Files OpenOption)))
@@ -34,7 +35,7 @@
               "\"message\":\"Renderer smoke job completed\"}\n")
          (with-out-str (renderer/-main)))))
 
-(deftest polar-midpoint-preview-is-served-over-http
+(deftest polar-preview-operation-is-accepted-over-http
   (let [port (available-port)
         server (api/start! port)
         body (json/write-str
@@ -46,16 +47,17 @@
                :sectionStartAt "2026-07-17T09:00:00Z"
                :sectionEndAt "2026-07-17T09:00:02Z"})]
     (try
-      (let [response (test-http/send-bytes!
+      (let [response (test-http/send-string!
                       :post (str "http://127.0.0.1:" port "/v1/preview")
                       body {"Content-Type" "application/json"})
-            png (.body response)]
-        (is (= 200 (.statusCode response)))
-        (is (= "image/png"
+            operation (json/read-str (.body response) :key-fn keyword)]
+        (is (= 202 (.statusCode response)))
+        (is (= "application/json; charset=utf-8"
                (some-> response .headers (.firstValue "content-type")
                        (.orElse nil))))
-        (is (= [137 80 78 71 13 10 26 10]
-               (mapv #(bit-and 0xff %) (take 8 png)))))
+        (is (= "queued" (:state operation)))
+        (is (= "key-moment-gallery" (:operationKind operation)))
+        (is (str/starts-with? (:statusUrl operation) "/v1/previews/")))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
@@ -65,9 +67,7 @@
         (reify frames/FrameRenderer
           (stream-frames! [_ _render-spec output]
             (.write ^OutputStream output (byte-array [1 2 3 4]))
-            {:frame-count 50 :buffer-count 1})
-          (render-preview! [_ _render-spec _output]
-            (throw (UnsupportedOperationException.))))
+            {:frame-count 50 :buffer-count 1}))
         video-encoder
         (reify media/VideoEncoder
           (encode! [_ _render-spec _audio-path output-path write-frames!]
