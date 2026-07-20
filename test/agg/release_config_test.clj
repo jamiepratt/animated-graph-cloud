@@ -424,7 +424,8 @@
                   "/v1/jobs/{jobId}/retry:" "/v1/uploads:" "/v1/tokens:"
                   "/v1/tokens/{tokenId}/revoke:" "/v1/admin/members:"
                   "/v1/admin/members/revoke:" "/v1/auth/login/start:"
-                  "/v1/auth/login/callback:" "/v1/drive/picker:"
+                  "/v1/auth/login/callback:" "/v1/auth/logout:"
+                  "/v1/drive/picker:"
                   "/v1/drive/picker/diagnostic:"]]
       (testing path (is (str/includes? openapi path))))
     (doseq [contract ["RenderRequest:" "Job:" "Error:" "bearerAuth:"
@@ -439,6 +440,7 @@
     (is (not (str/includes? openapi "/v1/auth/drive/callback:")))
     (doseq [behavior ["operationId: startGoogleLogin"
                       "operationId: finishGoogleLogin"
+                      "operationId: logoutBrowserSession"
                       "operationId: showGoogleDrivePicker"
                       "name: code" "name: state" "security: []"
                       "description: Redirect to Google OAuth authorization."

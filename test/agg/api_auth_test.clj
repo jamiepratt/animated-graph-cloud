@@ -169,6 +169,42 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest authenticated-user-can-log-out
+  (let [port (available-port)
+        {:keys [system session]} (auth-fixture)
+        browser-cookie (auth/issue-browser-cookie system {:session session})
+        cookie (str "__session=" browser-cookie "; agg_session=" session)
+        server (start-api! port {:auth-system system})]
+    (try
+      (let [authenticated (get! port "/" {"Cookie" cookie})
+            rendered-csrf (second (re-find #"name=\"csrf\" value=\"([^\"]+)\""
+                                           (.body authenticated)))
+            logout (test-http/send-string!
+                    :post (str "http://127.0.0.1:" port "/v1/auth/logout")
+                    (str "csrf=" rendered-csrf)
+                    {"Cookie" cookie
+                     "Content-Type" "application/x-www-form-urlencoded"})
+            signed-out (get! port "/" {})
+            protected (get! port "/v1/drive/picker" {})
+            clear-cookies (set (.allValues (.headers logout) "Set-Cookie"))]
+        (is (= 200 (.statusCode authenticated)))
+        (is (re-find #"<form[^>]+method=\"post\"[^>]+action=\"/v1/auth/logout\""
+                     (.body authenticated)))
+        (is (re-find #">Log out</button>" (.body authenticated)))
+        (is (string? rendered-csrf))
+        (is (= 302 (.statusCode logout)))
+        (is (= "/" (.orElse (.firstValue (.headers logout) "Location") nil)))
+        (is (= #{"__session=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax"
+                 "agg_session=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax"}
+               clear-cookies))
+        (is (re-find #"Continue with Google" (.body signed-out)))
+        (is (not (re-find #"Signed in as" (.body signed-out))))
+        (is (= 401 (.statusCode protected)))
+        (is (= {"error" "authentication_required"}
+               (json/read-str (.body protected)))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest combined-login-callback-returns-safe-categorized-errors
   (doseq [{:keys [label oauth options expected-status expected-body category
                   expected-reason]
