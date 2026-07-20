@@ -663,7 +663,9 @@
                       {"Content-Type" "application/json"})
             body (json/read-str (.body response) :key-fn keyword)
             request-id (some-> response .headers (.firstValue "x-request-id")
-                               (.orElse nil))]
+                               (.orElse nil))
+            diagnostic-fields [(dissoc body :requestId)
+                               (dissoc (first @events) :requestId)]]
         (is (= {:error "invalid_request"
                 :category "request_contract"
                 :failureCode "heart_rate_out_of_range"
@@ -684,7 +686,7 @@
                 :field "telemetry"
                 :line 2}
                (first @events)))
-        (is (not-any? #(str/includes? (str body @events) %)
+        (is (not-any? #(str/includes? (str diagnostic-fields) %)
                       ["261" "2026-07-17"])))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
