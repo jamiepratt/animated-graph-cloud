@@ -8,11 +8,12 @@ Alpha Compose is the public product. The `animated-graph-cloud` service accepts 
 - The API is a scale-to-zero Cloud Run service; rendering uses Cloud Run Jobs.
 - Supported cloud resources live in Warsaw (`europe-central2`).
 - Firestore is Native mode in `europe-central2`.
-- User Drive access uses `openid email profile drive.file`; broad Drive scopes are forbidden.
+- One PKCE-protected Google flow atomically establishes identity, active membership, and restricted `openid email profile drive.file` access before issuing a browser session; broad Drive scopes are forbidden.
 - The configured owner controls Firestore-backed memberships; revocation invalidates every access path and active job.
 - Runtime and CI identities use ambient credentials or Workload Identity Federation. Service-account key files are forbidden.
 - Temporary cloud objects expire after 24 hours. Job metadata expires after 90 days.
 - Source video is streamed directly from Google Drive into FFmpeg only for durable compositing jobs; it is never persisted by the service.
+- Every durable submission preflights its Drive delivery grant before job creation, including transparent overlay jobs without a source video.
 - Rendering emits a standard seekable MOV with ProRes 4444 alpha, 25 fps, and heartbeat audio.
 - Logs exclude email addresses, Google subjects, filenames, tokens, telemetry values, Drive credentials, and signed URLs.
 - Safe structured observability events from the API and renderer are copied best-effort to the Firestore `observability-logs` collection for 30 days. Owner and admin sessions can inspect the latest 100 events at `/ui/admin/logs` with severity/component filters and formatted or raw JSON views.

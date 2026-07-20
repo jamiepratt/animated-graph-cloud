@@ -28,7 +28,7 @@ tags:
   - name: Administration
     description: Owner- and admin-managed membership management.
   - name: Browser authorization
-    description: Google login, optional Drive authorization, and Drive Picker browser redirects.
+    description: Atomic Google identity and restricted Drive authorization, plus Drive Picker browser access.
 paths:
   /health:
     get:
@@ -50,15 +50,21 @@ paths:
     get:
       operationId: startGoogleLogin
       tags: [Browser authorization]
-      summary: Start approved-user Google sign-in.
-      description: Starts a PKCE-protected login flow and stores signed OAuth state in the Firebase-compatible `__session` HttpOnly cookie.
+      summary: Start combined Google identity and Drive authorization.
+      description: Starts a PKCE-protected offline flow for exactly `openid email profile drive.file` and stores signed OAuth state in the Firebase-compatible `__session` HttpOnly cookie. Routine login does not force consent. A signed recovery marker created after an unusable grant enables consent recovery.
       security: []
+      parameters:
+        - name: recovery
+          in: query
+          required: false
+          description: Requests recovery consent only when accompanied by the server-issued signed recovery cookie.
+          schema: {type: boolean, default: false}
       responses:
         "302":
           description: Redirect to Google OAuth authorization.
           headers:
             Location:
-              description: Google OAuth authorization URL requesting `openid email profile`.
+              description: Google OAuth authorization URL requesting exactly `openid email profile drive.file`, PKCE, and offline access.
               schema: {type: string, format: uri}
             Set-Cookie:
               description: Signed Firebase-compatible `__session` cookie containing short-lived OAuth state.
@@ -67,8 +73,8 @@ paths:
     get:
       operationId: finishGoogleLogin
       tags: [Browser authorization]
-      summary: Finish approved-user Google sign-in.
-      description: Validates the query state against signed OAuth state in the `__session` cookie and allowlists the Google identity.
+      summary: Finish combined Google identity and Drive authorization.
+      description: Validates signed state and PKCE, verifies identity and membership, rejects unexpected scopes, obtains or validates an encrypted refresh token, reuses or creates the output folder, persists the grant, and issues the browser session last.
       security: []
       parameters:
         - $ref: "#/components/parameters/OAuthCode"
@@ -99,52 +105,12 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Error"}
-  /v1/auth/drive/start:
-    get:
-      operationId: startGoogleDriveAuthorization
-      tags: [Browser authorization]
-      summary: Start optional Google Drive authorization.
-      description: Starts a consent flow requesting only `drive.file`, with offline access for selected inputs and created outputs.
-      security:
-        - sessionCookie: []
-      responses:
-        "302":
-          description: Redirect to Google OAuth authorization.
-          headers:
-            Location:
-              description: Google OAuth authorization URL requesting only `drive.file`.
-              schema: {type: string, format: uri}
-            Set-Cookie:
-              description: Signed Firebase-compatible `__session` cookie containing short-lived OAuth state tied to the signed-in user.
-              schema: {type: string}
-        "401": {$ref: "#/components/responses/AuthenticationRequired"}
-  /v1/auth/drive/callback:
-    get:
-      operationId: finishGoogleDriveAuthorization
-      tags: [Browser authorization]
-      summary: Finish optional Google Drive authorization.
-      description: Validates OAuth state, requires exactly `drive.file`, encrypts the refresh token, and ensures the output folder.
-      security: []
-      parameters:
-        - $ref: "#/components/parameters/OAuthCode"
-        - $ref: "#/components/parameters/OAuthState"
-      responses:
-        "302":
-          description: Redirect to the homepage with Drive connected.
-          headers:
-            Location:
-              schema: {type: string, const: "/?drive=connected"}
-            Set-Cookie:
-              description: Refreshed signed Firebase-compatible `__session` cookie.
-              schema: {type: string}
-        "400": {$ref: "#/components/responses/InvalidOAuthState"}
-        "403": {$ref: "#/components/responses/NotAllowlisted"}
   /v1/drive/picker:
     get:
       operationId: showGoogleDrivePicker
       tags: [Browser authorization]
       summary: Open Google Drive Picker for the signed-in user.
-      description: Refreshes the user's optional Drive grant and returns a no-store HTML Picker page for supported input files.
+      description: Refreshes the Drive grant required by the browser session and returns a no-store HTML Picker page for supported input files.
       security:
         - sessionCookie: []
       responses:
@@ -251,6 +217,7 @@ paths:
       operationId: submitJob
       tags: [Jobs]
       summary: Submit an idempotent durable render.
+      description: Preflights the requester's restricted Drive grant before accepting any job because every durable output is delivered to Drive. Personal tokens without a usable grant receive `drive_grant_required` before job creation.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CsrfToken"
@@ -268,6 +235,7 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/Job"}
         "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
         "409": {$ref: "#/components/responses/Conflict"}
         "429": {$ref: "#/components/responses/AdmissionRejected"}
         "503": {$ref: "#/components/responses/CapacityUnavailable"}
@@ -309,6 +277,7 @@ paths:
       operationId: retryJob
       tags: [Jobs]
       summary: Retry an owned failed or cancelled render job.
+      description: Preflights the requester's Drive delivery grant before queuing another attempt.
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       responses:
@@ -317,6 +286,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Job"}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         "429": {$ref: "#/components/responses/AdmissionRejected"}
@@ -588,11 +558,6 @@ components:
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
-    InvalidOAuthState:
-      description: OAuth state is missing, invalid, expired, or for another flow.
-      content:
-        application/json:
-          schema: {$ref: "#/components/schemas/Error"}
     NotAllowlisted:
       description: Google identity is not an approved user.
       content:
@@ -786,6 +751,7 @@ components:
             - token_not_found
             - admin_required
         retryable: {type: boolean}
+        recoveryPath: {type: string, const: "/v1/auth/login/start?recovery=true"}
     PreviewFailure:
       type: object
       additionalProperties: false

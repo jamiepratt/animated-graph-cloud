@@ -402,8 +402,7 @@
                   "/v1/jobs/{jobId}/retry:" "/v1/uploads:" "/v1/tokens:"
                   "/v1/tokens/{tokenId}/revoke:" "/v1/admin/members:"
                   "/v1/admin/members/revoke:" "/v1/auth/login/start:"
-                  "/v1/auth/login/callback:" "/v1/auth/drive/start:"
-                  "/v1/auth/drive/callback:" "/v1/drive/picker:"
+                  "/v1/auth/login/callback:" "/v1/drive/picker:"
                   "/v1/drive/picker/diagnostic:"]]
       (testing path (is (str/includes? openapi path))))
     (doseq [contract ["RenderRequest:" "Job:" "Error:" "bearerAuth:"
@@ -414,15 +413,14 @@
                    "outputFormat" "fitMode" "audioMode"]]
       (testing field (is (str/includes? openapi field))))
     (is (str/includes? openapi "drive.file"))
+    (is (not (str/includes? openapi "/v1/auth/drive/start:")))
+    (is (not (str/includes? openapi "/v1/auth/drive/callback:")))
     (doseq [behavior ["operationId: startGoogleLogin"
                       "operationId: finishGoogleLogin"
-                      "operationId: startGoogleDriveAuthorization"
-                      "operationId: finishGoogleDriveAuthorization"
                       "operationId: showGoogleDrivePicker"
                       "name: code" "name: state" "security: []"
                       "description: Redirect to Google OAuth authorization."
-                      "description: Redirect to the signed-in homepage."
-                      "description: Redirect to the homepage with Drive connected."]]
+                      "description: Redirect to the signed-in homepage."]]
       (testing behavior (is (str/includes? openapi behavior))))
     (is (not (str/includes? openapi "client_secret")))))
 
@@ -460,7 +458,7 @@
     (doseq [checkpoint ["cannot be undone" "Firebase Terms" "protected\n`main`"
                         "https://alphacompose.com/privacy"
                         "https://alphacompose.com/v1/auth/login/callback"
-                        "https://alphacompose.com/v1/auth/drive/callback"
+                        "remove the former `https://alphacompose.com/v1/auth/drive/callback`"
                         "drive.file" "AGG_ADMIN_EMAILS" "Rollback" "Secret Manager"
                         "animated-graph-cloud-prod-jp" "animated-graph-cloud-jp"]]
       (testing checkpoint (is (str/includes? runbook checkpoint))))

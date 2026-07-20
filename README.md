@@ -275,16 +275,18 @@ application after the private candidate and smoke checks pass.
 
 ## Google login and Drive delivery
 
-When `AGG_AUTH_ENABLED=true`, browser users start login at
-`GET /v1/auth/login/start`. Login requests only `openid email profile` and
-rechecks the active Firestore membership generation on every authenticated
-request. `AGG_OWNER_EMAIL` bootstraps the non-revocable owner, while
+When `AGG_AUTH_ENABLED=true`, browser users choose **Continue with Google** at
+`GET /v1/auth/login/start`. One PKCE-protected offline flow requests exactly
+`openid email profile drive.file`. Its callback verifies identity and active
+membership, encrypts or safely reuses the refresh token, ensures the user's
+`Alpha Compose` folder, persists the grant, and issues the session last. Routine
+login does not force consent. Only a signed recovery marker created after an
+unusable grant enables `prompt=consent`. The active Firestore membership
+generation is rechecked on every authenticated request. `AGG_OWNER_EMAIL`
+bootstraps the non-revocable owner, while
 `AGG_ADMIN_EMAILS` (comma- or semicolon-separated) bootstraps any number of
 active administrators. Administrators can manage the allowlist but cannot
-replace or revoke the owner. Drive is connected separately at
-`GET /v1/auth/drive/start` with only `drive.file`; the callback
-encrypts the refresh token with the Warsaw KMS key and creates or reuses the
-user's `Alpha Compose` folder. `GET /v1/drive/picker` opens a no-store
+replace or revoke the owner. `GET /v1/drive/picker` opens a no-store
 Google Picker compatibility page for the same restricted grant. The
 authenticated `/` entrypoint initializes the Picker in the page, keeps it
 hidden until “Pick one video” is pressed, and shows the selected source after
@@ -301,6 +303,12 @@ Firestore retains the ID and resumable session so worker retries resume the
 same file rather than creating duplicates. Polling success includes
 `driveFileId` and `driveWebViewLink`.
 
+Every durable submission refreshes the Drive grant before creating a job,
+including overlay-only requests. A missing or revoked grant returns
+`drive_grant_required` synchronously. Browser failures replace the session with
+a short-lived signed recovery marker and show an explicit **Continue with
+Google** action. Personal API tokens remain usable for non-Drive operations.
+
 ## Web workflow and personal API tokens
 
 Authenticated users get a server-rendered HTMX workflow at `/`. Paste the render
@@ -314,8 +322,8 @@ routes are `GET /v1/admin/members`, `POST /v1/admin/members`, and
 `POST /v1/admin/members/revoke`; writes require an administrator's session and
 CSRF token. Revocation invalidates the member's sessions and personal tokens, deletes
 their encrypted Drive grant, and cancels queued or running work. Re-adding the
-email creates a new membership generation, so the member must complete Google
-login and Drive authorization again.
+email creates a new membership generation, so the member must complete the
+combined Google authorization again.
 
 Owner and admin sessions can also open `/ui/admin/logs`. The page shows up to
 100 recent privacy-safe structured events from the API and renderer, with
@@ -343,16 +351,15 @@ The OAuth web-client JSON has this Secret Manager shape:
 {"web":{"client_id":"…","client_secret":"…"}}
 ```
 
-For development, register both Cloud Run callbacks on the development web
-client:
+For development, register the combined Cloud Run callback on the development
+web client:
 
 - `https://SERVICE_URL/v1/auth/login/callback`
-- `https://SERVICE_URL/v1/auth/drive/callback`
 
 Production uses a separate web client with
-`https://alphacompose.com/v1/auth/login/callback` and
-`https://alphacompose.com/v1/auth/drive/callback`. Never reuse the development
-client JSON.
+`https://alphacompose.com/v1/auth/login/callback`. Never reuse the development
+client JSON. Remove the former `/v1/auth/drive/callback` URI from the production
+OAuth client immediately after deploying the combined flow.
 
 The runtime mounts `oauth-client-secret`, `session-key`, `picker-api-key`, and
 `token-hash-pepper` from Secret Manager. Never place their values in Terraform,

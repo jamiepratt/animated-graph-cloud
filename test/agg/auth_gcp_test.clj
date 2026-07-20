@@ -3,17 +3,18 @@
             [agg.auth.core :as auth]
             [agg.auth.gcp :as gcp]
             [clojure.data.json :as json]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is]])
   (:import (com.google.cloud.firestore FirestoreOptions)))
 
-(deftest google-oauth-exchanges-login-drive-and-refresh-without-scope-mixing
+(deftest google-oauth-exchanges-combined-login-and-refreshes-drive-access
   (let [requests (atom [])
-        responses (atom [{:status 200 :body (json/write-str {:id_token "login-jwt"})}
-                         {:status 200
+        responses (atom [{:status 200
                           :body (json/write-str
-                                 {:access_token "drive-access"
+                                 {:id_token "login-jwt"
+                                  :access_token "drive-access"
                                   :refresh_token "drive-refresh"
-                                  :scope "https://www.googleapis.com/auth/drive.file"})}
+                                  :scope (str/join " " auth/approved-scopes)})}
                          {:status 200
                           :body (json/write-str {:access_token "fresh-access"})}])
         send! (fn [request]
@@ -29,16 +30,15 @@
                    :email "owner@example.com"
                    :email-verified? true})
                 "https://oauth2.googleapis.test/token")]
-    (is (= "owner@example.com"
-           (:email (auth/exchange-code! client :login "login-code" "verifier-1"
-                                        "https://app/login/callback"))))
-    (is (= #{"https://www.googleapis.com/auth/drive.file"}
-           (:granted-scopes
-            (auth/exchange-code! client :drive "drive-code" "verifier-2"
-                                 "https://app/drive/callback"))))
+    (let [combined (auth/exchange-code! client :login "login-code" "verifier-1"
+                                        "https://app/login/callback")]
+      (is (= "owner@example.com" (:email combined)))
+      (is (= "drive-access" (:access-token combined)))
+      (is (= "drive-refresh" (:refresh-token combined)))
+      (is (= (set auth/approved-scopes) (:granted-scopes combined))))
     (is (= {:access-token "fresh-access"}
            (auth/refresh-drive-token! client "drive-refresh")))
-    (is (= ["authorization_code" "authorization_code" "refresh_token"]
+    (is (= ["authorization_code" "refresh_token"]
            (mapv #(get (:form %) "grant_type") @requests)))
     (is (every? #(= "client-secret" (get (:form %) "client_secret"))
                 @requests))
@@ -65,8 +65,8 @@
                 "https://oauth2.googleapis.test/token")]
     (is (= ::auth/invalid-code
            (try
-             (auth/exchange-code! client :drive "used-code" "verifier"
-                                  "https://app/drive/callback")
+             (auth/exchange-code! client :login "used-code" "verifier"
+                                  "https://app/login/callback")
              nil
              (catch clojure.lang.ExceptionInfo error
                (:type (ex-data error))))))))

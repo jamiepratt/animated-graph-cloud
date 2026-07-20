@@ -201,15 +201,23 @@
 
 (defn- oauth-callback-failure [type]
   (case type
+    ::auth/drive-grant-required
+    {:category "invalid_grant"
+     :status 401
+     :body {:error "drive_grant_required"
+            :recoveryPath "/v1/auth/login/start?recovery=true"}}
+
     ::auth/revoked-grant
     {:category "invalid_grant"
      :status 401
-     :body {:error "drive_grant_required"}}
+     :body {:error "drive_grant_required"
+            :recoveryPath "/v1/auth/login/start?recovery=true"}}
 
     ::auth/missing-refresh-token
     {:category "missing_refresh_token"
      :status 401
-     :body {:error "drive_grant_required"}}
+     :body {:error "drive_grant_required"
+            :recoveryPath "/v1/auth/login/start?recovery=true"}}
 
     ::auth/invalid-drive-scopes
     {:category "unexpected_scopes"
@@ -341,9 +349,16 @@
       (:oauth browser)
       (get cookie "agg_oauth_state"))))
 
+(declare session-cookie)
+
 (defn- require-user! [exchange auth-system]
   (when auth-system
-    (auth/session-user auth-system (session-token exchange auth-system))))
+    (let [user (auth/session-user auth-system
+                                  (session-token exchange auth-system))]
+      (when-let [upgrade (:session-upgrade user)]
+        (.add (.getResponseHeaders ^HttpExchange exchange)
+              "Set-Cookie" (session-cookie upgrade)))
+      (dissoc user :session-upgrade))))
 
 (defn- browser-cookie-header [value]
   (str "__session=" value
@@ -352,6 +367,37 @@
 (defn- session-cookie [value]
   (str "__session=" value
        "; Max-Age=43200; Path=/; Secure; HttpOnly; SameSite=Lax"))
+
+(defn- clear-session-cookie []
+  "__session=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax")
+
+(def ^:private drive-recovery-path
+  "/v1/auth/login/start?recovery=true")
+
+(defn- clear-browser-session! [^HttpExchange exchange]
+  (.add (.getResponseHeaders exchange) "Set-Cookie" (clear-session-cookie)))
+
+(defn- set-drive-recovery-cookie! [^HttpExchange exchange auth-system]
+  (let [recovery (auth/issue-drive-recovery-token auth-system)
+        browser (auth/issue-browser-cookie auth-system {:oauth recovery})]
+    (.add (.getResponseHeaders exchange) "Set-Cookie"
+          (browser-cookie-header browser))))
+
+(defn- respond-drive-recovery! [exchange path]
+  (cond
+    (= "/" path)
+    (respond! exchange 401 "text/html; charset=utf-8" ui/drive-recovery-page)
+
+    (.startsWith ^String path "/ui/")
+    (respond! exchange 200 "text/html; charset=utf-8"
+              ui/drive-recovery-fragment)
+
+    (= "/v1/drive/picker" path)
+    (respond! exchange 401 "text/html; charset=utf-8" ui/drive-recovery-page)
+
+    :else
+    (respond-json! exchange 401 {:error "drive_grant_required"
+                                 :recoveryPath drive-recovery-path})))
 
 (defn- clear-legacy-oauth-cookie []
   "agg_oauth_state=; Max-Age=0; Path=/v1/auth; Secure; HttpOnly; SameSite=Lax")
@@ -406,30 +452,41 @@
                             error)))))
 
 (defn- attach-source!
-  [auth-system user {:keys [request render-spec]}]
-  (if-not (:source-video render-spec)
-    {:request request :render-spec render-spec}
-    (do
-      (when-not (and auth-system user)
-        (throw (errors/raise! "Drive authorization is required"
-                              {:type ::auth/drive-grant-required})))
-      (let [{:keys [access-token]}
-            (auth/drive-access! auth-system (:subject user))
-            gateway (:drive auth-system)]
-        (when-not (satisfies? drive/SourceGateway gateway)
-          (throw (errors/raise! "Drive source dependencies are incomplete"
-                                {:type ::drive/source-unavailable})))
-        (let [file-id (get-in render-spec [:source-video :file-id])
-              metadata (drive/source-metadata! gateway access-token file-id)
-              request (assoc request :sourceVideoServerMetadata metadata)]
-          {:request request
-           :render-spec (contract/attach-source-metadata render-spec metadata)
-           :source-stream!
-           (fn [output]
-             (drive/stream-source! gateway access-token file-id output))})))))
+  ([auth-system user prepared]
+   (attach-source! auth-system user prepared nil))
+  ([auth-system user {:keys [request render-spec]} drive-access]
+   (if-not (:source-video render-spec)
+     {:request request :render-spec render-spec}
+     (do
+       (when-not (and auth-system user)
+         (throw (errors/raise! "Drive authorization is required"
+                               {:type ::auth/drive-grant-required})))
+       (let [{:keys [access-token]}
+             (or drive-access
+                 (auth/drive-access! auth-system (:subject user)))
+             gateway (:drive auth-system)]
+         (when-not (satisfies? drive/SourceGateway gateway)
+           (throw (errors/raise! "Drive source dependencies are incomplete"
+                                 {:type ::drive/source-unavailable})))
+         (let [file-id (get-in render-spec [:source-video :file-id])
+               metadata (drive/source-metadata! gateway access-token file-id)
+               request (assoc request :sourceVideoServerMetadata metadata)]
+           {:request request
+            :render-spec (contract/attach-source-metadata render-spec metadata)
+            :source-stream!
+            (fn [output]
+              (drive/stream-source! gateway access-token file-id output))}))))))
 
-(defn- source-aware-request! [exchange auth-system user]
-  (attach-source! auth-system user (request-render-request exchange)))
+(defn- require-drive-access! [auth-system user]
+  (when auth-system
+    (when-not user
+      (throw (errors/raise! "Drive authorization is required"
+                            {:type ::auth/drive-grant-required})))
+    (auth/drive-access! auth-system (:subject user))))
+
+(defn- durable-request! [auth-system user prepared]
+  (let [drive-access (require-drive-access! auth-system user)]
+    (attach-source! auth-system user prepared drive-access)))
 
 (defn- ui-render-request [exchange]
   (try
@@ -446,9 +503,6 @@
       (throw (errors/raise! "Invalid render request"
                             {:type ::invalid-request}
                             error)))))
-
-(defn- source-aware-ui-request! [exchange auth-system user]
-  (attach-source! auth-system user (ui-render-request exchange)))
 
 (defn- stage-source-stream [source-stream! stage]
   (fn [output]
@@ -563,7 +617,8 @@
 (defn- submit-job! [^HttpExchange exchange job-service auth-system user]
   (let [idempotency-key (some-> exchange .getRequestHeaders
                                 (.getFirst "Idempotency-Key"))
-        {:keys [request]} (source-aware-request! exchange auth-system user)
+        {:keys [request]} (durable-request! auth-system user
+                                            (request-render-request exchange))
         request (cond-> request
                   user (assoc :requesterSubject (:subject user)
                               :requesterEmail (:email user)
@@ -591,8 +646,8 @@
 
 (defn- authenticated-user! [exchange auth-system token-service]
   (when auth-system
-    (if-let [session (session-token exchange auth-system)]
-      (assoc (auth/session-user auth-system session) :auth-kind :session)
+    (if (session-token exchange auth-system)
+      (assoc (require-user! exchange auth-system) :auth-kind :session)
       (if-let [token (and token-service (bearer-token exchange))]
         (->> (tokens/authenticate token-service token)
              (auth/require-allowlisted! auth-system)
@@ -669,14 +724,16 @@
       (respond-json! exchange 200 {:repairedJobs repaired-jobs
                                    :releasedLeases released-leases}))))
 
-(defn- begin-auth! [exchange auth-system flow]
-  (let [session (session-token exchange auth-system)
-        started (auth/begin-flow! auth-system flow
-                                  (when (= :drive flow) session))
+(defn- begin-auth! [exchange auth-system]
+  (let [recovery-requested? (contains? #{"1" "true"}
+                                       (get (query-params exchange) "recovery"))
+        recovery? (and recovery-requested?
+                       (auth/drive-recovery-token?
+                        auth-system (oauth-state-token exchange auth-system)))
+        started (auth/begin-flow! auth-system :login nil recovery?)
         cookie (auth/issue-browser-cookie
                 auth-system
-                {:session session
-                 :oauth (:stateCookie started)})]
+                {:oauth (:stateCookie started)})]
     (respond-redirect! exchange (:authorizationUrl started)
                        [(browser-cookie-header cookie)])))
 
@@ -689,18 +746,6 @@
                                                    exchange auth-system)})]
     (respond-redirect! exchange "/"
                        [(session-cookie (:session result))
-                        (clear-legacy-oauth-cookie)])))
-
-(defn- finish-drive! [exchange auth-system]
-  (let [params (query-params exchange)
-        session (session-token exchange auth-system)
-        _ (auth/finish-drive! auth-system
-                              {:code (get params "code")
-                               :state (get params "state")
-                               :state-cookie (oauth-state-token
-                                              exchange auth-system)})]
-    (respond-redirect! exchange "/?drive=connected"
-                       [(session-cookie session)
                         (clear-legacy-oauth-cookie)])))
 
 (defn- log-options [^HttpExchange exchange]
@@ -726,13 +771,16 @@
          :api-key picker-api-key
          :app-id picker-app-id
          :csrf csrf})
-      (catch Throwable _
-        nil))))
+      (catch clojure.lang.ExceptionInfo error
+        (if (= ::auth/drive-grant-required (:type (ex-data error)))
+          (throw error)
+          nil))
+      (catch Throwable _ nil))))
 
 (defn- landing! [^HttpExchange exchange auth-system token-service admin-service
                  log-store picker-api-key picker-app-id]
-  (let [user (when-let [session (session-token exchange auth-system)]
-               (auth/session-user auth-system session))
+  (let [user (when-let [_session (session-token exchange auth-system)]
+               (require-user! exchange auth-system))
         csrf (when user (auth/issue-csrf-token auth-system user))
         picker-config (landing-picker-config auth-system user picker-api-key
                                              picker-app-id csrf)
@@ -837,6 +885,12 @@
                 {:token-status "refreshed"
                  :account-status "grant-bound"
                  :index-status "not-probed"}))
+            (catch clojure.lang.ExceptionInfo error
+              (if (= ::auth/drive-grant-required (:type (ex-data error)))
+                (throw error)
+                {:token-status "refresh-failed"
+                 :account-status "unavailable"
+                 :index-status "not-probed"}))
             (catch Throwable _
               {:token-status "refresh-failed"
                :account-status "unavailable"
@@ -912,7 +966,8 @@
                                  auth-system user timeout-ms))))))
 
 (defn- submit-job-ui! [exchange job-service auth-system user]
-  (let [{:keys [request]} (source-aware-ui-request! exchange auth-system user)
+  (let [{:keys [request]} (durable-request! auth-system user
+                                            (ui-render-request exchange))
         request (assoc request
                        :requesterSubject (:subject user)
                        :requesterEmail (:email user)
@@ -1027,20 +1082,11 @@
 
                                   (and auth-system (= "GET" method)
                                        (= "/v1/auth/login/start" path))
-                                  (begin-auth! exchange auth-system :login)
+                                  (begin-auth! exchange auth-system)
 
                                   (and auth-system (= "GET" method)
                                        (= "/v1/auth/login/callback" path))
                                   (finish-login! exchange auth-system)
-
-                                  (and auth-system (= "GET" method)
-                                       (= "/v1/auth/drive/start" path))
-                                  (do (require-user! exchange auth-system)
-                                      (begin-auth! exchange auth-system :drive))
-
-                                  (and auth-system (= "GET" method)
-                                       (= "/v1/auth/drive/callback" path))
-                                  (finish-drive! exchange auth-system)
 
                                   (and auth-system (= "GET" method)
                                        (= "/v1/drive/picker" path))
@@ -1084,6 +1130,7 @@
                                         job-id (nth (.split path "/") 3)]
                                     (require-csrf! exchange auth-system user)
                                     (require-job-owner! job-service user job-id)
+                                    (require-drive-access! auth-system user)
                                     (respond! exchange 202 "text/html; charset=utf-8"
                                               (ui/job-fragment (jobs/retry-job! job-service job-id))))
 
@@ -1206,13 +1253,25 @@
                                         job-id (nth (.split path "/") 3)]
                                     (require-csrf! exchange auth-system user)
                                     (require-job-owner! job-service user job-id)
+                                    (require-drive-access! auth-system user)
                                     (retry-job! exchange job-service job-id))
 
                                   :else
                                   (respond! exchange 404 "application/json; charset=utf-8"
                                             "{\"error\":\"not_found\"}")))
           (catch clojure.lang.ExceptionInfo error
-            (let [failure (oauth-callback-failure (:type (ex-data error)))]
+            (let [error-type (:type (ex-data error))
+                  callback? (= "/v1/auth/login/callback" path)
+                  recovery-error? (contains? #{::auth/drive-grant-required
+                                               ::auth/revoked-grant
+                                               ::auth/missing-refresh-token}
+                                             error-type)
+                  _ (when callback?
+                      (if recovery-error?
+                        (set-drive-recovery-cookie! exchange auth-system)
+                        (clear-browser-session! exchange)))
+                  failure (when callback?
+                            (oauth-callback-failure error-type))]
               (if failure
                 (do
                   (log-oauth-callback-failure! dependencies request-id failure error)
@@ -1249,7 +1308,10 @@
                   (respond-json! exchange 403 {:error "csrf_required"})
 
                   ::auth/drive-grant-required
-                  (respond-json! exchange 401 {:error "drive_grant_required"})
+                  (do
+                    (when (session-token exchange auth-system)
+                      (set-drive-recovery-cookie! exchange auth-system))
+                    (respond-drive-recovery! exchange path))
 
                   ::picker-not-configured
                   (respond-json! exchange 503 {:error "picker_not_configured"})

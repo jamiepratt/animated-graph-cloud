@@ -56,7 +56,7 @@ same Firestore transaction that writes the job and idempotency record. Therefore
 a submission committed before revocation is found by the generation-scoped
 cancellation scan, while a transaction racing after revocation conflicts,
 retries, and is rejected. Retrying a pre-revocation job checks its stored
-generation in the same way. A Drive callback also saves its encrypted grant in
+generation in the same way. The combined Google callback also saves its encrypted grant in
 a transaction that reads the member generation, preventing a racing callback
 from restoring credentials after the revocation delete.
 

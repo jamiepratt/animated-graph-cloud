@@ -89,10 +89,9 @@ In Google Auth Platform for `animated-graph-cloud-prod-jp`:
 - set privacy policy `https://alphacompose.com/privacy`;
 - set terms `https://alphacompose.com/terms`;
 - verify `alphacompose.com` as an authorized domain;
-- request login scopes `openid email profile` and Drive scope `drive.file` only;
-- create a production Web application client with exact redirects
-  `https://alphacompose.com/v1/auth/login/callback` and
-  `https://alphacompose.com/v1/auth/drive/callback`;
+- publish exactly `openid email profile drive.file` for the combined flow;
+- create a production Web application client with the exact redirect
+  `https://alphacompose.com/v1/auth/login/callback`;
 - configure the intended `AGG_ADMIN_EMAILS` set; the release bootstraps those
   administrators but does not add ordinary allowlisted members.
 
@@ -101,14 +100,28 @@ verification. OAuth publication and verification are external Google actions;
 record their result rather than treating `drive.file` classification as proof
 of approval.
 
-Drive callback failures return bounded JSON error codes. `drive_grant_required`
-means the owner should repeat authorization; `invalid_drive_scopes` means the
-grant must be restarted with only `drive.file`; `oauth_exchange_failed`,
-`drive_unavailable`, `kms_unavailable`, and `grant_persistence_failed` are
-retryable service failures. The API emits one `oauth_callback_failed` event
+The combined callback issues no session until identity, membership, exact scope,
+refresh-token encryption or validated reuse, output-folder setup, and grant
+persistence all succeed. Routine login must not force consent. After a proven
+unusable grant, the browser session is replaced by a signed recovery marker and
+the explicit **Continue with Google** action may force consent.
+
+Callback failures return bounded JSON error codes. `drive_grant_required`
+means the owner should use the explicit recovery action; `invalid_drive_scopes`
+means the flow must be restarted with exactly `openid email profile drive.file`;
+`oauth_exchange_failed`, `drive_unavailable`, `kms_unavailable`, and
+`grant_persistence_failed` are retryable service failures. The API emits one
+`oauth_callback_failed` event
 with only `requestId`, `category`, `status`, and severity. Use the response
 `X-Request-Id` to correlate an owner report; never add OAuth codes, tokens,
 email addresses, filenames, or request bodies to an issue or log.
+
+Before releasing the combined flow, confirm the production client authorizes
+the combined callback and the published scope set is exact. After deployment,
+remove the former `https://alphacompose.com/v1/auth/drive/callback` redirect
+immediately. OAuth transactions using that old route will fail and must be
+restarted. Complete issue #48 publication/verification and run the combined
+owner smoke before accepting the release.
 
 ## Terraform bootstrap
 
