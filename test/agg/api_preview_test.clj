@@ -367,12 +367,76 @@
           (is (= 200 (.statusCode response)))
           (is (= "failed" (:state body)))
           (is (= {:code "source_content_failed"
+                  :category "drive_source_content"
+                  :requestId (:id operation)
                   :retryable true
                   :stage "source_content"
                   :status 503}
-                 (:error body)))
+                 (dissoc (:error body) :elapsedMs)))
+          (is (nat-int? (get-in body [:error :elapsedMs])))
           (is (not-any? #(str/includes? (.body response) %)
                         ["private-file" "private-drive-id" "secret-token"]))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest preview-application-timeout-is-bounded-correlated-and-logged-once
+  (let [events (atom [])
+        auth-system (auth-system nil)
+        user {:subject "google-subject-1" :email "owner@example.com"}
+        session (auth/issue-session auth-system user)
+        csrf (auth/issue-csrf-token auth-system user)
+        timeout-service
+        (reify jobs/JobService
+          (submit-job! [_ _ _]
+            (throw (errors/raise!
+                    "private-file.mp4 secret-token"
+                    {:type ::preview-timeout
+                     :failure-code "preview_timeout"
+                     :stage "source_metadata"
+                     :status 504
+                     :elapsed-ms 45004
+                     :timeout-ms 45000
+                     :retryable true})))
+          (get-job [_ _] nil)
+          (dispatch-job! [_ _] nil)
+          (cancel-job! [_ _] nil)
+          (retry-job! [_ _] nil)
+          (run-job! [_ _] nil))
+        port (available-port)
+        server (api/start! port {:auth-system auth-system
+                                 :preview-job-service timeout-service
+                                 :event-sink (fn [event fields]
+                                               (swap! events conj
+                                                      (assoc fields
+                                                             :event event)))})]
+    (try
+      (let [response (test-http/send-string!
+                      :post (str "http://127.0.0.1:" port "/v1/preview")
+                      (json/write-str (fixture/render-request))
+                      {"Content-Type" "application/json"
+                       "Cookie" (str "agg_session=" session)
+                       "X-CSRF-Token" csrf})
+            body (json/read-str (.body response) :key-fn keyword)
+            request-id (some-> response .headers (.firstValue "x-request-id")
+                               (.orElse nil))]
+        (is (= 504 (.statusCode response)))
+        (is (= {:error "preview_failed"
+                :category "preview_rendering"
+                :requestId request-id
+                :retryable true
+                :failureCode "preview_timeout"
+                :stage "source_metadata"
+                :status 504
+                :elapsedMs 45004
+                :timeoutMs 45000}
+               body))
+        (is (= 1 (count @events)))
+        (is (= (assoc (dissoc body :error :timeoutMs :elapsedMs)
+                      :severity "ERROR"
+                      :event "request_failed")
+               (dissoc (first @events) :elapsedMs :timeoutMs)))
+        (is (not-any? #(str/includes? (pr-str @events) %)
+                      ["private-file" "secret-token"])))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
@@ -396,13 +460,15 @@
         (is (= 400 (.statusCode response)))
         (is (= "application/json; charset=utf-8"
                (.orElse (.firstValue (.headers response) "content-type") nil)))
-        (is (= #{:error :category :requestId}
+        (is (= #{:error :category :requestId :retryable}
                (set (keys body))))
         (is (= "invalid_request" (:error body)))
         (is (= "request_contract" (:category body)))
         (is (= request-id (:requestId body)))
+        (is (false? (:retryable body)))
         (is (= "request_failed" (:event event)))
         (is (= "request_contract" (:category event)))
-        (is (= request-id (:requestId event))))
+        (is (= request-id (:requestId event)))
+        (is (false? (:retryable event))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))

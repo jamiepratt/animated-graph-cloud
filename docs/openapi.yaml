@@ -751,9 +751,15 @@ components:
       required: [code, retryable]
       properties:
         code: {type: string, maxLength: 128}
+        category:
+          type: string
+          enum: [request_contract, drive_source_metadata, drive_source_content, preview_rendering]
+        requestId: {type: string, format: uuid}
         retryable: {type: boolean}
         stage: {type: string, maxLength: 128}
         status: {type: integer, minimum: 100, maximum: 599}
+        elapsedMs: {type: integer, minimum: 0, maximum: 1000000000000}
+        timeoutMs: {type: integer, minimum: 0, maximum: 1000000000000}
     PreviewGallery:
       type: object
       additionalProperties: false

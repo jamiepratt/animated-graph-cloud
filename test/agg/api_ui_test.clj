@@ -169,24 +169,31 @@
          "let outcome;try{"
          "const button=document.querySelector('[hx-post=\"/ui/preview\"]');"
          "document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
-         "button.dispatchEvent(new CustomEvent('htmx:configRequest',{bubbles:true,detail:{elt:button,parameters:{},headers:{}}}));"
-         "const pending={text:document.getElementById('form-status').textContent,className:document.getElementById('form-status').className};"
-         "document.getElementById('preview-result').outerHTML='<article id=\"preview-result\" class=\"preview-error\"></article>';"
-         "const failure=document.getElementById('preview-result');"
-         "failure.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:failure}}));"
-         "const failed={text:document.getElementById('form-status').textContent,className:document.getElementById('form-status').className};"
-         "button.dispatchEvent(new CustomEvent('htmx:configRequest',{bubbles:true,detail:{elt:button,parameters:{},headers:{}}}));"
-         "failure.outerHTML='<article id=\"preview-result\" class=\"preview-gallery\"><img></article>';"
-         "const success=document.getElementById('preview-result');"
-         "success.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:success}}));"
-         "const succeeded={text:document.getElementById('form-status').textContent,className:document.getElementById('form-status').className};"
-         "outcome={pending,failed,succeeded};"
+         "function configure(){const detail={elt:button,parameters:{},headers:{}};const event=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail});button.dispatchEvent(event);return {event,detail};}"
+         "function transport(name,status=0){const target=document.getElementById('preview-result');target.dispatchEvent(new CustomEvent(name,{bubbles:true,detail:{elt:button,target,xhr:{status,getResponseHeader:()=>null}}}));return target;}"
+         "const first=configure(),firstGeneration=first.detail.headers['X-Preview-Generation'],firstResult=document.getElementById('preview-result');"
+         "const pending={text:document.getElementById('form-status').textContent,disabled:button.disabled,cleared:!firstResult.textContent.includes('stale prior success'),className:firstResult.className};"
+         "const unrelated=document.getElementById('job-result');unrelated.dispatchEvent(new CustomEvent('htmx:sendError',{bubbles:true,detail:{elt:unrelated,target:unrelated,xhr:{status:0,getResponseHeader:()=>null}}}));const unrelatedIgnored=button.disabled&&document.getElementById('preview-result').classList.contains('preview-pending');"
+         "const duplicate=configure();"
+         "const duplicateSuppressed=duplicate.event.defaultPrevented&&duplicate.detail.headers['X-Preview-Generation']===undefined;"
+         "transport('htmx:responseError',504);const platform=document.getElementById('preview-result');const platformFailure={text:platform.textContent,disabled:button.disabled};"
+         "configure();transport('htmx:responseError',502);const gateway=document.getElementById('preview-result');const gatewayFailure={text:gateway.textContent,disabled:button.disabled};"
+         "const retryAfterPlatform=configure(),retryGeneration=retryAfterPlatform.detail.headers['X-Preview-Generation'];"
+         "const lateDetail={target:document.getElementById('preview-result'),xhr:{getResponseHeader:()=>null},requestConfig:{headers:{'X-Preview-Generation':firstGeneration}},shouldSwap:true};lateDetail.target.dispatchEvent(new CustomEvent('htmx:beforeSwap',{bubbles:true,detail:lateDetail}));"
+         "transport('htmx:sendError');const dropped=document.getElementById('preview-result');const connectionLoss={text:dropped.textContent,disabled:button.disabled,lateRejected:!lateDetail.shouldSwap};"
+         "configure();transport('htmx:sendAbort');const aborted=document.getElementById('preview-result');const clientAbort={text:aborted.textContent,disabled:button.disabled};"
+         "configure();transport('htmx:timeout');const timedOut=document.getElementById('preview-result');const browserTimeout={text:timedOut.textContent,disabled:button.disabled};"
+         "const successfulRetry=configure(),successGeneration=successfulRetry.detail.headers['X-Preview-Generation'];const target=document.getElementById('preview-result');target.outerHTML='<article id=\"preview-result\" class=\"preview-gallery\" data-preview-generation=\"'+successGeneration+'\"><img></article>';const success=document.getElementById('preview-result');success.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:success}}));"
+         "const succeeded={text:document.getElementById('form-status').textContent,disabled:button.disabled,retried:successGeneration!==retryGeneration};"
+         "outcome={pending,unrelatedIgnored,duplicateSuppressed,platformFailure,gatewayFailure,connectionLoss,clientAbort,browserTimeout,succeeded};"
          "}catch(error){outcome={error:error.message};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));"
          "document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
          "</script>")
         html (-> page
                  (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "<div id=\"preview-result\"></div>"
+                              "<article id=\"preview-result\" class=\"preview-gallery\">stale prior success</article>")
                  (str/replace "</body>" (str scenario "</body>")))]
     (browser-outcome
      "agg-preview-status-browser-"
@@ -392,7 +399,7 @@
     (is (every? #(= #{:phase :view :listState} (set (keys %)))
                 (:diagnostics outcome)))))
 
-(deftest preview-request-status-tracks-pending-failure-and-success-in-a-browser
+(deftest preview-request-is-terminal-stale-safe-and-retriable-in-a-browser
   (let [outcome (preview-status-browser-outcome
                  (ui/page {:user {:email "owner@example.com" :role :member}
                            :csrf "csrf-test"
@@ -400,12 +407,29 @@
                            :members []
                            :logs-enabled? false}))]
     (is (nil? (:error outcome)) outcome)
-    (is (= {:text "Preparing preview…" :className "status"}
+    (is (= {:text "Preparing preview…"
+            :disabled true
+            :cleared true
+            :className "preview-pending"}
            (:pending outcome)))
-    (is (= {:text "Preview failed. See details below."
-            :className "status error"}
-           (:failed outcome)))
-    (is (= {:text "Preview ready." :className "status success"}
+    (is (:unrelatedIgnored outcome))
+    (is (:duplicateSuppressed outcome))
+    (is (false? (get-in outcome [:platformFailure :disabled])))
+    (is (str/includes? (get-in outcome [:platformFailure :text]) "504"))
+    (is (str/includes? (get-in outcome [:platformFailure :text])
+                       "No durable render was submitted or charged"))
+    (is (false? (get-in outcome [:gatewayFailure :disabled])))
+    (is (str/includes? (get-in outcome [:gatewayFailure :text]) "502"))
+    (is (= false (get-in outcome [:connectionLoss :disabled])))
+    (is (get-in outcome [:connectionLoss :lateRejected]))
+    (is (str/includes? (get-in outcome [:connectionLoss :text])
+                       "connection was lost"))
+    (is (= false (get-in outcome [:clientAbort :disabled])))
+    (is (str/includes? (get-in outcome [:clientAbort :text]) "cancelled"))
+    (is (= false (get-in outcome [:browserTimeout :disabled])))
+    (is (str/includes? (get-in outcome [:browserTimeout :text])
+                       "did not finish"))
+    (is (= {:text "Preview ready." :disabled false :retried true}
            (:succeeded outcome)))))
 
 (deftest preview-gallery-is-responsive-accessible-and-stale-safe-in-a-browser
@@ -461,7 +485,14 @@
                    "generation-1")
         failed (ui/preview-operation-fragment
                 (assoc base :state "failed"
-                       :error {:code "source_content_failed" :retryable true})
+                       :error {:code "preview_timeout"
+                               :category "preview_rendering"
+                               :requestId (:id base)
+                               :retryable true
+                               :stage "composition_encode"
+                               :status 504
+                               :elapsedMs 45004
+                               :timeoutMs 45000})
                 "generation-1")
         empty (ui/preview-operation-fragment
                (assoc base :state "succeeded"
@@ -473,8 +504,14 @@
     (is (str/includes? cancelled "preview_cancelled"))
     (is (str/includes? cancelled "<h2>Preview cancelled</h2>"))
     (is (not (str/includes? cancelled "hx-get=")))
-    (is (str/includes? failed "source_content_failed"))
-    (is (str/includes? failed "You can retry this preview."))
+    (doseq [detail ["preview_timeout" "preview_rendering"
+                    "00000000-0000-0000-0000-000000000061"
+                    "Composition encode" "504" "45004 ms" "45000 ms"]]
+      (is (str/includes? failed detail)))
+    (is (str/includes? failed "Preview did not finish"))
+    (is (str/includes? failed
+                       "No durable render was submitted or charged"))
+    (is (str/includes? failed "Retry with the Preview button"))
     (is (str/includes? empty "No preview moments"))))
 
 (deftest telemetry-files-follow-the-selected-format-in-a-browser

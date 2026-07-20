@@ -259,7 +259,11 @@
 (defn preview-failure-fragment
   [{:keys [category request-id status failureCode line stage elapsedMs timeoutMs
            retryable]}]
-  (str "<article id=\"preview-result\" class=\"preview-error\" role=\"alert\"><h2>Preview failed</h2><dl>"
+  (str "<article id=\"preview-result\" class=\"preview-error\" role=\"alert\"><h2>Preview failed</h2>"
+       (if (or timeoutMs (= 504 status))
+         "<p>Preview did not finish.</p>"
+         "<p>Preview could not start.</p>")
+       "<dl>"
        "<dt>Category</dt><dd><code>" (escape-html category) "</code></dd>"
        "<dt>Request ID</dt><dd><code>" (escape-html request-id) "</code></dd>"
        (when status
@@ -275,9 +279,14 @@
          (str "<dt>Elapsed</dt><dd>" (escape-html elapsedMs) " ms</dd>"))
        (when timeoutMs
          (str "<dt>Deadline</dt><dd>" (escape-html timeoutMs) " ms</dd>"))
-       (when retryable
-         "<dt>Retryable</dt><dd>Yes</dd>")
-       "</dl></article>"))
+       (when (some? retryable)
+         (str "<dt>Retryable</dt><dd>" (if retryable "Yes" "No")
+              "</dd>"))
+       "</dl><p>No durable render was submitted or charged.</p>"
+       (if retryable
+         "<p>Retry with the Preview button when ready.</p>"
+         "<p>Review the request before starting another preview.</p>")
+       "</article>"))
 
 (defn preview-operation-fragment
   [{:keys [id state progressPercent error result]} generation]
@@ -354,18 +363,43 @@
            (escape-html id) "\" data-preview-generation=\""
            (escape-html generation) "\"><h2>Preview "
            (if (= "cancelled" state) "cancelled" "failed")
-           "</h2><p><code>"
-           (escape-html (or (:code error) "preview_cancelled")) "</code></p>"
+           "</h2>"
+           (if (= "cancelled" state)
+             "<p>The preview operation was cancelled.</p>"
+             "<p>Preview did not finish.</p>")
+           "<dl><dt>Failure code</dt><dd><code>"
+           (escape-html (or (:code error) "preview_cancelled")) "</code></dd>"
+           (when (:category error)
+             (str "<dt>Category</dt><dd><code>"
+                  (escape-html (:category error)) "</code></dd>"))
+           (when (:requestId error)
+             (str "<dt>Request ID</dt><dd><code>"
+                  (escape-html (:requestId error)) "</code></dd>"))
            (when (:stage error)
-             (str "<p>Stage: " (escape-html (title-case (:stage error))) "</p>"))
-           (when (:retryable error) "<p>You can retry this preview.</p>")
+             (str "<dt>Stage</dt><dd>"
+                  (escape-html (title-case (:stage error))) "</dd>"))
+           (when (some? (:status error))
+             (str "<dt>Status</dt><dd>" (long (:status error)) "</dd>"))
+           (when (some? (:elapsedMs error))
+             (str "<dt>Elapsed</dt><dd>" (long (:elapsedMs error))
+                  " ms</dd>"))
+           (when (some? (:timeoutMs error))
+             (str "<dt>Deadline</dt><dd>" (long (:timeoutMs error))
+                  " ms</dd>"))
+           (when (some? (:retryable error))
+             (str "<dt>Retryable</dt><dd>"
+                  (if (:retryable error) "Yes" "No") "</dd>"))
+           "</dl><p>No durable render was submitted or charged.</p>"
+           (if (:retryable error)
+             "<p>Retry with the Preview button when ready.</p>"
+             "<p>Start a new preview only after changing the request.</p>")
            "</article>")
 
       :else
       (str "<article id=\"preview-result\" class=\"preview-pending\" role=\"status\" aria-live=\"polite\" data-preview-operation=\""
            (escape-html id) "\" data-preview-generation=\""
            (escape-html generation) "\" hx-get=\"" (escape-html path)
-           "\" hx-trigger=\"load delay:1s\" hx-swap=\"outerHTML\"><h2>Preparing preview</h2><p>"
+           "\" hx-trigger=\"load delay:1s\" hx-swap=\"outerHTML\" hx-request='{\"timeout\":15000}'><h2>Preparing preview</h2><p>"
            (escape-html (title-case state)) " - " (long progressPercent)
            "%</p><progress max=\"100\" value=\"" (long progressPercent)
            "\">" (long progressPercent) "%</progress></article>"))))
@@ -434,7 +468,7 @@
      "<div class=\"optional\"><label class=\"toggle\"><input id=\"timer-enabled\" type=\"checkbox\"> Show elapsed timer</label><div id=\"timer-fields\" hidden class=\"field-grid\"><label>Timer start<input id=\"timer-start-at\" type=\"datetime-local\" step=\".001\"></label><label>Timer end<input id=\"timer-end-at\" type=\"datetime-local\" step=\".001\"></label></div></div>"
      "<div class=\"optional\"><label class=\"toggle\"><input id=\"watermark-enabled\" type=\"checkbox\"> Add a PNG watermark</label><div id=\"watermark-fields\" hidden class=\"source-box\"><label for=\"watermark-file\">PNG file <small>It is converted to base64 locally and sent with this request.</small></label><input id=\"watermark-file\" type=\"file\" accept=\"image/png,.png\"><p id=\"watermark-status\" class=\"status\" role=\"status\"></p></div></div></section>"
      "<section class=\"card raw-panel\"><details><summary>Advanced: paste or inspect raw JSON</summary><p class=\"hint\">Paste a request and choose “Apply to form”. The JSON is checked for structural errors first; form edits are reflected here before preview or submission.</p><p class=\"hint\"><strong>Accepted fields</strong></p><ul class=\"field-reference\"><li><code>telemetryFormat</code> and <code>telemetry</code> are required. Formats: <code>polar-csv</code>, <code>garmin-fit</code> (base64 FIT), or <code>oxiwear-hr-csv</code>.</li><li><code>preset</code> is required: <code>1080p25</code> (1920×1080, 25 fps, up to 8 minutes) or <code>2.7k25</code> (2704×1520, 25 fps, up to 4 minutes).</li><li><code>telemetrySyncAt</code>, <code>cameraSyncAt</code>, <code>sectionStartAt</code>, and <code>sectionEndAt</code> are required ISO-8601 instants with <code>Z</code> or an explicit UTC offset.</li><li><code>spo2</code> is optional: <code>{format:\"oxiwear-spo2-csv\", telemetry}</code>.</li><li><code>timer</code> is optional: <code>{startAt, endAt}</code>, within the requested section.</li><li><code>watermark</code> is optional: <code>{contentBase64}</code>, a bounded PNG encoded as base64.</li><li><code>sourceVideo</code> is optional: <code>{fileId}</code>; when present, <code>outputFormat</code> (<code>h264-mp4</code> or <code>prores-422-mov</code>), <code>fitMode</code> (<code>letterbox</code>, <code>pillarbox</code>, or <code>crop</code>), and <code>audioMode</code> (<code>source+heartbeat</code>, <code>source-only</code>, or <code>heartbeat-only</code>) configure compositing.</li></ul><textarea id=\"raw-json\" spellcheck=\"false\">{}</textarea><div class=\"raw-actions\"><button id=\"apply-json\" type=\"button\">Apply JSON to form</button><button id=\"copy-json\" type=\"button\">Copy generated JSON</button></div><p id=\"json-status\" class=\"status json-errors\" role=\"status\"></p></details></section>"
-     "<section class=\"card\"><div class=\"actions\"><button class=\"primary\" type=\"button\" hx-post=\"/ui/preview\" hx-include=\"closest form\" hx-target=\"#preview-result\" hx-swap=\"outerHTML\">Preview overlay</button><button class=\"primary\" type=\"submit\">Submit render</button><span id=\"form-status\" class=\"status\" role=\"status\"></span></div></section></form>"
+     "<section class=\"card\"><div class=\"actions\"><button id=\"preview-button\" class=\"primary\" type=\"button\" hx-post=\"/ui/preview\" hx-include=\"closest form\" hx-target=\"#preview-result\" hx-swap=\"outerHTML\" hx-request='{\"timeout\":15000}'>Preview overlay</button><button class=\"primary\" type=\"submit\">Submit render</button><span id=\"form-status\" class=\"status\" role=\"status\"></span></div></section></form>"
      "<div class=\"results\"><div id=\"preview-result\"></div><div id=\"job-result\"></div></div>"
      (token-panel tokens)
      (when (admin/administrator? (:role user))
@@ -470,9 +504,9 @@
      "byId('watermark-content')||(()=>{const input=document.createElement('input');input.id='watermark-content';input.type='hidden';form.appendChild(input);})();readBinaryFile('watermark-file','watermark-content','watermark-status');"
      "function applyRequest(request){if(!request||typeof request!=='object'||Array.isArray(request))throw new Error('JSON must be an object');['telemetryFormat','preset','outputFormat','fitMode','audioMode'].forEach(key=>{if(request[key]!==undefined&&byId(key.replace(/[A-Z]/g,letter=>'-'+letter.toLowerCase())))byId(key.replace(/[A-Z]/g,letter=>'-'+letter.toLowerCase())).value=request[key];});byId('source-video-file-id').value=request.sourceVideo?.fileId||'';byId('timezone').value='local';[['telemetrySyncAt','telemetry-sync-at'],['cameraSyncAt','camera-sync-at'],['sectionStartAt','section-start-at'],['sectionEndAt','section-end-at']].forEach(([key,id])=>{byId(id).value=request[key]?isoToLocal(request[key]):'';});clearFileBackedValue('telemetry');byId('telemetry').value=request.telemetry||'';byId('telemetry-file').value='';show(byId('telemetry-status'),request.telemetry?'Loaded from JSON.':'');const hasSpo2=!!request.spo2;byId('spo2-enabled').checked=hasSpo2;refreshOptional('spo2-enabled','spo2-fields');clearFileBackedValue('spo2-telemetry');byId('spo2-telemetry').value=hasSpo2?(request.spo2.telemetry||''):'';show(byId('spo2-status'),hasSpo2?'Loaded from JSON.':'');const hasTimer=!!request.timer;byId('timer-enabled').checked=hasTimer;refreshOptional('timer-enabled','timer-fields');byId('timer-start-at').value=hasTimer?isoToLocal(request.timer.startAt):'';byId('timer-end-at').value=hasTimer?isoToLocal(request.timer.endAt):'';const hasWatermark=!!request.watermark;byId('watermark-enabled').checked=hasWatermark;refreshOptional('watermark-enabled','watermark-fields');byId('watermark-file').value='';clearFileBackedValue('watermark-content');byId('watermark-content').value=hasWatermark?(request.watermark.contentBase64||''):'';show(byId('watermark-status'),hasWatermark?'Loaded from JSON.':'');updateTelemetryAccept();writeRequest(request);invalidatePreview();show(jsonStatus,'JSON applied to the form.','success');show(status,'Ready to preview or submit.','success');}"
      "byId('apply-json').addEventListener('click',()=>{try{const request=JSON.parse(raw.value),errors=validateRequest(request);if(errors.length){show(jsonStatus,errors.map((error,index)=>(index+1)+'. '+error).join('\\n'),'error');return;}applyRequest(request);}catch(error){show(jsonStatus,error.message,'error');}});byId('copy-json').addEventListener('click',()=>{const text=syncRequest(false)||raw.value;navigator.clipboard?navigator.clipboard.writeText(text).then(()=>show(jsonStatus,'Generated JSON copied.','success')):show(jsonStatus,'Copy is unavailable in this browser.');});"
-     "function newPreviewGeneration(){return crypto.randomUUID?crypto.randomUUID():String(Date.now())+'-'+Math.random();}let previewGeneration=newPreviewGeneration();function invalidatePreview(){previewGeneration=newPreviewGeneration();const result=byId('preview-result');if(result?.dataset?.previewOperation){result.outerHTML='<article id=\"preview-result\" class=\"preview-stale\" role=\"status\"><h2>Preview settings changed</h2><p>Start a new preview for the current settings.</p></article>';show(status,'Preview settings changed.','');}}"
-     "function previewTrigger(event){const trigger=event.detail?.elt||event.target;return !!trigger?.matches?.('[hx-post=\"/ui/preview\"]');}function previewTarget(event){const target=event.detail?.target||event.target;return target?.id==='preview-result'?target:null;}"
-     "form.addEventListener('input',event=>{if(event.target.id==='raw-json'||event.target.type==='file')return;clearFileBackedValue(event.target.id);invalidatePreview();syncRequest(false);});document.body.addEventListener('htmx:configRequest',event=>{if(!form.contains(event.target))return;const text=syncRequest(true);if(!text){event.preventDefault();return;}event.detail.parameters.request=text;if(previewTrigger(event)){previewGeneration=newPreviewGeneration();event.detail.headers['X-Preview-Generation']=previewGeneration;show(status,'Preparing preview…');}});document.body.addEventListener('htmx:beforeSwap',event=>{const target=previewTarget(event);if(!target)return;const generation=event.detail.xhr?.getResponseHeader('X-Preview-Generation');if(generation&&generation!==previewGeneration)event.detail.shouldSwap=false;});document.body.addEventListener('htmx:afterSwap',event=>{const target=previewTarget(event);if(!target)return;if(target.matches('.preview-error'))show(status,'Preview failed. See details below.','error');else if(target.matches('.preview-pending'))show(status,'Preparing preview…');else if(target.matches('.preview-gallery'))show(status,'Preview ready.','success');});"
+     "const previewButton=byId('preview-button');function newPreviewGeneration(){return crypto.randomUUID?crypto.randomUUID():String(Date.now())+'-'+Math.random();}let previewGeneration=newPreviewGeneration(),previewActive=false;function setPreviewActive(active){previewActive=active;previewButton.disabled=active;previewButton.setAttribute('aria-disabled',String(active));}function localPreviewState(className,title,message){const result=byId('preview-result');result.className=className;result.setAttribute('role',className==='preview-pending'?'status':'alert');result.dataset.previewGeneration=previewGeneration;delete result.dataset.previewOperation;result.replaceChildren();const heading=document.createElement('h2'),copy=document.createElement('p');heading.textContent=title;copy.textContent=message;result.append(heading,copy);return result;}function beginPreview(){previewGeneration=newPreviewGeneration();setPreviewActive(true);localPreviewState('preview-pending','Preparing preview','Waiting for the preview service.');show(status,'Preparing preview…');}function finishPreview(){setPreviewActive(false);}function invalidatePreview(){const hadPreview=previewActive||!!byId('preview-result')?.dataset?.previewOperation;previewGeneration=newPreviewGeneration();finishPreview();if(hadPreview){localPreviewState('preview-stale','Preview settings changed','Start a new preview for the current settings.');show(status,'Preview settings changed.','');}}"
+     "function previewTrigger(event){const trigger=event.detail?.elt||event.target;return !!trigger?.matches?.('[hx-post=\"/ui/preview\"]');}function previewTarget(event){const target=event.detail?.target||event.target;return target?.id==='preview-result'?target:null;}function previewRequestEvent(event){const trigger=event.detail?.elt||event.target;return previewTrigger(event)||trigger?.id==='preview-result'||!!trigger?.closest?.('#preview-result')||!!previewTarget(event);}function requestPreviewGeneration(event){const trigger=event.detail?.elt||event.target;return event.detail?.requestConfig?.headers?.['X-Preview-Generation']||trigger?.dataset?.previewGeneration;}function previewEventGeneration(event){return event.detail?.xhr?.aggPreviewGeneration||event.detail?.requestConfig?.headers?.['X-Preview-Generation']||event.detail?.xhr?.getResponseHeader?.('X-Preview-Generation')||requestPreviewGeneration(event)||previewTarget(event)?.dataset?.previewGeneration||previewGeneration;}function currentPreviewEvent(event){return previewEventGeneration(event)===previewGeneration;}function transportFailure(event,kind){if(!previewRequestEvent(event)||!previewActive||!currentPreviewEvent(event))return;const statusCode=Number(event.detail?.xhr?.status||0);finishPreview();if(kind==='platform'){localPreviewState('preview-error','Preview did not finish','The preview service returned status '+statusCode+'. No durable render was submitted or charged. Retry with the Preview button.');show(status,'Preview failed. See details below.','error');}else if(kind==='connection'){localPreviewState('preview-error','Preview connection lost','The preview connection was lost. No durable render was submitted or charged. Check the connection, then retry.');show(status,'Preview connection lost.','error');}else if(kind==='cancelled'){localPreviewState('preview-error','Preview request cancelled','The browser cancelled this preview request. No durable render was submitted or charged. Retry when ready.');show(status,'Preview request cancelled.','error');}else{localPreviewState('preview-error','Preview did not finish','The browser stopped waiting for the preview service. No durable render was submitted or charged. Retry with the Preview button.');show(status,'Preview timed out.','error');}}"
+     "form.addEventListener('input',event=>{if(event.target.id==='raw-json'||event.target.type==='file')return;clearFileBackedValue(event.target.id);invalidatePreview();syncRequest(false);});document.body.addEventListener('htmx:configRequest',event=>{if(!form.contains(event.target))return;const preview=previewTrigger(event);if(preview&&previewActive){event.preventDefault();return;}const text=syncRequest(true);if(!text){event.preventDefault();return;}event.detail.parameters.request=text;if(preview){beginPreview();event.detail.headers['X-Preview-Generation']=previewGeneration;}});document.body.addEventListener('htmx:beforeSend',event=>{if(previewRequestEvent(event)&&event.detail?.xhr)event.detail.xhr.aggPreviewGeneration=requestPreviewGeneration(event)||previewGeneration;});document.body.addEventListener('htmx:beforeSwap',event=>{const target=previewTarget(event);if(!target)return;const generation=previewEventGeneration(event);if(generation&&generation!==previewGeneration)event.detail.shouldSwap=false;});document.body.addEventListener('htmx:afterSwap',event=>{const target=previewTarget(event);if(!target||!currentPreviewEvent(event))return;if(target.matches('.preview-pending')){setPreviewActive(true);show(status,'Preparing preview…');}else{finishPreview();if(target.matches('.preview-error'))show(status,'Preview failed. See details below.','error');else if(target.matches('.preview-gallery'))show(status,'Preview ready.','success');else if(target.matches('.preview-empty'))show(status,'Preview completed with no moments.','success');else if(target.matches('.preview-stale'))show(status,'Preview expired.','error');}});document.body.addEventListener('htmx:responseError',event=>transportFailure(event,'platform'));document.body.addEventListener('htmx:sendError',event=>transportFailure(event,'connection'));document.body.addEventListener('htmx:timeout',event=>transportFailure(event,'timeout'));document.body.addEventListener('htmx:sendAbort',event=>transportFailure(event,'cancelled'));document.body.addEventListener('htmx:xhr:abort',event=>transportFailure(event,'cancelled'));"
      "let previewOpener=null;document.body.addEventListener('click',event=>{const open=event.target.closest?.('.preview-open');if(open){const dialog=byId('preview-dialog'),image=dialog?.querySelector('img');if(!dialog||!image)return;previewOpener=open;image.src=open.dataset.full;image.alt=open.dataset.alt;dialog.showModal();return;}if(event.target.closest?.('.preview-dialog-close'))byId('preview-dialog')?.close();});document.body.addEventListener('close',event=>{if(event.target.id==='preview-dialog'&&previewOpener){previewOpener.focus();previewOpener=null;}},true);"
      (picker-script picker-config)
      "})();</script></div></body></html>")))

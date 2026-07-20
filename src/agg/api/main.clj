@@ -112,6 +112,9 @@
   (and (integer? value)
        (<= 0 value 1000000000000)))
 
+(defn- safe-preview-status? [value]
+  (and (integer? value) (<= 400 value 599)))
+
 (defn- preview-diagnostics [error]
   (let [data (error-data error)
         failure-code (some (fn [entry]
@@ -126,6 +129,14 @@
                       (let [value (:stage entry)]
                         (when (contains? preview-stages value) value)))
                     data)
+        status (some (fn [entry]
+                       (let [value (:status entry)]
+                         (when (safe-preview-status? value) value)))
+                     data)
+        retryable (some (fn [entry]
+                          (let [value (:retryable entry)]
+                            (when (boolean? value) value)))
+                        data)
         elapsed-ms (some (fn [entry]
                            (let [value (:elapsed-ms entry)]
                              (when (safe-preview-timing? value) value)))
@@ -138,6 +149,8 @@
       failure-code (assoc :failureCode failure-code)
       line (assoc :line line)
       stage (assoc :stage stage)
+      status (assoc :status status)
+      (some? retryable) (assoc :retryable retryable)
       elapsed-ms (assoc :elapsedMs elapsed-ms)
       timeout-ms (assoc :timeoutMs timeout-ms))))
 
@@ -155,25 +168,30 @@
                    source-metadata? "drive_source_metadata"
                    source-content? "drive_source_content"
                    :else "preview_rendering")
+        error-code (if contract? "invalid_request" "preview_failed")
+        diagnostics (preview-diagnostics error)
         status (cond
                  contract? 400
                  invalid-source? 400
+                 (safe-preview-status? (:status diagnostics))
+                 (:status diagnostics)
                  :else 502)
-        error-code (if contract? "invalid_request" "preview_failed")
-        diagnostics (preview-diagnostics error)]
+        retryable (if (contains? diagnostics :retryable)
+                    (:retryable diagnostics)
+                    (not (or contract? invalid-source?)))]
     {:status status
      :category category
      :diagnostics diagnostics
-     :body (merge
-            (cond-> {:error error-code
-                     :category category
-                     :requestId request-id}
-              (not contract?) (assoc :retryable true))
-            diagnostics)
+     :retryable retryable
+     :body (merge {:error error-code
+                   :category category
+                   :requestId request-id
+                   :retryable retryable}
+                  diagnostics)
      :log? true}))
 
 (defn- respond-preview-failure! [dependencies exchange request-id error]
-  (let [{:keys [status category diagnostics body log?]}
+  (let [{:keys [status category diagnostics retryable body log?]}
         (preview-failure error request-id)]
     (when log?
       (emit-event! dependencies "request_failed"
@@ -181,9 +199,8 @@
                     {:severity (if (= 400 status) "WARNING" "ERROR")
                      :requestId request-id
                      :category category
-                     :status status}
-                    (when (not= 400 status)
-                      {:retryable true})
+                     :status status
+                     :retryable retryable}
                     diagnostics)))
     (if (= "/ui/preview" (some-> exchange .getRequestURI .getPath))
       (respond! exchange 200 "text/html; charset=utf-8"
@@ -191,7 +208,7 @@
                  (merge {:category category
                          :request-id request-id
                          :status status
-                         :retryable (not= 400 status)}
+                         :retryable retryable}
                         diagnostics)))
       (respond-json! exchange status body))))
 

@@ -229,10 +229,26 @@
                                                           :output-bytes))
              (= "failed" state)
              (assoc :error
-                    (cond-> {:code (or (:failureCode job) "preview_failed")
-                             :retryable (true? (:retryable job))}
-                      (:stage job) (assoc :stage (:stage job))
-                      (:status job) (assoc :status (:status job))))
+                    (let [code (or (:failureCode job) "preview_failed")]
+                      (cond-> {:code code
+                               :category
+                               (cond
+                                 (= "source_metadata_failed" code)
+                                 "drive_source_metadata"
+
+                                 (contains? #{"source_download_failed"
+                                              "source_content_failed"} code)
+                                 "drive_source_content"
+
+                                 :else "preview_rendering")
+                               :requestId (:id job)
+                               :retryable (true? (:retryable job))}
+                        (:stage job) (assoc :stage (:stage job))
+                        (:status job) (assoc :status (:status job))
+                        (some? (:elapsedMs job))
+                        (assoc :elapsedMs (:elapsedMs job))
+                        (some? (:timeoutMs job))
+                        (assoc :timeoutMs (:timeoutMs job)))))
              (= "cancelled" state)
              (assoc :error {:code "preview_cancelled"
                             :retryable false}))))))))
