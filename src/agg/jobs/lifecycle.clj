@@ -71,6 +71,7 @@
     "drive_grant_required"
     "overlay_render_failed"
     "composition_encode_failed"
+    "composition_timeout"
     "artifact_upload_failed"
     "drive_delivery_failed"
     "completion_persistence_failed"
@@ -127,13 +128,16 @@
         stage (first-safe :stage #(contains? durable-stages %))
         reason (first-safe :reason #(contains? durable-failure-reasons %))
         status (first-safe :status #(and (integer? %) (<= 100 % 599)))
+        timeout-ms (first-safe :timeout-ms
+                               #(and (integer? %) (<= 0 % 1000000000000)))
         retryable (first-safe :retryable boolean?)]
     (cond-> {:failure-code failure-code
              :retryable (true? retryable)
              :elapsed-ms (max 0 (long elapsed-ms))}
       stage (assoc :stage stage)
       reason (assoc :reason reason)
-      status (assoc :status status))))
+      status (assoc :status status)
+      timeout-ms (assoc :timeout-ms timeout-ms))))
 
 (defn- typed-failure-code [data stage]
   (let [types (into #{} (keep :type) data)]
@@ -285,6 +289,8 @@
     (:stage failure-diagnostics) (assoc :stage (:stage failure-diagnostics))
     (:reason failure-diagnostics) (assoc :reason (:reason failure-diagnostics))
     (:status failure-diagnostics) (assoc :status (:status failure-diagnostics))
+    (:timeout-ms failure-diagnostics)
+    (assoc :timeoutMs (:timeout-ms failure-diagnostics))
     failure-diagnostics (assoc :retryable (:retryable failure-diagnostics)
                                :elapsedMs (:elapsed-ms failure-diagnostics))
     output (assoc :output output)))

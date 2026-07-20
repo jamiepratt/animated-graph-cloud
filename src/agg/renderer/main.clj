@@ -36,12 +36,37 @@
               (recur))))))
     (.formatHex (HexFormat/of) (.digest digest))))
 
+(defn cloud-progress-event
+  ([stage elapsed-ms]
+   (cloud-progress-event stage elapsed-ms {}))
+  ([stage elapsed-ms {:keys [progressPercent]}]
+   (cond-> {:severity "INFO"
+            :component "renderer"
+            :event "cloud_render_progress"
+            :message "Cloud renderer job is active"
+            :stage stage
+            :elapsedMs (max 0 (long elapsed-ms))}
+     (and (integer? progressPercent) (<= 0 progressPercent 100))
+     (assoc :progressPercent progressPercent))))
+
+(defn- progress-reporter []
+  (let [started (System/nanoTime)]
+    (fn report
+      ([stage] (report stage {}))
+      ([stage fields]
+       (try
+         (observability/emit-event!
+          (cloud-progress-event
+           stage (quot (- (System/nanoTime) started) 1000000) fields))
+         (catch Throwable _ nil))))))
+
 (defn render!
   "Runs one bounded render and returns its validated media report."
   [{:keys [output-path profile? jfr-path] :as render-spec}
-   {:keys [media video-encoder frame-renderer source-stream!]}]
+   {:keys [media video-encoder frame-renderer source-stream! progress!]}]
   (let [video-encoder (or video-encoder media)
         frame-renderer (or frame-renderer frames/java2d-frame-renderer)
+        progress! (or progress! (fn ([_]) ([_ _])))
         compositing? (some? (:source-video render-spec))
         source-stream!
         (when source-stream!
@@ -54,9 +79,11 @@
         started (System/nanoTime)
         frame-result (atom nil)
         memory-sampler (when profile? (profile/start-memory-sampler))
-        recording (when profile? (profile/start-recording))]
+        recording (when profile? (profile/start-recording))
+        frame-progress (atom #{})]
     (tufte/profile {:id ::render}
                    (try
+                     (progress! "overlay_render")
                      (jobs/with-durable-stage
                        "overlay_render"
                        #(tufte/p ::audio-generation
@@ -73,32 +100,48 @@
                                         (tufte/p
                                          ::frame-streaming
                                          (frames/stream-frames!
-                                          frame-renderer render-spec output)))))
+                                          frame-renderer
+                                          (assoc render-spec
+                                                 :frame-progress!
+                                                 (fn [percent]
+                                                   (let [[seen _]
+                                                         (swap-vals!
+                                                          frame-progress
+                                                          conj percent)]
+                                                     (when-not
+                                                      (contains? seen percent)
+                                                       (progress!
+                                                        "composition_encode"
+                                                        {:progressPercent
+                                                         percent})))))
+                                          output)))))
                            encode-result
-                           (jobs/with-durable-stage
-                             "composition_encode"
-                             #(tufte/p
-                               ::encoding
-                               (if compositing?
-                                 (do
-                                   (when-not (and source-stream!
-                                                  (satisfies?
-                                                   media/CompositeEncoder
-                                                   video-encoder))
-                                     (throw (errors/raise!
-                                             "Video compositing dependencies are incomplete"
-                                             {:type ::missing-compositing-dependencies})))
-                                   (media/encode-composite! video-encoder
-                                                            render-spec
-                                                            audio-path
-                                                            output-path
-                                                            source-stream!
-                                                            write-overlay!))
-                                 (media/encode! video-encoder
-                                                render-spec
-                                                audio-path
-                                                output-path
-                                                write-overlay!))))
+                           (do
+                             (progress! "composition_encode")
+                             (jobs/with-durable-stage
+                               "composition_encode"
+                               #(tufte/p
+                                 ::encoding
+                                 (if compositing?
+                                   (do
+                                     (when-not (and source-stream!
+                                                    (satisfies?
+                                                     media/CompositeEncoder
+                                                     video-encoder))
+                                       (throw (errors/raise!
+                                               "Video compositing dependencies are incomplete"
+                                               {:type ::missing-compositing-dependencies})))
+                                     (media/encode-composite! video-encoder
+                                                              render-spec
+                                                              audio-path
+                                                              output-path
+                                                              source-stream!
+                                                              write-overlay!))
+                                   (media/encode! video-encoder
+                                                  render-spec
+                                                  audio-path
+                                                  output-path
+                                                  write-overlay!)))))
                            verified
                            (jobs/with-durable-stage
                              "composition_encode"
@@ -217,7 +260,7 @@
   ([{:keys [output-path report-path jfr-path bucket object-prefix delete-local?
             ffmpeg ffprobe]
      :as request}
-    {:keys [media video-encoder artifact-store source-stream!]}]
+    {:keys [media video-encoder artifact-store source-stream! progress!]}]
    (when (not= (some? bucket) (some? object-prefix))
      (throw (errors/raise! "Bucket and object prefix must be supplied together"
                            {:type ::invalid-upload-options})))
@@ -233,7 +276,9 @@
          completed? (atom false)]
      (try
        (let [result (render! request {:video-encoder video-encoder
-                                      :source-stream! source-stream!})]
+                                      :source-stream! source-stream!
+                                      :progress! progress!})]
+         (when progress! (progress! "artifact_upload"))
          (jobs/with-durable-stage
            "artifact_upload"
            #(let [report-json (json/write-str (dissoc result :objects))]
@@ -277,7 +322,9 @@
   jobs/RenderWorker
   (perform-render! [_ job-id request]
     (tufte/profile {:id ::cloud-render}
-                   (let [subject (:requesterSubject request)
+                   (let [progress! (progress-reporter)
+                         _ (progress! "request_prepare")
+                         subject (:requesterSubject request)
                          render-spec
                          (jobs/with-durable-stage
                            "request_prepare"
@@ -288,7 +335,8 @@
                          #((or render-cloud! run-job!)
                            render-spec
                            {:preview-operation-id job-id
-                            :original-request request}))
+                            :original-request request
+                            :progress! progress!}))
                        (let [output-suffix
                              (if (= "h264-mp4" (:output-format render-spec))
                                ".mp4"
@@ -321,9 +369,11 @@
                                             :delete-local? false)
                                      {:artifact-store
                                       (storage/gcs-store bucket object-prefix)
-                                      :original-request request}))
+                                      :original-request request
+                                      :progress! progress!}))
                                  delivered
                                  (when drive-delivery
+                                   (progress! "drive_delivery")
                                    (jobs/with-durable-stage
                                      "drive_delivery"
                                      #(do
@@ -364,7 +414,9 @@
                                    :attempt (:attempt result)
                                    :elapsed-ms (:elapsedMs result)}
                             (:stage result) (assoc :stage (:stage result))
-                            (:status result) (assoc :status (:status result))))))
+                            (:status result) (assoc :status (:status result))
+                            (:timeoutMs result)
+                            (assoc :timeout-ms (:timeoutMs result))))))
   result)
 
 (defn run-cloud-job! [job-id attempt]
@@ -392,6 +444,7 @@
         render-cloud!
         (fn [request dependencies]
           (let [original-request (or (:original-request dependencies) request)
+                progress! (or (:progress! dependencies) (fn [_]))
                 preview? (some? (:preview-operation-id dependencies))
                 source-video (:source-video request)
                 _ (when (and source-video (nil? source-system))
@@ -399,6 +452,7 @@
                                           {:type ::missing-source-system})))
                 access-token
                 (when source-video
+                  (progress! "source_content")
                   (:access-token
                    (jobs/with-durable-stage
                      "source_content"
@@ -459,6 +513,7 @@
           (:stage diagnosis) (assoc :stage (:stage diagnosis))
           (:reason diagnosis) (assoc :reason (:reason diagnosis))
           (:status diagnosis) (assoc :status (:status diagnosis))
+          (:timeout-ms diagnosis) (assoc :timeoutMs (:timeout-ms diagnosis))
           attempt (assoc :attempt attempt))]
     (merge
      (if drive-reauthorization?

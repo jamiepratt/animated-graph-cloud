@@ -563,6 +563,35 @@
     (is (= "worker_failed" (:failureCode (jobs/get-job service job-id))))
     (is (nil? (get-in @(:state system) [:jobs job-id :lease])))))
 
+(deftest composition-timeout-is-durable-and-releases-the-render-lease
+  (let [worker (reify jobs/RenderWorker
+                 (perform-render! [_ _job-id _request]
+                   (errors/raise! "bounded render timeout"
+                                  {:type ::composition-timeout
+                                   :failure-code "composition_timeout"
+                                   :stage "composition_encode"
+                                   :timeout-ms 50
+                                   :retryable true})))
+        system (jobs/in-memory-system {:worker worker})
+        service (:service system)
+        job-id (get-in (jobs/submit-job! service "timed-render"
+                                         (render-request))
+                       [:job :id])]
+    (jobs/dispatch-job! service job-id)
+    (try
+      (jobs/run-job! service job-id)
+      (catch clojure.lang.ExceptionInfo _))
+    (let [failed (jobs/get-job service job-id)]
+      (is (= {:state "failed"
+              :failureCode "composition_timeout"
+              :stage "composition_encode"
+              :timeoutMs 50
+              :retryable true}
+             (select-keys failed [:state :failureCode :stage :timeoutMs
+                                  :retryable])))
+      (is (str/includes? (ui/job-fragment failed) "Deadline")))
+    (is (nil? (get-in @(:state system) [:jobs job-id :lease])))))
+
 (deftest typed-render-failure-has-one-privacy-safe-public-diagnosis
   (let [worker (reify jobs/RenderWorker
                  (perform-render! [_ _job-id _request]

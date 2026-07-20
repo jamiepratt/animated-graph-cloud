@@ -10,7 +10,7 @@
     :jobsCancelled :cleanupErrors :components :failureCode :errorType :port
     :requestId :category :status :phase :view :listState :tokenStatus
     :accountStatus :mimeFilter :indexStatus :stage :elapsedMs :timeoutMs
-    :retryable :attempt})
+    :progressPercent :retryable :attempt})
 
 (def ^:private safe-value-keys
   #{:severity :component :event :message :reason :failureCode :errorType

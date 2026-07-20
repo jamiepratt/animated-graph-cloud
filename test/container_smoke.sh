@@ -52,6 +52,7 @@ docker run --rm --entrypoint ffmpeg "$image" -hide_banner -h encoder=libx264 2>&
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' overlay '
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' amix '
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' alimiter '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' volume '
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' hstack '
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' select '
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' setpts '
@@ -59,7 +60,8 @@ docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -
 
 docker run --rm "$image" clojure.main -e '
 (require (quote [agg.render.audio :as audio])
-         (quote [agg.render.media :as media]))
+         (quote [agg.render.media :as media])
+         (quote [agg.renderer.main :as renderer]))
 (import (quote java.awt.image.BufferedImage)
         (quote java.io.ByteArrayOutputStream)
         (quote java.nio.file.Files)
@@ -71,21 +73,22 @@ docker run --rm "$image" clojure.main -e '
       image-path (.resolve directory "source.png")
       audio-path (.resolve directory "source.wav")
       source-path (.resolve directory "source.mp4")
+      durable-path (.resolve directory "durable.mp4")
       image (BufferedImage. 64 36 BufferedImage/TYPE_INT_ARGB)
       overlay-output (ByteArrayOutputStream.)]
   (try
     (ImageIO/write image "png" (.toFile image-path))
     (with-open [output (Files/newOutputStream audio-path (make-array OpenOption 0))]
-      (audio/write-wav! {:duration-seconds 2
+      (audio/write-wav! {:duration-seconds 20
                          :telemetry [{:seconds 0.0 :heart-rate 120.0}
-                                     {:seconds 2.0 :heart-rate 120.0}]}
+                                     {:seconds 20.0 :heart-rate 120.0}]}
                         output))
     (let [process (.start
                    (doto (ProcessBuilder.
                           ^java.util.List
                           ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
                            "-loop" "1" "-framerate" "25" "-i" (str image-path)
-                           "-i" (str audio-path) "-t" "2" "-c:v" "libx264"
+                           "-i" (str audio-path) "-t" "20" "-c:v" "libx264"
                            "-pix_fmt" "yuv420p" "-c:a" "aac" "-movflags"
                            "+faststart" "-y" (str source-path)])
                      (.inheritIO)))]
@@ -110,7 +113,38 @@ docker run --rm "$image" clojure.main -e '
       (when-not (and (= {:frame-count 2 :source-decodes 1} result)
                      (= [0 24] (mapv first @frames)))
         (throw (ex-info "selected-source gallery smoke failed" {}))))
+    (let [started (System/nanoTime)
+          result
+          (renderer/render!
+           {:id "1080p25"
+            :width 64 :height 36 :fps 25 :duration-seconds 9
+            :output-format "h264-mp4"
+            :fit-mode "letterbox"
+            :audio-mode "source+heartbeat"
+            :source-video {:file-id "smoke-fixture"}
+            :telemetry [{:seconds 0.0 :heart-rate 120.0}
+                        {:seconds 9.0 :heart-rate 140.0}]
+            :timeout-ms media/durable-composite-smoke-bound-ms
+            :output-path durable-path
+            :profile? false}
+           {:video-encoder (media/ffmpeg-video-encoder)
+            :source-stream!
+            (fn [output]
+              (with-open [input (Files/newInputStream
+                                 source-path (make-array OpenOption 0))]
+                (.transferTo input output)))})
+          elapsed-ms (quot (- (System/nanoTime) started) 1000000)]
+      (when-not (and (< elapsed-ms media/durable-composite-smoke-bound-ms)
+                     (= 225 (:frame-count result))
+                     (= "h264" (get-in result [:media :video :codec]))
+                     (= "aac" (get-in result [:media :audio :codec]))
+                     (= 9.0 (get-in result [:media :container
+                                            :duration-seconds]))
+                     (pos? (:output-bytes result)))
+        (throw (ex-info "durable selected-source smoke failed"
+                        {:elapsed-ms elapsed-ms}))))
     (finally
+      (Files/deleteIfExists durable-path)
       (Files/deleteIfExists source-path)
       (Files/deleteIfExists audio-path)
       (Files/deleteIfExists image-path)

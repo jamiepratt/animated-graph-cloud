@@ -4,6 +4,7 @@
             [agg.errors :as errors]
             [agg.jobs.lifecycle :as jobs]
             [agg.jobs-test :as fixture]
+            [agg.observability :as observability]
             [agg.renderer.main :as renderer]
             [clojure.test :refer [deftest is]])
   (:import (java.nio.file Files OpenOption)))
@@ -37,6 +38,41 @@
     (is (= "https://drive.google.com/file/d/drive-output-1/view"
            (:driveWebViewLink result)))
     (is (= "jobs/job-1/output.mov" (:object result)))))
+
+(deftest durable-cloud-render-emits-only-bounded-stage-progress
+  (let [events (atom [])
+        delivery (reify drive/OutputDelivery
+                   (deliver-output! [_ _job-id _subject _path]
+                     {:fileId "drive-output-1"}))
+        render-cloud!
+        (fn [{:keys [output-path]} {:keys [progress!]}]
+          (progress! "source_content")
+          (progress! "overlay_render")
+          (progress! "composition_encode")
+          (Files/writeString output-path "movie" (make-array OpenOption 0))
+          (progress! "artifact_upload")
+          {:output-bytes 5
+           :sha256 (apply str (repeat 64 "a"))
+           :objects {:media {:object "jobs/job-1/output.mov"}}})
+        worker (renderer/->CloudRenderWorker "temporary-bucket" delivery
+                                             render-cloud!)]
+    (with-redefs [observability/emit-event! #(swap! events conj %)]
+      (jobs/perform-render! worker "private-job-id"
+                            (assoc (fixture/render-request)
+                                   :requesterSubject "private-subject")))
+    (is (= ["request_prepare" "source_content" "overlay_render"
+            "composition_encode" "artifact_upload" "drive_delivery"]
+           (mapv :stage @events)))
+    (is (every? #(= {:severity "INFO"
+                     :component "renderer"
+                     :event "cloud_render_progress"
+                     :message "Cloud renderer job is active"}
+                    (dissoc % :stage :elapsedMs))
+                @events))
+    (is (every? #(and (integer? (:elapsedMs %))
+                      (not (neg? (:elapsedMs %))))
+                @events))
+    (is (not (re-find #"private|subject|job-id" (pr-str @events))))))
 
 (deftest cloud-preview-worker-persists-a-gallery-without-durable-delivery
   (let [delivered (atom 0)
@@ -111,7 +147,8 @@
                 :stage "composition_encode"
                 :status 422
                 :retryable false
-                :elapsedMs 9123}
+                :elapsedMs 9123
+                :timeoutMs 2700000}
         cause (try
                 (renderer/require-cloud-success! failed)
                 (catch Throwable error error))]
@@ -124,7 +161,8 @@
             :status 422
             :retryable false
             :attempt 2
-            :elapsedMs 9123}
+            :elapsedMs 9123
+            :timeoutMs 2700000}
            (renderer/cloud-failure-event cause)))))
 
 (deftest actual-worker-failure-event-keeps-the-validated-attempt

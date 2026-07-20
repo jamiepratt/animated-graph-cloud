@@ -215,6 +215,18 @@ Supported outputs are H.264 MP4 (default) and ProRes 422 MOV. Fit defaults to
 letterbox/pillarbox; audio defaults to source plus bounded heartbeat mix, with
 source-only and heartbeat-only modes also available.
 
+Selected-source composition has one 45-minute deadline shared by FFmpeg,
+source streaming, overlay production, and the heartbeat-only fallback attempt.
+Timeouts terminate FFmpeg, fail durably as `composition_timeout`, and release
+the render lease before Cloud Run's one-hour task limit. Safe stage events and
+at most eleven numeric frame-progress samples identify forward movement without
+logging source or telemetry data. The production container smoke generates a
+real 20-second H.264/AAC source, streams it through the non-seekable input, and
+requires a verified 9-second H.264/AAC output within 30 seconds.
+The production FFmpeg bundle includes every filter used by that command,
+including `volume`; a nonzero FFmpeg exit fails immediately instead of waiting
+on a pipe producer that no longer has a consumer.
+
 `POST /v1/jobs` accepts the same validated render JSON as `/v1/overlay` and
 requires an `Idempotency-Key` header of 1–128 characters. A new request returns
 `202`; replaying the same key and body returns `200` with the same job ID.

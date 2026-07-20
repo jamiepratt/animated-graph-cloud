@@ -6,6 +6,7 @@
            (java.io ByteArrayInputStream ByteArrayOutputStream IOException OutputStream RandomAccessFile)
            (java.nio.file Files OpenOption Path)
            (java.util Arrays)
+           (java.util.concurrent TimeUnit)
            (javax.imageio ImageIO)))
 
 (defprotocol VideoEncoder
@@ -49,6 +50,12 @@
    :profile "422"
    :encoder "prores_ks"
    :pixel-format "yuv422p10le"})
+
+(def durable-composite-timeout-ms (* 45 60 1000))
+(def durable-composite-smoke-bound-ms 30000)
+
+(def ^:private process-stop-grace-ms 1000)
+(def ^:private timed-out (Object.))
 
 (defn- process-builder [command]
   (doto (ProcessBuilder. ^java.util.List command)
@@ -405,8 +412,57 @@
       (identical? current cause) true
       :else (recur (.getCause ^Throwable current)))))
 
+(defn- remaining-ms [deadline-nanos]
+  (max 0 (long (Math/ceil
+                (/ (- deadline-nanos (System/nanoTime)) 1000000.0)))))
+
+(defn- timeout-error [timeout-ms]
+  (errors/raise! "FFmpeg compositing exceeded its deadline"
+                 {:type ::composite-timeout
+                  :failure-code "composition_timeout"
+                  :stage "composition_encode"
+                  :timeout-ms timeout-ms
+                  :retryable true}))
+
+(defn- delivered-error [result]
+  (when (realized? result)
+    (let [value @result]
+      (when (instance? Throwable value) value))))
+
+(defn- await-process! [^Process process overlay-result deadline-nanos timeout-ms]
+  (loop []
+    (when-let [overlay-error (delivered-error overlay-result)]
+      (throw (errors/raise! "FFmpeg compositing failed"
+                            {:type ::compositing-failed}
+                            overlay-error)))
+    (if-not (.isAlive process)
+      (.exitValue process)
+      (let [remaining (remaining-ms deadline-nanos)]
+        (if (pos? remaining)
+          (do
+            (.waitFor process (min remaining 25) TimeUnit/MILLISECONDS)
+            (recur))
+          (throw (timeout-error timeout-ms)))))))
+
+(defn- await-producer! [result deadline-nanos timeout-ms]
+  (let [remaining (remaining-ms deadline-nanos)
+        value (if (pos? remaining)
+                (deref result remaining timed-out)
+                timed-out)]
+    (if (identical? timed-out value)
+      (throw (timeout-error timeout-ms))
+      value)))
+
+(defn- stop-process! [^Process process]
+  (when (.isAlive process)
+    (.destroy process)
+    (when-not (.waitFor process process-stop-grace-ms TimeUnit/MILLISECONDS)
+      (.destroyForcibly process)
+      (.waitFor process process-stop-grace-ms TimeUnit/MILLISECONDS))))
+
 (defn- encode-composite-attempt!
-  [ffmpeg render-spec heartbeat-path output-path source-stream! write-overlay!]
+  [ffmpeg render-spec heartbeat-path output-path source-stream! write-overlay!
+   deadline-nanos timeout-ms]
   (let [directory (Files/createTempDirectory
                    "agg-composite-pipe-"
                    (make-array java.nio.file.attribute.FileAttribute 0))
@@ -414,6 +470,7 @@
         process (.start (process-builder
                          (composite-command ffmpeg render-spec heartbeat-path
                                             overlay-pipe output-path)))
+        captured (capture-output (.getInputStream process))
         source-result (promise)
         source-pipe-write-error (atom nil)
         overlay-result (promise)
@@ -440,50 +497,59 @@
     (.setDaemon overlay-thread true)
     (.start source-thread)
     (.start overlay-thread)
-    (let [exit-status (.waitFor process)
-          source-error @source-result
-          overlay-error @overlay-result]
-      (try
-        ;; The duration bound can make FFmpeg close stdin before Drive finishes.
-        ;; Suppress only the exact write failure from that successful process.
-        (when (and source-error
-                   (not (and (zero? exit-status)
-                             (caused-by? source-error
-                                         @source-pipe-write-error))))
-          (throw (errors/raise! "FFmpeg compositing failed"
-                                {:type ::compositing-failed
-                                 :exit-status exit-status}
-                                source-error)))
-        (when overlay-error
-          (throw (errors/raise! "FFmpeg compositing failed"
-                                {:type ::compositing-failed
-                                 :exit-status exit-status}
-                                overlay-error)))
+    (try
+      (let [exit-status (await-process! process overlay-result deadline-nanos
+                                        timeout-ms)]
         (when-not (zero? exit-status)
           (throw (errors/raise! "FFmpeg compositing failed"
                                 {:type ::compositing-failed
                                  :exit-status exit-status})))
-        {:exit-status exit-status}
-        (finally
-          (Files/deleteIfExists overlay-pipe)
-          (Files/deleteIfExists directory))))))
+        (let [source-error (await-producer! source-result deadline-nanos timeout-ms)
+              overlay-error (await-producer! overlay-result deadline-nanos timeout-ms)]
+          ;; The duration bound can make FFmpeg close stdin before Drive finishes.
+          ;; Suppress only the exact write failure from that successful process.
+          (when (and source-error
+                     (not (caused-by? source-error
+                                      @source-pipe-write-error)))
+            (throw (errors/raise! "FFmpeg compositing failed"
+                                  {:type ::compositing-failed
+                                   :exit-status exit-status}
+                                  source-error)))
+          (when overlay-error
+            (throw (errors/raise! "FFmpeg compositing failed"
+                                  {:type ::compositing-failed
+                                   :exit-status exit-status}
+                                  overlay-error)))
+          {:exit-status exit-status}))
+      (catch Throwable error
+        (stop-process! process)
+        (throw error))
+      (finally
+        (deref captured process-stop-grace-ms "")
+        (Files/deleteIfExists overlay-pipe)
+        (Files/deleteIfExists directory)))))
 
 (defn- encode-composite-with-ffmpeg!
   [ffmpeg render-spec heartbeat-path output-path source-stream! write-overlay!]
-  (try
-    (encode-composite-attempt! ffmpeg render-spec heartbeat-path output-path
-                               source-stream! write-overlay!)
-    (catch clojure.lang.ExceptionInfo error
-      ;; A source without an audio stream is still composable. Retry the same
-      ;; non-seekable source with heartbeat-only audio; no source bytes are
-      ;; retained between attempts.
-      (if (and (= "source+heartbeat" (:audio-mode render-spec))
-               (= ::compositing-failed (:type (ex-data error))))
-        (encode-composite-attempt!
-         ffmpeg
-         (assoc render-spec :audio-mode "heartbeat-only")
-         heartbeat-path output-path source-stream! write-overlay!)
-        (throw error)))))
+  (let [timeout-ms (long (or (:timeout-ms render-spec)
+                             durable-composite-timeout-ms))
+        deadline-nanos (+ (System/nanoTime) (* timeout-ms 1000000))]
+    (try
+      (encode-composite-attempt! ffmpeg render-spec heartbeat-path output-path
+                                 source-stream! write-overlay!
+                                 deadline-nanos timeout-ms)
+      (catch clojure.lang.ExceptionInfo error
+        ;; A source without an audio stream is still composable. Retry the same
+        ;; non-seekable source with heartbeat-only audio; no source bytes are
+        ;; retained between attempts. Both attempts share one deadline.
+        (if (and (= "source+heartbeat" (:audio-mode render-spec))
+                 (= ::compositing-failed (:type (ex-data error))))
+          (encode-composite-attempt!
+           ffmpeg
+           (assoc render-spec :audio-mode "heartbeat-only")
+           heartbeat-path output-path source-stream! write-overlay!
+           deadline-nanos timeout-ms)
+          (throw error))))))
 
 (defn- read-unsigned-int [^RandomAccessFile file]
   (bit-and 0xffffffff (long (.readInt file))))
