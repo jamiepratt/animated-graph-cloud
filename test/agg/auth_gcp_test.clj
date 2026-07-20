@@ -3,6 +3,7 @@
             [agg.auth.core :as auth]
             [agg.auth.gcp :as gcp]
             [clojure.data.json :as json]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is]])
   (:import (com.google.cloud.firestore FirestoreOptions)))
 
@@ -13,8 +14,7 @@
                                  {:id_token "login-jwt"
                                   :access_token "drive-access"
                                   :refresh_token "drive-refresh"
-                                  :scope (clojure.string/join
-                                          " " auth/approved-scopes)})}
+                                  :scope (str/join " " auth/approved-scopes)})}
                          {:status 200
                           :body (json/write-str {:access_token "fresh-access"})}])
         send! (fn [request]

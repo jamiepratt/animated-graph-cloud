@@ -488,9 +488,6 @@
   (let [drive-access (require-drive-access! auth-system user)]
     (attach-source! auth-system user prepared drive-access)))
 
-(defn- source-aware-request! [exchange auth-system user]
-  (attach-source! auth-system user (request-render-request exchange)))
-
 (defn- ui-render-request [exchange]
   (try
     (let [request (json/read-str (get (request-form exchange) "request")
@@ -506,9 +503,6 @@
       (throw (errors/raise! "Invalid render request"
                             {:type ::invalid-request}
                             error)))))
-
-(defn- source-aware-ui-request! [exchange auth-system user]
-  (attach-source! auth-system user (ui-render-request exchange)))
 
 (defn- stage-source-stream [source-stream! stage]
   (fn [output]
@@ -652,7 +646,7 @@
 
 (defn- authenticated-user! [exchange auth-system token-service]
   (when auth-system
-    (if-let [session (session-token exchange auth-system)]
+    (if (session-token exchange auth-system)
       (assoc (require-user! exchange auth-system) :auth-kind :session)
       (if-let [token (and token-service (bearer-token exchange))]
         (->> (tokens/authenticate token-service token)

@@ -441,7 +441,7 @@
          error)))))
 
 (defn finish-login!
-  [{:keys [oauth allowlist member-directory cipher grant-store drive]
+  [{:keys [oauth member-directory cipher grant-store drive]
     :as system}
    {:keys [code state state-cookie]}]
   (when-not (and cipher grant-store drive (:drive-token-client system))
