@@ -433,6 +433,9 @@
            (when (:stage error)
              (str "<dt>Stage</dt><dd>"
                   (escape-html (title-case (:stage error))) "</dd>"))
+           (when (:reason error)
+             (str "<dt>Reason</dt><dd><code>"
+                  (escape-html (:reason error)) "</code></dd>"))
            (when (some? (:status error))
              (str "<dt>Status</dt><dd>" (long (:status error)) "</dd>"))
            (when (some? (:elapsedMs error))

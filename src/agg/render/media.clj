@@ -297,6 +297,8 @@
                     (image-png (.getSubimage image 0 0 width height))
                     (image-png (.getSubimage image width 0 width height)))))
 
+(declare monitored-pipe-output caused-by?)
+
 (defn- render-composite-gallery-with-ffmpeg!
   [ffmpeg render-spec source-stream! overlays consume-frame!]
   (let [{:keys [width height]} render-spec
@@ -320,21 +322,32 @@
             stderr (future
                      (with-open [input (.getErrorStream process)]
                        (.readAllBytes input)))
-            source-error (atom nil)]
+            source-error (atom nil)
+            source-pipe-write-error (atom nil)]
         (try
-          (with-open [source-output (.getOutputStream process)]
-            (try
-              (source-stream! source-output)
-              (catch Throwable error
-                (reset! source-error error))))
+          (try
+            (with-open [source-output (.getOutputStream process)]
+              (source-stream!
+               (monitored-pipe-output source-output source-pipe-write-error)))
+            (catch Throwable error
+              (reset! source-error error)))
           (let [exit-status (.waitFor process)
-                output @stdout]
+                output @stdout
+                expected-pipe-closure?
+                (and @source-error
+                     (caused-by? @source-error @source-pipe-write-error))]
             @stderr
+            (when (and @source-error (not expected-pipe-closure?))
+              (throw (errors/raise! "Selected-source streaming failed"
+                                    {:type ::source-stream-failed
+                                     :reason "source_stream_failed"
+                                     :retryable true}
+                                    @source-error)))
             (when-not (zero? exit-status)
               (throw (errors/raise! "Selected-source gallery composition failed"
                                     {:type ::composite-gallery-failed
-                                     :exit-status exit-status}
-                                    @source-error)))
+                                     :exit-status exit-status
+                                     :reason "preview_decode_failed"})))
             (when (> (alength ^bytes output) maximum-output-bytes)
               (throw (errors/raise! "Selected-source gallery output is too large"
                                     {:type ::gallery-output-too-large

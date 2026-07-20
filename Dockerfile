@@ -58,7 +58,7 @@ RUN curl --fail --location --silent --show-error \
        --enable-parsers \
        --enable-bsfs \
        --enable-encoder=aac,libx264,png,prores_ks \
-       --enable-filter=aformat,alimiter,amix,aresample,crop,fps,format,overlay,pad,scale,setsar \
+       --enable-filter=aformat,alimiter,amix,aresample,crop,fps,format,hstack,overlay,pad,scale,select,setpts,setsar,split \
     && make --jobs="$(nproc)" \
     && make install \
     && mkdir --parents /opt/ffmpeg/lib \
