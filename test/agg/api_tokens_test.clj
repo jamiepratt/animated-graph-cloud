@@ -22,13 +22,28 @@
   (let [oauth (reify auth/OAuthClient
                 (exchange-code! [_ _ _ _ _]
                   (throw (UnsupportedOperationException.))))
+        grant-store (reify auth/GrantStore
+                      (load-grant [_ _]
+                        {:refresh-token-ciphertext "kms:refresh"
+                         :folder-id "folder-1"})
+                      (save-grant! [_ _ grant] grant)
+                      (revoke-grant! [_ _] nil))
+        cipher (reify auth/TokenCipher
+                 (encrypt-token! [_ value] (str "kms:" value))
+                 (decrypt-token! [_ value] (subs value 4)))
+        token-client (reify auth/DriveTokenClient
+                       (refresh-drive-token! [_ _]
+                         {:access-token "drive-access"}))
         system (auth/system
                 {:client-id "client-id"
                  :client-secret "client-secret"
                  :base-url "https://app.example.com"
                  :allowlist #{"owner@example.com" "member@example.com"}
                  :session-key (.getBytes "01234567890123456789012345678901")
-                 :oauth oauth})]
+                 :oauth oauth
+                 :grant-store grant-store
+                 :cipher cipher
+                 :drive-token-client token-client})]
     {:system system
      :owner {:subject "owner-subject" :email "owner@example.com"}
      :member {:subject "member-subject" :email "member@example.com"}}))
@@ -97,6 +112,40 @@
                    (.statusCode
                     (request! port :get (str "/v1/jobs/" job-id) nil
                               {"Cookie" (str "agg_session=" member-session)}))))))
+        (testing "a personal token keeps non-Drive access but cannot submit without a Drive grant"
+          (let [missing-drive-port (available-port)
+                missing-drive-auth
+                (assoc system :grant-store
+                       (reify auth/GrantStore
+                         (load-grant [_ _] nil)
+                         (save-grant! [_ _ grant] grant)
+                         (revoke-grant! [_ _] nil)))
+                missing-drive-server
+                (api/start! missing-drive-port
+                            {:job-service (:service lifecycle)
+                             :auth-system missing-drive-auth
+                             :upload-signer upload-signer
+                             :token-service (:service token-system)})]
+            (try
+              (let [job-response
+                    (request! missing-drive-port :post "/v1/jobs"
+                              (fixture/render-request)
+                              {"Content-Type" "application/json"
+                               "Idempotency-Key" "missing-drive-token-job"
+                               "Authorization" (str "Bearer " raw-token)})
+                    upload-response
+                    (request! missing-drive-port :post "/v1/uploads"
+                              {:contentType "application/json"
+                               :contentLength 32}
+                              {"Content-Type" "application/json"
+                               "Authorization" (str "Bearer " raw-token)})]
+                (is (= 401 (.statusCode job-response)))
+                (is (= {:error "drive_grant_required"
+                        :recoveryPath "/v1/auth/login/start?recovery=true"}
+                       (parsed job-response)))
+                (is (= 201 (.statusCode upload-response))))
+              (finally
+                (.close ^java.lang.AutoCloseable missing-drive-server)))))
         (testing "allowlist removal immediately disables an otherwise-valid token"
           (let [revoked-port (available-port)
                 revoked-auth (assoc system :allowlist #{"member@example.com"})

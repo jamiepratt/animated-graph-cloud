@@ -35,13 +35,28 @@
   (let [oauth (reify auth/OAuthClient
                 (exchange-code! [_ _ _ _ _]
                   (throw (UnsupportedOperationException.))))
+        grant-store (reify auth/GrantStore
+                      (load-grant [_ _]
+                        {:refresh-token-ciphertext "kms:refresh"
+                         :folder-id "folder-1"})
+                      (save-grant! [_ _ grant] grant)
+                      (revoke-grant! [_ _] nil))
+        cipher (reify auth/TokenCipher
+                 (encrypt-token! [_ value] (str "kms:" value))
+                 (decrypt-token! [_ value] (subs value 4)))
+        token-client (reify auth/DriveTokenClient
+                       (refresh-drive-token! [_ _]
+                         {:access-token "drive-access"}))
         auth-system (auth/system
                      {:client-id "client-id"
                       :client-secret "client-secret"
                       :base-url "https://app.example.com"
                       :allowlist #{"owner@example.com" "member@example.com"}
                       :session-key (.getBytes "01234567890123456789012345678901")
-                      :oauth oauth})
+                      :oauth oauth
+                      :grant-store grant-store
+                      :cipher cipher
+                      :drive-token-client token-client})
         owner {:subject "owner-subject" :email "owner@example.com"}
         member {:subject "member-subject" :email "member@example.com"}]
     {:auth-system auth-system
@@ -228,14 +243,14 @@
         (is (str/includes? (.body homepage) "class=\"hero-card\""))
         (is (str/includes? (.body homepage) "class=\"feature-grid\""))
         (is (str/includes? (.body homepage) "class=\"card trust-card\""))
-        (is (str/includes? (.body homepage) "Sign in with Google"))
+        (is (str/includes? (.body homepage) "Continue with Google"))
         (is (str/includes? (.body homepage) "href=\"/privacy\""))
         (is (str/includes? (.body homepage) "href=\"/terms\""))
-        (is (str/includes? (.body homepage) "Google account information"))
-        (is (str/includes? (.body homepage) "approved users"))
+        (is (str/includes? (.body homepage) "Google identity"))
+        (is (str/includes? (.body homepage) "approved access"))
         (is (str/includes? (.body homepage) "drive.file"))
         (is (str/includes? (.body homepage) "files you select"))
-        (is (str/includes? (.body homepage) "output delivery"))
+        (is (str/includes? (.body homepage) "required output delivery"))
         (is (= 200 (.statusCode privacy)))
         (is (str/includes? (.body privacy) "Privacy policy"))
         (is (str/includes? (.body privacy) "Google Drive"))
@@ -480,6 +495,8 @@
         (is (str/includes? (.body landing) "event.target.type==='file'"))
         (is (str/includes? (.body landing) "setFileBackedValue(targetId"))
         (is (str/includes? (.body landing) "function openPicker()"))
+        (is (not (str/includes? (.body landing) "localStorage")))
+        (is (not (str/includes? (.body landing) "sessionStorage")))
         (is (not (str/includes? (.body landing)
                                 "window.open('/v1/drive/picker'")))
         (is (not (str/includes? (.body landing)

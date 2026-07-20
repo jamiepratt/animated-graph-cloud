@@ -14,13 +14,13 @@
                              :code code
                              :verifier verifier
                              :redirect-uri redirect-uri})
-      (if (= :login flow)
-        {:subject "google-subject-1"
-         :email "owner@example.com"
-         :email-verified? true}
-        {:access-token "drive-access-token"
-         :refresh-token "drive-refresh-token"
-         :granted-scopes #{"https://www.googleapis.com/auth/drive.file"}}))))
+      (is (= :login flow))
+      {:subject "google-subject-1"
+       :email "owner@example.com"
+       :email-verified? true
+       :access-token "drive-access-token"
+       :refresh-token "drive-refresh-token"
+       :granted-scopes (set auth/approved-scopes)})))
 
 (defn drive-fixture []
   (let [grants (atom {})
@@ -63,29 +63,24 @@
     {:system system :grants grants :encrypted encrypted :folders folders
      :refreshes refreshes}))
 
-(deftest login-and-drive-use-separate-minimal-pkce-flows
-  (let [system (auth/system {:client-id "client-id"
-                             :client-secret "client-secret"
-                             :base-url "https://app.example.com"
-                             :allowlist #{"owner@example.com"}
-                             :session-key (.getBytes "01234567890123456789012345678901")
-                             :oauth (fake-oauth (atom []))
-                             :clock fixed-clock})
-        login (auth/begin-flow! system :login nil)
-        session (auth/issue-session system
-                                    {:subject "google-subject-1"
-                                     :email "owner@example.com"})
-        drive (auth/begin-flow! system :drive session)]
-    (is (= #{"openid" "email" "profile"}
-           (set (:scopes login))))
-    (is (= #{"https://www.googleapis.com/auth/drive.file"}
-           (set (:scopes drive))))
-    (is (= "S256" (:codeChallengeMethod login)))
-    (is (= "S256" (:codeChallengeMethod drive)))
-    (is (not= (:state login) (:state drive)))
-    (is (not= (:codeChallenge login) (:codeChallenge drive)))
-    (is (not (re-find #"drive" (:authorizationUrl login))))
-    (is (re-find #"drive.file" (:authorizationUrl drive)))))
+(deftest login-uses-one-combined-offline-pkce-flow-and-consent-only-for-recovery
+  (let [{:keys [system]} (drive-fixture)
+        routine (auth/begin-flow! system :login nil)
+        recovery (auth/begin-flow! system :login nil true)]
+    (is (= (set auth/approved-scopes) (set (:scopes routine))))
+    (is (= "S256" (:codeChallengeMethod routine)))
+    (is (re-find #"drive.file" (:authorizationUrl routine)))
+    (is (re-find #"access_type=offline" (:authorizationUrl routine)))
+    (is (not (re-find #"prompt=consent" (:authorizationUrl routine))))
+    (is (re-find #"prompt=consent" (:authorizationUrl recovery)))
+    (is (false? (:recovery? routine)))
+    (is (true? (:recovery? recovery)))
+    (is (= ::auth/invalid-flow
+           (try
+             (auth/begin-flow! system :drive nil)
+             nil
+             (catch clojure.lang.ExceptionInfo error
+               (:type (ex-data error))))))))
 
 (deftest firebase-browser-cookie-bundles-session-and-oauth-state
   (let [system (auth/system {:client-id "client-id"
@@ -109,13 +104,7 @@
 
 (deftest login-callback-requires-matching-unexpired-state-and-allowlisted-email
   (let [exchanges (atom [])
-        system (auth/system {:client-id "client-id"
-                             :client-secret "client-secret"
-                             :base-url "https://app.example.com"
-                             :allowlist #{"owner@example.com"}
-                             :session-key (.getBytes "01234567890123456789012345678901")
-                             :oauth (fake-oauth exchanges)
-                             :clock fixed-clock})
+        system (assoc (:system (drive-fixture)) :oauth (fake-oauth exchanges))
         flow (auth/begin-flow! system :login nil)]
     (testing "state mismatch fails before exchanging the code"
       (is (= ::auth/invalid-state
@@ -137,13 +126,8 @@
         (is (= :login (:flow (first @exchanges))))))))
 
 (deftest login-rejects-a-valid-google-user-outside-the-allowlist
-  (let [system (auth/system {:client-id "client-id"
-                             :client-secret "client-secret"
-                             :base-url "https://app.example.com"
-                             :allowlist #{"another@example.com"}
-                             :session-key (.getBytes "01234567890123456789012345678901")
-                             :oauth (fake-oauth (atom []))
-                             :clock fixed-clock})
+  (let [system (assoc (:system (drive-fixture))
+                      :allowlist #{"another@example.com"})
         flow (auth/begin-flow! system :login nil)]
     (is (= ::auth/not-allowlisted
            (try
@@ -154,22 +138,36 @@
              (catch clojure.lang.ExceptionInfo error
                (:type (ex-data error))))))))
 
+(deftest combined-login-accepts-googles-normalized-identity-scope-names
+  (let [oauth (reify auth/OAuthClient
+                (exchange-code! [_ _ _ _ _]
+                  {:subject "google-subject-1"
+                   :email "owner@example.com"
+                   :email-verified? true
+                   :access-token "drive-access-token"
+                   :refresh-token "drive-refresh-token"
+                   :granted-scopes
+                   #{"openid"
+                     "https://www.googleapis.com/auth/userinfo.email"
+                     "https://www.googleapis.com/auth/userinfo.profile"
+                     "https://www.googleapis.com/auth/drive.file"}}))
+        system (assoc (:system (drive-fixture)) :oauth oauth)
+        flow (auth/begin-flow! system :login nil)]
+    (is (string? (:session
+                  (auth/finish-login! system {:code "code"
+                                              :state (:state flow)
+                                              :state-cookie
+                                              (:stateCookie flow)}))))))
+
 (deftest pkce-state-survives-scale-to-zero-and-session-rechecks-allowlist
-  (let [configuration {:client-id "client-id"
-                       :client-secret "client-secret"
-                       :base-url "https://app.example.com"
-                       :allowlist #{"owner@example.com"}
-                       :session-key (.getBytes "01234567890123456789012345678901")
-                       :oauth (fake-oauth (atom []))
-                       :clock fixed-clock}
-        first-instance (auth/system configuration)
-        callback-instance (auth/system configuration)
+  (let [{first-instance :system} (drive-fixture)
+        callback-instance first-instance
         flow (auth/begin-flow! first-instance :login nil)
         completed (auth/finish-login! callback-instance
                                       {:code "code"
                                        :state (:state flow)
                                        :state-cookie (:stateCookie flow)})
-        revoked-instance (auth/system (assoc configuration :allowlist #{}))]
+        revoked-instance (assoc callback-instance :allowlist #{})]
     (is (= "owner@example.com" (get-in completed [:user :email])))
     (is (= ::auth/not-allowlisted
            (try
@@ -187,13 +185,14 @@
                   (is (= :login flow))
                   {:subject "member-subject"
                    :email "member@example.com"
-                   :email-verified? true}))
-        system (auth/system {:client-id "client-id"
-                             :client-secret "client-secret"
-                             :base-url "https://app.example.com"
-                             :member-directory directory
-                             :session-key (.getBytes "01234567890123456789012345678901")
-                             :oauth oauth})
+                   :email-verified? true
+                   :access-token "drive-access-token"
+                   :refresh-token "drive-refresh-token"
+                   :granted-scopes (set auth/approved-scopes)}))
+        system (assoc (:system (drive-fixture))
+                      :allowlist #{}
+                      :member-directory directory
+                      :oauth oauth)
         login! (fn []
                  (let [flow (auth/begin-flow! system :login nil)]
                    (auth/finish-login! system {:code "code"
@@ -246,13 +245,11 @@
                  (catch clojure.lang.ExceptionInfo error
                    (:type (ex-data error))))))))))
 
-(deftest drive-grant-is-encrypted-and-reuses-the-users-output-folder
-  (let [{:keys [system grants encrypted folders]} (drive-fixture)
-        session (auth/issue-session system {:subject "google-subject-1"
-                                            :email "owner@example.com"})]
+(deftest combined-login-encrypts-the-grant-and-reuses-the-users-output-folder
+  (let [{:keys [system grants encrypted folders]} (drive-fixture)]
     (doseq [_ (range 2)]
-      (let [flow (auth/begin-flow! system :drive session)]
-        (auth/finish-drive! system {:code "drive-code"
+      (let [flow (auth/begin-flow! system :login nil)]
+        (auth/finish-login! system {:code "combined-code"
                                     :state (:state flow)
                                     :state-cookie (:stateCookie flow)})))
     (is (= ["drive-refresh-token" "drive-refresh-token"] @encrypted))
@@ -263,12 +260,10 @@
     (is (= "drive-folder-1"
            (get-in @grants ["google-subject-1" :folder-id])))))
 
-(deftest drive-reauthorization-preserves-an-existing-refresh-token
+(deftest routine-login-validates-and-preserves-an-existing-refresh-token
   (let [{:keys [system grants encrypted]} (drive-fixture)
-        session (auth/issue-session system {:subject "google-subject-1"
-                                            :email "owner@example.com"})
-        first-flow (auth/begin-flow! system :drive session)]
-    (auth/finish-drive! system {:code "first-drive-code"
+        first-flow (auth/begin-flow! system :login nil)]
+    (auth/finish-login! system {:code "first-combined-code"
                                 :state (:state first-flow)
                                 :state-cookie (:stateCookie first-flow)})
     (let [reauthorization-system
@@ -276,26 +271,50 @@
                  :oauth
                  (reify auth/OAuthClient
                    (exchange-code! [_ flow _ _ _]
-                     (is (= :drive flow))
-                     {:access-token "reauthorized-drive-access-token"
+                     (is (= :login flow))
+                     {:subject "google-subject-1"
+                      :email "owner@example.com"
+                      :email-verified? true
+                      :access-token "routine-access-token"
                       :refresh-token nil
-                      :granted-scopes
-                      #{"https://www.googleapis.com/auth/drive.file"}})))
-          second-flow (auth/begin-flow! reauthorization-system :drive session)]
+                      :granted-scopes (set auth/approved-scopes)})))
+          second-flow (auth/begin-flow! reauthorization-system :login nil)]
       (is (= {:user {:subject "google-subject-1"
                      :email "owner@example.com"
                      :role :member}}
-               (select-keys
-                (auth/finish-drive!
-                 reauthorization-system
-                 {:code "second-drive-code"
-                  :state (:state second-flow)
-                  :state-cookie (:stateCookie second-flow)})
-                [:user])))
+             (select-keys
+              (auth/finish-login!
+               reauthorization-system
+               {:code "routine-code"
+                :state (:state second-flow)
+                :state-cookie (:stateCookie second-flow)})
+              [:user])))
       (is (= ["drive-refresh-token"] @encrypted))
       (is (= "kms:drive-refresh-token"
              (get-in @grants ["google-subject-1"
                               :refresh-token-ciphertext]))))))
+
+(deftest legacy-session-is-upgraded-only-after-a-successful-drive-refresh
+  (let [{:keys [system grants refreshes]} (drive-fixture)
+        user {:subject "google-subject-1" :email "owner@example.com"}
+        legacy (auth/issue-session system user {:combined-auth? false})]
+    (swap! grants assoc "google-subject-1"
+           {:refresh-token-ciphertext "kms:refresh"
+            :folder-id "drive-folder-1"})
+    (let [validated (auth/session-user system legacy)]
+      (is (= "google-subject-1" (:subject validated)))
+      (is (string? (:session-upgrade validated)))
+      (is (= ["refresh"] @refreshes))
+      (is (nil? (:session-upgrade
+                 (auth/session-user system (:session-upgrade validated)))))
+      (is (= ["refresh"] @refreshes)))
+    (swap! grants dissoc "google-subject-1")
+    (is (= ::auth/drive-grant-required
+           (try
+             (auth/session-user system legacy)
+             nil
+             (catch clojure.lang.ExceptionInfo error
+               (:type (ex-data error))))))))
 
 (deftest drive-access-refreshes-an-encrypted-grant-and-revokes-only-invalid-grants
   (let [{:keys [system grants refreshes]} (drive-fixture)

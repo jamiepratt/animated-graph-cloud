@@ -23,12 +23,27 @@
   (let [oauth (reify auth/OAuthClient
                 (exchange-code! [_ _ _ _ _]
                   (throw (UnsupportedOperationException.))))
+        grant-store (reify auth/GrantStore
+                      (load-grant [_ _]
+                        {:refresh-token-ciphertext "kms:refresh"
+                         :folder-id "folder-1"})
+                      (save-grant! [_ _ grant] grant)
+                      (revoke-grant! [_ _] nil))
+        cipher (reify auth/TokenCipher
+                 (encrypt-token! [_ value] (str "kms:" value))
+                 (decrypt-token! [_ value] (subs value 4)))
+        token-client (reify auth/DriveTokenClient
+                       (refresh-drive-token! [_ _]
+                         {:access-token "drive-access"}))
         system (auth/system {:client-id "client-id"
                              :client-secret "client-secret"
                              :base-url "https://app.example.com"
                              :allowlist #{"owner@example.com"}
                              :session-key (.getBytes "01234567890123456789012345678901")
-                             :oauth oauth})]
+                             :oauth oauth
+                             :grant-store grant-store
+                             :cipher cipher
+                             :drive-token-client token-client})]
     {:system system
      :session (auth/issue-session system {:subject "google-subject-1"
                                           :email "owner@example.com"})}))
@@ -36,7 +51,7 @@
 (defn- drive-callback-fixture
   ([oauth]
    (drive-callback-fixture oauth {}))
-  ([oauth {:keys [cipher drive grant-store]}]
+  ([oauth {:keys [cipher drive grant-store drive-token-client]}]
    (let [cipher (or cipher
                     (reify auth/TokenCipher
                       (encrypt-token! [_ value] (str "kms:" value))
@@ -50,6 +65,11 @@
                            (load-grant [_ _] nil)
                            (save-grant! [_ _ grant] grant)
                            (revoke-grant! [_ _] nil)))
+         drive-token-client
+         (or drive-token-client
+             (reify auth/DriveTokenClient
+               (refresh-drive-token! [_ _]
+                 {:access-token "refreshed-drive-access"})))
          system (auth/system {:client-id "client-id"
                               :client-secret "client-secret"
                               :base-url "https://app.example.com"
@@ -58,7 +78,8 @@
                               :oauth oauth
                               :cipher cipher
                               :grant-store grant-store
-                              :drive drive})]
+                              :drive drive
+                              :drive-token-client drive-token-client})]
      {:system system
       :session (auth/issue-session system {:subject "google-subject-1"
                                            :email "owner@example.com"})})))
@@ -66,10 +87,13 @@
 (defn- valid-drive-oauth []
   (reify auth/OAuthClient
     (exchange-code! [_ flow _ _ _]
-      (is (= :drive flow))
-      {:access-token "drive-access"
+      (is (= :login flow))
+      {:subject "google-subject-1"
+       :email "owner@example.com"
+       :email-verified? true
+       :access-token "drive-access"
        :refresh-token "drive-refresh"
-       :granted-scopes #{"https://www.googleapis.com/auth/drive.file"}})))
+       :granted-scopes (set auth/approved-scopes)})))
 
 (deftest configured-user-routes-require-an-allowlisted-session
   (let [port (available-port)
@@ -107,14 +131,12 @@
                   (is (= :login flow))
                   {:subject "google-subject-1"
                    :email "owner@example.com"
-                   :email-verified? true}))
-        system (auth/system
-                {:client-id "client-id"
-                 :client-secret "client-secret"
-                 :base-url (str "http://127.0.0.1:" port)
-                 :allowlist #{"owner@example.com"}
-                 :session-key (.getBytes "01234567890123456789012345678901")
-                 :oauth oauth})
+                   :email-verified? true
+                   :access-token "drive-access"
+                   :refresh-token "drive-refresh"
+                   :granted-scopes (set auth/approved-scopes)}))
+        system (assoc (:system (drive-callback-fixture oauth))
+                      :base-url (str "http://127.0.0.1:" port))
         flow (auth/begin-flow! system :login nil)
         browser-cookie (auth/issue-browser-cookie
                         system {:oauth (:stateCookie flow)})
@@ -140,7 +162,7 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
-(deftest drive-callback-returns-safe-categorized-errors
+(deftest combined-login-callback-returns-safe-categorized-errors
   (doseq [{:keys [label oauth options expected-status expected-body category]
            :or {options {}}}
           [{:label "revoked grant"
@@ -149,22 +171,29 @@
                        (throw (ex-info "invalid_grant"
                                        {:type ::auth/revoked-grant}))))
             :expected-status 401
-            :expected-body {"error" "drive_grant_required"}
+            :expected-body {"error" "drive_grant_required"
+                            "recoveryPath" "/v1/auth/login/start?recovery=true"}
             :category "invalid_grant"}
            {:label "missing refresh token"
             :oauth (reify auth/OAuthClient
                      (exchange-code! [_ _ _ _ _]
                        {:access-token "drive-access"
+                        :subject "google-subject-1"
+                        :email "owner@example.com"
+                        :email-verified? true
                         :refresh-token nil
-                        :granted-scopes
-                        #{"https://www.googleapis.com/auth/drive.file"}}))
+                        :granted-scopes (set auth/approved-scopes)}))
             :expected-status 401
-            :expected-body {"error" "drive_grant_required"}
+            :expected-body {"error" "drive_grant_required"
+                            "recoveryPath" "/v1/auth/login/start?recovery=true"}
             :category "missing_refresh_token"}
            {:label "unexpected scopes"
             :oauth (reify auth/OAuthClient
                      (exchange-code! [_ _ _ _ _]
                        {:access-token "drive-access"
+                        :subject "google-subject-1"
+                        :email "owner@example.com"
+                        :email-verified? true
                         :refresh-token "drive-refresh"
                         :granted-scopes #{"https://www.googleapis.com/auth/drive"}}))
             :expected-status 400
@@ -220,22 +249,28 @@
     (testing label
       (let [port (available-port)
             events (atom [])
-            {:keys [system session]} (drive-callback-fixture oauth options)
-            flow (auth/begin-flow! system :drive session)
+            {:keys [system]} (drive-callback-fixture oauth options)
+            flow (auth/begin-flow! system :login nil)
             browser-cookie (auth/issue-browser-cookie
-                            system {:session session
-                                    :oauth (:stateCookie flow)})
+                            system {:oauth (:stateCookie flow)})
             server (api/start! port
                                {:auth-system system
                                 :event-sink #(swap! events conj [%1 %2])})]
         (try
           (let [response (get! port
-                               (str "/v1/auth/drive/callback?code=code&state="
+                               (str "/v1/auth/login/callback?code=code&state="
                                     (:state flow))
                                {"Cookie" (str "__session=" browser-cookie)})
                 event (second (first @events))]
             (is (= expected-status (.statusCode response)))
             (is (= expected-body (json/read-str (.body response))))
+            (let [set-cookie (first (.allValues (.headers response) "Set-Cookie"))
+                  cookie-value (some-> set-cookie
+                                       (.split "=" 2) second
+                                       (.split ";" 2) first)]
+              (is (re-find #"^__session=" set-cookie))
+              (is (nil? (:session
+                         (auth/browser-cookie system cookie-value)))))
             (is (= ["oauth_callback_failed"]
                    (mapv first @events)))
             (is (= category (:category event)))
@@ -475,8 +510,10 @@
                                 {"Cookie" (str "agg_session=" session)})]
         (is (= 200 (.statusCode anonymous)))
         (is (re-find #"/v1/auth/login/start" (.body anonymous)))
+        (is (re-find #"Continue with Google" (.body anonymous)))
         (is (= 200 (.statusCode authenticated)))
-        (is (re-find #"/v1/auth/drive/start" (.body authenticated)))
+        (is (not (re-find #"/v1/auth/drive/start" (.body authenticated))))
+        (is (not (re-find #"Connect Drive" (.body authenticated))))
         (is (re-find #"gapi\.load\('picker'" (.body authenticated)))
         (is (re-find #"google\.picker\.PickerBuilder" (.body authenticated)))
         (is (re-find #"setOAuthToken" (.body authenticated)))
@@ -492,6 +529,59 @@
         (is (not (re-find #"window\.open\('/v1/drive/picker'" (.body authenticated))))
         (is (not (re-find #"addEventListener\('message'" (.body authenticated))))
         (is (not (re-find #"Select Drive input" (.body authenticated)))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest removed-separate-drive-oauth-routes-return-not-found
+  (let [port (available-port)
+        {:keys [system]} (auth-fixture)
+        server (api/start! port {:auth-system system})]
+    (try
+      (doseq [path ["/v1/auth/drive/start" "/v1/auth/drive/callback"]]
+        (let [response (get! port path {})]
+          (is (= 404 (.statusCode response)) path)
+          (is (= {"error" "not_found"}
+                 (json/read-str (.body response))) path)))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest revoked-drive-grant-blocks-submission-clears-the-session-and-enables-signed-recovery
+  (let [port (available-port)
+        lifecycle (jobs/in-memory-system)
+        {:keys [system session]} (auth-fixture)
+        revoked-system
+        (assoc system :drive-token-client
+               (reify auth/DriveTokenClient
+                 (refresh-drive-token! [_ _]
+                   (throw (ex-info "invalid grant"
+                                   {:type ::auth/revoked-grant})))))
+        csrf (auth/issue-csrf-token revoked-system
+                                    {:subject "google-subject-1"})
+        server (api/start! port {:auth-system revoked-system
+                                 :job-service (:service lifecycle)})]
+    (try
+      (let [response (post! port "/v1/jobs" (fixture/render-request)
+                            {"Content-Type" "application/json"
+                             "Idempotency-Key" "revoked-drive-preflight"
+                             "Cookie" (str "agg_session=" session)
+                             "X-CSRF-Token" csrf})
+            set-cookie (first (.allValues (.headers response) "Set-Cookie"))
+            recovery-cookie (first (.split ^String set-cookie ";" 2))
+            recovery-start (get! port "/v1/auth/login/start?recovery=true"
+                                 {"Cookie" recovery-cookie})
+            forged-recovery (get! port "/v1/auth/login/start?recovery=true" {})]
+        (is (= 401 (.statusCode response)))
+        (is (= {"error" "drive_grant_required"
+                "recoveryPath" "/v1/auth/login/start?recovery=true"}
+               (json/read-str (.body response))))
+        (is (empty? (get @(:state lifecycle) :jobs)))
+        (is (re-find #"^__session=" set-cookie))
+        (is (re-find #"prompt=consent"
+                     (.orElse (.firstValue (.headers recovery-start) "Location")
+                              "")))
+        (is (not (re-find #"prompt=consent"
+                          (.orElse (.firstValue (.headers forged-recovery) "Location")
+                                   "")))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

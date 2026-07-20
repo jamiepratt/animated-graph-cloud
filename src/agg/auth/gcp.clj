@@ -65,18 +65,18 @@
                  (catch Throwable _ {}))]
     (when-not (<= 200 status 299)
       (throw (errors/raise! "Google OAuth token exchange failed"
-                      {:type (cond
-                               (and (= "invalid_grant" (:error parsed))
-                                    (= "authorization_code"
-                                       (get form "grant_type")))
-                               ::auth/invalid-code
+                            {:type (cond
+                                     (and (= "invalid_grant" (:error parsed))
+                                          (= "authorization_code"
+                                             (get form "grant_type")))
+                                     ::auth/invalid-code
 
-                               (= "invalid_grant" (:error parsed))
-                               ::auth/revoked-grant
+                                     (= "invalid_grant" (:error parsed))
+                                     ::auth/revoked-grant
 
-                               :else
-                               ::auth/oauth-exchange-failed)
-                       :status status})))
+                                     :else
+                                     ::auth/oauth-exchange-failed)
+                             :status status})))
     parsed))
 
 (defrecord GoogleOAuthClient [send! client-id client-secret verify-identity
@@ -93,12 +93,12 @@
             "redirect_uri" redirect-uri
             "grant_type" "authorization_code"})]
       (case flow
-        :login (verify-identity id_token)
-        :drive {:access-token access_token
-                :refresh-token refresh_token
-                :granted-scopes (into #{}
-                                      (remove str/blank?)
-                                      (str/split (or scope "") #"\s+"))}
+        :login (merge (verify-identity id_token)
+                      {:access-token access_token
+                       :refresh-token refresh_token
+                       :granted-scopes (into #{}
+                                             (remove str/blank?)
+                                             (str/split (or scope "") #"\s+"))})
         (throw (errors/raise! "Unknown OAuth flow" {:type ::auth/invalid-flow})))))
   auth/DriveTokenClient
   (refresh-drive-token! [_ refresh-token]
@@ -120,11 +120,11 @@
 (defn- verified-token-payload [verifier token]
   (when (str/blank? token)
     (throw (errors/raise! "Google ID token is missing"
-                    {:type ::invalid-id-token})))
+                          {:type ::invalid-id-token})))
   (if-let [verified (.verify verifier token)]
     (.getPayload verified)
     (throw (errors/raise! "Google ID token signature or claims are invalid"
-                    {:type ::invalid-id-token}))))
+                          {:type ::invalid-id-token}))))
 
 (defn identity-verifier [client-id]
   (let [verifier (google-id-token-verifier client-id)]
@@ -161,7 +161,7 @@
         client-secret (:client_secret credentials)]
     (when-not (and (not-empty client-id) (not-empty client-secret))
       (throw (errors/raise! "OAuth client secret JSON is invalid"
-                      {:type ::invalid-client-secret})))
+                            {:type ::invalid-client-secret})))
     {:client-id client-id :client-secret client-secret}))
 
 (defn oauth-client [{:keys [client-id client-secret]}]
@@ -221,8 +221,8 @@
         (catch clojure.lang.ExceptionInfo error
           (if (= ::admin/not-allowlisted (:type (ex-data error)))
             (throw (errors/raise! "User is no longer allowlisted"
-                            {:type ::auth/not-allowlisted}
-                            error))
+                                  {:type ::auth/not-allowlisted}
+                                  error))
             (throw error))))))
   admin/CredentialAdministration
   (delete-member-credentials! [_ {:keys [subject] :as cleanup-identity}]
@@ -320,9 +320,9 @@
           ciphertext (:ciphertext parsed)]
       (when-not (and (<= 200 status 299) (not-empty ciphertext))
         (throw (errors/raise! "KMS token encryption failed"
-                        {:type ::kms-encryption-failed
-                         :status status
-                         :reason (kms-failure-reason status parsed)})))
+                              {:type ::kms-encryption-failed
+                               :status status
+                               :reason (kms-failure-reason status parsed)})))
       ciphertext))
   (decrypt-token! [_ ciphertext]
     (let [{:keys [status body]}
@@ -337,9 +337,9 @@
           plaintext (:plaintext parsed)]
       (when-not (and (<= 200 status 299) (not-empty plaintext))
         (throw (errors/raise! "KMS token decryption failed"
-                        {:type ::kms-decryption-failed
-                         :status status
-                         :reason (kms-failure-reason status parsed)})))
+                              {:type ::kms-decryption-failed
+                               :status status
+                               :reason (kms-failure-reason status parsed)})))
       (String. (.decode (Base64/getDecoder) ^String plaintext)
                StandardCharsets/UTF_8))))
 
@@ -350,7 +350,7 @@
 (defn- required [value name]
   (when (str/blank? value)
     (throw (errors/raise! (str name " is required")
-                    {:type ::missing-configuration :name name})))
+                          {:type ::missing-configuration :name name})))
   value)
 
 (defn- session-key [value]
@@ -358,7 +358,7 @@
                          StandardCharsets/UTF_8)]
     (when (< (alength bytes) 32)
       (throw (errors/raise! "AGG_SESSION_KEY must contain at least 32 bytes"
-                      {:type ::weak-session-key})))
+                            {:type ::weak-session-key})))
     bytes))
 
 (defn- token-hash-pepper [value]
@@ -366,7 +366,7 @@
                          StandardCharsets/UTF_8)]
     (when (< (alength bytes) 32)
       (throw (errors/raise! "AGG_TOKEN_HASH_PEPPER must contain at least 32 bytes"
-                      {:type ::weak-token-hash-pepper})))
+                            {:type ::weak-token-hash-pepper})))
     bytes))
 
 (defn- crypto-key-name [project region]

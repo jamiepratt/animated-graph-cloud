@@ -1,6 +1,6 @@
 # 0006: Isolate Google login from Drive delivery authorization
 
-- Status: Accepted
+- Status: Superseded by ADR 0013
 - Date: 2026-07-17
 
 ## Context

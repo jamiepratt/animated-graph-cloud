@@ -126,7 +126,7 @@
      "if(!picker){pickerRequested=true;selection.textContent='Loading Google Drive Picker…';initializePicker();return;}"
      "pickerRequested=false;picker.setVisible(true);reportDiagnostic('opened','drive','unknown');}"
      "function openPicker(){"
-     "if(!pickerConfig){selection.textContent='Connect Drive first';return;}"
+     "if(!pickerConfig){selection.textContent='Google Drive is temporarily unavailable';return;}"
      "showPicker();}"
      "function initializePicker(){"
      "if(!pickerConfig||picker||pickerLoading)return;"
@@ -315,7 +315,7 @@
      "</head><body hx-headers=\"" csrf-headers "\">"
      "<div class=\"shell\"><header><div><div class=\"eyebrow\">Telemetry overlays for video</div><h1>Compose your overlay</h1><p class=\"muted\">Configure a render, preview it, then send the finished overlay to Drive. Finished renders use durable jobs, including full-length sections.</p></div>"
      "<p class=\"muted\">Signed in as " (escape-html (:email user)) "</p></header>"
-     "<section class=\"card drive-card\"><div><h2>Google Drive</h2><p class=\"muted\">Select one video to compose telemetry over it, or leave it empty for a transparent overlay. The Picker also includes an Upload tab for source videos.</p></div><div class=\"drive-actions\"><a href=\"/v1/auth/drive/start\">Connect Drive</a><button id=\"open-picker\" type=\"button\">Pick one video</button><span>Selected: <output id=\"picker-selection\">None</output></span></div></section>"
+     "<section class=\"card drive-card\"><div><h2>Google Drive</h2><p class=\"muted\">Select one video to compose telemetry over it, or leave it empty for a transparent overlay. The Picker also includes an Upload tab for source videos. Every finished render is delivered to your Alpha Compose Drive folder.</p></div><div class=\"drive-actions\"><button id=\"open-picker\" type=\"button\">Pick one video</button><span>Selected: <output id=\"picker-selection\">None</output></span></div></section>"
      "<section class=\"card\"><div class=\"section-head\"><div><h2>Optional source video</h2><p class=\"muted\">The server verifies the selected Drive file. The browser sends only its ID.</p></div></div><input id=\"source-video-file-id\" type=\"hidden\"><div class=\"field-grid\"><label>Output<select id=\"output-format\"><option value=\"h264-mp4\">H.264 MP4</option><option value=\"prores-422-mov\">ProRes 422 MOV</option></select></label><label>Fit<select id=\"fit-mode\"><option value=\"letterbox\">Letterbox / pillarbox</option><option value=\"crop\">Crop to fill</option></select></label><label>Audio<select id=\"audio-mode\"><option value=\"source+heartbeat\">Source + heartbeat</option><option value=\"source-only\">Source only</option><option value=\"heartbeat-only\">Heartbeat only</option></select></label></div></section>"
      "<form id=\"render-form\" hx-post=\"/ui/jobs\" hx-target=\"#job-result\" hx-swap=\"innerHTML\">"
      "<input id=\"render-request\" type=\"hidden\" name=\"request\" value=\"{}\">"
@@ -410,11 +410,13 @@
         "<p class=\"muted\">Alpha Compose turns heart-rate and other supported telemetry into "
         "transparent video overlays for short videos. Export the overlay, then "
         "place it above your footage in your editor.</p>"
-        "<div class=\"actions\"><a class=\"cta\" href=\"/v1/auth/login/start\">Sign in with Google</a></div>"
+        "<div class=\"actions\"><a class=\"cta\" href=\"/v1/auth/login/start\">Continue with Google</a></div>"
+        "<p class=\"muted\">This uses your Google identity for approved access and requests "
+        "<code>drive.file</code> for files you select and finished renders delivered to Drive.</p>"
         "</div><aside class=\"hero-card\"><div><div class=\"step\">How it works</div>"
         "<h2>From telemetry to overlay.</h2>"
         "<p class=\"muted\">Configure your render, preview it, then send the finished overlay to Drive.</p>"
-        "</div><p class=\"hero-card-note\">Alpha Compose does not upload or composite your source video.</p>"
+        "</div><p class=\"hero-card-note\">Choose a Drive video for composition, or render a transparent overlay.</p>"
         "</aside></section>"
         "<section class=\"feature-grid\"><article class=\"card\"><div class=\"step\">01</div>"
         "<h2>Bring your data</h2><p class=\"muted\">Use supported heart-rate and other telemetry formats from your existing activity files.</p>"
@@ -424,11 +426,29 @@
         "<h2>Keep editing</h2><p class=\"muted\">Export a transparent overlay, then place it above your footage in your editor.</p>"
         "</article></section>"
         "<section class=\"card trust-card\"><div class=\"step\">Access &amp; privacy</div>"
-        "<h2>Connect only what you need.</h2>"
-        "<p class=\"muted\">Google account information is requested to sign in approved users. "
-        "Connecting Google Drive is optional and requests only the "
-        "<code>drive.file</code> permission, limited to files you select or "
-        "Alpha Compose creates for input selection and output delivery.</p></section>")))
+        "<h2>Only the access the workflow needs.</h2>"
+        "<p class=\"muted\">Continue with Google is one protected authorization step. "
+        "Alpha Compose requests identity plus only the <code>drive.file</code> permission, "
+        "limited to files you select or Alpha Compose creates for input selection and "
+        "required output delivery.</p></section>")))
+
+(def drive-recovery-fragment
+  (str "<section class=\"notice\" role=\"alert\"><h2>Google Drive access needs renewal</h2>"
+       "<p>Your session was cleared because Alpha Compose could no longer use its restricted "
+       "<code>drive.file</code> grant. No render was submitted.</p>"
+       "<p><a class=\"button primary\" href=\"/v1/auth/login/start?recovery=true\">"
+       "Continue with Google</a></p></section>"))
+
+(def drive-recovery-page
+  (public-page
+   "Google Drive access needs renewal"
+   (str "<section class=\"hero\"><div class=\"hero-copy\"><div class=\"eyebrow\">Authorization required</div>"
+        "<h1>Reconnect Google to continue.</h1>"
+        "<p class=\"muted\">Alpha Compose cleared your browser session because its restricted "
+        "<code>drive.file</code> grant is missing, expired, or revoked. Continue explicitly to "
+        "restore identity, file selection, and Drive delivery access. No render was submitted.</p>"
+        "<div class=\"actions\"><a class=\"cta\" href=\"/v1/auth/login/start?recovery=true\">"
+        "Continue with Google</a></div></div></section>")))
 
 (def privacy-page
   (public-page
@@ -438,7 +458,7 @@
         "requests may be sent to <a href=\"mailto:me@jamiep.org\">me@jamiep.org</a>.</p>"
         "<h2>Information used</h2><p>We use your Google account identifier and "
         "email address to authenticate you and enforce the administrator-managed access list. "
-        "When you connect Google Drive, Alpha Compose receives only the "
+        "As part of the same authorization, Alpha Compose receives only the "
         "<code>drive.file</code> permission, allowing access to files you select or "
         "that Alpha Compose creates. We process telemetry and optional watermark "
         "content solely to create the requested overlay.</p>"

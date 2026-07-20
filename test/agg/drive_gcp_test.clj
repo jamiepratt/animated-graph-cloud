@@ -84,20 +84,38 @@
     (is (.contains ^String (:url (second @requests)) "mimeType+contains+%27video%2F%27"))
     (is (not (.contains ^String (:url (second @requests)) "video-1")))))
 
-(deftest missing-output-folder-is-created-once
+(deftest missing-output-folder-is-discovered-before-it-is-created
+  (let [requests (atom [])
+        responses (atom [{:status 200 :body (json/write-str {:files []})}
+                         {:status 200 :body (json/write-str {:id "folder-new"})}])
+        gateway
+        (gcp/->RestDriveGateway
+         (fn [request]
+           (swap! requests conj request)
+           (let [response (first @responses)]
+             (swap! responses subvec 1)
+             response))
+         (* 8 1024 1024))]
+    (is (= "folder-new"
+           (auth/ensure-output-folder! gateway "access-token" nil)))
+    (is (= [:get :post] (mapv :method @requests)))
+    (is (.contains ^String (:url (first @requests)) "Alpha+Compose"))
+    (is (= {:name "Alpha Compose"
+            :mimeType "application/vnd.google-apps.folder"}
+           (json/read-str (:body (second @requests)) :key-fn keyword)))))
+
+(deftest folder-created-before-a-persistence-failure-is-reused-on-retry
   (let [requests (atom [])
         gateway
         (gcp/->RestDriveGateway
          (fn [request]
            (swap! requests conj request)
-           {:status 200 :body (json/write-str {:id "folder-new"})})
+           {:status 200
+            :body (json/write-str {:files [{:id "recovered-folder"}]})})
          (* 8 1024 1024))]
-    (is (= "folder-new"
+    (is (= "recovered-folder"
            (auth/ensure-output-folder! gateway "access-token" nil)))
-    (is (= :post (:method (first @requests))))
-    (is (= {:name "Alpha Compose"
-            :mimeType "application/vnd.google-apps.folder"}
-           (json/read-str (:body (first @requests)) :key-fn keyword)))))
+    (is (= [:get] (mapv :method @requests)))))
 
 (deftest recovered-resumable-upload-queries-offset-and-continues-with-a-bounded-chunk
   (let [requests (atom [])

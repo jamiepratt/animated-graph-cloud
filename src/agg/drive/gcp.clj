@@ -76,6 +76,25 @@
          ::folder-create-failed)]
     (:id (parse-json body))))
 
+(defn- find-output-folder! [send! access-token]
+  (let [query (str "name = 'Alpha Compose' and mimeType = '"
+                   folder-mime-type "' and trashed = false")
+        {:keys [body]}
+        (require-success
+         (send! (authorized
+                 {:method :get
+                  :url (str "https://www.googleapis.com/drive/v3/files"
+                            "?spaces=drive&pageSize=1&fields=files(id)&q="
+                            (urlencode query))
+                  :headers {}}
+                 access-token))
+         ::folder-lookup-failed)]
+    (some-> (parse-json body) :files first :id not-empty)))
+
+(defn- discover-or-create-folder! [send! access-token]
+  (or (find-output-folder! send! access-token)
+      (create-folder! send! access-token)))
+
 (defn- range-offset [header]
   (if (nil? header)
     0
@@ -155,7 +174,7 @@
   auth/DriveClient
   (ensure-output-folder! [_ access-token existing-folder]
     (if-not existing-folder
-      (create-folder! send! access-token)
+      (discover-or-create-folder! send! access-token)
       (let [{:keys [status body]}
             (send! (authorized
                     {:method :get
@@ -165,12 +184,12 @@
                      :headers {}}
                     access-token))]
         (cond
-          (= 404 status) (create-folder! send! access-token)
+          (= 404 status) (discover-or-create-folder! send! access-token)
           (<= 200 status 299)
           (let [{:keys [id mimeType trashed]} (parse-json body)]
             (if (and (= folder-mime-type mimeType) (not trashed))
               id
-              (create-folder! send! access-token)))
+              (discover-or-create-folder! send! access-token)))
           :else
           (throw (errors/raise! "Drive output folder lookup failed"
                                 {:type ::folder-lookup-failed :status status}))))))
