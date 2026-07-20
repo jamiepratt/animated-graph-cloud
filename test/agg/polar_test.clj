@@ -19,6 +19,17 @@
                         (polar/parse-csv
                          "timestamp,heart_rate\n2026-07-17T10:00:00Z,"))))
 
+(deftest polar-heart-rate-range-failures-retain-only-field-and-line
+  (try
+    (polar/parse-csv
+     "timestamp,heart_rate\n2026-07-17T10:00:00Z,261\n")
+    (is false "out-of-range heart rate unexpectedly decoded")
+    (catch clojure.lang.ExceptionInfo error
+      (is (= ::polar/heart-rate-out-of-range (:type (ex-data error))))
+      (is (= "telemetry" (:field (ex-data error))))
+      (is (= 2 (:line (ex-data error))))
+      (is (not (contains? (ex-data error) :value))))))
+
 (deftest polar-flow-semicolon-exports-use-the-heart-rate-column
   (let [samples (polar/parse-csv
                  (slurp (io/resource "fixtures/polar/polar-flow.csv")))]

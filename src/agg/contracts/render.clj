@@ -26,6 +26,108 @@
      (base64-characters (:bytes watermark/limits))
      (* 2 1024 1024)))
 
+(def telemetry-documentation-path
+  "/openapi.yaml#/components/schemas/RenderRequest")
+
+(def telemetry-failure-codes
+  #{"unsupported_telemetry_columns"
+    "malformed_telemetry_row"
+    "heart_rate_out_of_range"
+    "telemetry_value_out_of_range"
+    "unordered_telemetry"
+    "insufficient_telemetry_coverage"
+    "telemetry_too_large"
+    "telemetry_sample_limit_exceeded"
+    "unsupported_telemetry_format"
+    "invalid_telemetry"})
+
+(defn- error-data [error]
+  (loop [current error
+         data []]
+    (if current
+      (recur (.getCause ^Throwable current)
+             (conj data (ex-data current)))
+      data)))
+
+(def ^:private telemetry-failure-types
+  [[::polar/unsupported-columns
+    {:failure-code "unsupported_telemetry_columns"
+     :field "telemetry"
+     :expected-schema polar/expected-schema}]
+   [::oxiwear/unsupported-columns
+    {:failure-code "unsupported_telemetry_columns"}]
+   [::polar/heart-rate-out-of-range
+    {:failure-code "heart_rate_out_of_range" :field "telemetry"}]
+   [::oxiwear/heart-rate-out-of-range
+    {:failure-code "heart_rate_out_of_range"}]
+   [::garmin/heart-rate-out-of-range
+    {:failure-code "heart_rate_out_of_range" :field "telemetry"}]
+   [::oxiwear/value-out-of-range
+    {:failure-code "telemetry_value_out_of_range"}]
+   [::polar/too-many-samples
+    {:failure-code "telemetry_sample_limit_exceeded" :field "telemetry"}]
+   [::oxiwear/too-many-samples
+    {:failure-code "telemetry_sample_limit_exceeded"}]
+   [::garmin/too-many-samples
+    {:failure-code "telemetry_sample_limit_exceeded" :field "telemetry"}]
+   [::polar/malformed-row
+    {:failure-code "malformed_telemetry_row" :field "telemetry"}]
+   [::oxiwear/malformed-row
+    {:failure-code "malformed_telemetry_row"}]
+   [::unordered-telemetry
+    {:failure-code "unordered_telemetry" :field "telemetry"}]
+   [::unordered-spo2
+    {:failure-code "unordered_telemetry" :field "spo2.telemetry"}]
+   [::insufficient-telemetry
+    {:failure-code "insufficient_telemetry_coverage" :field "telemetry"}]
+   [::insufficient-coverage
+    {:failure-code "insufficient_telemetry_coverage" :field "telemetry"}]
+   [::insufficient-spo2
+    {:failure-code "insufficient_telemetry_coverage"
+     :field "spo2.telemetry"}]
+   [::insufficient-spo2-coverage
+    {:failure-code "insufficient_telemetry_coverage"
+     :field "spo2.telemetry"}]
+   [::telemetry-too-large
+    {:failure-code "telemetry_too_large" :field "telemetry"}]
+   [::spo2-too-large
+    {:failure-code "telemetry_too_large" :field "spo2.telemetry"}]
+   [::garmin/fit-too-large
+    {:failure-code "telemetry_too_large" :field "telemetry"}]
+   [::unsupported-format
+    {:failure-code "unsupported_telemetry_format"
+     :field "telemetryFormat"}]
+   [::invalid-telemetry
+    {:failure-code "invalid_telemetry" :field "telemetry"}]
+   [::invalid-spo2
+    {:failure-code "invalid_telemetry" :field "spo2"}]
+   [::garmin/malformed-fit
+    {:failure-code "unsupported_telemetry_format" :field "telemetry"}]])
+
+(defn telemetry-failure
+  "Classifies owned telemetry validation failures into privacy-safe public data."
+  [error]
+  (let [data (error-data error)
+        [failure-type failure diagnostics]
+        (some (fn [[failure-type failure]]
+                (when-let [diagnostics
+                           (some #(when (= failure-type (:type %)) %) data)]
+                  [failure-type failure diagnostics]))
+              telemetry-failure-types)]
+    (when failure
+      (let [field (or (:field failure) (:field diagnostics))
+            expected-schema
+            (or (:expected-schema failure)
+                (when (= ::oxiwear/unsupported-columns failure-type)
+                  (if (= "spo2.telemetry" field)
+                    oxiwear/spo2-expected-schema
+                    oxiwear/heart-rate-expected-schema)))]
+        (cond-> (assoc failure
+                       :field field
+                       :documentation-path telemetry-documentation-path)
+          (:line diagnostics) (assoc :line (:line diagnostics))
+          expected-schema (assoc :expected-schema expected-schema))))))
+
 (defn- instant [value field]
   (try
     (Instant/parse value)
@@ -87,7 +189,8 @@
     "garmin-fit" (garmin/parse-fit-base64 telemetry)
     "oxiwear-hr-csv" (oxiwear/parse-heart-rate-csv telemetry)
     (throw (errors/raise! "Unsupported telemetry format"
-                          {:type ::unsupported-format}))))
+                          {:type ::unsupported-format
+                           :field "telemetryFormat"}))))
 
 (defn- utf8-size [value]
   (alength (.getBytes ^String value StandardCharsets/UTF_8)))
@@ -116,25 +219,29 @@
     (require! (#{"polar-csv" "garmin-fit" "oxiwear-hr-csv"}
                telemetryFormat)
               "Unsupported telemetry format"
-              {:type ::unsupported-format})
+              {:type ::unsupported-format :field "telemetryFormat"})
     (require! (string? telemetry)
               "Telemetry must be CSV text or base64 FIT content"
-              {:type ::invalid-telemetry})
+              {:type ::invalid-telemetry :field "telemetry"})
     (let [telemetry-limit (if (= "garmin-fit" telemetryFormat)
                             max-garmin-base64-characters
                             max-telemetry-bytes)]
       (require! (<= (utf8-size telemetry) telemetry-limit)
                 "Telemetry exceeds the size limit"
-                {:type ::telemetry-too-large :limit telemetry-limit}))
+                {:type ::telemetry-too-large
+                 :field "telemetry"
+                 :limit telemetry-limit}))
     (when spo2
       (require! (and (map? spo2)
                      (= "oxiwear-spo2-csv" (:format spo2))
                      (string? (:telemetry spo2)))
                 "Invalid optional SpO2 input"
-                {:type ::invalid-spo2})
+                {:type ::invalid-spo2 :field "spo2"})
       (require! (<= (utf8-size (:telemetry spo2)) max-telemetry-bytes)
                 "SpO2 telemetry exceeds the size limit"
-                {:type ::spo2-too-large :limit max-telemetry-bytes}))
+                {:type ::spo2-too-large
+                 :field "spo2.telemetry"
+                 :limit max-telemetry-bytes}))
     (when timer
       (require! (and (map? timer)
                      (string? (:startAt timer))
@@ -187,23 +294,24 @@
                   {:type ::invalid-timer-order}))
       (require! (>= (count samples) 2)
                 "Telemetry must contain at least two samples"
-                {:type ::insufficient-telemetry})
+                {:type ::insufficient-telemetry :field "telemetry"})
       (require! (ordered? parsed-samples)
                 "Telemetry timestamps must be strictly increasing"
-                {:type ::unordered-telemetry})
+                {:type ::unordered-telemetry :field "telemetry"})
       (require! (covers? samples telemetry-start telemetry-end)
                 "Telemetry does not cover the requested section"
-                {:type ::insufficient-coverage})
+                {:type ::insufficient-coverage :field "telemetry"})
       (when spo2-samples
         (require! (>= (count spo2-samples) 2)
                   "SpO2 telemetry must contain at least two samples"
-                  {:type ::insufficient-spo2})
+                  {:type ::insufficient-spo2 :field "spo2.telemetry"})
         (require! (ordered? spo2-samples)
                   "SpO2 timestamps must be strictly increasing"
-                  {:type ::unordered-spo2})
+                  {:type ::unordered-spo2 :field "spo2.telemetry"})
         (require! (covers? spo2-samples telemetry-start telemetry-end)
                   "SpO2 telemetry does not cover the requested section"
-                  {:type ::insufficient-spo2-coverage}))
+                  {:type ::insufficient-spo2-coverage
+                   :field "spo2.telemetry"}))
       (cond-> (assoc (spec/with-duration render-preset duration-seconds)
                      :telemetry (timeline/section samples
                                                   telemetry-start

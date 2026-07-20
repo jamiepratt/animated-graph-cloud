@@ -89,6 +89,9 @@
 (defn- preview-path? [path]
   (contains? #{"/v1/preview" "/ui/preview"} path))
 
+(defn- telemetry-api-path? [path]
+  (contains? #{"/v1/preview" "/v1/overlay" "/v1/jobs"} path))
+
 (declare respond! respond-json!)
 
 (defn- error-data [error]
@@ -115,8 +118,20 @@
 (defn- safe-preview-status? [value]
   (and (integer? value) (<= 400 value 599)))
 
+(defn- public-telemetry-diagnostics
+  [{:keys [failure-code field line expected-schema documentation-path]}]
+  (cond-> {:failureCode failure-code
+           :field field
+           :documentationPath documentation-path}
+    line (assoc :line line)
+    expected-schema
+    (assoc :expectedSchema
+           {:timestampColumns (:timestamp-columns expected-schema)
+            :valueColumns (:value-columns expected-schema)})))
+
 (defn- preview-diagnostics [error]
   (let [data (error-data error)
+        telemetry-failure (contract/telemetry-failure error)
         failure-code (some (fn [entry]
                              (let [value (:failure-code entry)]
                                (when (safe-failure-code? value) value)))
@@ -144,15 +159,18 @@
         timeout-ms (some (fn [entry]
                            (let [value (:timeout-ms entry)]
                              (when (safe-preview-timing? value) value)))
-                         data)]
-    (cond-> {}
-      failure-code (assoc :failureCode failure-code)
-      line (assoc :line line)
-      stage (assoc :stage stage)
-      status (assoc :status status)
-      (some? retryable) (assoc :retryable retryable)
-      elapsed-ms (assoc :elapsedMs elapsed-ms)
-      timeout-ms (assoc :timeoutMs timeout-ms))))
+                         data)
+        diagnostics (cond-> {}
+                      failure-code (assoc :failureCode failure-code)
+                      line (assoc :line line)
+                      stage (assoc :stage stage)
+                      status (assoc :status status)
+                      (some? retryable) (assoc :retryable retryable)
+                      elapsed-ms (assoc :elapsedMs elapsed-ms)
+                      timeout-ms (assoc :timeoutMs timeout-ms))]
+    (if telemetry-failure
+      (merge diagnostics (public-telemetry-diagnostics telemetry-failure))
+      diagnostics)))
 
 (defn- preview-failure [error request-id]
   (let [types (error-types error)
@@ -201,7 +219,9 @@
                      :category category
                      :status status
                      :retryable retryable}
-                    diagnostics)))
+                    (select-keys diagnostics
+                                 [:failureCode :field :line :stage :status
+                                  :retryable :elapsedMs :timeoutMs]))))
     (if (= "/ui/preview" (some-> exchange .getRequestURI .getPath))
       (respond! exchange 200 "text/html; charset=utf-8"
                 (ui/preview-failure-fragment
@@ -1484,7 +1504,9 @@
                               "{\"error\":\"payload_too_large\"}"))
 
                   ::invalid-request
-                  (if (preview-path? path)
+                  (if (or (preview-path? path)
+                          (and (telemetry-api-path? path)
+                               (contract/telemetry-failure error)))
                     (respond-preview-failure! dependencies exchange request-id error)
                     (respond! exchange 400 "application/json; charset=utf-8"
                               "{\"error\":\"invalid_request\"}"))

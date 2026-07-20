@@ -380,6 +380,38 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest telemetry-job-rejections-share-the-preview-api-vocabulary
+  (let [port (available-port)
+        system (jobs/in-memory-system)
+        server (api/start! port {:job-service (:service system)})]
+    (try
+      (let [response (request! port :post "/v1/jobs"
+                               (assoc (render-request)
+                                      :telemetry
+                                      "Date,Duration\n2026-07-17,30\n")
+                               {"Content-Type" "application/json"
+                                "Idempotency-Key" "invalid-telemetry"})
+            body (response-json response)
+            request-id (some-> response .headers
+                               (.firstValue "x-request-id") (.orElse nil))]
+        (is (= 400 (.statusCode response)))
+        (is (= {:error "invalid_request"
+                :category "request_contract"
+                :failureCode "unsupported_telemetry_columns"
+                :requestId request-id
+                :retryable false
+                :field "telemetry"
+                :expectedSchema
+                {:timestampColumns ["timestamp" "date/time" "datetime"]
+                 :valueColumns ["heart_rate" "heart rate"
+                                "heart rate (bpm)" "HR" "HR (bpm)"]}
+                :documentationPath
+                "/openapi.yaml#/components/schemas/RenderRequest"}
+               body))
+        (is (empty? @(:enqueued system))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest malformed-job-submission-is-an-invalid-request
   (let [port (available-port)
         system (jobs/in-memory-system)

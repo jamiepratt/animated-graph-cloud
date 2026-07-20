@@ -553,10 +553,18 @@ components:
               email: {type: string, format: email, maxLength: 254}
   responses:
     InvalidRequest:
-      description: Invalid request.
+      description: |
+        Invalid request. Telemetry contract failures use the stable classified
+        shape and emit a privacy-safe `request_failed` event with the same
+        failure code, category, request ID, retryability, field, and bounded
+        line when known. Never contains telemetry values, filenames, Drive IDs,
+        account data, request bodies, or signed URLs.
       content:
         application/json:
-          schema: {$ref: "#/components/schemas/Error"}
+          schema:
+            anyOf:
+              - {$ref: "#/components/schemas/Error"}
+              - {$ref: "#/components/schemas/TelemetryContractError"}
     AuthenticationRequired:
       description: Authentication or a valid Drive grant is required.
       content:
@@ -630,7 +638,13 @@ components:
           description: Heart-rate input encoding. polar-csv and oxiwear-hr-csv use CSV text; garmin-fit uses base64-encoded FIT content.
         telemetry:
           type: string
-          description: CSV text or base64-encoded Garmin FIT content. CSV is limited to 10 MiB of UTF-8 text; Garmin FIT base64 is limited to 13,981,016 characters (a 10 MiB binary input).
+          description: |
+            CSV text or base64-encoded Garmin FIT content. Timestamped Polar
+            CSV requires one of `timestamp`, `date/time`, or `datetime` and one
+            of `heart_rate`, `heart rate`, `heart rate (bpm)`, `HR`, or
+            `HR (bpm)`. OxiWear heart-rate CSV requires `reading_time` and
+            `pulse_rate`. CSV is limited to 10 MiB of UTF-8 text; Garmin FIT
+            base64 is limited to 13,981,016 characters (a 10 MiB binary input).
         preset:
           type: string
           enum: [1080p25, 2.7k25]
@@ -724,6 +738,55 @@ components:
       type: string
       format: date-time
       description: ISO-8601 instant with `Z` or an explicit UTC offset.
+    TelemetryContractError:
+      type: object
+      additionalProperties: false
+      description: Stable, non-retryable telemetry validation feedback. Never contains telemetry values, filenames, Drive IDs, account data, request bodies, or signed URLs.
+      required: [error, category, failureCode, requestId, retryable, field]
+      properties:
+        error: {const: invalid_request}
+        category: {const: request_contract}
+        failureCode:
+          type: string
+          enum:
+            - unsupported_telemetry_columns
+            - malformed_telemetry_row
+            - heart_rate_out_of_range
+            - telemetry_value_out_of_range
+            - unordered_telemetry
+            - insufficient_telemetry_coverage
+            - telemetry_too_large
+            - telemetry_sample_limit_exceeded
+            - unsupported_telemetry_format
+            - invalid_telemetry
+        requestId: {type: string, format: uuid}
+        retryable: {const: false}
+        field:
+          type: string
+          enum: [telemetry, telemetryFormat, spo2, spo2.telemetry]
+        line: {type: integer, minimum: 1, maximum: 1000000000000}
+        expectedSchema: {$ref: "#/components/schemas/TelemetryExpectedSchema"}
+        documentationPath:
+          const: "/openapi.yaml#/components/schemas/RenderRequest"
+    TelemetryExpectedSchema:
+      type: object
+      additionalProperties: false
+      required: [timestampColumns, valueColumns]
+      properties:
+        timestampColumns:
+          type: array
+          minItems: 1
+          maxItems: 3
+          items:
+            type: string
+            enum: [timestamp, date/time, datetime, reading_time]
+        valueColumns:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items:
+            type: string
+            enum: [heart_rate, heart rate, heart rate (bpm), HR, HR (bpm), pulse_rate, spo2]
     PreviewOperation:
       type: object
       additionalProperties: false

@@ -110,7 +110,7 @@
       (is signal)
       (is (:pstats signal)))))
 
-(deftest api-emits-one-boundary-signal-and-skips-expected-validation
+(deftest api-emits-one-bounded-signal-for-owned-failures
   (let [events (atom [])
         contention-service
         (reify jobs/JobService
@@ -155,8 +155,18 @@
                         (str "http://127.0.0.1:" validation-port "/v1/jobs")
                         "{}"
                         {"Content-Type" "application/json"
-                         "Idempotency-Key" "validation-key"})]
+                         "Idempotency-Key" "validation-key"})
+              request-id (some-> response .headers
+                                 (.firstValue "x-request-id") (.orElse nil))]
           (is (= 400 (.statusCode response)))
-          (is (empty? @validation-events)))
+          (is (= [{:event "request_failed"
+                   :severity "WARNING"
+                   :requestId request-id
+                   :category "request_contract"
+                   :status 400
+                   :retryable false
+                   :failureCode "unsupported_telemetry_format"
+                   :field "telemetryFormat"}]
+                 @validation-events)))
         (finally
           (.close ^java.lang.AutoCloseable validation-server))))))

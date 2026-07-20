@@ -7,11 +7,16 @@
 
 (def ^:private max-samples 900000)
 
+(def expected-schema
+  {:timestamp-columns ["timestamp" "date/time" "datetime"]
+   :value-columns ["heart_rate" "heart rate" "heart rate (bpm)"
+                   "HR" "HR (bpm)"]})
+
 (def ^:private timestamp-columns
-  #{"timestamp" "date/time" "datetime"})
+  (set (map str/lower-case (:timestamp-columns expected-schema))))
 
 (def ^:private heart-rate-columns
-  #{"heart_rate" "heart rate" "heart rate (bpm)" "hr" "hr (bpm)"})
+  (set (map str/lower-case (:value-columns expected-schema))))
 
 (defn- cell [value]
   (let [trimmed (-> value str/trim (str/replace-first "\ufeff" ""))]
@@ -41,7 +46,8 @@
            heart-rate-index (column-index columns heart-rate-columns)]
        (when-not (and timestamp-index heart-rate-index)
          (throw (errors/raise! "Unsupported Polar CSV columns"
-                               {:type ::unsupported-columns})))
+                               {:type ::unsupported-columns
+                                :field "telemetry"})))
        (loop [samples (transient [])
               sample-count 0
               line-number 2]
@@ -61,7 +67,11 @@
                                 (or (.isBefore timestamp required-start)
                                     (.isAfter timestamp required-end)))]
                        (when-not (< sample-count max-samples)
-                         (throw (IllegalArgumentException.)))
+                         (throw
+                          (errors/raise! "Polar CSV has too many samples"
+                                         {:type ::too-many-samples
+                                          :field "telemetry"
+                                          :limit max-samples})))
                        (if (and outside-required-window?
                                 (zero? heart-rate))
                          {:timestamp timestamp
@@ -69,14 +79,22 @@
                          (do
                            (when-not (and (not (str/blank? timestamp-text))
                                           (not (str/blank? heart-rate-text))
-                                          (Double/isFinite heart-rate)
-                                          (<= 20.0 heart-rate 260.0))
+                                          (Double/isFinite heart-rate))
                              (throw (IllegalArgumentException.)))
+                           (when-not (<= 20.0 heart-rate 260.0)
+                             (throw
+                              (errors/raise! "Polar heart rate is out of range"
+                                             {:type ::heart-rate-out-of-range
+                                              :field "telemetry"
+                                              :line line-number})))
                            {:timestamp timestamp
                             :heart-rate heart-rate})))
+                     (catch clojure.lang.ExceptionInfo error
+                       (throw error))
                      (catch Throwable cause
                        (throw (errors/raise! "Malformed Polar CSV row"
                                              {:type ::malformed-row
+                                              :field "telemetry"
                                               :line line-number}
                                              cause))))]
                (recur (conj! samples sample)

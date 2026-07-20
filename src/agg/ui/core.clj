@@ -260,35 +260,86 @@
 
 (defn preview-failure-fragment
   [{:keys [category request-id status failureCode line stage elapsedMs timeoutMs
-           retryable]}]
-  (str "<article id=\"preview-result\" class=\"preview-error\" role=\"alert\"><h2>Preview failed</h2>"
-       (if (or timeoutMs (= 504 status))
-         "<p>Preview did not finish.</p>"
-         "<p>Preview could not start.</p>")
-       "<dl>"
-       "<dt>Category</dt><dd><code>" (escape-html category) "</code></dd>"
-       "<dt>Request ID</dt><dd><code>" (escape-html request-id) "</code></dd>"
-       (when status
-         (str "<dt>Status</dt><dd>" (escape-html status) "</dd>"))
-       (when failureCode
-         (str "<dt>Failure code</dt><dd><code>"
-              (escape-html failureCode) "</code></dd>"))
-       (when line
-         (str "<dt>Source line</dt><dd>" (escape-html line) "</dd>"))
-       (when stage
-         (str "<dt>Stage</dt><dd><code>" (escape-html stage) "</code></dd>"))
-       (when elapsedMs
-         (str "<dt>Elapsed</dt><dd>" (escape-html elapsedMs) " ms</dd>"))
-       (when timeoutMs
-         (str "<dt>Deadline</dt><dd>" (escape-html timeoutMs) " ms</dd>"))
-       (when (some? retryable)
-         (str "<dt>Retryable</dt><dd>" (if retryable "Yes" "No")
-              "</dd>"))
-       "</dl><p>No durable render was submitted or charged.</p>"
-       (if retryable
-         "<p>Retry with the Preview button when ready.</p>"
-         "<p>Review the request before starting another preview.</p>")
-       "</article>"))
+           retryable field expectedSchema documentationPath]}]
+  (let [input-label (case field
+                      "telemetry" "Heart-rate telemetry"
+                      "spo2.telemetry" "SpO₂ telemetry"
+                      "telemetryFormat" "Telemetry format"
+                      "spo2" "SpO₂ input"
+                      "Telemetry input")
+        correction
+        (case failureCode
+          "unsupported_telemetry_columns"
+          "Use timestamped Polar CSV or the documented columns for the selected telemetry format. Summary-only exports are not supported."
+          "malformed_telemetry_row"
+          "Correct the malformed row, keeping an absolute timestamp and numeric value in every required column."
+          "heart_rate_out_of_range"
+          "Heart rate must be between 20 and 260 bpm."
+          "telemetry_value_out_of_range"
+          "Correct the value so it is inside the documented range."
+          "unordered_telemetry"
+          "Sort telemetry timestamps in strictly increasing order and remove duplicates."
+          "insufficient_telemetry_coverage"
+          "Provide at least two samples that cover the full requested section."
+          "telemetry_too_large"
+          "Reduce the telemetry input to the documented size limit."
+          "telemetry_sample_limit_exceeded"
+          "Use fewer telemetry samples while preserving coverage of the requested section."
+          "unsupported_telemetry_format"
+          "Choose Polar CSV, Garmin FIT, or OxiWear heart-rate CSV and provide content matching that format."
+          "invalid_telemetry"
+          "Provide telemetry content matching the selected format."
+          "Review the telemetry input and API documentation before retrying.")
+        expected-columns
+        (when (and (map? expectedSchema)
+                   (seq (:timestampColumns expectedSchema))
+                   (seq (:valueColumns expectedSchema)))
+          (str "<p>Accepted timestamp columns: "
+               (str/join ", "
+                         (map #(str "<code>" (escape-html %) "</code>")
+                              (:timestampColumns expectedSchema)))
+               ". Accepted value columns: "
+               (str/join ", "
+                         (map #(str "<code>" (escape-html %) "</code>")
+                              (:valueColumns expectedSchema)))
+               ".</p>"))
+        documentation-link
+        (when (and (string? documentationPath)
+                   (str/starts-with? documentationPath "/openapi.yaml"))
+          (str "<p><a href=\"" (escape-html documentationPath)
+               "\">Review the telemetry request contract</a>.</p>"))]
+    (str "<article id=\"preview-result\" class=\"preview-error\" role=\"alert\"><h2>Preview failed</h2>"
+         (if (or timeoutMs (= 504 status))
+           "<p>Preview did not finish.</p>"
+           "<p>Preview could not start.</p>")
+         (when failureCode
+           (str "<section><h3>" (escape-html input-label) "</h3><p>"
+                (escape-html correction) "</p>" expected-columns
+                documentation-link "</section>"))
+         "<dl>"
+         "<dt>Category</dt><dd><code>" (escape-html category) "</code></dd>"
+         "<dt>Request ID</dt><dd><code>" (escape-html request-id) "</code></dd>"
+         (when status
+           (str "<dt>Status</dt><dd>" (escape-html status) "</dd>"))
+         (when failureCode
+           (str "<dt>Failure code</dt><dd><code>"
+                (escape-html failureCode) "</code></dd>"))
+         (when line
+           (str "<dt>Source line</dt><dd>" (escape-html line) "</dd>"))
+         (when stage
+           (str "<dt>Stage</dt><dd><code>" (escape-html stage) "</code></dd>"))
+         (when elapsedMs
+           (str "<dt>Elapsed</dt><dd>" (escape-html elapsedMs) " ms</dd>"))
+         (when timeoutMs
+           (str "<dt>Deadline</dt><dd>" (escape-html timeoutMs) " ms</dd>"))
+         (when (some? retryable)
+           (str "<dt>Retryable</dt><dd>" (if retryable "Yes" "No")
+                "</dd>"))
+         "</dl><p>No durable render was submitted or charged.</p>"
+         (if retryable
+           "<p>Retry with the Preview button when ready.</p>"
+           "<p>Review the request before starting another preview.</p>")
+         "</article>")))
 
 (defn preview-operation-fragment
   [{:keys [id state progressPercent error result]} generation]

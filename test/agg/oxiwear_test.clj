@@ -27,3 +27,20 @@
       (is false "malformed OxiWear CSV unexpectedly decoded")
       (catch clojure.lang.ExceptionInfo error
         (is (= ::oxiwear/malformed-row (:type (ex-data error))))))))
+
+(deftest oxiwear-range-failures-identify-the-safe-input-and-line
+  (doseq [[parser csv expected-type expected-field]
+          [[oxiwear/parse-heart-rate-csv
+            "reading_time,pulse_rate\n2026-07-17T00:00:00Z,19\n"
+            ::oxiwear/heart-rate-out-of-range "telemetry"]
+           [oxiwear/parse-spo2-csv
+            "reading_time,spo2\n2026-07-17T00:00:00Z,101\n"
+            ::oxiwear/value-out-of-range "spo2.telemetry"]]]
+    (try
+      (parser csv)
+      (is false "out-of-range OxiWear value unexpectedly decoded")
+      (catch clojure.lang.ExceptionInfo error
+        (is (= expected-type (:type (ex-data error))))
+        (is (= expected-field (:field (ex-data error))))
+        (is (= 2 (:line (ex-data error))))
+        (is (not (contains? (ex-data error) :value)))))))

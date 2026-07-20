@@ -1,5 +1,6 @@
 (ns agg.contracts-test
   (:require [agg.contracts.render :as contract]
+            [agg.telemetry.garmin :as garmin]
             [agg.telemetry.polar :as polar]
             [agg.telemetry.timeline :as timeline]
             [clojure.java.io :as io]
@@ -130,8 +131,92 @@
     (catch clojure.lang.ExceptionInfo error
       (:type (ex-data error)))))
 
+(defn- telemetry-failure [request]
+  (try
+    (contract/prepare request)
+    nil
+    (catch clojure.lang.ExceptionInfo error
+      (contract/telemetry-failure error))))
+
+(deftest telemetry-contract-failures-share-one-public-vocabulary
+  (let [base (valid-request)
+        cases
+        [{:request (assoc base :telemetry "Date,Duration\n2026-07-17,30\n")
+          :expected {:failure-code "unsupported_telemetry_columns"
+                     :field "telemetry"}}
+         {:request (assoc base :telemetry
+                          "timestamp,heart_rate\n2026-07-17T10:00:00Z,\n")
+          :expected {:failure-code "malformed_telemetry_row"
+                     :field "telemetry" :line 2}}
+         {:request (assoc base :telemetry
+                          "timestamp,heart_rate\n2026-07-17T10:00:00Z,261\n")
+          :expected {:failure-code "heart_rate_out_of_range"
+                     :field "telemetry" :line 2}}
+         {:request (assoc base :telemetry
+                          (str "timestamp,heart_rate\n"
+                               "2026-07-17T10:00:00Z,120\n"
+                               "2026-07-17T10:00:02Z,124\n"
+                               "2026-07-17T10:00:01Z,128\n"))
+          :expected {:failure-code "unordered_telemetry"
+                     :field "telemetry"}}
+         {:request (assoc base :telemetry
+                          "timestamp,heart_rate\n2026-07-17T10:00:00Z,120\n")
+          :expected {:failure-code "insufficient_telemetry_coverage"
+                     :field "telemetry"}}
+         {:request (assoc base :sectionEndAt "2026-07-17T09:00:03Z")
+          :expected {:failure-code "insufficient_telemetry_coverage"
+                     :field "telemetry"}}
+         {:request (assoc base :telemetryFormat "unknown")
+          :expected {:failure-code "unsupported_telemetry_format"
+                     :field "telemetryFormat"}}
+         {:request (assoc base :telemetryFormat "garmin-fit"
+                          :telemetry "bm90LWZpdA==")
+          :expected {:failure-code "unsupported_telemetry_format"
+                     :field "telemetry"}}
+         {:request (assoc base :spo2
+                          {:format "oxiwear-spo2-csv"
+                           :telemetry
+                           "reading_time,spo2\n2026-07-17T10:00:00Z,\n"})
+          :expected {:failure-code "malformed_telemetry_row"
+                     :field "spo2.telemetry" :line 2}}]]
+    (doseq [{:keys [request expected]} cases]
+      (let [failure (telemetry-failure request)]
+        (is (= expected (select-keys failure [:failure-code :field :line]))
+            (pr-str expected))
+        (is (contains? contract/telemetry-failure-codes
+                       (:failure-code failure)))
+        (is (= contract/telemetry-documentation-path
+               (:documentation-path failure)))))))
+
+(deftest openapi-documents-the-privacy-safe-telemetry-failure-contract
+  (let [openapi (slurp "docs/openapi.yaml")]
+    (is (str/includes? openapi "TelemetryContractError:"))
+    (is (str/includes? openapi "required: [error, category, failureCode, requestId, retryable, field]"))
+    (doseq [failure-code contract/telemetry-failure-codes]
+      (is (str/includes? openapi (str "- " failure-code)) failure-code))
+    (doseq [column ["timestamp" "date/time" "datetime" "heart_rate"
+                    "heart rate" "heart rate (bpm)" "HR" "HR (bpm)"
+                    "reading_time" "pulse_rate" "spo2"]]
+      (is (str/includes? openapi column) column))
+    (is (str/includes? openapi
+                       "Never contains telemetry values, filenames, Drive IDs, account data, request bodies, or signed URLs."))))
+
+(deftest specific-telemetry-causes-win-over-parser-wrappers
+  (let [specific (ex-info "private telemetry value"
+                          {:type ::garmin/heart-rate-out-of-range
+                           :field "telemetry"})
+        wrapper (ex-info "private input name"
+                         {:type ::garmin/malformed-fit}
+                         specific)]
+    (is (= {:failure-code "heart_rate_out_of_range"
+            :field "telemetry"
+            :documentation-path contract/telemetry-documentation-path}
+           (contract/telemetry-failure wrapper)))
+    (is (nil? (contract/telemetry-failure
+               (ex-info "private unknown" {:type ::unknown-telemetry}))))))
+
 (deftest polar-sensor-gap-zeros-within-the-requested-window-are-rejected
-  (is (= ::polar/malformed-row
+  (is (= ::polar/heart-rate-out-of-range
          (error-type
           (assoc (valid-request)
                  :telemetry
@@ -148,7 +233,7 @@
                    "fixtures/polar/out-of-order-zero-after-window.csv")))))))
 
 (deftest nonzero-invalid-polar-values-outside-the-requested-window-stay-strict
-  (is (= ::polar/malformed-row
+  (is (= ::polar/heart-rate-out-of-range
          (error-type
           (assoc (valid-request)
                  :telemetry

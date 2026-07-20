@@ -156,3 +156,31 @@
                @events)))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
+
+(deftest overlay-telemetry-rejections-use-the-shared-api-vocabulary
+  (let [port (test-http/available-port)
+        {:keys [auth-system token-service token]} (auth-fixture)
+        server (api/start! port {:service-profile "overlay"
+                                 :auth-system auth-system
+                                 :token-service token-service})]
+    (try
+      (let [response
+            (request! port :post "/v1/overlay"
+                      (json/write-str
+                       (assoc (render-request "2026-07-17T09:00:01Z")
+                              :telemetry
+                              "Date,Duration\n2026-07-17,30\n"))
+                      {"Content-Type" "application/json"
+                       "Authorization" (str "Bearer " token)})
+            body (json/read-str (.body response) :key-fn keyword)
+            request-id (some-> response .headers
+                               (.firstValue "x-request-id") (.orElse nil))]
+        (is (= 400 (.statusCode response)))
+        (is (= "invalid_request" (:error body)))
+        (is (= "request_contract" (:category body)))
+        (is (= "unsupported_telemetry_columns" (:failureCode body)))
+        (is (= request-id (:requestId body)))
+        (is (false? (:retryable body)))
+        (is (= "telemetry" (:field body))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))

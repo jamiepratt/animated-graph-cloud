@@ -451,7 +451,7 @@
       (let [response (test-http/send-string!
                       :post
                       (str "http://127.0.0.1:" port "/v1/preview")
-                      "{}"
+                      "{"
                       {"Content-Type" "application/json"})
             body (json/read-str (.body response) :key-fn keyword)
             event (first @events)
@@ -470,5 +470,178 @@
         (is (= "request_contract" (:category event)))
         (is (= request-id (:requestId event)))
         (is (false? (:retryable event))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest polar-summary-export-explains-the-timestamped-csv-contract
+  (let [events (atom [])
+        port (available-port)
+        server (api/start! port
+                           {:event-sink (fn [event fields]
+                                          (swap! events conj
+                                                 (assoc fields :event event)))})
+        request (assoc (fixture/render-request)
+                       :telemetry
+                       (str "Date,Start time,Duration,Maximum heart rate\n"
+                            "2026-07-17,10:00:00,00:30:00,180\n"))]
+    (try
+      (let [response (test-http/send-string!
+                      :post
+                      (str "http://127.0.0.1:" port "/v1/preview")
+                      (json/write-str request)
+                      {"Content-Type" "application/json"})
+            body (json/read-str (.body response) :key-fn keyword)
+            request-id (some-> response .headers (.firstValue "x-request-id")
+                               (.orElse nil))]
+        (is (= 400 (.statusCode response)))
+        (is (= {:error "invalid_request"
+                :category "request_contract"
+                :failureCode "unsupported_telemetry_columns"
+                :requestId request-id
+                :retryable false
+                :field "telemetry"
+                :expectedSchema
+                {:timestampColumns ["timestamp" "date/time" "datetime"]
+                 :valueColumns ["heart_rate" "heart rate"
+                                "heart rate (bpm)" "HR" "HR (bpm)"]}
+                :documentationPath
+                "/openapi.yaml#/components/schemas/RenderRequest"}
+               body))
+        (is (= "unsupported_telemetry_columns"
+               (:failureCode (first @events))))
+        (is (= "telemetry" (:field (first @events))))
+        (is (not-any? #(str/includes? (str body @events) %)
+                      ["Maximum heart rate" "2026-07-17" "180"])))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest telemetry-range-failure-is-stable-bounded-and-nonretryable
+  (let [events (atom [])
+        port (available-port)
+        server (api/start! port
+                           {:event-sink (fn [event fields]
+                                          (swap! events conj
+                                                 (assoc fields :event event)))})
+        request (assoc (fixture/render-request)
+                       :telemetry
+                       (str "timestamp,heart_rate\n"
+                            "2026-07-17T10:00:00Z,261\n"))]
+    (try
+      (let [response (test-http/send-string!
+                      :post
+                      (str "http://127.0.0.1:" port "/v1/preview")
+                      (json/write-str request)
+                      {"Content-Type" "application/json"})
+            body (json/read-str (.body response) :key-fn keyword)
+            request-id (some-> response .headers (.firstValue "x-request-id")
+                               (.orElse nil))]
+        (is (= {:error "invalid_request"
+                :category "request_contract"
+                :failureCode "heart_rate_out_of_range"
+                :requestId request-id
+                :retryable false
+                :field "telemetry"
+                :line 2
+                :documentationPath
+                "/openapi.yaml#/components/schemas/RenderRequest"}
+               body))
+        (is (= {:event "request_failed"
+                :severity "WARNING"
+                :category "request_contract"
+                :status 400
+                :requestId request-id
+                :retryable false
+                :failureCode "heart_rate_out_of_range"
+                :field "telemetry"
+                :line 2}
+               (first @events)))
+        (is (not-any? #(str/includes? (str body @events) %)
+                      ["261" "2026-07-17"])))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest telemetry-contract-vocabulary-is-stable-across-api-failures
+  (let [events (atom [])
+        port (available-port)
+        server (api/start! port
+                           {:event-sink (fn [event fields]
+                                          (swap! events conj
+                                                 (assoc fields :event event)))})
+        base (fixture/render-request)
+        cases
+        [{:request (assoc base :telemetry
+                          "timestamp,heart_rate\n2026-07-17T10:00:00Z,\n")
+          :code "malformed_telemetry_row" :field "telemetry" :line 2}
+         {:request (assoc base :telemetry
+                          (str "timestamp,heart_rate\n"
+                               "2026-07-17T10:00:00Z,120\n"
+                               "2026-07-17T10:00:02Z,124\n"
+                               "2026-07-17T10:00:01Z,128\n"))
+          :code "unordered_telemetry" :field "telemetry"}
+         {:request (assoc base :telemetry
+                          "timestamp,heart_rate\n2026-07-17T10:00:00Z,120\n")
+          :code "insufficient_telemetry_coverage" :field "telemetry"}
+         {:request (assoc base :sectionEndAt "2026-07-17T09:00:03Z")
+          :code "insufficient_telemetry_coverage" :field "telemetry"}
+         {:request (assoc base :telemetryFormat "unknown")
+          :code "unsupported_telemetry_format" :field "telemetryFormat"}
+         {:request (assoc base :telemetryFormat "garmin-fit"
+                          :telemetry "bm90LWZpdA==")
+          :code "unsupported_telemetry_format" :field "telemetry"}
+         {:request (assoc base :spo2
+                          {:format "oxiwear-spo2-csv"
+                           :telemetry
+                           "reading_time,spo2\n2026-07-17T10:00:00Z,\n"})
+          :code "malformed_telemetry_row"
+          :field "spo2.telemetry" :line 2}]]
+    (try
+      (doseq [{:keys [request code field line]} cases]
+        (let [response (test-http/send-string!
+                        :post
+                        (str "http://127.0.0.1:" port "/v1/preview")
+                        (json/write-str request)
+                        {"Content-Type" "application/json"})
+              body (json/read-str (.body response) :key-fn keyword)
+              request-id (some-> response .headers
+                                 (.firstValue "x-request-id") (.orElse nil))]
+          (is (= 400 (.statusCode response)) code)
+          (is (= {:error "invalid_request"
+                  :category "request_contract"
+                  :failureCode code
+                  :requestId request-id
+                  :retryable false
+                  :field field
+                  :documentationPath
+                  "/openapi.yaml#/components/schemas/RenderRequest"}
+                 (dissoc body :line))
+              code)
+          (is (= line (:line body)) code)))
+      (is (= (mapv :code cases) (mapv :failureCode @events)))
+      (is (every? #(= "request_contract" (:category %)) @events))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest telemetry-size-failure-is-distinct-and-does-not-echo-content
+  (let [events (atom [])
+        port (available-port)
+        server (api/start! port
+                           {:event-sink (fn [event fields]
+                                          (swap! events conj
+                                                 (assoc fields :event event)))})
+        oversized (.repeat "x" (inc contract/max-telemetry-bytes))
+        request (assoc (fixture/render-request) :telemetry oversized)]
+    (try
+      (let [response (test-http/send-string!
+                      :post
+                      (str "http://127.0.0.1:" port "/v1/preview")
+                      (json/write-str request)
+                      {"Content-Type" "application/json"})
+            body (json/read-str (.body response) :key-fn keyword)]
+        (is (= 400 (.statusCode response)))
+        (is (= "telemetry_too_large" (:failureCode body)))
+        (is (= "telemetry" (:field body)))
+        (is (false? (:retryable body)))
+        (is (= "telemetry_too_large" (:failureCode (first @events))))
+        (is (< (count (.body response)) 1024)))
       (finally
         (.close ^java.lang.AutoCloseable server)))))

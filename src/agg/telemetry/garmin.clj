@@ -16,16 +16,18 @@
     (when-not (and (string? encoded)
                    (<= (count encoded) max-base64-characters))
       (throw (errors/raise! "Garmin FIT input exceeds the size limit"
-                      {:type ::fit-too-large
-                       :limit max-fit-bytes})))
+                            {:type ::fit-too-large
+                             :field "telemetry"
+                             :limit max-fit-bytes})))
     (let [bytes (.decode (Base64/getDecoder) ^String encoded)
           samples (transient [])
           sample-count (volatile! 0)
           broadcaster (MesgBroadcaster.)]
       (when (> (alength bytes) max-fit-bytes)
         (throw (errors/raise! "Garmin FIT input exceeds the size limit"
-                        {:type ::fit-too-large
-                         :limit max-fit-bytes})))
+                              {:type ::fit-too-large
+                               :field "telemetry"
+                               :limit max-fit-bytes})))
       (.addListener
        broadcaster
        (reify RecordMesgListener
@@ -33,8 +35,13 @@
            (when (and (.getTimestamp record) (.getHeartRate record))
              (when-not (< @sample-count max-samples)
                (throw (errors/raise! "Garmin FIT has too many samples"
-                               {:type ::too-many-samples
-                                :limit max-samples})))
+                                     {:type ::too-many-samples
+                                      :field "telemetry"
+                                      :limit max-samples})))
+             (when-not (<= 20.0 (double (.getHeartRate record)) 260.0)
+               (throw (errors/raise! "Garmin heart rate is out of range"
+                                     {:type ::heart-rate-out-of-range
+                                      :field "telemetry"})))
              (vswap! sample-count inc)
              (conj! samples
                     {:timestamp (.getInstant (.getTimestamp record))
@@ -46,5 +53,6 @@
       (throw error))
     (catch Throwable cause
       (throw (errors/raise! "Malformed Garmin FIT input"
-                      {:type ::malformed-fit}
-                      cause)))))
+                            {:type ::malformed-fit
+                             :field "telemetry"}
+                            cause)))))

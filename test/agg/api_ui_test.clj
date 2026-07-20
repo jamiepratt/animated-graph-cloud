@@ -556,14 +556,59 @@
         (is (str/includes? body "<article id=\"preview-result\""))
         (is (str/includes? body "Preview failed"))
         (is (str/includes? body "request_contract"))
+        (is (str/includes? body "heart_rate_out_of_range"))
+        (is (str/includes? body "Heart-rate telemetry"))
+        (is (str/includes? body "between 20 and 260 bpm"))
         (is (str/includes? body request-id))
         (is (str/includes? body "Source line"))
         (is (str/includes? body ">2</dd>"))
         (is (not (str/includes? body "{\"error\":\"invalid_request\"}")))
-        (is (not (str/includes? body "heart_rate")))
+        (is (not (str/includes? body "timestamp,heart_rate")))
+        (is (not (str/includes? body ",19")))
         (is (not (str/includes? body "2026-07-17"))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
+
+(deftest telemetry-preview-failures-identify-the-input-and-safe-correction
+  (let [base {:category "request_contract"
+              :request-id "00000000-0000-0000-0000-000000000062"
+              :status 400
+              :retryable false
+              :field "telemetry"
+              :documentationPath
+              "/openapi.yaml#/components/schemas/RenderRequest"}
+        summary (ui/preview-failure-fragment
+                 (assoc base
+                        :failureCode "unsupported_telemetry_columns"
+                        :expectedSchema
+                        {:timestampColumns ["timestamp" "date/time" "datetime"]
+                         :valueColumns ["heart_rate" "heart rate"
+                                        "heart rate (bpm)" "HR" "HR (bpm)"]}))
+        corrections
+        {"malformed_telemetry_row" "Correct the malformed row"
+         "heart_rate_out_of_range" "between 20 and 260 bpm"
+         "unordered_telemetry" "strictly increasing"
+         "insufficient_telemetry_coverage" "cover the full requested section"
+         "telemetry_too_large" "documented size limit"
+         "telemetry_sample_limit_exceeded" "fewer telemetry samples"
+         "unsupported_telemetry_format" "Polar CSV, Garmin FIT, or OxiWear"
+         "unknown_failure" "Review the telemetry input"}]
+    (is (str/includes? summary "Heart-rate telemetry"))
+    (is (str/includes? summary "timestamped Polar CSV"))
+    (doseq [column ["timestamp" "date/time" "datetime" "heart_rate"
+                    "heart rate" "heart rate (bpm)" "HR" "HR (bpm)"]]
+      (is (str/includes? summary column)))
+    (is (str/includes? summary "href=\"/openapi.yaml"))
+    (doseq [[failure-code correction] corrections]
+      (is (str/includes?
+           (ui/preview-failure-fragment
+            (assoc base :failureCode failure-code :line 7))
+           correction)
+          failure-code))
+    (let [spo2 (ui/preview-failure-fragment
+                (assoc base :field "spo2.telemetry"
+                       :failureCode "malformed_telemetry_row"))]
+      (is (str/includes? spo2 "SpO₂ telemetry")))))
 
 (deftest site-icon-assets-are-served-and-linked
   (let [port (available-port)
