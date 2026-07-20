@@ -108,8 +108,11 @@ if [ "$garmin_preview_status" != '202' ]; then
   echo "Garmin FIT preview status was $garmin_preview_status, expected 202" >&2
   exit 1
 fi
-if ! grep -q '"operationKind":"key-moment-gallery"' "$garmin_preview_operation" || \
-   ! grep -q '"statusUrl":"/v1/previews/' "$garmin_preview_operation"; then
+garmin_preview_operation_normalized="$(tr -d '\\' <"$garmin_preview_operation")"
+if ! printf '%s' "$garmin_preview_operation_normalized" | \
+     grep -q '"operationKind":"key-moment-gallery"' || \
+   ! printf '%s' "$garmin_preview_operation_normalized" | \
+     grep -q '"statusUrl":"/v1/previews/'; then
   echo "Garmin FIT preview operation response is invalid" >&2
   exit 1
 fi
