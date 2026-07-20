@@ -169,10 +169,23 @@
                      html)))
 
 (defn- preview-status-browser-outcome [page]
-  (let [scenario
+  (let [terminal-fragment
+        (ui/preview-operation-fragment
+         {:id "00000000-0000-0000-0000-000000000021"
+          :state "failed"
+          :progressPercent 100
+          :error {:code "worker_failed"
+                  :category "preview_rendering"
+                  :requestId "00000000-0000-0000-0000-000000000021"
+                  :stage "source_content"
+                  :elapsedMs 4748
+                  :retryable false}}
+         "terminal-generation")
+        scenario
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
+         "const terminalFragment=" (json/write-str terminal-fragment) ";"
          "const button=document.querySelector('[hx-post=\"/ui/preview\"]'),submit=document.getElementById('submit-button'),receipt=document.getElementById('preview-operation-id');const initial={submitDisabled:submit.disabled,receipt:receipt.value,status:document.getElementById('preview-submit-status').textContent};"
          "document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
          "function configure(){const detail={elt:button,parameters:{},headers:{}};const event=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail});button.dispatchEvent(event);return {event,detail};}"
@@ -190,8 +203,8 @@
          "configure();transport('htmx:sendAbort');const aborted=document.getElementById('preview-result');const clientAbort={text:aborted.textContent,disabled:button.disabled};"
          "configure();transport('htmx:timeout');const timedOut=document.getElementById('preview-result');const browserTimeout={text:timedOut.textContent,disabled:button.disabled};"
          "const successfulRetry=configure(),successGeneration=successfulRetry.detail.headers['X-Preview-Generation'];const target=document.getElementById('preview-result');target.outerHTML='<article id=\"preview-result\" class=\"preview-gallery\" data-preview-operation=\"00000000-0000-0000-0000-000000000063\" data-preview-receipt-expires-at=\"2099-07-20T10:15:00Z\" data-preview-generation=\"'+successGeneration+'\"><img></article>';const success=document.getElementById('preview-result');success.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:success}}));"
-         "const succeeded={text:document.getElementById('form-status').textContent,disabled:button.disabled,submitDisabled:submit.disabled,receipt:receipt.value,retried:successGeneration!==retryGeneration};const submitDetail={elt:submit,parameters:{},headers:{}};const submitEvent=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail:submitDetail});submit.dispatchEvent(submitEvent);const duplicateSubmitDetail={elt:submit,parameters:{},headers:{}};const duplicateSubmitEvent=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail:duplicateSubmitDetail});submit.dispatchEvent(duplicateSubmitEvent);const submitFlow={firstAllowed:!submitEvent.defaultPrevented,duplicateSuppressed:duplicateSubmitEvent.defaultPrevented,idempotencyKey:submitDetail.headers['Idempotency-Key'],operation:submitDetail.parameters.previewOperationId};const jobResult=document.getElementById('job-result');jobResult.innerHTML='<article class=\"preview-submit-blocked\" data-preview-gate=\"preview_expired\"><h2>Preview expired</h2></article>';jobResult.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:jobResult}}));const serverGate={submitDisabled:submit.disabled,receipt:receipt.value,status:document.getElementById('preview-submit-status').textContent};const raw=document.getElementById('raw-json');raw.value='changed';raw.dispatchEvent(new Event('input',{bubbles:true}));const rawInvalidated={submitDisabled:submit.disabled,receipt:receipt.value,className:document.getElementById('preview-result').className};"
-         "outcome={initial,pending,unrelatedIgnored,duplicateSuppressed,platformFailure,gatewayFailure,connectionLoss,clientAbort,browserTimeout,succeeded,submitFlow,serverGate,rawInvalidated};"
+         "const succeeded={text:document.getElementById('form-status').textContent,disabled:button.disabled,submitDisabled:submit.disabled,receipt:receipt.value,retried:successGeneration!==retryGeneration};const submitDetail={elt:submit,parameters:{},headers:{}};const submitEvent=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail:submitDetail});submit.dispatchEvent(submitEvent);const duplicateSubmitDetail={elt:submit,parameters:{},headers:{}};const duplicateSubmitEvent=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail:duplicateSubmitDetail});submit.dispatchEvent(duplicateSubmitEvent);const submitFlow={firstAllowed:!submitEvent.defaultPrevented,duplicateSuppressed:duplicateSubmitEvent.defaultPrevented,idempotencyKey:submitDetail.headers['Idempotency-Key'],operation:submitDetail.parameters.previewOperationId};const jobResult=document.getElementById('job-result');jobResult.innerHTML='<article class=\"preview-submit-blocked\" data-preview-gate=\"preview_expired\"><h2>Preview expired</h2></article>';jobResult.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{target:jobResult}}));const serverGate={submitDisabled:submit.disabled,receipt:receipt.value,status:document.getElementById('preview-submit-status').textContent};const raw=document.getElementById('raw-json');raw.value='changed';raw.dispatchEvent(new Event('input',{bubbles:true}));const rawInvalidated={submitDisabled:submit.disabled,receipt:receipt.value,className:document.getElementById('preview-result').className};const terminalAttempt=configure(),terminalGeneration=terminalAttempt.detail.headers['X-Preview-Generation'],terminalPending=document.getElementById('preview-result');terminalPending.outerHTML=terminalFragment.replace('terminal-generation',terminalGeneration);const terminalError=document.getElementById('preview-result');terminalError.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{elt:button,target:terminalPending,xhr:{aggPreviewGeneration:terminalGeneration,getResponseHeader:()=>terminalGeneration}}}));const terminalFailure={className:terminalError.className,text:terminalError.textContent,previewDisabled:button.disabled,submitDisabled:submit.disabled,submitStatus:document.getElementById('preview-submit-status').textContent,status:document.getElementById('form-status').textContent};"
+         "outcome={initial,pending,unrelatedIgnored,duplicateSuppressed,platformFailure,gatewayFailure,connectionLoss,clientAbort,browserTimeout,terminalFailure,succeeded,submitFlow,serverGate,rawInvalidated};"
          "}catch(error){outcome={error:error.message};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));"
          "document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
@@ -462,6 +475,21 @@
     (is (= false (get-in outcome [:browserTimeout :disabled])))
     (is (str/includes? (get-in outcome [:browserTimeout :text])
                        "did not finish"))
+    (is (= "preview-error" (get-in outcome [:terminalFailure :className])))
+    (is (false? (get-in outcome [:terminalFailure :previewDisabled])))
+    (is (get-in outcome [:terminalFailure :submitDisabled]))
+    (is (= "Preview failed. Run Preview again."
+           (get-in outcome [:terminalFailure :submitStatus])))
+    (is (= "Preview failed. See details below."
+           (get-in outcome [:terminalFailure :status])))
+    (is (str/includes? (get-in outcome [:terminalFailure :text])
+                       "preview_rendering"))
+    (is (str/includes? (get-in outcome [:terminalFailure :text])
+                       "Source content"))
+    (is (str/includes? (get-in outcome [:terminalFailure :text])
+                       "worker_failed"))
+    (is (str/includes? (get-in outcome [:terminalFailure :text])
+                       "No durable render was submitted or charged"))
     (is (= {:text "Preview ready."
             :disabled false
             :submitDisabled false
