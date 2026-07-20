@@ -2,7 +2,7 @@
   (:require [agg.errors :as errors]
             [clojure.data.json :as json]
             [clojure.string :as str])
-  (:import (java.io RandomAccessFile)
+  (:import (java.io IOException OutputStream RandomAccessFile)
            (java.nio.file Files OpenOption Path)))
 
 (defprotocol VideoEncoder
@@ -254,6 +254,38 @@
     (catch Throwable error
       (deliver result error))))
 
+(defn- record-pipe-write-error! [write-error error]
+  (compare-and-set! write-error nil error)
+  (throw error))
+
+(defn- monitored-pipe-output [^OutputStream output write-error]
+  (proxy [OutputStream] []
+    (write
+      ([value]
+       (try
+         (if (bytes? value)
+           (.write output ^bytes value)
+           (.write output (int value)))
+         (catch IOException error
+           (record-pipe-write-error! write-error error))))
+      ([buffer offset length]
+       (try
+         (.write output ^bytes buffer (int offset) (int length))
+         (catch IOException error
+           (record-pipe-write-error! write-error error)))))
+    (flush []
+      (try
+        (.flush output)
+        (catch IOException error
+          (record-pipe-write-error! write-error error))))))
+
+(defn- caused-by? [error cause]
+  (loop [current error]
+    (cond
+      (nil? current) false
+      (identical? current cause) true
+      :else (recur (.getCause ^Throwable current)))))
+
 (defn- encode-composite-attempt!
   [ffmpeg render-spec heartbeat-path output-path source-stream! write-overlay!]
   (let [directory (Files/createTempDirectory
@@ -264,11 +296,15 @@
                          (composite-command ffmpeg render-spec heartbeat-path
                                             overlay-pipe output-path)))
         source-result (promise)
+        source-pipe-write-error (atom nil)
         overlay-result (promise)
         source-thread (Thread.
                        #(try
                           (with-open [output (.getOutputStream process)]
-                            (write-pipe! source-stream! output source-result))
+                            (write-pipe! source-stream!
+                                         (monitored-pipe-output
+                                          output source-pipe-write-error)
+                                         source-result))
                           (catch Throwable error
                             (deliver source-result error)))
                        "agg-drive-source")
@@ -289,7 +325,12 @@
           source-error @source-result
           overlay-error @overlay-result]
       (try
-        (when source-error
+        ;; The duration bound can make FFmpeg close stdin before Drive finishes.
+        ;; Suppress only the exact write failure from that successful process.
+        (when (and source-error
+                   (not (and (zero? exit-status)
+                             (caused-by? source-error
+                                         @source-pipe-write-error))))
           (throw (errors/raise! "FFmpeg compositing failed"
                                 {:type ::compositing-failed
                                  :exit-status exit-status}
