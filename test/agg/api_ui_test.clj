@@ -177,6 +177,42 @@
      "Browser-level preview status regression requires Chrome or Chromium"
      html)))
 
+(defn- telemetry-file-browser-outcome [page]
+  (let [fit-base64 (str/trim
+                    (slurp (io/resource "fixtures/garmin/activity.fit.b64")))
+        csv-text (str/trim (slurp (io/resource "fixtures/polar/valid.csv")))
+        second-csv-text (str "timestamp,heart_rate\n"
+                             "2026-07-17T10:00:00Z,130\n"
+                             "2026-07-17T10:00:02Z,132")
+        oxiwear-text (str/trim
+                      (slurp (io/resource "fixtures/oxiwear/hr-midnight.csv")))
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "(async()=>{let outcome;try{"
+         "const format=document.getElementById('telemetry-format'),input=document.getElementById('telemetry-file'),telemetry=document.getElementById('telemetry'),raw=document.getElementById('raw-json'),status=document.getElementById('telemetry-status');"
+         "document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02']].forEach(([id,value])=>document.getElementById(id).value=value);"
+         "const upload=async file=>{const transfer=new DataTransfer();transfer.items.add(file);input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));const cleared=telemetry.value==='';await new Promise((resolve,reject)=>{const deadline=Date.now()+1000;const check=()=>{if(status.classList.contains('success'))resolve();else if(status.classList.contains('error')||Date.now()>deadline)reject(new Error('file read failed'));else setTimeout(check,5);};check();});return {request:JSON.parse(raw.value),cleared};};"
+         "const selectFile=async(value,file)=>{format.value=value;format.dispatchEvent(new Event('change',{bubbles:true}));return upload(file);};"
+         "const fitBytes=Uint8Array.from(atob(" (json/write-str fit-base64) "),character=>character.charCodeAt(0));"
+         "const fitUpload=await selectFile('garmin-fit',new File([fitBytes],'input.fit',{type:'application/octet-stream'}));"
+         "format.value='polar-csv';format.dispatchEvent(new Event('change',{bubbles:true}));"
+         "const clearedOnFormatChange=telemetry.value===''&&input.files.length===0;"
+         "const csvUpload=await selectFile('polar-csv',new File([" (json/write-str csv-text) "],'input.csv',{type:'text/csv'}));"
+         "const secondCsvUpload=await upload(new File([" (json/write-str second-csv-text) "],'replacement.csv',{type:'text/csv'}));"
+         "const oxiwearUpload=await selectFile('oxiwear-hr-csv',new File([" (json/write-str oxiwear-text) "],'input.csv',{type:'text/csv'}));"
+         "outcome={fitMatches:fitUpload.request.telemetry===" (json/write-str fit-base64) ",fitFormat:fitUpload.request.telemetryFormat,csvMatches:csvUpload.request.telemetry===" (json/write-str csv-text) ",csvFormat:csvUpload.request.telemetryFormat,clearedOnFormatChange,clearedOnFileChange:secondCsvUpload.cleared,secondCsvMatches:secondCsvUpload.request.telemetry===" (json/write-str second-csv-text) ",oxiwearMatches:oxiwearUpload.request.telemetry===" (json/write-str oxiwear-text) ",oxiwearFormat:oxiwearUpload.request.telemetryFormat};"
+         "}catch(_error){outcome={error:'browser telemetry upload scenario failed'};}"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-telemetry-file-browser-"
+     "Browser-level telemetry file regression requires Chrome or Chromium"
+     html)))
+
 (deftest public-product-and-legal-pages-identify-alpha-compose
   (let [port (available-port)
         {:keys [auth-system]} (fixture)
@@ -284,6 +320,24 @@
            (:failed outcome)))
     (is (= {:text "Preview ready." :className "status success"}
            (:succeeded outcome)))))
+
+(deftest telemetry-files-follow-the-selected-format-in-a-browser
+  (let [outcome (telemetry-file-browser-outcome
+                 (ui/page {:user {:email "owner@example.com" :role :member}
+                           :csrf "csrf-test"
+                           :tokens []
+                           :members []
+                           :logs-enabled? false}))]
+    (is (nil? (:error outcome)) outcome)
+    (is (:fitMatches outcome) outcome)
+    (is (= "garmin-fit" (:fitFormat outcome)))
+    (is (:clearedOnFormatChange outcome) outcome)
+    (is (:csvMatches outcome) outcome)
+    (is (= "polar-csv" (:csvFormat outcome)))
+    (is (:clearedOnFileChange outcome) outcome)
+    (is (:secondCsvMatches outcome) outcome)
+    (is (:oxiwearMatches outcome) outcome)
+    (is (= "oxiwear-hr-csv" (:oxiwearFormat outcome)))))
 
 (deftest htmx-preview-failure-is-a-safe-correlated-html-fragment
   (let [port (available-port)
