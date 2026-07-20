@@ -887,6 +887,9 @@ components:
         requestId: {type: string, format: uuid}
         retryable: {type: boolean}
         stage: {type: string, maxLength: 128}
+        reason:
+          type: string
+          enum: [preview_decode_failed, source_stream_failed]
         status: {type: integer, minimum: 100, maximum: 599}
         elapsedMs: {type: integer, minimum: 0, maximum: 1000000000000}
         timeoutMs: {type: integer, minimum: 0, maximum: 1000000000000}
@@ -996,6 +999,9 @@ components:
         stage:
           type: string
           enum: [request_load, request_prepare, source_content, overlay_render, composition_encode, artifact_upload, drive_delivery, completion_persistence]
+        reason:
+          type: string
+          enum: [preview_decode_failed, source_stream_failed]
         status:
           type: integer
           minimum: 100

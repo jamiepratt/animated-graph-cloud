@@ -167,6 +167,59 @@
     (is (= "3" (second (drop-while #(not= "-frames:v" %) command))))
     (is (= "pipe:1" (last command)))))
 
+(deftest failed-selected-source-gallery-identifies-preview-decode-not-source-content
+  (let [ffmpeg (executable-script! (short-source-reader-script 7))
+        renderer (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
+        transparent (png-bytes 64 36 false)
+        source-block (byte-array 65536)]
+    (try
+      (let [cause
+            (try
+              (jobs/with-durable-stage
+                "composition_encode"
+                (fn []
+                  (media/render-composite-gallery!
+                   renderer
+                   {:width 64 :height 36 :fps 25 :duration-seconds 1
+                    :fit-mode "letterbox"}
+                   (fn [source-output]
+                     (jobs/with-durable-stage
+                       "source_content"
+                       (fn []
+                         (loop []
+                           (.write ^OutputStream source-output source-block)
+                           (recur)))))
+                   [{:frameIndex 0 :overlay transparent}]
+                   (fn [& _]
+                     (throw (AssertionError. "failed decode emitted a frame"))))))
+              (catch Throwable error error))
+            diagnostics (jobs/failure-diagnostics cause 1)]
+        (is (= {:failure-code "composition_encode_failed"
+                :stage "composition_encode"
+                :reason "preview_decode_failed"
+                :retryable false
+                :elapsed-ms 1}
+               diagnostics))
+        (is (not (re-find #"source|filename|oauth|https?://|token"
+                          (pr-str diagnostics))))
+        (is (= "preview_decode_failed"
+               (:reason
+                (jobs/job-resource
+                 {:id "00000000-0000-0000-0000-000000000072"
+                  :state :failed
+                  :attempt 1
+                  :created-at (java.time.Instant/parse
+                               "2026-07-20T00:00:00Z")
+                  :updated-at (java.time.Instant/parse
+                               "2026-07-20T00:00:01Z")
+                  :failure "composition_encode_failed"
+                  :failure-diagnostics diagnostics}))))
+        (is (nil? (:reason
+                   (jobs/failure-diagnostics
+                    (ex-info "private" {:reason "private_drive_id"}) 1)))))
+      (finally
+        (Files/deleteIfExists ffmpeg)))))
+
 (deftest preview-moments-use-standard-prominence-and-stable-tie-breaking
   (let [section (first
                  (frames/preview-sections

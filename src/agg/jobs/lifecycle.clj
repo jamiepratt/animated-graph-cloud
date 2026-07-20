@@ -99,6 +99,9 @@
    "drive_delivery" "drive_delivery_failed"
    "completion_persistence" "completion_persistence_failed"})
 
+(def ^:private durable-failure-reasons
+  #{"preview_decode_failed" "source_stream_failed"})
+
 (defn- throwable-data [cause]
   (loop [current cause
          result []]
@@ -122,12 +125,14 @@
                                      #(contains? durable-failure-codes %))
                          "worker_failed")
         stage (first-safe :stage #(contains? durable-stages %))
+        reason (first-safe :reason #(contains? durable-failure-reasons %))
         status (first-safe :status #(and (integer? %) (<= 100 % 599)))
         retryable (first-safe :retryable boolean?)]
     (cond-> {:failure-code failure-code
              :retryable (true? retryable)
              :elapsed-ms (max 0 (long elapsed-ms))}
       stage (assoc :stage stage)
+      reason (assoc :reason reason)
       status (assoc :status status))))
 
 (defn- typed-failure-code [data stage]
@@ -278,6 +283,7 @@
     operation-kind (assoc :operationKind (name operation-kind))
     failure (assoc :failureCode (public-failure-code failure))
     (:stage failure-diagnostics) (assoc :stage (:stage failure-diagnostics))
+    (:reason failure-diagnostics) (assoc :reason (:reason failure-diagnostics))
     (:status failure-diagnostics) (assoc :status (:status failure-diagnostics))
     failure-diagnostics (assoc :retryable (:retryable failure-diagnostics)
                                :elapsedMs (:elapsed-ms failure-diagnostics))

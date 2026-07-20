@@ -471,6 +471,7 @@
               #(throw (errors/raise!
                        "private-file.mp4 private-drive-id secret-token"
                        {:type ::private-preview-failure
+                        :reason "source_stream_failed"
                         :status 503 :retryable true})))))
         system (jobs/in-memory-system {:worker worker})
         port (available-port)
@@ -500,6 +501,7 @@
                   :requestId (:id operation)
                   :retryable true
                   :stage "source_content"
+                  :reason "source_stream_failed"
                   :status 503}
                  (dissoc (:error body) :elapsedMs)))
           (is (nat-int? (get-in body [:error :elapsedMs])))

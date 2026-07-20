@@ -52,6 +52,71 @@ docker run --rm --entrypoint ffmpeg "$image" -hide_banner -h encoder=libx264 2>&
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' overlay '
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' amix '
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' alimiter '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' hstack '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' select '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' setpts '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' split '
+
+docker run --rm "$image" clojure.main -e '
+(require (quote [agg.render.audio :as audio])
+         (quote [agg.render.media :as media]))
+(import (quote java.awt.image.BufferedImage)
+        (quote java.io.ByteArrayOutputStream)
+        (quote java.nio.file.Files)
+        (quote java.nio.file.OpenOption)
+        (quote javax.imageio.ImageIO))
+(let [directory (Files/createTempDirectory
+                 "agg-selected-source-smoke-"
+                 (make-array java.nio.file.attribute.FileAttribute 0))
+      image-path (.resolve directory "source.png")
+      audio-path (.resolve directory "source.wav")
+      source-path (.resolve directory "source.mp4")
+      image (BufferedImage. 64 36 BufferedImage/TYPE_INT_ARGB)
+      overlay-output (ByteArrayOutputStream.)]
+  (try
+    (ImageIO/write image "png" (.toFile image-path))
+    (with-open [output (Files/newOutputStream audio-path (make-array OpenOption 0))]
+      (audio/write-wav! {:duration-seconds 2
+                         :telemetry [{:seconds 0.0 :heart-rate 120.0}
+                                     {:seconds 2.0 :heart-rate 120.0}]}
+                        output))
+    (let [process (.start
+                   (doto (ProcessBuilder.
+                          ^java.util.List
+                          ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
+                           "-loop" "1" "-framerate" "25" "-i" (str image-path)
+                           "-i" (str audio-path) "-t" "2" "-c:v" "libx264"
+                           "-pix_fmt" "yuv420p" "-c:a" "aac" "-movflags"
+                           "+faststart" "-y" (str source-path)])
+                     (.inheritIO)))]
+      (when-not (zero? (.waitFor process))
+        (throw (ex-info "source fixture generation failed" {}))))
+    (ImageIO/write image "png" overlay-output)
+    (let [frames (atom [])
+          result
+          (media/render-composite-gallery!
+           (media/ffmpeg-video-encoder)
+           {:width 64 :height 36 :fps 25 :duration-seconds 1
+            :fit-mode "letterbox"}
+           (fn [output]
+             (with-open [input (Files/newInputStream
+                                source-path (make-array OpenOption 0))]
+               (.transferTo input output)))
+           [{:frameIndex 0 :overlay (.toByteArray overlay-output)}
+            {:frameIndex 24 :overlay (.toByteArray overlay-output)}]
+           (fn [frame-index source-png final-png]
+             (swap! frames conj [frame-index (alength source-png)
+                                 (alength final-png)])))]
+      (when-not (and (= {:frame-count 2 :source-decodes 1} result)
+                     (= [0 24] (mapv first @frames)))
+        (throw (ex-info "selected-source gallery smoke failed" {}))))
+    (finally
+      (Files/deleteIfExists source-path)
+      (Files/deleteIfExists audio-path)
+      (Files/deleteIfExists image-path)
+      (Files/deleteIfExists directory)
+      (shutdown-agents))))
+'
 
 renderer_output="$(docker run --rm "$image" clojure.main -m agg.renderer.main)"
 if [ "$renderer_output" != "$expected_renderer" ]; then

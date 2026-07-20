@@ -239,7 +239,8 @@ resource. State progresses through `queued`, `launching`, and `running` to
 `cancellation-requested`. Only failed and cancelled jobs accept an explicit
 retry. Successful polls include the private temporary object name, SHA-256, and
 content type. Failed render polls include a bounded `failureCode`, `stage`,
-optional numeric upstream `status`, `retryable`, and `elapsedMs`; `attempt`
+optional allowlisted `reason`, numeric upstream `status`, `retryable`, and
+`elapsedMs`; `attempt`
 correlates the diagnosis with the exact Cloud Run execution. The same bounded
 fields appear in the renderer failure event and server-rendered job fragment.
 They never include exception messages, stack traces, signed URLs, Drive IDs,

@@ -457,6 +457,7 @@
                            :retryable (:retryable diagnosis)
                            :elapsedMs (:elapsed-ms diagnosis))
           (:stage diagnosis) (assoc :stage (:stage diagnosis))
+          (:reason diagnosis) (assoc :reason (:reason diagnosis))
           (:status diagnosis) (assoc :status (:status diagnosis))
           attempt (assoc :attempt attempt))]
     (merge

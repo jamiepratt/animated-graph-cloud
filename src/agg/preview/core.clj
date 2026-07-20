@@ -248,6 +248,7 @@
                                :requestId (:id job)
                                :retryable (true? (:retryable job))}
                         (:stage job) (assoc :stage (:stage job))
+                        (:reason job) (assoc :reason (:reason job))
                         (:status job) (assoc :status (:status job))
                         (some? (:elapsedMs job))
                         (assoc :elapsedMs (:elapsedMs job))

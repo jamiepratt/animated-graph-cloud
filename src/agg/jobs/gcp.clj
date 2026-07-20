@@ -76,6 +76,8 @@
                                                  :elapsed-ms])))
     (get-in job [:failure-diagnostics :stage])
     (assoc "failureStage" (get-in job [:failure-diagnostics :stage]))
+    (get-in job [:failure-diagnostics :reason])
+    (assoc "failureReason" (get-in job [:failure-diagnostics :reason]))
     (get-in job [:failure-diagnostics :status])
     (assoc "failureStatus" (long (get-in job [:failure-diagnostics :status])))
     (:output job) (assoc "outputJson" (json/write-str (:output job)))
@@ -107,6 +109,8 @@
                         :elapsed-ms (long (get data "failureElapsedMs"))}
                  (get data "failureStage")
                  (assoc :stage (get data "failureStage"))
+                 (get data "failureReason")
+                 (assoc :reason (get data "failureReason"))
                  (contains? data "failureStatus")
                  (assoc :status (long (get data "failureStatus")))))
         (get data "outputJson")

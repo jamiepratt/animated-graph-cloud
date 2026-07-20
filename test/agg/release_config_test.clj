@@ -307,6 +307,10 @@
          "Encoder png [PNG (Portable Network Graphics) image]:"))
     (is (str/includes? smoke "-h muxer=image2pipe"))
     (is (str/includes? smoke "Muxer image2pipe [piped image2 sequence]:"))
+    (doseq [filter-name ["hstack" "select" "setpts" "split"]]
+      (is (str/includes? smoke
+                         (str "-filters 2>&1 | grep -q ' "
+                              filter-name " '"))))
     (is (not (re-find #"-encoders.*grep -q ' png '" smoke)))
     (is (not (re-find #"-muxers.*grep -q ' image2pipe '" smoke)))))
 

@@ -20,6 +20,11 @@
     (is (str/includes? ffmpeg-builder "--enable-zlib"))
     (is (str/includes? dockerfile "--enable-muxer=image2pipe,mov,mp4"))
     (is (str/includes? dockerfile "--enable-encoder=aac,libx264,png,prores_ks"))
+    (doseq [filter-name ["hstack" "select" "setpts" "split"]]
+      (is (re-find (re-pattern (str "--enable-filter=[^\\n]*\\b"
+                                    filter-name "\\b"))
+                   ffmpeg-builder)
+          (str "selected-source Preview requires FFmpeg filter " filter-name)))
     (is (not (str/includes? runtime "zlib1g-dev")))
     (is (not (str/includes? runtime "apt-get install")))))
 
