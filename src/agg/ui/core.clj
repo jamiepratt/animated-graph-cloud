@@ -345,12 +345,16 @@
                              "</div></div></section>")))
                "<dialog id=\"preview-dialog\" aria-labelledby=\"preview-dialog-title\"><div class=\"dialog-head\"><h2 id=\"preview-dialog-title\">Larger preview image</h2><button type=\"button\" class=\"preview-dialog-close\">Close</button></div><img alt=\"\"></dialog>"
                "</article>"))
-        (str "<article id=\"preview-result\" class=\"preview-empty\" role=\"status\" data-preview-generation=\""
+        (str "<article id=\"preview-result\" class=\"preview-empty\" role=\"status\" data-preview-operation=\""
+             (escape-html id) "\" data-preview-generation=\""
              (escape-html generation) "\"><h2>No preview moments</h2><p>The normalized traces contain no renderable frames.</p></article>"))
 
       (contains? #{"failed" "cancelled"} state)
-      (str "<article id=\"preview-result\" class=\"preview-error\" role=\"alert\" data-preview-generation=\""
-           (escape-html generation) "\"><h2>Preview failed</h2><p><code>"
+      (str "<article id=\"preview-result\" class=\"preview-error\" role=\"alert\" data-preview-operation=\""
+           (escape-html id) "\" data-preview-generation=\""
+           (escape-html generation) "\"><h2>Preview "
+           (if (= "cancelled" state) "cancelled" "failed")
+           "</h2><p><code>"
            (escape-html (or (:code error) "preview_cancelled")) "</code></p>"
            (when (:stage error)
              (str "<p>Stage: " (escape-html (title-case (:stage error))) "</p>"))

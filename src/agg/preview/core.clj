@@ -20,8 +20,15 @@
   (and (string? value)
        (boolean (re-matches #"[A-Za-z0-9_-]{1,64}" value))))
 
+(defn valid-operation-id? [value]
+  (and (string? value)
+       (boolean
+        (re-matches
+         #"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
+         value))))
+
 (defn- require-asset-key! [operation-id asset-id size]
-  (when-not (and (string? operation-id)
+  (when-not (and (valid-operation-id? operation-id)
                  (valid-asset-id? asset-id)
                  (contains? #{:thumbnail :full} size))
     (throw (errors/raise! "Preview image key is invalid"
@@ -207,6 +214,7 @@
                           "queued" 0
                           "launching" 10
                           "running" 25
+                          "cancellation-requested" 75
                           100)]
            (cond-> {:id (:id job)
                     :operationKind "key-moment-gallery"
@@ -224,4 +232,7 @@
                     (cond-> {:code (or (:failureCode job) "preview_failed")
                              :retryable (true? (:retryable job))}
                       (:stage job) (assoc :stage (:stage job))
-                      (:status job) (assoc :status (:status job)))))))))))
+                      (:status job) (assoc :status (:status job))))
+             (= "cancelled" state)
+             (assoc :error {:code "preview_cancelled"
+                            :retryable false}))))))))

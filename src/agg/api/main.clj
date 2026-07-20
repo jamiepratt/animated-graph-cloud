@@ -47,6 +47,19 @@
 (def ^:private preview-stages
   #{"source_metadata"})
 
+(def ^:private uuid-path-component
+  "[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")
+
+(def ^:private preview-api-path-pattern
+  (re-pattern (str "/v1/previews/" uuid-path-component)))
+
+(def ^:private preview-image-path-pattern
+  (re-pattern (str "/v1/previews/" uuid-path-component
+                   "/images/[A-Za-z0-9_-]{1,64}/(?:thumbnail|full)")))
+
+(def ^:private preview-ui-path-pattern
+  (re-pattern (str "/ui/previews/" uuid-path-component)))
+
 (def ^:private public-assets
   {"/openapi.yaml" ["openapi.yaml" "application/yaml; charset=utf-8"]
    "/alpha-compose-mark.svg" ["public/alpha-compose-mark.svg" "image/svg+xml; charset=utf-8"]
@@ -595,15 +608,20 @@
         (jobs/submit-job! job-service idempotency-key request)]
     (respond-json! exchange (if created? 202 200) job)))
 
-(defn- poll-job! [exchange job-service job-id]
-  (if-let [job (jobs/get-job job-service job-id)]
-    (respond-json! exchange 200 job)
-    (respond-json! exchange 404 {:error "job_not_found"})))
+(defn- poll-job! [exchange job]
+  (respond-json! exchange 200 job))
 
 (defn- require-job-owner! [job-service user job-id]
   (when (and user
              (not (jobs/owns-job? job-service job-id (:subject user))))
     (throw (errors/raise! "Job does not exist" {:type ::jobs/job-not-found}))))
+
+(defn- require-durable-job! [job-service job-id]
+  (let [job (jobs/get-job job-service job-id)]
+    (when (or (nil? job) (= "preview" (:operationKind job)))
+      (throw (errors/raise! "Job does not exist"
+                            {:type ::jobs/job-not-found})))
+    job))
 
 (defn- bearer-token [^HttpExchange exchange]
   (some-> exchange .getRequestHeaders (.getFirst "Authorization")
@@ -969,10 +987,8 @@
     (respond! exchange (if created? 202 200) "text/html; charset=utf-8"
               (ui/job-fragment job))))
 
-(defn- poll-job-ui! [exchange job-service job-id]
-  (if-let [job (jobs/get-job job-service job-id)]
-    (respond! exchange 200 "text/html; charset=utf-8" (ui/job-fragment job))
-    (respond! exchange 404 "text/html; charset=utf-8" "Job not found")))
+(defn- poll-job-ui! [exchange job]
+  (respond! exchange 200 "text/html; charset=utf-8" (ui/job-fragment job)))
 
 (defn- create-token-ui! [exchange token-service user]
   (let [created (tokens/create-token! token-service user
@@ -1096,7 +1112,7 @@
 
                                   (and auth-system preview-job-service
                                        (= "GET" method)
-                                       (re-matches #"/ui/previews/[^/]+" path))
+                                       (re-matches preview-ui-path-pattern path))
                                   (let [user (require-session-user! exchange auth-system)
                                         operation-id (last (.split path "/"))]
                                     (require-job-owner! preview-job-service user
@@ -1115,7 +1131,9 @@
                                   (let [user (require-session-user! exchange auth-system)
                                         job-id (last (.split path "/"))]
                                     (require-job-owner! job-service user job-id)
-                                    (poll-job-ui! exchange job-service job-id))
+                                    (poll-job-ui! exchange
+                                                  (require-durable-job!
+                                                   job-service job-id)))
 
                                   (and auth-system job-service (= "POST" method)
                                        (re-matches #"/ui/jobs/[^/]+/cancel" path))
@@ -1123,6 +1141,7 @@
                                         job-id (nth (.split path "/") 3)]
                                     (require-csrf! exchange auth-system user)
                                     (require-job-owner! job-service user job-id)
+                                    (require-durable-job! job-service job-id)
                                     (respond! exchange 200 "text/html; charset=utf-8"
                                               (ui/job-fragment (jobs/cancel-job! job-service job-id))))
 
@@ -1132,6 +1151,7 @@
                                         job-id (nth (.split path "/") 3)]
                                     (require-csrf! exchange auth-system user)
                                     (require-job-owner! job-service user job-id)
+                                    (require-durable-job! job-service job-id)
                                     (require-drive-access! auth-system user)
                                     (respond! exchange 202 "text/html; charset=utf-8"
                                               (ui/job-fragment (jobs/retry-job! job-service job-id))))
@@ -1182,7 +1202,7 @@
                                               auth-system user))
 
                                   (and preview-job-service (= "GET" method)
-                                       (re-matches #"/v1/previews/[^/]+" path))
+                                       (re-matches preview-api-path-pattern path))
                                   (let [user (authenticated-user! exchange auth-system token-service)
                                         operation-id (last (.split path "/"))]
                                     (require-job-owner! preview-job-service user operation-id)
@@ -1190,9 +1210,7 @@
 
                                   (and preview-job-service preview-asset-store
                                        (= "GET" method)
-                                       (re-matches
-                                        #"/v1/previews/[^/]+/images/[A-Za-z0-9_-]{1,64}/(?:thumbnail|full)"
-                                        path))
+                                       (re-matches preview-image-path-pattern path))
                                   (let [user (authenticated-user! exchange auth-system token-service)
                                         parts (.split path "/")
                                         operation-id (nth parts 3)
@@ -1253,7 +1271,9 @@
                                   (let [user (authenticated-user! exchange auth-system token-service)
                                         job-id (last (.split path "/"))]
                                     (require-job-owner! job-service user job-id)
-                                    (poll-job! exchange job-service (last (.split path "/"))))
+                                    (poll-job! exchange
+                                               (require-durable-job!
+                                                job-service job-id)))
 
                                   (and job-service (= "POST" method)
                                        (re-matches #"/internal/v1/jobs/[^/]+/dispatch" path))
@@ -1269,6 +1289,7 @@
                                         job-id (nth (.split path "/") 3)]
                                     (require-csrf! exchange auth-system user)
                                     (require-job-owner! job-service user job-id)
+                                    (require-durable-job! job-service job-id)
                                     (cancel-job! exchange job-service job-id))
 
                                   (and job-service (= "POST" method)
@@ -1277,6 +1298,7 @@
                                         job-id (nth (.split path "/") 3)]
                                     (require-csrf! exchange auth-system user)
                                     (require-job-owner! job-service user job-id)
+                                    (require-durable-job! job-service job-id)
                                     (require-drive-access! auth-system user)
                                     (retry-job! exchange job-service job-id))
 

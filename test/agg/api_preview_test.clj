@@ -55,6 +55,7 @@
         preview-system (jobs/in-memory-system)
         port (available-port)
         server (api/start! port {:auth-system auth-system
+                                 :job-service (:service preview-system)
                                  :preview-job-service
                                  (:service preview-system)})]
     (try
@@ -76,7 +77,35 @@
                              :get
                              (str "http://127.0.0.1:" port
                                   (:statusUrl operation))
-                             nil {})]
+                             nil {})
+            durable-path (str "/v1/jobs/" (:id operation))
+            ui-durable-path (str "/ui/jobs/" (:id operation))
+            write-headers {"Cookie" (str "agg_session=" session)
+                           "X-CSRF-Token" csrf
+                           "Content-Type" "application/json"}
+            durable-responses
+            [(test-http/send-string! :get
+                                     (str "http://127.0.0.1:" port durable-path)
+                                     nil {"Cookie" (str "agg_session=" session)})
+             (test-http/send-string! :post
+                                     (str "http://127.0.0.1:" port durable-path
+                                          "/cancel")
+                                     "" write-headers)
+             (test-http/send-string! :post
+                                     (str "http://127.0.0.1:" port durable-path
+                                          "/retry")
+                                     "" write-headers)
+             (test-http/send-string! :get
+                                     (str "http://127.0.0.1:" port ui-durable-path)
+                                     nil {"Cookie" (str "agg_session=" session)})
+             (test-http/send-string! :post
+                                     (str "http://127.0.0.1:" port ui-durable-path
+                                          "/cancel")
+                                     "" write-headers)
+             (test-http/send-string! :post
+                                     (str "http://127.0.0.1:" port ui-durable-path
+                                          "/retry")
+                                     "" write-headers)]]
         (is (< elapsed-ms 250.0))
         (is (= 202 (.statusCode response)))
         (is (= "application/json; charset=utf-8"
@@ -94,7 +123,51 @@
         (is (= 200 (.statusCode status)))
         (is (= "queued" (:state (json/read-str (.body status)
                                                :key-fn keyword))))
-        (is (= 401 (.statusCode unauthenticated))))
+        (is (= 401 (.statusCode unauthenticated)))
+        (is (every? #(= 404 (.statusCode %)) durable-responses))
+        (is (= "queued" (:state (jobs/get-job (:service preview-system)
+                                              (:id operation)))))
+        (jobs/cancel-job! (:service preview-system) (:id operation))
+        (let [cancelled-response
+              (test-http/send-string!
+               :get (str "http://127.0.0.1:" port (:statusUrl operation))
+               nil {"Cookie" (str "agg_session=" session)})
+              cancelled (json/read-str (.body cancelled-response)
+                                       :key-fn keyword)]
+          (is (= 200 (.statusCode cancelled-response)))
+          (is (= "cancelled" (:state cancelled)))
+          (is (= {:code "preview_cancelled" :retryable false}
+                 (:error cancelled)))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest malformed-preview-operation-paths-fall-through-without-store-access
+  (let [auth-system (auth-system nil)
+        session (auth/issue-session auth-system
+                                    {:subject "google-subject-1"
+                                     :email "owner@example.com"})
+        port (available-port)
+        forbidden-store (Object.)
+        server (api/start! port {:auth-system auth-system
+                                 :preview-job-service forbidden-store
+                                 :preview-asset-store forbidden-store})
+        invalid-id (apply str (repeat 512 "a"))]
+    (try
+      (let [api-status (test-http/send-string!
+                        :get (str "http://127.0.0.1:" port
+                                  "/v1/previews/" invalid-id)
+                        nil {})
+            api-image (test-http/send-string!
+                       :get (str "http://127.0.0.1:" port
+                                 "/v1/previews/" invalid-id
+                                 "/images/a000/thumbnail")
+                       nil {})
+            ui-status (test-http/send-string!
+                       :get (str "http://127.0.0.1:" port
+                                 "/ui/previews/" invalid-id)
+                       nil {"Cookie" (str "agg_session=" session)})]
+        (is (= [404 404 404]
+               (mapv #(.statusCode %) [api-status api-image ui-status]))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

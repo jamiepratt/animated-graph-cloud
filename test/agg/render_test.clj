@@ -301,6 +301,32 @@
     (is (nil? (preview/operation-resource
                job (.plusSeconds created (* 24 60 60)))))))
 
+(deftest cancelled-preview-operations-are-terminal-and-bounded
+  (let [created (java.time.Instant/parse "2026-07-20T00:00:00Z")
+        resource (fn [state]
+                   (preview/operation-resource
+                    {:id "00000000-0000-0000-0000-000000000061"
+                     :operationKind "preview"
+                     :state state
+                     :createdAt (str created)
+                     :updatedAt (str created)}
+                    (.plusSeconds created 1)))]
+    (is (= 75 (:progressPercent (resource "cancellation-requested"))))
+    (is (nil? (:error (resource "cancellation-requested"))))
+    (is (= {:code "preview_cancelled" :retryable false}
+           (:error (resource "cancelled"))))
+    (is (= 100 (:progressPercent (resource "cancelled"))))))
+
+(deftest preview-asset-keys-require-uuid-operation-ids
+  (let [store (preview/in-memory-asset-store)]
+    (is (preview/valid-operation-id?
+         "00000000-0000-0000-0000-000000000061"))
+    (is (false? (preview/valid-operation-id? (apply str (repeat 512 "a")))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"key is invalid"
+                          (preview/put-asset! store "not-a-uuid" "a000"
+                                              :full (png-bytes 1 1 true))))))
+
 (deftest overlay-gallery-renders-each-shared-frame-asset-once
   (let [store (preview/in-memory-asset-store)
         manifest

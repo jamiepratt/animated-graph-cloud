@@ -181,7 +181,8 @@
     (let [limit (if (= :thumbnail size)
                   preview/max-thumbnail-bytes
                   preview/max-full-image-bytes)]
-      (when-not (and (preview/valid-asset-id? asset-id)
+      (when-not (and (preview/valid-operation-id? operation-id)
+                     (preview/valid-asset-id? asset-id)
                      (contains? #{:thumbnail :full} size)
                      (bytes? bytes)
                      (<= (alength ^bytes bytes) limit))
@@ -197,7 +198,8 @@
         (.create storage blob bytes (make-array Storage$BlobTargetOption 0))
         {:asset-id asset-id :size size})))
   (get-asset [_ operation-id asset-id size]
-    (when (and (preview/valid-asset-id? asset-id)
+    (when (and (preview/valid-operation-id? operation-id)
+               (preview/valid-asset-id? asset-id)
                (contains? #{:thumbnail :full} size))
       (let [object-name (str "previews/" operation-id "/assets/"
                              asset-id "-" (name size) ".png")

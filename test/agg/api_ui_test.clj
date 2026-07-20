@@ -452,6 +452,31 @@
     (is (not (str/includes? fragment ">Source</span>")))
     (is (not (str/includes? fragment ">Final</span>")))))
 
+(deftest terminal-preview-fragments-retain-operation-identity
+  (let [base {:id "00000000-0000-0000-0000-000000000061"
+              :progressPercent 100}
+        cancelled (ui/preview-operation-fragment
+                   (assoc base :state "cancelled"
+                          :error {:code "preview_cancelled" :retryable false})
+                   "generation-1")
+        failed (ui/preview-operation-fragment
+                (assoc base :state "failed"
+                       :error {:code "source_content_failed" :retryable true})
+                "generation-1")
+        empty (ui/preview-operation-fragment
+               (assoc base :state "succeeded"
+                      :result {:sections [] :assets []})
+               "generation-1")]
+    (doseq [fragment [cancelled failed empty]]
+      (is (str/includes? fragment
+                         "data-preview-operation=\"00000000-0000-0000-0000-000000000061\"")))
+    (is (str/includes? cancelled "preview_cancelled"))
+    (is (str/includes? cancelled "<h2>Preview cancelled</h2>"))
+    (is (not (str/includes? cancelled "hx-get=")))
+    (is (str/includes? failed "source_content_failed"))
+    (is (str/includes? failed "You can retry this preview."))
+    (is (str/includes? empty "No preview moments"))))
+
 (deftest telemetry-files-follow-the-selected-format-in-a-browser
   (let [outcome (telemetry-file-browser-outcome
                  (ui/page {:user {:email "owner@example.com" :role :member}

@@ -335,19 +335,19 @@
                                          ::drive-delivery
                                          (drive/deliver-output!
                                           drive-delivery job-id subject
-                                          output-path)))))]
-                             (let [base-result
-                                   {:output-bytes (:output-bytes result)
-                                    :object
-                                    (get-in result [:objects :media :object])
-                                    :sha256 (:sha256 result)
-                                    :contentType
-                                    (:content-type result "video/quicktime")}]
-                               (if delivered
-                                 (assoc base-result
-                                        :driveFileId (:fileId delivered)
-                                        :driveWebViewLink (:webViewLink delivered))
-                                 base-result)))
+                                          output-path)))))
+                                 base-result
+                                 {:output-bytes (:output-bytes result)
+                                  :object
+                                  (get-in result [:objects :media :object])
+                                  :sha256 (:sha256 result)
+                                  :contentType
+                                  (:content-type result "video/quicktime")}]
+                             (if delivered
+                               (assoc base-result
+                                      :driveFileId (:fileId delivered)
+                                      :driveWebViewLink (:webViewLink delivered))
+                               base-result))
                            (finally
                              (jobs/with-durable-stage
                                "artifact_upload"
