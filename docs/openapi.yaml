@@ -188,12 +188,15 @@ paths:
       tags: [Rendering]
       summary: Start an asynchronous key-moment gallery preview.
       description: |
-        Starts a bounded asynchronous operation that selects prominent moments
-        from every rendered trace. Selected-source previews batch-decode each
-        unique output frame once and return fitted Source and exact composited
-        Final image references. This is a breaking replacement for the former
-        synchronous `image/png` midpoint response. Clients must poll `statusUrl`
-        and consume the structured result after `state` becomes `succeeded`.
+        Starts a bounded asynchronous operation that selects the first and final
+        rendered video frames, trace boundaries, configured timer boundaries,
+        and prominent extrema from every rendered trace. Candidates map to real
+        output frames before coincident labels and assets are deduplicated.
+        Selected-source previews batch-decode each unique output frame once and
+        return fitted Source and exact composited Final image references. This is
+        a breaking replacement for the former synchronous `image/png` midpoint response.
+        Clients must poll `statusUrl` and consume the structured result after
+        `state` becomes `succeeded`.
       parameters:
         - $ref: "#/components/parameters/OptionalIdempotencyKey"
         - $ref: "#/components/parameters/CsrfToken"

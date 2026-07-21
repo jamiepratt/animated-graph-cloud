@@ -514,15 +514,21 @@
                         (prominent-events samples value-key
                                           "Prominent maximum" false))
         events (concat [{:frame 0 :label "Video start"}]
-                       (when (not= 0 first-frame)
-                         [{:frame first-frame :label "Trace start"}])
+                       [{:frame first-frame :label "Trace start"}]
+                       (when-let [timer (:timer render-spec)]
+                         [{:frame (frame-index fps frame-count
+                                               (:start-seconds timer))
+                           :label "Timer start"}])
                        (map (fn [{:keys [seconds label]}]
                               {:frame (frame-index fps frame-count seconds)
                                :label label})
                             extrema)
+                       (when-let [timer (:timer render-spec)]
+                         [{:frame (frame-index fps frame-count
+                                               (:end-seconds timer))
+                           :label "Timer end"}])
                        [{:frame last-frame :label "Trace stop"}]
-                       (when (not= last-frame (dec frame-count))
-                         [{:frame (dec frame-count) :label "Video end"}]))
+                       [{:frame (dec frame-count) :label "Video end"}])
         by-frame (reduce (fn [result {:keys [frame label]}]
                            (update result frame (fnil conj []) label))
                          (sorted-map)

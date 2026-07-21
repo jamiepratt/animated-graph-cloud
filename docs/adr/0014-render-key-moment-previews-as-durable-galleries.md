@@ -18,10 +18,11 @@ Cloud Tasks, and Cloud Run Job lifecycle. The render request carries an internal
 version marker so the renderer produces a gallery instead of a durable Drive
 delivery. Preview jobs expire after 24 hours.
 
-Select actual 25 fps output frames from each normalized trace: video and trace
-boundaries plus at most three standard-prominence minima and maxima. Deduplicate
-after frame mapping, combine coincident labels, and share frame assets across
-trace sections.
+Select actual 25 fps output frames from each normalized trace: the first and
+final rendered video frames, trace boundaries, configured timer start and end,
+plus at most three standard-prominence minima and maxima. Map every candidate to
+a real output frame before deduplication, combine all coincident labels, and
+share frame assets across trace sections.
 
 Overlay-only previews store transparent overlay PNGs. Selected-source previews
 stream the source once into one FFmpeg workflow, batch-select every unique frame,
@@ -42,3 +43,10 @@ must accept HTTP 202, poll the operation URL, then fetch authenticated image
 references. Preview execution scales to zero with the existing renderer job and
 does not add a continuously allocated service. Durable render submission and
 Drive delivery remain unchanged.
+
+The investigated short monotonic selected-source preview had two selected
+frames, and the manifest and stored assets retained both. The apparent
+single-moment result came from the former oversized horizontal presentation,
+not renderer or manifest loss. The compact gallery and viewer enumerate every
+manifest photograph; timer boundaries add distinct moments when they map to
+distinct frames.
