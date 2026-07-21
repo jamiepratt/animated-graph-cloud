@@ -447,19 +447,6 @@
        (:requester-subject
         (snapshot-job
          (await! (.get (.document (.collection firestore "jobs") job-id)))))))
-  lifecycle/PreviewEvidence
-  (preview-evidence [_ operation-id]
-    (when-let [job
-               (snapshot-job
-                (await! (.get (.document (.collection firestore "jobs")
-                                         operation-id))))]
-      {:operation-kind (:operation-kind job)
-       :state (:state job)
-       :request-digest (:request-digest job)
-       :requester-subject (:requester-subject job)
-       :requester-membership-version (:requester-membership-version job)
-       :updated-at (Instant/ofEpochMilli (:updated-at job))
-       :now (Instant/now clock)}))
   lifecycle/JobReconciler
   (reconcile-jobs! [_]
     (let [jobs (.collection firestore "jobs")

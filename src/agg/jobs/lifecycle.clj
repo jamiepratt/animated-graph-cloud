@@ -21,9 +21,6 @@
 (defprotocol JobAccess
   (owns-job? [service job-id subject]))
 
-(defprotocol PreviewEvidence
-  (preview-evidence [service operation-id]))
-
 (defprotocol JobReconciler
   (reconcile-jobs! [service]))
 
@@ -66,7 +63,6 @@
 
 (def preview-operation-version "key-moment-gallery-v1")
 (def preview-retention-seconds (* 24 60 60))
-(def preview-evidence-seconds (* 15 60))
 
 (defn preview-request? [request]
   (= preview-operation-version (:previewOperation request)))
@@ -240,48 +236,6 @@
    (dissoc request :previewOperation :sourceVideoServerMetadata
            :requesterSubject :requesterEmail :requesterMembershipVersion)))
 
-(defn- valid-operation-id? [value]
-  (and (string? value)
-       (<= 1 (count value) 80)
-       (try
-         (UUID/fromString value)
-         true
-         (catch IllegalArgumentException _ false))))
-
-(defn require-preview-evidence!
-  [service operation-id request {:keys [subject membership-version]}]
-  (when-not (seq operation-id)
-    (throw (errors/raise! "A successful Preview is required"
-                          {:type ::preview-required})))
-  (let [evidence (when (and (satisfies? PreviewEvidence service)
-                            (valid-operation-id? operation-id))
-                   (preview-evidence service operation-id))
-        owner? (and evidence
-                    (= subject (:requester-subject evidence))
-                    (= membership-version
-                       (:requester-membership-version evidence)))
-        request? (and owner?
-                      (= (render-request-digest request)
-                         (:request-digest evidence)))]
-    (when-not (and owner? request? (= :preview (:operation-kind evidence)))
-      (throw (errors/raise! "Preview evidence is stale"
-                            {:type ::preview-stale})))
-    (case (:state evidence)
-      :succeeded
-      (when-not (.isBefore ^Instant (:now evidence)
-                           (.plusSeconds ^Instant (:updated-at evidence)
-                                         preview-evidence-seconds))
-        (throw (errors/raise! "Preview evidence has expired"
-                              {:type ::preview-expired})))
-
-      (:queued :launching :running :cancellation-requested)
-      (throw (errors/raise! "Preview is still pending"
-                            {:type ::preview-pending}))
-
-      (throw (errors/raise! "Preview evidence is stale"
-                            {:type ::preview-stale})))
-    true))
-
 (defn job-resource
   [{:keys [id state attempt created-at updated-at failure failure-diagnostics
            output operation-kind]}]
@@ -357,17 +311,6 @@
   JobAccess
   (owns-job? [_ job-id subject]
     (= subject (get-in @state [:jobs job-id :request :requesterSubject])))
-  PreviewEvidence
-  (preview-evidence [_ operation-id]
-    (when-let [job (get-in @state [:jobs operation-id])]
-      {:operation-kind (:operation-kind job)
-       :state (:state job)
-       :request-digest (render-request-digest (:request job))
-       :requester-subject (get-in job [:request :requesterSubject])
-       :requester-membership-version
-       (get-in job [:request :requesterMembershipVersion])
-       :updated-at (:updated-at job)
-       :now (Instant/now clock)}))
   JobReconciler
   (reconcile-jobs! [_]
     (let [now (Instant/now clock)]

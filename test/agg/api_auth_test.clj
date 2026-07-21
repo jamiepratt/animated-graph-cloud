@@ -15,8 +15,7 @@
 (defn- start-api!
   ([port] (start-api! port {}))
   ([port dependencies]
-   (api/start!
-    port (assoc dependencies :test-only-disable-preview-submit-gate? true))))
+   (api/start! port dependencies)))
 
 (defn- post! [port path body headers]
   (test-http/send-string! :post (str "http://127.0.0.1:" port path)

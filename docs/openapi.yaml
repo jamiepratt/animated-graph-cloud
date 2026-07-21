@@ -302,10 +302,9 @@ paths:
       operationId: submitJob
       tags: [Jobs]
       summary: Submit an idempotent durable render.
-      description: Requires a fresh successful Preview for this exact canonical request, owner, and membership generation before creating a job, task, lease, or budget reservation. Then preflights the requester's restricted Drive grant because every durable output is delivered to Drive. Personal tokens without a usable grant receive `drive_grant_required` before job creation.
+      description: Preview is optional. Submission validates the request, applies admission, capacity, budget, confirmation, and idempotency safeguards, then preflights the requester's restricted Drive grant because every durable output is delivered to Drive. Personal tokens without a usable grant receive `drive_grant_required` before job creation.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/PreviewOperationId"
         - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         $ref: "#/components/requestBodies/RenderRequest"
@@ -323,23 +322,10 @@ paths:
         "400": {$ref: "#/components/responses/InvalidRequest"}
         "401": {$ref: "#/components/responses/AuthenticationRequired"}
         "409":
-          description: Preview is pending or stale, or the idempotency key conflicts.
+          description: The idempotency key conflicts with a different request.
           content:
             application/json:
-              schema:
-                anyOf:
-                  - {$ref: "#/components/schemas/PreviewGateError"}
-                  - {$ref: "#/components/schemas/Error"}
-        "410":
-          description: Preview evidence expired.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/PreviewGateError"}
-        "428":
-          description: A successful Preview operation ID is required.
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/PreviewGateError"}
+              schema: {$ref: "#/components/schemas/Error"}
         "429": {$ref: "#/components/responses/AdmissionRejected"}
         "503": {$ref: "#/components/responses/CapacityUnavailable"}
   /v1/jobs/{jobId}:
@@ -570,12 +556,6 @@ components:
       required: false
       description: Replays with the same owner, key, and exact request return the same Preview operation.
       schema: {type: string, minLength: 1, maxLength: 128}
-    PreviewOperationId:
-      name: Preview-Operation-Id
-      in: header
-      required: true
-      description: Opaque owner-bound ID from the latest successful Preview for this exact request. It expires 15 minutes after Preview succeeds and contains no request digest or source identity.
-      schema: {type: string, format: uuid}
     JobId:
       name: jobId
       in: path
@@ -869,10 +849,6 @@ components:
           type: string
           format: date-time
           description: Operation and image retention boundary, 24 hours after creation.
-        receiptExpiresAt:
-          type: string
-          format: date-time
-          description: Present only after success. Submit evidence expires at this no-store boundary, independently of gallery retention.
         result: {$ref: "#/components/schemas/PreviewGallery"}
         error: {$ref: "#/components/schemas/PreviewOperationError"}
     PreviewOperationError:
@@ -893,17 +869,6 @@ components:
         status: {type: integer, minimum: 100, maximum: 599}
         elapsedMs: {type: integer, minimum: 0, maximum: 1000000000000}
         timeoutMs: {type: integer, minimum: 0, maximum: 1000000000000}
-    PreviewGateError:
-      type: object
-      additionalProperties: false
-      required: [error, requestId, retryable, previewPath]
-      properties:
-        error:
-          type: string
-          enum: [preview_required, preview_pending, preview_stale, preview_expired]
-        requestId: {type: string, format: uuid}
-        retryable: {type: boolean}
-        previewPath: {type: string, const: /v1/preview}
     PreviewGallery:
       type: object
       additionalProperties: false

@@ -244,32 +244,6 @@
                                :requestId request-id
                                :retryable true}))
 
-(defn- preview-gate-failure [type request-id]
-  (let [[error status retryable]
-        (case type
-          ::jobs/preview-required ["preview_required" 428 false]
-          ::jobs/preview-pending ["preview_pending" 409 true]
-          ::jobs/preview-expired ["preview_expired" 410 false]
-          ["preview_stale" 409 false])]
-    {:status status
-     :body {:error error
-            :requestId request-id
-            :retryable retryable
-            :previewPath "/v1/preview"}}))
-
-(defn- respond-preview-gate-failure!
-  [dependencies exchange request-id type]
-  (let [{:keys [status body]} (preview-gate-failure type request-id)]
-    (emit-event! dependencies "admission_rejected"
-                 {:severity "WARNING"
-                  :reason (:error body)
-                  :requestId request-id
-                  :retryable (:retryable body)})
-    (if (.startsWith ^String (some-> exchange .getRequestURI .getPath) "/ui/")
-      (respond! exchange 200 "text/html; charset=utf-8"
-                (ui/preview-gate-fragment body))
-      (respond-json! exchange status body))))
-
 (defn- oauth-callback-failure [type]
   (case type
     ::auth/drive-grant-required
@@ -804,16 +778,10 @@
         (Files/deleteIfExists output-path)))))
 
 (defn- submit-job!
-  [^HttpExchange exchange job-service preview-job-service preview-submit-gate?
-   auth-system user]
+  [^HttpExchange exchange job-service auth-system user]
   (let [idempotency-key (some-> exchange .getRequestHeaders
                                 (.getFirst "Idempotency-Key"))
-        operation-id (some-> exchange .getRequestHeaders
-                             (.getFirst "Preview-Operation-Id"))
         prepared (request-render-request exchange)
-        _ (when preview-submit-gate?
-            (jobs/require-preview-evidence! preview-job-service operation-id
-                                            (:request prepared) user))
         {:keys [request]} (durable-request! auth-system user prepared)
         request (cond-> (dissoc request :previewOperation
                                 :requesterSubject
@@ -1196,7 +1164,7 @@
                 (ui/preview-stale-fragment generation)))))
 
 (defn- submit-job-ui!
-  [exchange job-service preview-job-service preview-submit-gate? auth-system user]
+  [exchange job-service auth-system user]
   (let [form (request-form exchange)
         prepared (try
                    (let [request (json/read-str (get form "request")
@@ -1210,10 +1178,6 @@
                      (throw (errors/raise! "Invalid render request"
                                            {:type ::invalid-request}
                                            error))))
-        _ (when preview-submit-gate?
-            (jobs/require-preview-evidence! preview-job-service
-                                            (get form "previewOperationId")
-                                            (:request prepared) user))
         {:keys [request]} (durable-request! auth-system user prepared)
         request (assoc (dissoc request
                                :previewOperation
@@ -1293,7 +1257,7 @@
                               preview-job-service preview-asset-store
                               upload-signer auth-system picker-api-key
                               picker-app-id token-service admin-service log-store
-                              service-profile preview-submit-gate?]
+                              service-profile]
                        :as dependencies}]
   (reify HttpHandler
     (handle [_ exchange]
@@ -1374,8 +1338,6 @@
                                   (let [user (require-session-user! exchange auth-system)]
                                     (require-csrf! exchange auth-system user)
                                     (submit-job-ui! exchange job-service
-                                                    preview-job-service
-                                                    preview-submit-gate?
                                                     auth-system user))
 
                                   (and auth-system job-service (= "GET" method)
@@ -1512,8 +1474,6 @@
                                   (let [user (authenticated-user! exchange auth-system token-service)]
                                     (require-csrf! exchange auth-system user)
                                     (submit-job! exchange job-service
-                                                 preview-job-service
-                                                 preview-submit-gate?
                                                  auth-system user))
 
                                   (and upload-signer (= "POST" method) (= "/v1/uploads" path))
@@ -1668,11 +1628,6 @@
                   ::jobs/idempotency-conflict
                   (respond-json! exchange 409 {:error "idempotency_conflict"})
 
-                  (::jobs/preview-required ::jobs/preview-pending
-                                           ::jobs/preview-stale ::jobs/preview-expired)
-                  (respond-preview-gate-failure! dependencies exchange request-id
-                                                 error-type)
-
                   ::jobs/daily-submission-limit-exhausted
                   (do
                     (emit-event! dependencies "admission_rejected"
@@ -1777,12 +1732,7 @@
   ([port]
    (start! port {}))
   ([port dependencies]
-   (let [test-bypass? (:test-only-disable-preview-submit-gate? dependencies)
-         _ (when (and test-bypass?
-                      (nil? (io/resource "agg/test_runner.clj")))
-             (throw (IllegalArgumentException.
-                     "The Preview Submit gate bypass is test-only")))
-         local-preview-system (jobs/in-memory-system)
+   (let [local-preview-system (jobs/in-memory-system)
          preview-job-service (or (:preview-job-service dependencies)
                                  (:job-service dependencies)
                                  (:service local-preview-system))
@@ -1792,8 +1742,7 @@
                               :preview-asset-store (preview/in-memory-asset-store)
                               :service-profile "api"}
                              dependencies
-                             {:preview-submit-gate? (not test-bypass?)
-                              :preview-job-service preview-job-service})
+                             {:preview-job-service preview-job-service})
          _ (when-not (contains? service-profiles (:service-profile dependencies))
              (throw (IllegalArgumentException.
                      "service-profile must be api or overlay")))

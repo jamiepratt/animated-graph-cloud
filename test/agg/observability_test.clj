@@ -16,8 +16,7 @@
 (defn- start-api!
   ([port] (start-api! port {}))
   ([port dependencies]
-   (api/start!
-    port (assoc dependencies :test-only-disable-preview-submit-gate? true))))
+   (api/start! port dependencies)))
 
 (defn- valid-render-request []
   {:telemetryFormat "polar-csv"

@@ -201,6 +201,19 @@
     (is (str/includes? openapi
                        "Never contains telemetry values, filenames, Drive IDs, account data, request bodies, or signed URLs."))))
 
+(deftest openapi-documents-preview-as-optional-for-durable-submission
+  (let [openapi (slurp "docs/openapi.yaml")
+        jobs-start (str/index-of openapi "  /v1/jobs:\n")
+        jobs-end (str/index-of openapi "  /v1/jobs/{jobId}:\n")
+        jobs-operation (subs openapi jobs-start jobs-end)]
+    (is (str/includes? jobs-operation "Preview is optional"))
+    (is (not (str/includes? jobs-operation "PreviewOperationId")))
+    (is (not (str/includes? jobs-operation "\"410\":")))
+    (is (not (str/includes? jobs-operation "\"428\":")))
+    (is (not (str/includes? openapi "Preview-Operation-Id")))
+    (is (not (str/includes? openapi "PreviewGateError:")))
+    (is (not (str/includes? openapi "receiptExpiresAt:")))))
+
 (deftest specific-telemetry-causes-win-over-parser-wrappers
   (let [specific (ex-info "private telemetry value"
                           {:type ::garmin/heart-rate-out-of-range
