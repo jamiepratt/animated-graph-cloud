@@ -102,9 +102,21 @@
        "sleep " delay-seconds "\n"
        "exit 0\n"))
 
-(defn- immediate-composite-failure-script [exit-status]
+(defn- blocked-producer-failure-script [exit-status]
   (str "#!/bin/sh\n"
-       "echo 'No such filter: volume' >&2\n"
+       "input_number=0\n"
+       "while [ \"$#\" -gt 0 ]; do\n"
+       "  if [ \"$1\" = \"-i\" ]; then\n"
+       "    shift\n"
+       "    input_number=$((input_number + 1))\n"
+       "    if [ \"$input_number\" -eq 2 ]; then\n"
+       "      overlay=$1\n"
+       "      break\n"
+       "    fi\n"
+       "  fi\n"
+       "  shift\n"
+       "done\n"
+       "head -c 1 \"$overlay\" >/dev/null\n"
        "exit " exit-status "\n"))
 
 (defn- alpha-bounds [^bytes rgba width]
@@ -581,14 +593,14 @@
         (Files/deleteIfExists ffmpeg)))))
 
 (deftest ffmpeg-exit-is-not-masked-by-a-blocked-fifo-producer
-  (let [ffmpeg (executable-script! (immediate-composite-failure-script 7))
+  (let [ffmpeg (executable-script! (blocked-producer-failure-script 7))
         encoder (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
         output (Files/createTempFile
                 "agg-immediate-failure-composite-" ".mp4"
-                (make-array java.nio.file.attribute.FileAttribute 0))]
+                (make-array java.nio.file.attribute.FileAttribute 0))
+        release-producer (promise)]
     (try
-      (let [started (System/nanoTime)
-            cause
+      (let [cause
             (try
               (media/encode-composite!
                encoder
@@ -600,13 +612,15 @@
                "/tmp/heartbeat.wav"
                output
                (fn [_])
-               (fn [_]))
-              (catch Throwable error error))
-            elapsed-ms (quot (- (System/nanoTime) started) 1000000)]
+               (fn [overlay-output]
+                 (.write ^OutputStream overlay-output (byte-array [0]))
+                 (.flush ^OutputStream overlay-output)
+                 @release-producer))
+              (catch Throwable error error))]
         (is (= ::media/compositing-failed (:type (ex-data cause))))
-        (is (= 7 (:exit-status (ex-data cause))))
-        (is (< elapsed-ms 1000)))
+        (is (= 7 (:exit-status (ex-data cause)))))
       (finally
+        (deliver release-producer true)
         (Files/deleteIfExists output)
         (Files/deleteIfExists ffmpeg)))))
 
