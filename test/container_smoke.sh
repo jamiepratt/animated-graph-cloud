@@ -66,6 +66,8 @@ docker run --rm "$image" clojure.main -e '
         (quote java.io.ByteArrayOutputStream)
         (quote java.nio.file.Files)
         (quote java.nio.file.OpenOption)
+        (quote java.time.Instant)
+        (quote java.time.ZoneId)
         (quote javax.imageio.ImageIO))
 (let [directory (Files/createTempDirectory
                  "agg-selected-source-smoke-"
@@ -141,6 +143,8 @@ docker run --rm "$image" clojure.main -e '
           (renderer/render!
            {:id "1080p25"
             :width 64 :height 36 :fps 25 :duration-seconds 9
+            :section-start-at Instant/EPOCH
+            :display-time-zone (ZoneId/of "UTC")
             :output-format "h264-mp4"
             :fit-mode "letterbox"
             :audio-mode "source+heartbeat"

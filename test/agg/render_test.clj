@@ -249,6 +249,18 @@
                         (renderer/parse-options ["--preset" "1080p25"
                                                  "--duration-seconds" "eight"]))))
 
+(deftest renderer-cli-request-has-explicit-deterministic-clock-context
+  (let [{:keys [output-path report-path] :as request}
+        (renderer/parse-options ["--preset" "1080p25"
+                                 "--duration-seconds" "1"
+                                 "--profile" "false"])]
+    (try
+      (is (= Instant/EPOCH (:section-start-at request)))
+      (is (= (ZoneId/of "UTC") (:display-time-zone request)))
+      (finally
+        (Files/deleteIfExists output-path)
+        (Files/deleteIfExists report-path)))))
+
 (deftest prores-4444-locks-encoder-input-and-decoder-output-formats
   (is (= {:encoder "prores_ks"
           :profile 4
