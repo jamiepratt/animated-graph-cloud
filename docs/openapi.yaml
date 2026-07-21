@@ -677,6 +677,7 @@ components:
         - telemetryFormat
         - telemetry
         - preset
+        - displayTimeZone
         - telemetrySyncAt
         - cameraSyncAt
         - sectionStartAt
@@ -699,6 +700,10 @@ components:
           type: string
           enum: [1080p25, 2.7k25]
           description: 1080p25 is 1920×1080 at 25 fps for up to 8 minutes; 2.7k25 is 2704×1520 at 25 fps for up to 4 minutes.
+        displayTimeZone:
+          type: string
+          minLength: 1
+          description: Required IANA timezone identifier, such as Europe/Warsaw or UTC, used only for the rendered 24-hour local clock. Missing, blank, offset-only, and unknown values are invalid. This field does not reinterpret any input timestamp and has no fallback.
         futureTraceOpacityPercent:
           type: number
           minimum: 0
@@ -1074,7 +1079,7 @@ components:
         retryable: {type: boolean}
         field:
           type: string
-          enum: [futureTraceOpacityPercent]
+          enum: [displayTimeZone, futureTraceOpacityPercent]
         recoveryPath: {type: string, const: "/v1/auth/login/start?recovery=true"}
     SynchronousOverlayDurationExceeded:
       type: object

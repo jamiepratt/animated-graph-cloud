@@ -27,7 +27,8 @@
    :telemetrySyncAt "2026-07-17T10:00:00Z"
    :cameraSyncAt "2026-07-17T09:00:00Z"
    :sectionStartAt "2026-07-17T09:00:00Z"
-   :sectionEndAt "2026-07-17T09:00:02Z"})
+   :sectionEndAt "2026-07-17T09:00:02Z"
+   :displayTimeZone "Europe/Warsaw"})
 
 (defn- request! [port method path body headers]
   (test-http/send-string! method (str "http://127.0.0.1:" port path)
@@ -486,6 +487,30 @@
                 :field "futureTraceOpacityPercent"}
                (response-json response)))
         (is (empty? @(:enqueued system))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest invalid-job-display-time-zone-identifies-only-the-public-field
+  (let [port (available-port)
+        system (jobs/in-memory-system)
+        server (start-api! port {:job-service (:service system)})]
+    (try
+      (doseq [[label request]
+              [["missing" (dissoc (render-request) :displayTimeZone)]
+               ["blank" (assoc (render-request) :displayTimeZone "  ")]
+               ["offset" (assoc (render-request) :displayTimeZone "+02:00")]
+               ["unknown" (assoc (render-request)
+                                 :displayTimeZone "Private/Unknown-Zone")]]]
+        (let [response (request! port :post "/v1/jobs" request
+                                 {"Content-Type" "application/json"
+                                  "Idempotency-Key" (str "invalid-zone-" label)})
+              body (response-json response)]
+          (is (= 400 (.statusCode response)) label)
+          (is (= {:error "invalid_request" :field "displayTimeZone"}
+                 body)
+              label)
+          (is (not (str/includes? (pr-str body) "Private/Unknown-Zone")))))
+      (is (empty? @(:enqueued system)))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

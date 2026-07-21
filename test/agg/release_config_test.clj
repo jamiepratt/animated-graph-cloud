@@ -482,6 +482,7 @@
                       "sessionCookie:" "Idempotency-Key"]]
       (testing contract (is (str/includes? openapi contract))))
     (doseq [field ["telemetryFormat" "telemetrySyncAt" "sectionStartAt"
+                   "displayTimeZone"
                    "futureTraceOpacityPercent"
                    "spo2" "timer" "watermark" "sourceVideo"
                    "outputFormat" "fitMode" "audioMode"]]

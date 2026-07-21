@@ -10,6 +10,7 @@
   "cameraSyncAt": "2026-07-17T23:59:59+02:00",
   "sectionStartAt": "2026-07-17T23:59:59+02:00",
   "sectionEndAt": "2026-07-18T00:00:00+02:00",
+  "displayTimeZone": "Europe/Warsaw",
   "timer": {
     "startAt": "2026-07-17T23:59:59.200+02:00",
     "endAt": "2026-07-17T23:59:59.800+02:00"

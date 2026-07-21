@@ -132,7 +132,8 @@ durable jobs.
   "telemetrySyncAt": "2026-07-17T10:00:00Z",
   "cameraSyncAt": "2026-07-17T09:00:00Z",
   "sectionStartAt": "2026-07-17T09:00:00Z",
-  "sectionEndAt": "2026-07-17T09:00:01Z"
+  "sectionEndAt": "2026-07-17T09:00:01Z",
+  "displayTimeZone": "Europe/Warsaw"
 }
 ```
 
@@ -143,6 +144,7 @@ The render JSON fields are:
 | `telemetryFormat` | Yes | `polar-csv`, `garmin-fit`, or `oxiwear-hr-csv` |
 | `telemetry` | Yes | CSV text, or base64 FIT content for `garmin-fit`; CSV is limited to 10 MiB and FIT base64 to 13,981,016 characters |
 | `preset` | Yes | `1080p25` (1920×1080, 25 fps, up to 8 minutes) or `2.7k25` (2704×1520, 25 fps, up to 4 minutes) |
+| `displayTimeZone` | Yes | Known IANA timezone identifier such as `Europe/Warsaw` or `UTC`; no missing, blank, offset, unknown, or server-local fallback |
 | `telemetrySyncAt`, `cameraSyncAt`, `sectionStartAt`, `sectionEndAt` | Yes | ISO-8601 instants with `Z` or an explicit UTC offset |
 | `spo2` | No | `{ "format": "oxiwear-spo2-csv", "telemetry": "..." }`; CSV is limited to 10 MiB |
 | `timer` | No | `{ "startAt": "...", "endAt": "..." }`, within the requested section |
@@ -152,7 +154,11 @@ The render JSON fields are:
 | `fitMode` | No | With `sourceVideo`: `letterbox`, `pillarbox`, or `crop` |
 | `audioMode` | No | With `sourceVideo`: `source+heartbeat`, `source-only`, or `heartbeat-only` |
 
-Timestamps are ISO-8601 instants. `cameraSyncAt` must not follow the section;
+Timestamps are ISO-8601 instants. `displayTimeZone` affects only the rendered
+camera clock and never reinterprets synchronization, section, or timer values.
+The browser's `My browser timezone` option resolves to its IANA identifier in
+the submitted JSON. Missing, blank, offset-only, and unknown display zones are
+rejected. `cameraSyncAt` must not follow the section;
 section end must follow section start by a whole number of seconds. The anchor
 offset maps the camera section onto Polar time, and Polar telemetry must cover
 both mapped boundaries. The selected preset supplies size, 25 fps, and maximum
@@ -170,7 +176,10 @@ mapped section boundaries.
 Heart rate is linearly interpolated on one shared section timeline. Preview and
 MOV use a fixed 40–220 bpm scale and a stable 30-second centered/clamped window
 (or the whole section when shorter); heartbeat timing uses the same interpolated
-values. See ADR 0004 for the rendering decision.
+values. The frame readout shows deterministic 24-hour local video time
+(`HH:mm:ss`), then section elapsed time, then telemetry values. Preview and
+completed renders derive both times from the same production frame instant.
+See ADR 0004 for the rendering decision.
 
 The same `telemetry` field also accepts these locked formats:
 

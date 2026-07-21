@@ -43,7 +43,8 @@
    :telemetrySyncAt "2026-07-17T10:00:00Z"
    :cameraSyncAt "2026-07-17T09:00:00Z"
    :sectionStartAt "2026-07-17T09:00:00Z"
-   :sectionEndAt section-end})
+   :sectionEndAt section-end
+   :displayTimeZone "Europe/Warsaw"})
 
 (deftest overlay-profile-exposes-only-health-and-authenticated-overlay
   (let [port (test-http/available-port)
