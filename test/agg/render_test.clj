@@ -81,6 +81,12 @@
        "wait \"$overlay_reader\"\n"
        "exit " exit-status "\n"))
 
+(defn- gallery-output-script [png-path exit-status]
+  (str "#!/bin/sh\n"
+       "cat >/dev/null\n"
+       "cat \"" png-path "\"\n"
+       "exit " exit-status "\n"))
+
 (defn- delayed-composite-script [delay-seconds]
   (str "#!/bin/sh\n"
        "input_number=0\n"
@@ -257,6 +263,40 @@
                     (ex-info "private" {:reason "private_drive_id"}) 1)))))
       (finally
         (Files/deleteIfExists ffmpeg)))))
+
+(deftest successful-short-source-gallery-output-is-a-bounded-partial-result
+  (let [combined-path (Files/createTempFile
+                       "agg-short-gallery-output-" ".png"
+                       (make-array java.nio.file.attribute.FileAttribute 0))
+        ffmpeg (executable-script!
+                (gallery-output-script combined-path 0))
+        renderer (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
+        transparent (png-bytes 64 36 false)
+        emitted (atom [])]
+    (try
+      (Files/write combined-path (png-bytes 128 36 true)
+                   (make-array OpenOption 0))
+      (is (= {:requested-frame-count 2
+              :generated-frame-count 1
+              :omitted-frame-count 1
+              :reason "source_duration_too_short"
+              :source-decodes 1}
+             (media/render-composite-gallery!
+              renderer
+              {:width 64 :height 36 :fps 25 :duration-seconds 2
+               :fit-mode "letterbox"}
+              (fn [source-output]
+                (.write ^OutputStream source-output (byte-array 1024)))
+              [{:frameIndex 0 :overlay transparent}
+               {:frameIndex 49 :overlay transparent}]
+              (fn [frame-index source-png final-png]
+                (swap! emitted conj [frame-index
+                                     (alength source-png)
+                                     (alength final-png)])))))
+      (is (= [0] (mapv first @emitted)))
+      (finally
+        (Files/deleteIfExists ffmpeg)
+        (Files/deleteIfExists combined-path)))))
 
 (deftest preview-moments-use-standard-prominence-and-stable-tie-breaking
   (let [section (first
@@ -535,7 +575,96 @@
     (is (= 1 @decode-count))
     (is (= 1 @source-count))
     (is (= "source-final" (:mode manifest)))
-    (is (= 2 (count (:assets manifest))))))
+    (is (= 2 (count (:assets manifest))))
+    (is (nil? (:warnings manifest)))))
+
+(deftest partial-source-gallery-keeps-complete-moments-and-bounded-warning
+  (let [operation-id "00000000-0000-0000-0000-000000000084"
+        decode-count (atom 0)
+        source-count (atom 0)
+        store (preview/in-memory-asset-store)
+        gallery-renderer
+        (reify media/CompositeGalleryRenderer
+          (render-composite-gallery!
+            [_ _render-spec source-stream! overlays consume-frame!]
+            (swap! decode-count inc)
+            (with-open [output (ByteArrayOutputStream.)]
+              (source-stream! output))
+            (doseq [{:keys [frameIndex overlay]}
+                    (filter #(contains? #{0 6} (:frameIndex %)) overlays)]
+              (consume-frame! frameIndex (png-bytes 64 36 true) overlay))
+            {:requested-frame-count 4
+             :generated-frame-count 2
+             :omitted-frame-count 2
+             :reason "source_duration_too_short"
+             :source-decodes 1}))
+        manifest
+        (preview/render-gallery!
+         operation-id
+         {:width 64 :height 36 :fps 2 :duration-seconds 4
+          :source-video {:file-id "not-exposed"}
+          :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                      {:seconds 2.0 :heart-rate 120.0}
+                      {:seconds 4.0 :heart-rate 140.0}]
+          :timer {:start-seconds 1.0 :end-seconds 3.0}}
+         store frames/java2d-frame-renderer gallery-renderer
+         (fn [output]
+           (swap! source-count inc)
+           (.write ^OutputStream output (byte-array 1024))))]
+    (is (= 1 @decode-count))
+    (is (= 1 @source-count))
+    (is (= [0 6] (mapv :frameIndex (:assets manifest))))
+    (is (= [0 6]
+           (mapv :frameIndex (get-in manifest [:sections 0 :moments]))))
+    (is (= ["a000" "a002"]
+           (mapv :frameRef (get-in manifest [:sections 0 :moments]))))
+    (is (= [{:reason "source_duration_too_short"
+             :requestId operation-id
+             :requestedMomentCount 4
+             :generatedMomentCount 2
+             :omittedMomentCount 2
+             :requestedDurationSeconds 4
+             :retryable false}]
+           (:warnings manifest)))))
+
+(deftest zero-source-gallery-is-a-bounded-failure-without-image-references
+  (let [operation-id "00000000-0000-0000-0000-000000000085"
+        store (preview/in-memory-asset-store)
+        gallery-renderer
+        (reify media/CompositeGalleryRenderer
+          (render-composite-gallery!
+            [_ _render-spec source-stream! overlays _consume-frame!]
+            (with-open [output (ByteArrayOutputStream.)]
+              (source-stream! output))
+            {:requested-frame-count (count overlays)
+             :generated-frame-count 0
+             :omitted-frame-count (count overlays)
+             :reason "source_duration_too_short"
+             :source-decodes 1}))
+        failure
+        (try
+          (preview/render-gallery!
+           operation-id
+           {:width 64 :height 36 :fps 2 :duration-seconds 1
+            :source-video {:file-id "not-exposed"}
+            :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                        {:seconds 1.0 :heart-rate 140.0}]}
+           store frames/java2d-frame-renderer gallery-renderer
+           (fn [output]
+             (.write ^OutputStream output (byte-array 1024))))
+          (catch clojure.lang.ExceptionInfo error error))]
+    (is (= {:type ::preview/source-duration-too-short
+            :reason "source_duration_too_short"
+            :limits {:requested-moment-count 2
+                     :generated-moment-count 0
+                     :omitted-moment-count 2
+                     :requested-duration-seconds 1}
+            :retryable false}
+           (dissoc (ex-data failure) :source)))
+    (doseq [asset-id ["a000-source" "a000-final"
+                      "a001-source" "a001-final"]]
+      (is (nil? (preview/get-asset store operation-id asset-id :thumbnail)))
+      (is (nil? (preview/get-asset store operation-id asset-id :full))))))
 
 (deftest transparent-complete-overlays-merge-source-and-final-assets
   (let [transparent (png-bytes 64 36 false)

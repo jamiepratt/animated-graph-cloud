@@ -126,18 +126,30 @@
            (format "%.1f" value)))
        " " unit " - " elapsed))
 
-(defn- manifest-sections [sections asset-id-by-frame]
+(defn- manifest-sections [sections asset-id-by-frame available-frames]
   (mapv (fn [section]
           (update section :moments
                   (fn [moments]
-                    (mapv (fn [moment]
-                            (assoc moment
-                                   :frameRef
-                                   (get asset-id-by-frame (:frameIndex moment))
-                                   :eventLabel (str/join " / " (:labels moment))
-                                   :title (moment-title moment (:unit section))))
-                          moments))))
+                    (->> moments
+                         (filter #(contains? available-frames (:frameIndex %)))
+                         (mapv (fn [moment]
+                                 (assoc moment
+                                        :frameRef
+                                        (get asset-id-by-frame (:frameIndex moment))
+                                        :eventLabel (str/join " / " (:labels moment))
+                                        :title (moment-title moment
+                                                             (:unit section)))))))))
         sections))
+
+(defn- source-duration-warning
+  [operation-id duration-seconds requested generated]
+  {:reason "source_duration_too_short"
+   :requestId operation-id
+   :requestedMomentCount requested
+   :generatedMomentCount generated
+   :omittedMomentCount (- requested generated)
+   :requestedDurationSeconds duration-seconds
+   :retryable false})
 
 (defn render-gallery!
   "Renders and stores one bounded gallery. Selected-source decode occurs once."
@@ -154,6 +166,7 @@
                   (assoc asset :overlay (.toByteArray output))))
               assets)
         stored-by-frame (atom {})
+        gallery-result (atom nil)
         output-bytes (atom 0)
         store! (fn [asset-id bytes]
                  (let [{stored-bytes :bytes reference :reference}
@@ -167,25 +180,28 @@
                                    gallery-renderer))
           (throw (errors/raise! "Selected-source gallery dependencies are incomplete"
                                 {:type ::missing-gallery-renderer})))
-        (media/render-composite-gallery!
-         gallery-renderer render-spec source-stream! overlays
-         (fn [frame-index source-png final-png]
-           (let [{:keys [id overlay]}
-                 (first (filter #(= frame-index (:frameIndex %)) overlays))
-                 visible? (png-visible? overlay)
-                 source-ref (store! (str id "-source") source-png)
-                 final-ref (if visible?
-                             (store! (str id "-final") final-png)
-                             source-ref)]
-             (swap! stored-by-frame assoc frame-index
-                    {:id id
-                     :frameIndex frame-index
-                     :kind "source-final"
-                     :merged (not visible?)
-                     :source source-ref
-                     :final final-ref}))))
-        (when-not (= (set (map :frameIndex assets))
-                     (set (keys @stored-by-frame)))
+        (reset!
+         gallery-result
+         (media/render-composite-gallery!
+          gallery-renderer render-spec source-stream! overlays
+          (fn [frame-index source-png final-png]
+            (let [{:keys [id overlay]}
+                  (first (filter #(= frame-index (:frameIndex %)) overlays))
+                  visible? (png-visible? overlay)
+                  source-ref (store! (str id "-source") source-png)
+                  final-ref (if visible?
+                              (store! (str id "-final") final-png)
+                              source-ref)]
+              (swap! stored-by-frame assoc frame-index
+                     {:id id
+                      :frameIndex frame-index
+                      :kind "source-final"
+                      :merged (not visible?)
+                      :source source-ref
+                      :final final-ref})))))
+        (when-not (or (= (set (map :frameIndex assets))
+                         (set (keys @stored-by-frame)))
+                      (= "source_duration_too_short" (:reason @gallery-result)))
           (throw (errors/raise! "Source gallery did not emit every selected frame"
                                 {:type ::incomplete-gallery}))))
       (doseq [{:keys [id frameIndex overlay]} overlays]
@@ -194,11 +210,33 @@
                 :frameIndex frameIndex
                 :kind "overlay"
                 :image (store! (str id "-overlay") overlay)})))
-    {:output-bytes @output-bytes
-     :version 1
-     :mode (if source-stream! "source-final" "overlay")
-     :sections (manifest-sections sections asset-id-by-frame)
-     :assets (mapv #(get @stored-by-frame (:frameIndex %)) assets)}))
+    (let [available-frames (set (keys @stored-by-frame))
+          requested (count assets)
+          generated (count available-frames)]
+      (when (and source-stream! (zero? generated)
+                 (= "source_duration_too_short" (:reason @gallery-result)))
+        (throw (errors/raise! "The selected video has no requested preview frames"
+                              {:type ::source-duration-too-short
+                               :reason "source_duration_too_short"
+                               :limits
+                               {:requested-moment-count requested
+                                :generated-moment-count 0
+                                :omitted-moment-count requested
+                                :requested-duration-seconds
+                                (:duration-seconds render-spec)}
+                               :retryable false})))
+      (cond-> {:output-bytes @output-bytes
+               :version 1
+               :mode (if source-stream! "source-final" "overlay")
+               :sections (manifest-sections sections asset-id-by-frame
+                                            available-frames)
+               :assets (into [] (keep #(get @stored-by-frame (:frameIndex %)))
+                             assets)}
+        (and source-stream! (< generated requested)
+             (= "source_duration_too_short" (:reason @gallery-result)))
+        (assoc :warnings [(source-duration-warning
+                           operation-id (:duration-seconds render-spec)
+                           requested generated)])))))
 
 (defn operation-resource
   ([job]
@@ -245,6 +283,15 @@
                                :retryable (true? (:retryable job))}
                         (:stage job) (assoc :stage (:stage job))
                         (:reason job) (assoc :reason (:reason job))
+                        (:requestedMomentCount job)
+                        (assoc :requestedMomentCount (:requestedMomentCount job))
+                        (some? (:generatedMomentCount job))
+                        (assoc :generatedMomentCount (:generatedMomentCount job))
+                        (:omittedMomentCount job)
+                        (assoc :omittedMomentCount (:omittedMomentCount job))
+                        (:requestedDurationSeconds job)
+                        (assoc :requestedDurationSeconds
+                               (:requestedDurationSeconds job))
                         (:status job) (assoc :status (:status job))
                         (some? (:elapsedMs job))
                         (assoc :elapsedMs (:elapsedMs job))

@@ -78,6 +78,32 @@
            fields))
     (is (empty? (observability/safe-event-fields {:stage "private.mov"})))))
 
+(deftest partial-preview-event-keeps-bounded-source-duration-counts
+  (let [base {:severity "WARNING"
+              :component "renderer"
+              :event "preview_partial_gallery"
+              :requestId "00000000-0000-0000-0000-000000000084"
+              :reason "source_duration_too_short"
+              :retryable false}]
+    (is (= (assoc base
+                  :requestedMomentCount 4
+                  :generatedMomentCount 3
+                  :omittedMomentCount 1
+                  :requestedDurationSeconds 20)
+           (observability/safe-event-fields
+            (assoc base
+                   :requestedMomentCount 4
+                   :generatedMomentCount 3
+                   :omittedMomentCount 1
+                   :requestedDurationSeconds 20))))
+    (is (= base
+           (observability/safe-event-fields
+            (assoc base
+                   :requestedMomentCount 33
+                   :generatedMomentCount -1
+                   :omittedMomentCount 33
+                   :requestedDurationSeconds 481))))))
+
 (deftest cloud-render-event-keeps-the-bounded-durable-diagnosis
   (is (= {:severity "ERROR"
           :component "renderer"

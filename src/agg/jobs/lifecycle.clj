@@ -106,7 +106,25 @@
    "completion_persistence" "completion_persistence_failed"})
 
 (def ^:private durable-failure-reasons
-  #{"preview_decode_failed" "source_stream_failed"})
+  #{"preview_decode_failed" "source_stream_failed"
+    "source_duration_too_short"})
+
+(def ^:private preview-count-limit-keys
+  [:requested-moment-count :generated-moment-count :omitted-moment-count
+   :requested-duration-seconds])
+
+(defn- valid-preview-limits? [limits]
+  (let [{:keys [requested-moment-count generated-moment-count
+                omitted-moment-count requested-duration-seconds]}
+        limits]
+    (and (= (set preview-count-limit-keys) (set (keys limits)))
+         (every? integer? (vals limits))
+         (<= 1 requested-moment-count 32)
+         (<= 0 generated-moment-count requested-moment-count)
+         (<= 1 omitted-moment-count requested-moment-count)
+         (= requested-moment-count
+            (+ generated-moment-count omitted-moment-count))
+         (<= 1 requested-duration-seconds 480))))
 
 (defn- throwable-data [cause]
   (loop [current cause
@@ -135,12 +153,21 @@
         status (first-safe :status #(and (integer? %) (<= 100 % 599)))
         timeout-ms (first-safe :timeout-ms
                                #(and (integer? %) (<= 0 % 1000000000000)))
-        retryable (first-safe :retryable boolean?)]
+        retryable (first-safe :retryable boolean?)
+        preview-limits
+        (some (fn [entry]
+                (let [limits (:limits entry)]
+                  (when (and (= "source_duration_too_short" (:reason entry))
+                             (map? limits)
+                             (valid-preview-limits? limits))
+                    (select-keys limits preview-count-limit-keys))))
+              data)]
     (cond-> {:failure-code failure-code
              :retryable (true? retryable)
              :elapsed-ms (max 0 (long elapsed-ms))}
       stage (assoc :stage stage)
       reason (assoc :reason reason)
+      preview-limits (merge preview-limits)
       status (assoc :status status)
       timeout-ms (assoc :timeout-ms timeout-ms))))
 
@@ -251,6 +278,15 @@
     failure (assoc :failureCode (public-failure-code failure))
     (:stage failure-diagnostics) (assoc :stage (:stage failure-diagnostics))
     (:reason failure-diagnostics) (assoc :reason (:reason failure-diagnostics))
+    (:requested-moment-count failure-diagnostics)
+    (assoc :requestedMomentCount (:requested-moment-count failure-diagnostics))
+    (some? (:generated-moment-count failure-diagnostics))
+    (assoc :generatedMomentCount (:generated-moment-count failure-diagnostics))
+    (:omitted-moment-count failure-diagnostics)
+    (assoc :omittedMomentCount (:omitted-moment-count failure-diagnostics))
+    (:requested-duration-seconds failure-diagnostics)
+    (assoc :requestedDurationSeconds
+           (:requested-duration-seconds failure-diagnostics))
     (:status failure-diagnostics) (assoc :status (:status failure-diagnostics))
     (:timeout-ms failure-diagnostics)
     (assoc :timeoutMs (:timeout-ms failure-diagnostics))

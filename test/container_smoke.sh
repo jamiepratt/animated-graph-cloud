@@ -73,9 +73,11 @@ docker run --rm "$image" clojure.main -e '
       image-path (.resolve directory "source.png")
       audio-path (.resolve directory "source.wav")
       source-path (.resolve directory "source.mp4")
+      short-source-path (.resolve directory "short-source.mp4")
       durable-path (.resolve directory "durable.mp4")
       image (BufferedImage. 64 36 BufferedImage/TYPE_INT_ARGB)
-      overlay-output (ByteArrayOutputStream.)]
+      overlay-output (ByteArrayOutputStream.)
+      source-stream-count (atom 0)]
   (try
     (ImageIO/write image "png" (.toFile image-path))
     (with-open [output (Files/newOutputStream audio-path (make-array OpenOption 0))]
@@ -94,6 +96,16 @@ docker run --rm "$image" clojure.main -e '
                      (.inheritIO)))]
       (when-not (zero? (.waitFor process))
         (throw (ex-info "source fixture generation failed" {}))))
+    (let [process (.start
+                   (doto (ProcessBuilder.
+                          ^java.util.List
+                          ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
+                           "-loop" "1" "-framerate" "25" "-i" (str image-path)
+                           "-t" "1" "-c:v" "libx264" "-pix_fmt" "yuv420p"
+                           "-y" (str short-source-path)])
+                     (.inheritIO)))]
+      (when-not (zero? (.waitFor process))
+        (throw (ex-info "short source fixture generation failed" {}))))
     (ImageIO/write image "png" overlay-output)
     (let [frames (atom [])
           result
@@ -102,17 +114,28 @@ docker run --rm "$image" clojure.main -e '
            {:width 64 :height 36 :fps 25 :duration-seconds 1
             :fit-mode "letterbox"}
            (fn [output]
+             (swap! source-stream-count inc)
              (with-open [input (Files/newInputStream
-                                source-path (make-array OpenOption 0))]
+                                short-source-path (make-array OpenOption 0))]
                (.transferTo input output)))
            [{:frameIndex 0 :overlay (.toByteArray overlay-output)}
-            {:frameIndex 24 :overlay (.toByteArray overlay-output)}]
+            {:frameIndex 24 :overlay (.toByteArray overlay-output)}
+            {:frameIndex 49 :overlay (.toByteArray overlay-output)}]
            (fn [frame-index source-png final-png]
              (swap! frames conj [frame-index (alength source-png)
                                  (alength final-png)])))]
-      (when-not (and (= {:frame-count 2 :source-decodes 1} result)
+      (when-not (and (= {:requested-frame-count 3
+                         :generated-frame-count 2
+                         :omitted-frame-count 1
+                         :reason "source_duration_too_short"
+                         :source-decodes 1}
+                        result)
+                     (= 1 @source-stream-count)
                      (= [0 24] (mapv first @frames)))
-        (throw (ex-info "selected-source gallery smoke failed" {}))))
+        (throw (ex-info "short selected-source gallery smoke failed"
+                        {:result result
+                         :source-stream-count @source-stream-count
+                         :frame-indexes (mapv first @frames)}))))
     (let [started (System/nanoTime)
           result
           (renderer/render!
@@ -145,6 +168,7 @@ docker run --rm "$image" clojure.main -e '
                         {:elapsed-ms elapsed-ms}))))
     (finally
       (Files/deleteIfExists durable-path)
+      (Files/deleteIfExists short-source-path)
       (Files/deleteIfExists source-path)
       (Files/deleteIfExists audio-path)
       (Files/deleteIfExists image-path)

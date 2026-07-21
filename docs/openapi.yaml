@@ -193,7 +193,11 @@ paths:
         and prominent extrema from every rendered trace. Candidates map to real
         output frames before coincident labels and assets are deduplicated.
         Selected-source previews batch-decode each unique output frame once and
-        return fitted Source and exact composited Final image references. This is
+        return fitted Source and exact composited Final image references. When a
+        selected video ends before every requested moment, a successful partial
+        gallery returns each complete Source and Final pair plus bounded warning
+        counts and recovery guidance. Zero available moments fail with the same
+        structured source-duration diagnosis. This is
         a breaking replacement for the former synchronous `image/png` midpoint response.
         Clients must poll `statusUrl` and consume the structured result after
         `state` becomes `succeeded`.
@@ -217,7 +221,7 @@ paths:
       operationId: getPreview
       tags: [Rendering]
       summary: Get an owned preview operation and its completed manifest.
-      description: Preview operations and assets expire 24 hours after creation.
+      description: Preview operations and assets expire 24 hours after creation. A selected-source partial result remains succeeded, exposes every complete image pair, and reports bounded warning counts. Zero available moments are a failed operation with an actionable source-duration reason.
       parameters:
         - name: previewId
           in: path
@@ -868,7 +872,11 @@ components:
         stage: {type: string, maxLength: 128}
         reason:
           type: string
-          enum: [preview_decode_failed, source_stream_failed]
+          enum: [preview_decode_failed, source_stream_failed, source_duration_too_short]
+        requestedMomentCount: {type: integer, minimum: 1, maximum: 32}
+        generatedMomentCount: {type: integer, minimum: 0, maximum: 32}
+        omittedMomentCount: {type: integer, minimum: 1, maximum: 32}
+        requestedDurationSeconds: {type: integer, minimum: 1, maximum: 480}
         status: {type: integer, minimum: 100, maximum: 599}
         elapsedMs: {type: integer, minimum: 0, maximum: 1000000000000}
         timeoutMs: {type: integer, minimum: 0, maximum: 1000000000000}
@@ -886,6 +894,23 @@ components:
           type: array
           description: One entry per unique output frame, shared across trace sections.
           items: {$ref: "#/components/schemas/PreviewFrameAsset"}
+        warnings:
+          type: array
+          maxItems: 1
+          description: Bounded diagnostics for a successful partial selected-source gallery.
+          items: {$ref: "#/components/schemas/PreviewWarning"}
+    PreviewWarning:
+      type: object
+      additionalProperties: false
+      required: [reason, requestId, requestedMomentCount, generatedMomentCount, omittedMomentCount, requestedDurationSeconds, retryable]
+      properties:
+        reason: {const: source_duration_too_short}
+        requestId: {type: string, format: uuid}
+        requestedMomentCount: {type: integer, minimum: 2, maximum: 32}
+        generatedMomentCount: {type: integer, minimum: 1, maximum: 31}
+        omittedMomentCount: {type: integer, minimum: 1, maximum: 31}
+        requestedDurationSeconds: {type: integer, minimum: 1, maximum: 480}
+        retryable: {const: false}
     PreviewTraceSection:
       type: object
       additionalProperties: false

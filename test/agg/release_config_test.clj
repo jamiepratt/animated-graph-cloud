@@ -193,6 +193,24 @@
       (testing migration
         (is (str/includes? readme migration))))))
 
+(deftest preview-contract-publishes-partial-gallery-recovery
+  (let [openapi (slurp "docs/openapi.yaml")
+        readme (slurp "README.md")]
+    (doseq [contract ["PreviewWarning:"
+                      "warnings:"
+                      "source_duration_too_short"
+                      "requestedMomentCount"
+                      "generatedMomentCount"
+                      "omittedMomentCount"
+                      "requestedDurationSeconds"]]
+      (testing contract
+        (is (str/includes? openapi contract))))
+    (doseq [guidance ["partial gallery"
+                      "Shorten the section or choose a longer video"
+                      "does not display failure codes, request IDs, internal stages"]]
+      (testing guidance
+        (is (str/includes? readme guidance))))))
+
 (deftest production-release-deploys-main-push-and-is-domain-aware
   (let [workflow (slurp ".github/workflows/deploy-production.yml")]
     (is (str/includes? workflow "push:"))
@@ -313,6 +331,18 @@
                               filter-name " '"))))
     (is (not (re-find #"-encoders.*grep -q ' png '" smoke)))
     (is (not (re-find #"-muxers.*grep -q ' image2pipe '" smoke)))))
+
+(deftest container-smoke-covers-a-real-non-seekable-short-source
+  (let [smoke (slurp "test/container_smoke.sh")]
+    (is (str/includes? smoke "short-source.mp4"))
+    (is (str/includes? smoke
+                       "Files/newInputStream\n                                short-source-path"))
+    (is (str/includes? smoke ":requested-frame-count 3"))
+    (is (str/includes? smoke ":generated-frame-count 2"))
+    (is (str/includes? smoke ":omitted-frame-count 1"))
+    (is (str/includes? smoke ":reason \"source_duration_too_short\""))
+    (is (str/includes? smoke "(= 1 @source-stream-count)"))
+    (is (str/includes? smoke "(= [0 24] (mapv first @frames))"))))
 
 (deftest container-smoke-renders-a-bounded-durable-h264-source
   (let [smoke (slurp "test/container_smoke.sh")]

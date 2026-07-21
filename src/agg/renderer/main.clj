@@ -330,13 +330,31 @@
                            "request_prepare"
                            #(tufte/p ::telemetry-parsing (contract/prepare request)))]
                      (if (jobs/preview-request? request)
-                       (jobs/with-durable-stage
-                         "composition_encode"
-                         #((or render-cloud! run-job!)
-                           render-spec
-                           {:preview-operation-id job-id
-                            :original-request request
-                            :progress! progress!}))
+                       (let [result
+                             (jobs/with-durable-stage
+                               "composition_encode"
+                               #((or render-cloud! run-job!)
+                                 render-spec
+                                 {:preview-operation-id job-id
+                                  :original-request request
+                                  :progress! progress!}))
+                             warning (first (:warnings result))]
+                         (when (= "source_duration_too_short"
+                                  (:reason warning))
+                           (observability/emit-event!
+                            (merge
+                             {:severity "WARNING"
+                              :component "renderer"
+                              :event "preview_partial_gallery"
+                              :message
+                              "Preview gallery has unavailable source frames"
+                              :requestId job-id}
+                             (select-keys
+                              warning
+                              [:reason :requestedMomentCount
+                               :generatedMomentCount :omittedMomentCount
+                               :requestedDurationSeconds :retryable]))))
+                         result)
                        (let [output-suffix
                              (if (= "h264-mp4" (:output-format render-spec))
                                ".mp4"
@@ -505,6 +523,11 @@
         attempt (some #(let [value (:attempt %)]
                          (when (and (integer? value) (pos? value)) value))
                       data)
+        job-id (some #(let [value (:job-id %)]
+                        (when (and (string? value)
+                                   (<= 1 (count value) 128))
+                          value))
+                     data)
         diagnostic-fields
         (cond-> {}
           diagnosis (assoc :failureCode (:failure-code diagnosis)
@@ -512,6 +535,17 @@
                            :elapsedMs (:elapsed-ms diagnosis))
           (:stage diagnosis) (assoc :stage (:stage diagnosis))
           (:reason diagnosis) (assoc :reason (:reason diagnosis))
+          (and (= "source_duration_too_short" (:reason diagnosis)) job-id)
+          (assoc :requestId job-id)
+          (:requested-moment-count diagnosis)
+          (assoc :requestedMomentCount (:requested-moment-count diagnosis))
+          (some? (:generated-moment-count diagnosis))
+          (assoc :generatedMomentCount (:generated-moment-count diagnosis))
+          (:omitted-moment-count diagnosis)
+          (assoc :omittedMomentCount (:omitted-moment-count diagnosis))
+          (:requested-duration-seconds diagnosis)
+          (assoc :requestedDurationSeconds
+                 (:requested-duration-seconds diagnosis))
           (:status diagnosis) (assoc :status (:status diagnosis))
           (:timeout-ms diagnosis) (assoc :timeoutMs (:timeout-ms diagnosis))
           attempt (assoc :attempt attempt))]

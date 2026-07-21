@@ -658,11 +658,11 @@
     (is (:duplicateSuppressed outcome))
     (is (false? (get-in outcome [:platformFailure :disabled])))
     (is (false? (get-in outcome [:platformFailure :submitDisabled])))
-    (is (str/includes? (get-in outcome [:platformFailure :text]) "504"))
+    (is (not (str/includes? (get-in outcome [:platformFailure :text]) "504")))
     (is (str/includes? (get-in outcome [:platformFailure :text])
                        "No durable render was submitted or charged"))
     (is (false? (get-in outcome [:gatewayFailure :disabled])))
-    (is (str/includes? (get-in outcome [:gatewayFailure :text]) "502"))
+    (is (not (str/includes? (get-in outcome [:gatewayFailure :text]) "502")))
     (is (= false (get-in outcome [:connectionLoss :disabled])))
     (is (get-in outcome [:connectionLoss :lateRejected]))
     (is (str/includes? (get-in outcome [:connectionLoss :text])
@@ -684,11 +684,11 @@
     (is (= "Preview failed. See details below."
            (get-in outcome [:terminalFailure :status])))
     (is (str/includes? (get-in outcome [:terminalFailure :text])
-                       "preview_rendering"))
-    (is (str/includes? (get-in outcome [:terminalFailure :text])
-                       "Source content"))
-    (is (str/includes? (get-in outcome [:terminalFailure :text])
-                       "worker_failed"))
+                       "Check the selected video and inputs"))
+    (doseq [developer-detail ["preview_rendering" "Source content"
+                              "worker_failed" "Failure code" "Request ID"]]
+      (is (not (str/includes? (get-in outcome [:terminalFailure :text])
+                              developer-detail))))
     (is (str/includes? (get-in outcome [:terminalFailure :text])
                        "No durable render was submitted or charged"))
     (is (= {:text "Preview ready."
@@ -729,9 +729,11 @@
     (is (= "Preview failed. Submit remains available." (:submitStatus outcome))
         outcome)
     (is (= "Preview failed. See details below." (:status outcome)) outcome)
-    (doseq [detail ["preview_rendering" "Source content" "worker_failed"
-                    "No durable render was submitted or charged"]]
-      (is (str/includes? (:text outcome) detail) outcome))))
+    (is (str/includes? (:text outcome)
+                       "No durable render was submitted or charged"))
+    (doseq [developer-detail ["preview_rendering" "Source content"
+                              "worker_failed" "Failure code" "Request ID"]]
+      (is (not (str/includes? (:text outcome) developer-detail)) outcome))))
 
 (deftest preview-gallery-is-responsive-accessible-and-stale-safe-in-a-browser
   (let [desktop (preview-gallery-browser-outcome false)
@@ -808,6 +810,70 @@
                             :clickedPosition :accessibleViewer :buttonNavigation
                             :keyboardNavigation :endStates :focusReturned])))))
 
+(deftest partial-preview-explains-missing-source-duration-without-developer-traces
+  (let [operation-id "00000000-0000-0000-0000-000000000084"
+        operation
+        (-> (timer-preview-gallery-operation)
+            (assoc :id operation-id)
+            (update-in [:result :sections 0 :moments] #(vec (take 3 %)))
+            (update-in [:result :assets] #(vec (take 3 %)))
+            (assoc-in [:result :warnings]
+                      [{:reason "source_duration_too_short"
+                        :requestId operation-id
+                        :requestedMomentCount 4
+                        :generatedMomentCount 3
+                        :omittedMomentCount 1
+                        :requestedDurationSeconds 20
+                        :retryable false}]))
+        fragment (ui/preview-operation-fragment operation "generation-1")]
+    (is (str/includes?
+         fragment
+         (str "We generated 3 of 4 preview frames. The selected video ends "
+              "before the 20-second section, so 1 later preview frame is "
+              "unavailable. Shorten the section or choose a longer video.")))
+    (is (= 3 (count (re-seq #"class=\"preview-moment\"" fragment))))
+    (is (= 6 (count (re-seq #"class=\"preview-open\"" fragment))))
+    (doseq [developer-detail
+            ["source_duration_too_short" "Failure code" "Category"
+             "Request ID" "Stage" "Elapsed" "Retryable" "stack trace"
+             "FFmpeg"]]
+      (is (not (str/includes? fragment developer-detail)) developer-detail))
+    (is (= 1 (count (re-seq (re-pattern operation-id) fragment))))))
+
+(deftest zero-frame-preview-gives-actionable-copy-without-images-or-traces
+  (let [operation-id "00000000-0000-0000-0000-000000000085"
+        fragment
+        (ui/preview-operation-fragment
+         {:id operation-id
+          :state "failed"
+          :progressPercent 100
+          :error {:code "composition_encode_failed"
+                  :category "preview_rendering"
+                  :requestId operation-id
+                  :stage "composition_encode"
+                  :reason "source_duration_too_short"
+                  :requestedMomentCount 4
+                  :generatedMomentCount 0
+                  :omittedMomentCount 4
+                  :requestedDurationSeconds 20
+                  :elapsedMs 917
+                  :retryable false}}
+         "generation-1")]
+    (is (str/includes?
+         fragment
+         (str "We could not generate any of the 4 preview frames. The selected "
+              "video ends before the 20-second section. Shorten the section or "
+              "choose a longer video.")))
+    (is (not (str/includes? fragment "<img")))
+    (is (not (str/includes? fragment "/images/")))
+    (doseq [developer-detail
+            ["composition_encode_failed" "preview_rendering"
+             "source_duration_too_short" "Composition encode" "917 ms"
+             "Failure code" "Category" "Request ID" "Stage" "Elapsed"
+             "Retryable" "stack trace" "FFmpeg"]]
+      (is (not (str/includes? fragment developer-detail)) developer-detail))
+    (is (= 1 (count (re-seq (re-pattern operation-id) fragment))))))
+
 (deftest overlay-only-hr-and-spo2-gallery-has-trace-sections-and-overlay-row
   (let [operation (preview-gallery-operation)
         moment (get-in operation [:result :sections 0 :moments 0])
@@ -868,17 +934,17 @@
     (doseq [fragment [cancelled failed empty]]
       (is (str/includes? fragment
                          "data-preview-operation=\"00000000-0000-0000-0000-000000000061\"")))
-    (is (str/includes? cancelled "preview_cancelled"))
     (is (str/includes? cancelled "<h2>Preview cancelled</h2>"))
     (is (not (str/includes? cancelled "hx-get=")))
+    (is (not (str/includes? cancelled "preview_cancelled")))
     (doseq [detail ["preview_timeout" "preview_rendering"
-                    "00000000-0000-0000-0000-000000000061"
-                    "Composition encode" "504" "45004 ms" "45000 ms"]]
-      (is (str/includes? failed detail)))
+                    "Composition encode" "504" "45004 ms" "45000 ms"
+                    "Failure code" "Request ID" "Retryable"]]
+      (is (not (str/includes? failed detail))))
     (is (str/includes? failed "Preview did not finish"))
     (is (str/includes? failed
                        "No durable render was submitted or charged"))
-    (is (str/includes? failed "Retry with the Preview button"))
+    (is (str/includes? failed "retry with the Preview button"))
     (is (str/includes? empty "No preview moments"))))
 
 (deftest telemetry-files-follow-the-selected-format-in-a-browser
@@ -922,13 +988,13 @@
         (is (re-matches #"[0-9a-f-]{36}" request-id))
         (is (str/includes? body "<article id=\"preview-result\""))
         (is (str/includes? body "Preview failed"))
-        (is (str/includes? body "request_contract"))
-        (is (str/includes? body "heart_rate_out_of_range"))
         (is (str/includes? body "Heart-rate telemetry"))
         (is (str/includes? body "between 20 and 260 bpm"))
-        (is (str/includes? body request-id))
-        (is (str/includes? body "Source line"))
-        (is (str/includes? body ">2</dd>"))
+        (doseq [developer-detail
+                ["request_contract" "heart_rate_out_of_range" request-id
+                 "Source line" "Failure code" "Category" "Request ID"
+                 "Stage" "Elapsed" "Retryable" "stack trace" "FFmpeg"]]
+          (is (not (str/includes? body developer-detail)) developer-detail))
         (is (not (str/includes? body "{\"error\":\"invalid_request\"}")))
         (is (not (str/includes? body "timestamp,heart_rate")))
         (is (not (str/includes? body ",19")))
