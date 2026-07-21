@@ -225,6 +225,32 @@
           (.setColor graphics future-color)
           (draw-series-segment! graphics crossing current y-for))))))
 
+(defn- draw-timer-markers!
+  [graphics {:keys [height graph-left graph-right graph-bottom
+                    duration-seconds heart-rate-samples heart-rate-axis
+                    graph-top timer future-trace-alpha]}
+   seconds]
+  (when timer
+    (let [half-height (int (Math/round (* height 0.10)))
+          stroke-width (float (max 1.5 (* height 0.0032)))
+          dash-length (float (max 3.0 (* height 0.0125)))
+          stroke (BasicStroke. stroke-width
+                               BasicStroke/CAP_BUTT
+                               BasicStroke/JOIN_MITER
+                               10.0
+                               (float-array [dash-length dash-length])
+                               0.0)]
+      (.setStroke graphics stroke)
+      (doseq [event-seconds [(:start-seconds timer) (:end-seconds timer)]]
+        (let [x (x-for graph-left graph-right duration-seconds event-seconds)
+              y (y-for heart-rate-axis graph-top graph-bottom
+                       (value-at-series heart-rate-samples
+                                        :heart-rate event-seconds))
+              alpha (if (<= event-seconds seconds) 255 future-trace-alpha)]
+          (.setColor graphics (color-with-alpha heart-rate-color alpha))
+          (.drawLine graphics x (- y half-height)
+                     x (min graph-bottom (+ y half-height))))))))
+
 (defn- draw-cursor! [graphics {:keys [x y]} color radius]
   (.setColor graphics Color/WHITE)
   (.fillOval graphics
@@ -411,6 +437,7 @@
                                    (:color spo2-contract)
                                    stroke
                                    128))
+      (draw-timer-markers! g layout seconds)
       (let [heart-rate-seconds (clamp seconds 0.0 (:duration-seconds layout))
             heart-rate-point {:x (x-for graph-left graph-right
                                         (:duration-seconds layout)
