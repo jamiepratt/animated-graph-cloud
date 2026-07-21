@@ -24,7 +24,8 @@
                                       OidcToken QueueName Task TaskName)
            (java.time Clock Instant LocalDate YearMonth ZoneOffset)
            (java.util Date UUID)
-           (java.util.concurrent ExecutionException TimeUnit)))
+           (java.util.concurrent CancellationException ExecutionException
+                                 TimeUnit)))
 
 ;; The generated Cloud Tasks HttpMethod enum cannot be imported alongside the
 ;; Storage enum. Resolve it once without leaking that naming collision.
@@ -42,6 +43,17 @@
     (.get ^java.util.concurrent.Future future)
     (catch ExecutionException error
       (throw (.getCause error)))))
+
+(defn- await-cancellation! [future]
+  (try
+    (await! future)
+    (catch CancellationException _
+      nil)
+    (catch ApiException error
+      (if (= StatusCode$Code/CANCELLED
+             (some-> error .getStatusCode .getCode))
+        nil
+        (throw error)))))
 
 (defn- now-ms [^Clock clock]
   (.toEpochMilli (Instant/now clock)))
@@ -80,6 +92,9 @@
     (assoc "failureReason" (get-in job [:failure-diagnostics :reason]))
     (get-in job [:failure-diagnostics :status])
     (assoc "failureStatus" (long (get-in job [:failure-diagnostics :status])))
+    (get-in job [:failure-diagnostics :timeout-ms])
+    (assoc "failureTimeoutMs"
+           (long (get-in job [:failure-diagnostics :timeout-ms])))
     (:output job) (assoc "outputJson" (json/write-str (:output job)))
     (:operation-kind job) (assoc "operationKind" (name (:operation-kind job)))
     (:requester-subject job) (assoc "requesterSubject" (:requester-subject job))
@@ -112,7 +127,9 @@
                  (get data "failureReason")
                  (assoc :reason (get data "failureReason"))
                  (contains? data "failureStatus")
-                 (assoc :status (long (get data "failureStatus")))))
+                 (assoc :status (long (get data "failureStatus")))
+                 (contains? data "failureTimeoutMs")
+                 (assoc :timeout-ms (long (get data "failureTimeoutMs")))))
         (get data "outputJson")
         (assoc :output (json/read-str (get data "outputJson") :key-fn keyword))
         (get data "operationKind")
@@ -296,7 +313,8 @@
   (launch-job! [_ job-id]
     (launch-cloud-run! jobs-client renderer-job job-id 1))
   (cancel-execution! [_ execution]
-    (await! (.cancelExecutionAsync executions-client execution)))
+    (await-cancellation!
+     (.cancelExecutionAsync executions-client execution)))
   lifecycle/RecoverableJobLauncher
   (launch-job-attempt! [_ job-id attempt]
     (launch-cloud-run! jobs-client renderer-job job-id attempt))
@@ -331,7 +349,7 @@
 
 (defn- complete-cancellation! [^Firestore firestore launcher ^Clock clock
                                job-ref capacity-ref job-id attempt execution]
-  (lifecycle/cancel-execution! launcher execution)
+  (lifecycle/request-execution-cancellation! launcher execution)
   (public-job
    (transaction!
     firestore

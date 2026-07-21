@@ -17,6 +17,7 @@
   {:color [52 200 235]})
 
 (def heart-rate-color [255 55 82])
+(def max-frame-progress-steps 10)
 
 (defprotocol FrameRenderer
   (stream-frames! [renderer render-spec output]
@@ -561,10 +562,21 @@
   (stream-frames! [_ {:keys [width height fps] :as render-spec} output]
     (let [{:keys [image rgba]} (rgba-surface width height)
           layout (render-layout render-spec)
-          frames (spec/frame-count render-spec)]
+          frames (spec/frame-count render-spec)
+          progress! (:frame-progress! render-spec)
+          progress-interval (max 1 (long (Math/ceil
+                                          (/ (double frames)
+                                             max-frame-progress-steps))))]
+      (when progress! (progress! 0))
       (dotimes [frame-index frames]
         (render-frame! image layout (/ (double frame-index) fps))
-        (.write output ^bytes rgba 0 (alength ^bytes rgba)))
+        (.write output ^bytes rgba 0 (alength ^bytes rgba))
+        (let [completed (inc frame-index)]
+          (when (and progress!
+                     (or (= completed frames)
+                         (zero? (rem completed progress-interval))))
+            (progress! (min 100 (long (Math/round
+                                       (* 100.0 (/ completed frames)))))))))
       (.flush output)
       {:frame-count frames
        :buffer-count 1}))

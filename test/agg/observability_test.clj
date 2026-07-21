@@ -102,6 +102,25 @@
            :filename "private.mov"
            :token "secret"}))))
 
+(deftest cloud-render-progress-keeps-only-bounded-numeric-evidence
+  (is (= {:severity "INFO"
+          :component "renderer"
+          :event "cloud_render_progress"
+          :message "Cloud renderer job is active"
+          :stage "composition_encode"
+          :elapsedMs 1200
+          :progressPercent 50}
+         (observability/safe-event-fields
+          {:severity "INFO"
+           :component "renderer"
+           :event "cloud_render_progress"
+           :message "Cloud renderer job is active"
+           :stage "composition_encode"
+           :elapsedMs 1200
+           :progressPercent 50
+           :fileId "private-file"
+           :telemetry "private"}))))
+
 (deftest tufte-emits-structured-profile-signal
   (let [signals (atom [])]
     (tufte/with-handler

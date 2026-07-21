@@ -4,7 +4,8 @@
             [agg.contracts.render :as contract])
   (:import (java.security MessageDigest)
            (java.time Clock Instant LocalDate YearMonth ZoneOffset)
-           (java.util HexFormat UUID)))
+           (java.util HexFormat UUID)
+           (java.util.concurrent CancellationException)))
 
 (defprotocol JobService
   (submit-job! [service idempotency-key request])
@@ -29,6 +30,14 @@
 (defprotocol JobLauncher
   (launch-job! [launcher job-id])
   (cancel-execution! [launcher execution]))
+
+(defn request-execution-cancellation!
+  "Treat a cancelled operation future as acknowledgement of execution cancellation."
+  [launcher execution]
+  (try
+    (cancel-execution! launcher execution)
+    (catch CancellationException _
+      nil)))
 
 (defprotocol RecoverableJobLauncher
   (launch-job-attempt! [launcher job-id attempt])
@@ -71,6 +80,7 @@
     "drive_grant_required"
     "overlay_render_failed"
     "composition_encode_failed"
+    "composition_timeout"
     "artifact_upload_failed"
     "drive_delivery_failed"
     "completion_persistence_failed"
@@ -127,13 +137,16 @@
         stage (first-safe :stage #(contains? durable-stages %))
         reason (first-safe :reason #(contains? durable-failure-reasons %))
         status (first-safe :status #(and (integer? %) (<= 100 % 599)))
+        timeout-ms (first-safe :timeout-ms
+                               #(and (integer? %) (<= 0 % 1000000000000)))
         retryable (first-safe :retryable boolean?)]
     (cond-> {:failure-code failure-code
              :retryable (true? retryable)
              :elapsed-ms (max 0 (long elapsed-ms))}
       stage (assoc :stage stage)
       reason (assoc :reason reason)
-      status (assoc :status status))))
+      status (assoc :status status)
+      timeout-ms (assoc :timeout-ms timeout-ms))))
 
 (defn- typed-failure-code [data stage]
   (let [types (into #{} (keep :type) data)]
@@ -285,6 +298,8 @@
     (:stage failure-diagnostics) (assoc :stage (:stage failure-diagnostics))
     (:reason failure-diagnostics) (assoc :reason (:reason failure-diagnostics))
     (:status failure-diagnostics) (assoc :status (:status failure-diagnostics))
+    (:timeout-ms failure-diagnostics)
+    (assoc :timeoutMs (:timeout-ms failure-diagnostics))
     failure-diagnostics (assoc :retryable (:retryable failure-diagnostics)
                                :elapsedMs (:elapsed-ms failure-diagnostics))
     output (assoc :output output)))
@@ -502,7 +517,7 @@
                         {:job updated}))))]
             (if (:cancel? launch-result)
               (do
-                (cancel-execution! launcher execution)
+                (request-execution-cancellation! launcher execution)
                 (let [cancelled
                       (locking state
                         (let [job (get-in @state [:jobs job-id])
@@ -552,7 +567,7 @@
                                        :state (:state job)})))))]
       (if-let [execution (:execution result)]
         (do
-          (cancel-execution! launcher execution)
+          (request-execution-cancellation! launcher execution)
           (let [cancelled
                 (locking state
                   (let [job (get-in @state [:jobs job-id])

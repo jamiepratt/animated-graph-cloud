@@ -215,6 +215,18 @@ Supported outputs are H.264 MP4 (default) and ProRes 422 MOV. Fit defaults to
 letterbox/pillarbox; audio defaults to source plus bounded heartbeat mix, with
 source-only and heartbeat-only modes also available.
 
+Selected-source composition has one 45-minute deadline shared by FFmpeg,
+source streaming, overlay production, and the heartbeat-only fallback attempt.
+Timeouts terminate FFmpeg, fail durably as `composition_timeout`, and release
+the render lease before Cloud Run's one-hour task limit. Safe stage events and
+at most eleven numeric frame-progress samples identify forward movement without
+logging source or telemetry data. The production container smoke generates a
+real 20-second H.264/AAC source, streams it through the non-seekable input, and
+requires a verified 9-second H.264/AAC output within 30 seconds.
+The production FFmpeg bundle includes every filter used by that command,
+including `volume`; a nonzero FFmpeg exit fails immediately instead of waiting
+on a pipe producer that no longer has a consumer.
+
 `POST /v1/jobs` accepts the same validated render JSON as `/v1/overlay` and
 requires an `Idempotency-Key` header of 1–128 characters. A new request returns
 `202`; replaying the same key and body returns `200` with the same job ID.
@@ -268,7 +280,12 @@ that dispatch accepted but did not record. Adoption writes the execution name,
 repairs running/cancellation state, and renews capacity atomically; a pending
 cancellation then cancels that exact execution. A failed external cancellation
 keeps the renewed lease and is retried by the next Scheduler run before any
-durable cancellation is recorded. Expired unmatched running or
+durable cancellation is recorded. A Cloud Run cancellation operation that
+reports its execution cancelled is terminal success: the API records
+`cancelled` and releases the render lease instead of returning a render failure.
+Thus a genuine cancellation failure converges on the next five-minute
+reconciliation, while an accepted cancellation converges in the original
+request. Expired unmatched running or
 launching jobs become `failed` with `stale_lease`; expired cancellations become
 `cancelled`; stale, terminal, and missing-job capacity leases are removed
 atomically. Operational events contain only bounded reasons, durations, and

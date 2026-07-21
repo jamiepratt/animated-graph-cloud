@@ -314,6 +314,22 @@
     (is (not (re-find #"-encoders.*grep -q ' png '" smoke)))
     (is (not (re-find #"-muxers.*grep -q ' image2pipe '" smoke)))))
 
+(deftest container-smoke-renders-a-bounded-durable-h264-source
+  (let [smoke (slurp "test/container_smoke.sh")]
+    (is (str/includes? smoke ":duration-seconds 20"))
+    (is (str/includes? smoke "\"-t\" \"20\""))
+    (is (str/includes? smoke ":duration-seconds 9"))
+    (is (str/includes? smoke "media/durable-composite-smoke-bound-ms"))
+    (is (str/includes? smoke "(media/ffmpeg-video-encoder)"))
+    (is (str/includes? smoke "(= \"h264\""))
+    (is (str/includes? smoke "(= \"aac\""))))
+
+(deftest durable-job-contract-documents-composition-timeouts
+  (let [openapi (slurp "docs/openapi.yaml")]
+    (is (str/includes? openapi "- composition_timeout"))
+    (is (str/includes? openapi
+                       "timeoutMs: {type: integer, minimum: 0"))))
+
 (deftest production-release-verifies-private-services-before-targeted-reconciliation-and-promotion
   (let [workflow (slurp ".github/workflows/deploy-production.yml")
         terraform-init (str/index-of workflow

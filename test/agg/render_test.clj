@@ -81,6 +81,44 @@
        "wait \"$overlay_reader\"\n"
        "exit " exit-status "\n"))
 
+(defn- delayed-composite-script [delay-seconds]
+  (str "#!/bin/sh\n"
+       "input_number=0\n"
+       "while [ \"$#\" -gt 0 ]; do\n"
+       "  if [ \"$1\" = \"-i\" ]; then\n"
+       "    shift\n"
+       "    input_number=$((input_number + 1))\n"
+       "    if [ \"$input_number\" -eq 2 ]; then\n"
+       "      overlay=$1\n"
+       "      break\n"
+       "    fi\n"
+       "  fi\n"
+       "  shift\n"
+       "done\n"
+       "head -c 1 \"$overlay\" >/dev/null &\n"
+       "overlay_reader=$!\n"
+       "head -c 1 >/dev/null\n"
+       "wait \"$overlay_reader\"\n"
+       "sleep " delay-seconds "\n"
+       "exit 0\n"))
+
+(defn- blocked-producer-failure-script [exit-status]
+  (str "#!/bin/sh\n"
+       "input_number=0\n"
+       "while [ \"$#\" -gt 0 ]; do\n"
+       "  if [ \"$1\" = \"-i\" ]; then\n"
+       "    shift\n"
+       "    input_number=$((input_number + 1))\n"
+       "    if [ \"$input_number\" -eq 2 ]; then\n"
+       "      overlay=$1\n"
+       "      break\n"
+       "    fi\n"
+       "  fi\n"
+       "  shift\n"
+       "done\n"
+       "head -c 1 \"$overlay\" >/dev/null\n"
+       "exit " exit-status "\n"))
+
 (defn- alpha-bounds [^bytes rgba width]
   (loop [pixel 0
          visible-count 0
@@ -474,11 +512,117 @@
         joined (str/join " " command)]
     (is (some #{"pipe:0"} command))
     (is (some #{"/tmp/overlay.pipe"} command))
+    (is (str/includes? joined "[0:v]scale="))
+    (is (str/includes? joined "[1:v]format=rgba"))
+    (is (str/includes? joined "[0:a]aformat="))
     (is (str/includes? joined "force_original_aspect_ratio=decrease"))
     (is (str/includes? joined "amix=inputs=2"))
     (is (str/includes? joined "volume=0.5[src]"))
     (is (str/includes? joined "volume=1.0[beat]"))
     (is (not (some #(str/includes? % "source.mp4") command)))))
+
+(deftest durable-composite-stops-before-its-render-deadline
+  (let [ffmpeg (executable-script! (delayed-composite-script "0.5"))
+        encoder (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
+        output (Files/createTempFile
+                "agg-timeout-composite-" ".mp4"
+                (make-array java.nio.file.attribute.FileAttribute 0))
+        source-invocations (atom 0)]
+    (try
+      (let [started (System/nanoTime)
+            cause
+            (try
+              (jobs/with-durable-stage
+                "composition_encode"
+                #(media/encode-composite!
+                  encoder
+                  {:width 64 :height 36 :fps 25 :duration-seconds 9
+                   :output-format "h264-mp4"
+                   :fit-mode "letterbox"
+                   :audio-mode "source+heartbeat"
+                   :timeout-ms 250}
+                  "/tmp/heartbeat.wav"
+                  output
+                  (fn [source-output]
+                    (swap! source-invocations inc)
+                    (.write ^OutputStream source-output (byte-array [0])))
+                  (fn [overlay-output]
+                    (.write ^OutputStream overlay-output (byte-array [0])))))
+              (catch Throwable error error))
+            elapsed-ms (quot (- (System/nanoTime) started) 1000000)
+            diagnostics (jobs/failure-diagnostics cause elapsed-ms)]
+        (is (= {:failure-code "composition_timeout"
+                :stage "composition_encode"
+                :retryable true
+                :elapsed-ms elapsed-ms
+                :timeout-ms 250}
+               diagnostics))
+        (is (< elapsed-ms 1000))
+        (is (= 1 @source-invocations)))
+      (finally
+        (Files/deleteIfExists output)
+        (Files/deleteIfExists ffmpeg)))))
+
+(deftest composite-producer-failure-is-not-masked-by-the-process-deadline
+  (let [ffmpeg (executable-script! (delayed-composite-script "2"))
+        encoder (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
+        output (Files/createTempFile
+                "agg-producer-failure-composite-" ".mp4"
+                (make-array java.nio.file.attribute.FileAttribute 0))]
+    (try
+      (let [cause
+            (try
+              (media/encode-composite!
+               encoder
+               {:width 64 :height 36 :fps 25 :duration-seconds 9
+                :output-format "h264-mp4"
+                :fit-mode "letterbox"
+                :audio-mode "heartbeat-only"
+                :timeout-ms 500}
+               "/tmp/heartbeat.wav"
+               output
+               (fn [source-output]
+                 (.write ^OutputStream source-output (byte-array [0])))
+               (fn [_]
+                 (throw (IOException. "Overlay producer failed"))))
+              (catch Throwable error error))]
+        (is (= ::media/compositing-failed (:type (ex-data cause))))
+        (is (instance? IOException (.getCause cause))))
+      (finally
+        (Files/deleteIfExists output)
+        (Files/deleteIfExists ffmpeg)))))
+
+(deftest ffmpeg-exit-is-not-masked-by-a-blocked-fifo-producer
+  (let [ffmpeg (executable-script! (blocked-producer-failure-script 7))
+        encoder (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
+        output (Files/createTempFile
+                "agg-immediate-failure-composite-" ".mp4"
+                (make-array java.nio.file.attribute.FileAttribute 0))
+        release-producer (promise)]
+    (try
+      (let [cause
+            (try
+              (media/encode-composite!
+               encoder
+               {:width 64 :height 36 :fps 25 :duration-seconds 9
+                :output-format "h264-mp4"
+                :fit-mode "letterbox"
+                :audio-mode "heartbeat-only"
+                :timeout-ms 2000}
+               "/tmp/heartbeat.wav"
+               output
+               (fn [_])
+               (fn [overlay-output]
+                 (.write ^OutputStream overlay-output (byte-array [0]))
+                 (.flush ^OutputStream overlay-output)
+                 @release-producer))
+              (catch Throwable error error))]
+        (is (= ::media/compositing-failed (:type (ex-data cause))))
+        (is (= 7 (:exit-status (ex-data cause)))))
+      (finally
+        (deliver release-producer true)
+        (Files/deleteIfExists output)
+        (Files/deleteIfExists ffmpeg)))))
 
 (deftest successful-duration-bounded-composite-accepts-a-closed-source-pipe
   (let [ffmpeg (executable-script!
@@ -619,6 +763,19 @@
     (testing "the production-shaped overlay keeps both clear and visible pixels"
       (is (some zero? alpha))
       (is (some pos? alpha)))))
+
+(deftest frame-stream-progress-is-bounded-and-monotonic
+  (let [progress (atom [])
+        output (ByteArrayOutputStream.)]
+    (frames/stream!
+     {:width 64 :height 36 :fps 10 :duration-seconds 10
+      :frame-progress! #(swap! progress conj %)}
+     output)
+    (is (= 0 (first @progress)))
+    (is (= 100 (last @progress)))
+    (is (apply <= @progress))
+    (is (= (count @progress) (count (distinct @progress))))
+    (is (<= (count @progress) 11))))
 
 (deftest optional-spo2-timer-and-watermark-compose-into-streamed-frames
   (let [encoded-watermark
@@ -764,6 +921,47 @@
         (is (= 15 (:output-bytes result)))
         (is (re-matches #"[0-9a-f]{64}" (:sha256 result)))
         (is (= "4444" (get-in result [:media :video :profile]))))
+      (finally
+        (Files/deleteIfExists output)))))
+
+(deftest composite-frame-progress-stays-bounded-across-encoder-retries
+  (let [output (Files/createTempFile "agg-progress-test-" ".mp4"
+                                     (make-array java.nio.file.attribute.FileAttribute 0))
+        progress (atom [])
+        fake-media
+        (reify
+          media/VideoEncoder
+          (encode! [_ _ _ _ _]
+            (throw (AssertionError. "composite render used overlay encoder")))
+          (verify! [_ _ _]
+            (throw (AssertionError. "composite render used overlay verifier")))
+          media/CompositeEncoder
+          (encode-composite! [_ _ _ output-path _ write-overlay!]
+            (with-open [sink (OutputStream/nullOutputStream)]
+              (write-overlay! sink)
+              (write-overlay! sink))
+            (Files/write output-path (.getBytes "media" "UTF-8")
+                         (make-array OpenOption 0))
+            {:exit-status 0})
+          (verify-composite! [_ _ _]
+            {:video {:codec "h264"}
+             :audio {:codec "aac"}}))]
+    (try
+      (renderer/render!
+       {:id "progress-test"
+        :width 64 :height 36 :fps 10 :duration-seconds 10
+        :output-format "h264-mp4"
+        :source-video {:file-id "not-emitted"}
+        :telemetry [{:seconds 0.0 :heart-rate 120.0}
+                    {:seconds 10.0 :heart-rate 120.0}]
+        :output-path output
+        :profile? false}
+       {:media fake-media
+        :source-stream! (fn [_])
+        :progress! (fn ([_]) ([_ fields]
+                              (when-let [percent (:progressPercent fields)]
+                                (swap! progress conj percent))))})
+      (is (= [0 10 20 30 40 50 60 70 80 90 100] @progress))
       (finally
         (Files/deleteIfExists output)))))
 

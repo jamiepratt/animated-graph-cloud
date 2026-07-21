@@ -220,7 +220,8 @@
      "</div></body></html>")))
 
 (defn job-fragment
-  [{:keys [id state attempt failureCode stage status retryable elapsedMs output]
+  [{:keys [id state attempt failureCode stage status retryable elapsedMs timeoutMs
+           output]
     :as job}]
   (let [path (str "/ui/jobs/" id)
         polling? (contains? #{"queued" "launching" "running"
@@ -245,6 +246,8 @@
            (str "<p>Retryable: " (if retryable "yes" "no") "</p>"))
          (when (some? elapsedMs)
            (str "<p>Elapsed: " (long elapsedMs) " ms</p>"))
+         (when (some? timeoutMs)
+           (str "<p>Deadline: " (long timeoutMs) " ms</p>"))
          (when drive-link
            (str "<p><a href=\"" (escape-html drive-link)
                 "\" rel=\"noopener noreferrer\">Open result in Google Drive</a></p>"))

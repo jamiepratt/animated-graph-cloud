@@ -1,9 +1,10 @@
 # 0003: Use bounded multi-input FFmpeg rendering on a sized Cloud Run Job
 
-- Status: Accepted, amended 2026-07-19
+- Status: Accepted, amended 2026-07-21
 - Original date: 2026-07-16
 - Amendments: add streamable Drive-video compositing and the expanded FFmpeg
-  bundle; isolate synchronous overlays in one measured service envelope
+  bundle; isolate synchronous overlays in one measured service envelope; bound
+  selected-source composition inside the Cloud Run task limit
 
 ## Context
 
@@ -75,6 +76,23 @@ The final command-selected JDK 21 image remains digest-pinned and non-root.
 Terraform continues to own a generation-2 Warsaw `agg-renderer` Job with one
 task, no parallelism, zero retries, no GPU, 8 vCPU, 32 GiB memory, and a hard
 3,600-second timeout. Its image input must be an immutable digest.
+
+Every selected-source composition uses one 45-minute deadline across FFmpeg,
+both pipe producers, and the optional heartbeat-only retry. The renderer drains
+FFmpeg diagnostics while it runs, terminates the child process on expiry, and
+persists `composition_timeout` with the bounded deadline. Normal durable failure
+handling releases the active render lease. Stage transitions and no more than
+eleven numeric overlay-frame progress samples are safe operational events. The
+container smoke contract is a generated 20-second H.264/AAC input streamed
+through the non-seekable pipe to a verified 9-second H.264/AAC output in under
+30 seconds.
+
+The 2026-07-21 incident was two coupled defects. The minimal production FFmpeg
+bundle omitted the `volume` filter used by source-plus-heartbeat audio, so
+FFmpeg exited before opening the overlay FIFO. The worker then waited on that
+orphaned FIFO producer and hid the process failure until the task timeout. The
+bundle now includes `volume`, the smoke test asserts it, and nonzero FFmpeg
+exits bypass producer waits.
 
 The synchronous `/v1/overlay` path runs on a separate `agg-overlay` Cloud Run
 service. It uses the same immutable application image and API service identity,

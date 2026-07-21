@@ -367,7 +367,7 @@ paths:
         - $ref: "#/components/parameters/CsrfToken"
       responses:
         "200":
-          description: Cancellation recorded or requested.
+          description: Cancellation requested or durably recorded. A Cloud Run cancellation operation that reports the execution cancelled is returned as a cancelled Job, not a render failure. Genuine remote failures remain cancellation-requested and are retried by reconciliation within five minutes.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Job"}
@@ -990,6 +990,7 @@ components:
             - drive_grant_required
             - overlay_render_failed
             - composition_encode_failed
+            - composition_timeout
             - artifact_upload_failed
             - drive_delivery_failed
             - completion_persistence_failed
