@@ -332,6 +332,55 @@
      "Browser-level preview status regression requires Chrome or Chromium"
      html)))
 
+(defn- durable-submit-browser-outcome [page]
+  (let [accepted-fragment
+        (ui/job-fragment
+         {:id "00000000-0000-0000-0000-000000000093"
+          :state "queued"
+          :attempt 1})
+        succeeded-fragment
+        (ui/job-fragment
+         {:id "00000000-0000-0000-0000-000000000093"
+          :state "succeeded"
+          :attempt 1
+          :output {:driveWebViewLink "https://drive.example/result"}})
+        failed-fragment
+        (ui/job-fragment
+         {:id "00000000-0000-0000-0000-000000000093"
+          :state "failed"
+          :attempt 1
+          :failureCode "worker_failed"
+          :retryable false})
+        next-accepted-fragment
+        (ui/job-fragment
+         {:id "00000000-0000-0000-0000-000000000094"
+          :state "queued"
+          :attempt 1})
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{"
+         "const acceptedFragment=" (json/write-str accepted-fragment) ",succeededFragment=" (json/write-str succeeded-fragment) ",failedFragment=" (json/write-str failed-fragment) ",nextAcceptedFragment=" (json/write-str next-accepted-fragment) ";"
+         "const form=document.getElementById('render-form'),submit=document.getElementById('submit-button'),jobResult=document.getElementById('job-result');"
+         "document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
+         "function configure(){const detail={elt:submit,parameters:{},headers:{}};const event=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail});submit.dispatchEvent(event);return {event,detail};}"
+         "function swap(fragment){jobResult.innerHTML=fragment;jobResult.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{elt:form,target:jobResult}}));return {disabled:submit.disabled,ariaDisabled:submit.getAttribute('aria-disabled'),submitStatus:document.getElementById('preview-submit-status').textContent,formStatus:document.getElementById('form-status').textContent};}"
+         "function pollSwap(fragment){jobResult.innerHTML=fragment;const job=jobResult.firstElementChild;job.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{elt:job,target:job}}));return {disabled:submit.disabled,ariaDisabled:submit.getAttribute('aria-disabled'),submitStatus:document.getElementById('preview-submit-status').textContent,formStatus:document.getElementById('form-status').textContent};}"
+         "function resetSubmission(){const field=document.getElementById('future-trace-opacity-percent');field.value=field.value==='25'?'24':'25';field.dispatchEvent(new Event('input',{bubbles:true}));}"
+         "function transportFailure(name,status=0){resetSubmission();const attempt=configure(),key=attempt.detail.headers['Idempotency-Key'];form.dispatchEvent(new CustomEvent(name,{bubbles:true,detail:{elt:form,target:jobResult,xhr:{status,getResponseHeader:()=>null}}}));const failure={disabled:submit.disabled,ariaDisabled:submit.getAttribute('aria-disabled'),submitStatus:document.getElementById('preview-submit-status').textContent,formStatus:document.getElementById('form-status').textContent};const retry=configure();return {...failure,retryAllowed:!retry.event.defaultPrevented,sameKey:key===retry.detail.headers['Idempotency-Key']};}"
+         "const first=configure(),duplicate=configure(),accepted=swap(acceptedFragment),succeeded=swap(succeededFragment),failed=swap(failedFragment);resetSubmission();const oldJobIgnored=swap(succeededFragment);configure();const lateOldPoll=pollSwap(succeededFragment),nextAccepted=swap(nextAcceptedFragment),responseError=transportFailure('htmx:responseError',503),connectionError=transportFailure('htmx:sendError'),timeout=transportFailure('htmx:timeout'),cancelled=transportFailure('htmx:sendAbort');"
+         "outcome={firstAllowed:!first.event.defaultPrevented,duplicateSuppressed:duplicate.event.defaultPrevented,...accepted,succeeded,failed,oldJobIgnored,lateOldPoll,nextAccepted,responseError,connectionError,timeout,cancelled};"
+         "}catch(error){outcome={error:error.message};}"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-durable-submit-browser-"
+     "Browser-level durable Submit regression requires Chrome or Chromium"
+     html)))
+
 (defn- preview-gallery-operation []
   {:id "00000000-0000-0000-0000-000000000061"
    :operationKind "key-moment-gallery"
@@ -821,6 +870,84 @@
                          :invalidationWasPending])))
     (is (true? (get-in outcome
                        [:rawInvalidated :presentation :spinnerHidden])))))
+
+(deftest accepted-durable-submit-leaves-a-clear-idempotent-state
+  (let [outcome
+        (durable-submit-browser-outcome
+         (ui/page {:user {:email "owner@example.com" :role :member}
+                   :csrf "csrf-test"
+                   :tokens []
+                   :members []
+                   :logs-enabled? false}))]
+    (is (nil? (:error outcome)) outcome)
+    (is (:firstAllowed outcome))
+    (is (:duplicateSuppressed outcome))
+    (is (:disabled outcome))
+    (is (= "true" (:ariaDisabled outcome)))
+    (is (= "Submitted. Change any render setting to start another render."
+           (:submitStatus outcome)))
+    (is (= "Durable render submitted. Track its progress below."
+           (:formStatus outcome)))
+    (is (= {:disabled true
+            :ariaDisabled "true"
+            :submitStatus
+            "Render succeeded. Change any render setting to start another render."
+            :formStatus "Durable render succeeded. Open the result below."}
+           (:succeeded outcome)))
+    (is (= {:disabled true
+            :ariaDisabled "true"
+            :submitStatus
+            "Render failed. Review the result below, then change any render setting to start another render."
+            :formStatus "Durable render failed. Review the result below."}
+           (:failed outcome)))
+    (is (= {:disabled false
+            :ariaDisabled "false"
+            :submitStatus "Preview is optional."
+            :formStatus "Ready to preview or submit."}
+           (:oldJobIgnored outcome)))
+    (is (= {:disabled true
+            :ariaDisabled "true"
+            :submitStatus "Submitting durable render…"
+            :formStatus "Submitting durable render…"}
+           (:lateOldPoll outcome)))
+    (is (= {:disabled true
+            :ariaDisabled "true"
+            :submitStatus
+            "Submitted. Change any render setting to start another render."
+            :formStatus "Durable render submitted. Track its progress below."}
+           (:nextAccepted outcome)))
+    (is (= {:disabled false
+            :ariaDisabled "false"
+            :submitStatus
+            "Submission failed. Review the error below, then retry Submit render."
+            :formStatus "Durable render was not submitted. Retry when ready."
+            :retryAllowed true
+            :sameKey true}
+           (:responseError outcome)))
+    (is (= {:disabled false
+            :ariaDisabled "false"
+            :submitStatus
+            "Submission connection lost. Retry Submit render. Repeating is safe."
+            :formStatus "Submission connection lost. Retry when ready."
+            :retryAllowed true
+            :sameKey true}
+           (:connectionError outcome)))
+    (is (= {:disabled false
+            :ariaDisabled "false"
+            :submitStatus
+            "Submission timed out. Retry Submit render. Repeating is safe."
+            :formStatus "Submission timed out. Retry when ready."
+            :retryAllowed true
+            :sameKey true}
+           (:timeout outcome)))
+    (is (= {:disabled false
+            :ariaDisabled "false"
+            :submitStatus
+            "Submission cancelled. Retry Submit render. Repeating is safe."
+            :formStatus "Submission cancelled. Retry when ready."
+            :retryAllowed true
+            :sameKey true}
+           (:cancelled outcome)))))
 
 (deftest real-htmx-worker-failure-finishes-preview-in-a-browser
   (let [outcome
