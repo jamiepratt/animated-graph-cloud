@@ -211,6 +211,37 @@
       (testing guidance
         (is (str/includes? readme guidance))))))
 
+(deftest production-preview-admission-is-explicit-and-bounded
+  (let [workflow (slurp ".github/workflows/deploy-production.yml")
+        runbook (slurp "docs/production-runbook.md")
+        readme (slurp "README.md")
+        decision (slurp
+                  "docs/adr/0007-enforce-the-operating-envelope-at-admission.md")
+        normalize #(str/replace % #"\s+" " ")
+        runbook-copy (normalize runbook)
+        semantics-copy (normalize (str readme decision))]
+    (doseq [contract ["PREVIEW_RESERVATION_MINOR_UNITS: \"125\""
+                      "AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS"]]
+      (testing contract
+        (is (str/includes? workflow contract))))
+    (is (= 2 (count (re-seq
+                     #"AGG_PREVIEW_RESERVATION_MINOR_UNITS=\$PREVIEW_RESERVATION_MINOR_UNITS"
+                     workflow)))
+        "both production Cloud Run profiles receive the Preview policy")
+    (doseq [approval ["exactly one Preview and one Submit"
+                      "Preview reservation: PLN 1.25"
+                      "durable Submit reservation: PLN 1.25"
+                      "total maximum admission exposure: PLN 2.50"
+                      "No Preview retry or second Preview"]]
+      (testing approval
+        (is (str/includes? runbook-copy approval))))
+    (doseq [semantics ["Preview attempts reserve 125 grosz independently"
+                       "same idempotency key and body reserves nothing again"
+                       "success, failure, cancellation, or 24-hour expiry"
+                       "do not release the Preview reservation"]]
+      (testing semantics
+        (is (str/includes? semantics-copy semantics))))))
+
 (deftest production-release-deploys-main-push-and-is-domain-aware
   (let [workflow (slurp ".github/workflows/deploy-production.yml")]
     (is (str/includes? workflow "push:"))

@@ -22,6 +22,23 @@ Stop for explicit owner approval before each item:
    and OAuth configuration.
 5. Approve every costed production acceptance render and load test.
 
+### Preview plus Submit approval template
+
+Use this exact accounting boundary before a production exercise that requires a
+Preview followed by durable submission:
+
+> Approve exactly one Preview and one Submit. Preview reservation: PLN 1.25;
+> durable Submit reservation: PLN 1.25; total maximum admission exposure: PLN 2.50.
+> No Preview retry or second Preview, durable retry, or second Submit is
+> approved.
+
+Preview and durable reservations are independently configured and atomically
+recorded. Repeating the same idempotency key and body does not reserve again.
+A new Preview generation or explicit retry is a new attempt and reserves again.
+Success, failure, cancellation, and 24-hour expiry do not release the Preview
+reservation from the monthly admission counter. Record the current reserved and
+remaining minor units before approval and after the exercise.
+
 ## Repository and GitHub preparation
 
 Run repository-only acceptance first:

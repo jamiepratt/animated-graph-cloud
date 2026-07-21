@@ -113,17 +113,21 @@
                      "threshold_percent = 1.0"]]
     (is (str/includes? terraform threshold)))
   (is (str/includes? workflow "MONTHLY_BUDGET_MINOR_UNITS: \"40000\""))
+  (is (str/includes? workflow "PREVIEW_RESERVATION_MINOR_UNITS: \"125\""))
   (is (str/includes? workflow "RENDER_RESERVATION_MINOR_UNITS: \"125\""))
   (is (str/includes? workflow
-                     "--remove-env-vars \"AGG_MONTHLY_BUDGET_CENTS,AGG_RENDER_RESERVATION_CENTS\""))
+                     "--remove-env-vars \"AGG_MONTHLY_BUDGET_CENTS,AGG_PREVIEW_RESERVATION_CENTS,AGG_RENDER_RESERVATION_CENTS\""))
   (is (str/includes? workflow
                      "--update-env-vars \"AGG_JOB_LIFECYCLE_ENABLED=true"))
   (is (str/includes? workflow
                      "AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS"))
   (is (str/includes? workflow
+                     "AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS"))
+  (is (str/includes? workflow
                      "AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS"))
   (is (not (str/includes? terraform-variables "monthly_budget_usd")))
   (is (= 1 (count (re-seq #"AGG_MONTHLY_BUDGET_CENTS" workflow))))
+  (is (= 1 (count (re-seq #"AGG_PREVIEW_RESERVATION_CENTS" workflow))))
   (is (= 1 (count (re-seq #"AGG_RENDER_RESERVATION_CENTS" workflow))))
   (is (not (str/includes? workflow "--set-env-vars"))))
 

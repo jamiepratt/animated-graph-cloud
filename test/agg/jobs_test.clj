@@ -76,6 +76,8 @@
 (deftest admission-limits-fail-closed-on-invalid-configuration
   (doseq [options [{:daily-limit 0}
                    {:monthly-budget-minor-units 0}
+                   {:preview-reservation-minor-units 0}
+                   {:preview-reservation-minor-units -1}
                    {:render-reservation-minor-units 0}
                    {:render-reservation-minor-units -1}]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
@@ -84,7 +86,9 @@
 
 (deftest default-admission-policy-is-pln-minor-units
   (is (= 40000 jobs/default-monthly-budget-minor-units))
-  (is (= 125 jobs/default-render-reservation-minor-units)))
+  (is (= 125 jobs/default-preview-reservation-minor-units))
+  (is (= 125 jobs/default-render-reservation-minor-units))
+  (is (= 250 jobs/default-preview-plus-render-exposure-minor-units)))
 
 (deftest internal-failures-map-to-stable-public-failure-codes
   (is (= "worker_failed"
@@ -133,6 +137,86 @@
     (is (= "preview" (:operationKind preview)))
     (is (nil? (:operationKind render)))
     (is (= (* 24 60 60) jobs/preview-retention-seconds))))
+
+(deftest preview-and-durable-submit-use-independent-reservations
+  (let [system (jobs/in-memory-system
+                {:monthly-budget-minor-units 35
+                 :preview-reservation-minor-units 10
+                 :render-reservation-minor-units 25})
+        service (:service system)
+        preview-request (assoc (render-request)
+                               :previewOperation jobs/preview-operation-version)]
+    (is (:created? (jobs/submit-job! service "preview-budget" preview-request)))
+    (is (false? (:created? (jobs/submit-job! service "preview-budget"
+                                             preview-request)))
+        "an idempotent Preview repeat reserves nothing")
+    (is (:created? (jobs/submit-job! service "render-budget" (render-request)))
+        "one Preview plus one durable Submit fits their configured total")
+    (is (= ::jobs/monthly-budget-exhausted
+           (exception-type
+            #(jobs/submit-job! service "second-preview-budget"
+                               preview-request))))
+    (is (= 2 (count @(:enqueued system)))
+        "rejected and idempotent Preview submissions do not enqueue")))
+
+(deftest preview-retries-use-the-preview-reservation
+  (let [system (jobs/in-memory-system
+                {:monthly-budget-minor-units 20
+                 :preview-reservation-minor-units 10
+                 :render-reservation-minor-units 25})
+        service (:service system)
+        request (assoc (render-request)
+                       :previewOperation jobs/preview-operation-version)
+        job-id (get-in (jobs/submit-job! service "preview-retry" request)
+                       [:job :id])]
+    (jobs/cancel-job! service job-id)
+    (is (= 2 (:attempt (jobs/retry-job! service job-id))))
+    (jobs/cancel-job! service job-id)
+    (is (= ::jobs/monthly-budget-exhausted
+           (exception-type #(jobs/retry-job! service job-id))))
+    (is (= 2 (count @(:enqueued system))))))
+
+(deftest preview-terminal-outcomes-retain-their-reservation
+  (doseq [[outcome worker finish!]
+          [[:succeeded
+            (reify jobs/RenderWorker
+              (perform-render! [_ _ _] {:output-bytes 1 :result "preview"}))
+            (fn [service job-id]
+              (jobs/dispatch-job! service job-id)
+              (jobs/run-job! service job-id))]
+           [:failed
+            (reify jobs/RenderWorker
+              (perform-render! [_ _ _]
+                (throw (ex-info "preview failed" {}))))
+            (fn [service job-id]
+              (jobs/dispatch-job! service job-id)
+              (try
+                (jobs/run-job! service job-id)
+                (catch clojure.lang.ExceptionInfo _)))]
+           [:cancelled
+            (reify jobs/RenderWorker
+              (perform-render! [_ _ _] {:output-bytes 1}))
+            jobs/cancel-job!]]]
+    (let [system (jobs/in-memory-system
+                  {:monthly-budget-minor-units 10
+                   :preview-reservation-minor-units 10
+                   :render-reservation-minor-units 25
+                   :worker worker})
+          service (:service system)
+          request (assoc (render-request)
+                         :previewOperation jobs/preview-operation-version)
+          job-id (get-in (jobs/submit-job! service
+                                           (str "terminal-preview-" outcome)
+                                           request)
+                         [:job :id])]
+      (finish! service job-id)
+      (is (= (name outcome) (:state (jobs/get-job service job-id))))
+      (is (= ::jobs/monthly-budget-exhausted
+             (exception-type
+              #(jobs/submit-job! service
+                                 (str "terminal-preview-next-" outcome)
+                                 request)))
+          (str "Preview reservation is retained after " (name outcome))))))
 
 (deftest future-trace-opacity-is-normalized-before-durable-storage-and-retry
   (doseq [[requested expected] [[::omitted 25] [0 0] [100 100]]]

@@ -56,7 +56,11 @@
 (def max-active-leases 5)
 (def max-daily-submissions 100)
 (def default-monthly-budget-minor-units 40000)
+(def default-preview-reservation-minor-units 125)
 (def default-render-reservation-minor-units 125)
+(def default-preview-plus-render-exposure-minor-units
+  (+ default-preview-reservation-minor-units
+     default-render-reservation-minor-units))
 (def ^:private billing-zone (ZoneOffset/ofHours -8))
 (def lease-seconds (* 65 60))
 (def max-output-bytes (* 18 1024 1024 1024))
@@ -66,6 +70,12 @@
 
 (defn preview-request? [request]
   (= preview-operation-version (:previewOperation request)))
+
+(defn reservation-minor-units
+  [request preview-reservation-minor-units render-reservation-minor-units]
+  (if (preview-request? request)
+    preview-reservation-minor-units
+    render-reservation-minor-units))
 
 (def ^:private durable-failure-codes
   #{"request_load_failed"
@@ -230,13 +240,19 @@
     :else "worker_failed"))
 
 (defn validate-admission-limits!
-  [daily-limit monthly-budget-minor-units render-reservation-minor-units]
-  (when-not (every? #(and (integer? %) (pos? %))
-                    [daily-limit monthly-budget-minor-units
-                     render-reservation-minor-units])
-    (throw (errors/raise! "Admission limits must be positive integers"
-                          {:type ::invalid-admission-configuration})))
-  true)
+  ([daily-limit monthly-budget-minor-units render-reservation-minor-units]
+   (validate-admission-limits! daily-limit monthly-budget-minor-units
+                               default-preview-reservation-minor-units
+                               render-reservation-minor-units))
+  ([daily-limit monthly-budget-minor-units preview-reservation-minor-units
+    render-reservation-minor-units]
+   (when-not (every? #(and (integer? %) (pos? %))
+                     [daily-limit monthly-budget-minor-units
+                      preview-reservation-minor-units
+                      render-reservation-minor-units])
+     (throw (errors/raise! "Admission limits must be positive integers"
+                           {:type ::invalid-admission-configuration})))
+   true))
 
 (defn require-render-attempt! [expected attempt]
   (when-not (and (integer? attempt)
@@ -344,6 +360,7 @@
 
 (defrecord InMemoryJobService [state enqueued launcher worker ^Clock clock
                                daily-limit monthly-budget-minor-units
+                               preview-reservation-minor-units
                                render-reservation-minor-units member-directory]
   JobAccess
   (owns-job? [_ job-id subject]
@@ -406,6 +423,9 @@
                       month (billing-month clock)
                       submitted (get-in @state [:admission :daily day] 0)
                       reserved (get-in @state [:admission :monthly month] 0)
+                      reservation (reservation-minor-units
+                                   request preview-reservation-minor-units
+                                   render-reservation-minor-units)
                       _ (when (>= (count (filter #(active-lease? now %)
                                                  (vals (:jobs @state))))
                                   max-active-leases)
@@ -414,7 +434,7 @@
                       _ (when (>= submitted daily-limit)
                           (throw (errors/raise! "Daily submission limit is exhausted"
                                                 {:type ::daily-submission-limit-exhausted})))
-                      _ (when (> (+ reserved render-reservation-minor-units)
+                      _ (when (> (+ reserved reservation)
                                  monthly-budget-minor-units)
                           (throw (errors/raise! "Monthly compute budget is exhausted"
                                                 {:type ::monthly-budget-exhausted})))
@@ -422,6 +442,11 @@
                                    :state :queued
                                    :attempt 1
                                    :request request
+                                   :reservation-kind
+                                   (if (preview-request? request)
+                                     :preview
+                                     :render)
+                                   :reservation-minor-units reservation
                                    :created-at now
                                    :updated-at now}
                             (preview-request? request)
@@ -435,8 +460,7 @@
                                      (assoc-in [:admission :daily day]
                                                (inc submitted))
                                      (assoc-in [:admission :monthly month]
-                                               (+ reserved
-                                                  render-reservation-minor-units)))))
+                                               (+ reserved reservation)))))
                   {:created? true :job job}))))
           result (with-member-action member-directory
                    (member-identity request)
@@ -574,18 +598,26 @@
                                           {:type ::invalid-transition
                                            :state (:state job)})))
                   (let [reserved (get-in @state [:admission :monthly month] 0)
+                        reservation (if (= :preview (:operation-kind job))
+                                      preview-reservation-minor-units
+                                      render-reservation-minor-units)
                         _ (when (>= (count (filter #(active-lease? now %)
                                                    (vals (:jobs @state))))
                                     max-active-leases)
                             (throw (errors/raise! "All render leases are held"
                                                   {:type ::capacity-exhausted})))
-                        _ (when (> (+ reserved render-reservation-minor-units)
+                        _ (when (> (+ reserved reservation)
                                    monthly-budget-minor-units)
                             (throw (errors/raise! "Monthly compute budget is exhausted"
                                                   {:type ::monthly-budget-exhausted})))
                         updated (-> job
                                     (assoc :state :queued
                                            :attempt (inc (:attempt job))
+                                           :reservation-kind
+                                           (if (= :preview (:operation-kind job))
+                                             :preview
+                                             :render)
+                                           :reservation-minor-units reservation
                                            :updated-at now)
                                     (dissoc :lease :execution :failure
                                             :failure-diagnostics :output))]
@@ -594,8 +626,7 @@
                              (-> current
                                  (assoc-in [:jobs job-id] updated)
                                  (assoc-in [:admission :monthly month]
-                                           (+ reserved
-                                              render-reservation-minor-units)))))
+                                           (+ reserved reservation)))))
                     updated)))))]
       (swap! enqueued conj {:job-id job-id :attempt (:attempt retried)})
       (job-resource retried)))
@@ -712,14 +743,18 @@
 (defn in-memory-system
   ([] (in-memory-system {}))
   ([{:keys [clock launcher worker daily-limit monthly-budget-minor-units
-            render-reservation-minor-units member-directory]
+            preview-reservation-minor-units render-reservation-minor-units
+            member-directory]
      :or {clock (Clock/systemUTC)
           daily-limit max-daily-submissions
           monthly-budget-minor-units
           default-monthly-budget-minor-units
+          preview-reservation-minor-units
+          default-preview-reservation-minor-units
           render-reservation-minor-units
           default-render-reservation-minor-units}}]
    (validate-admission-limits! daily-limit monthly-budget-minor-units
+                               preview-reservation-minor-units
                                render-reservation-minor-units)
    (let [state (atom {:jobs {} :idempotency {}})
          enqueued (atom [])
@@ -732,7 +767,9 @@
                         (throw (errors/raise! "No render worker configured" {})))))]
      {:service (->InMemoryJobService state enqueued launcher worker clock
                                      daily-limit monthly-budget-minor-units
-                                     render-reservation-minor-units member-directory)
+                                     preview-reservation-minor-units
+                                     render-reservation-minor-units
+                                     member-directory)
       :state state
       :enqueued enqueued
       :launched launched

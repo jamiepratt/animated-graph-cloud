@@ -77,17 +77,27 @@
                       display-time-zone))))
 
 (defn readout-time-text
-  "Formats the local video clock followed by section elapsed time."
-  [^Instant section-start-at ^ZoneId display-time-zone seconds]
-  (str (local-clock-text section-start-at display-time-zone seconds)
-       "   "
-       (elapsed-text seconds)))
+  "Formats local video time and includes section elapsed only without a timer."
+  ([^Instant section-start-at ^ZoneId display-time-zone seconds]
+   (readout-time-text section-start-at display-time-zone seconds nil))
+  ([^Instant section-start-at ^ZoneId display-time-zone seconds timer]
+   (cond-> (local-clock-text section-start-at display-time-zone seconds)
+     (nil? timer) (str "   " (elapsed-text seconds)))))
 
-(defn- timer-text [{:keys [start-seconds end-seconds]} seconds]
-  (elapsed-text
-   (-> (- seconds start-seconds)
-       (max 0.0)
-       (min (- end-seconds start-seconds)))))
+(defn timer-readout-text
+  "Formats a timer before, during, and after its configured interval."
+  [{:keys [start-seconds end-seconds]} seconds]
+  (cond
+    (< seconds start-seconds)
+    (str "-" (elapsed-text (Math/ceil (- start-seconds seconds))))
+
+    (< seconds end-seconds)
+    (elapsed-text (- seconds start-seconds))
+
+    :else
+    (str (elapsed-text (- end-seconds start-seconds))
+         " + "
+         (elapsed-text (- seconds end-seconds)))))
 
 (defn- color-with-alpha [[red green blue] alpha]
   (Color. (int red) (int green) (int blue) (int alpha)))
@@ -316,23 +326,102 @@
                         (- x label-gap (.stringWidth metrics title))))
                  (int (+ graph-top (.getAscent metrics))))))
 
-(defn- draw-x-axis! [graphics graph-left graph-right graph-bottom duration-seconds font]
+(defn axis-time-text
+  "Formats a signed whole-second x-axis value without a positive prefix."
+  [seconds]
+  (str (when (neg? seconds) "-")
+       (elapsed-text (Math/abs (double seconds)))))
+
+(defn- tick-multiple-seconds [seconds]
+  (let [seconds (Math/abs (long seconds))]
+    (cond
+      (zero? (rem seconds 60)) 60
+      (zero? (rem seconds 30)) 30
+      (zero? (rem seconds 15)) 15
+      :else 5)))
+
+(defn x-axis-ticks
+  "Returns visible five-second ticks relative to section or timer start."
+  [duration-seconds timer]
+  (let [origin-seconds (double (or (:start-seconds timer) 0.0))
+        first-tick (* 5 (long (Math/ceil (/ (- origin-seconds) 5.0))))
+        last-tick (* 5 (long (Math/floor
+                              (/ (- (double duration-seconds) origin-seconds)
+                                 5.0))))]
+    (mapv (fn [relative-seconds]
+            {:section-seconds (+ origin-seconds relative-seconds)
+             :relative-seconds relative-seconds
+             :tick-multiple-seconds (tick-multiple-seconds relative-seconds)})
+          (range first-tick (inc last-tick) 5))))
+
+(defn- x-axis-tick-size [font tick-multiple-seconds]
+  (let [base (max 2 (int (Math/round (* (.getSize font) 0.22))))
+        scale ({5 1.0, 15 1.5, 30 2.0, 60 2.5} tick-multiple-seconds)]
+    (int (Math/round (* base scale)))))
+
+(defn- label-placement [font font-render-context x label]
+  (let [bounds (.getStringBounds font label font-render-context)
+        label-x (int (Math/round (- x (.getCenterX bounds))))]
+    {:label label
+     :label-x label-x
+     :label-left (+ label-x (.getMinX bounds))
+     :label-right (+ label-x (.getMaxX bounds))}))
+
+(defn- label-cadence-fits? [ticks font font-render-context cadence]
+  (let [labels (->> ticks
+                    (filter #(zero? (rem (:relative-seconds %) cadence)))
+                    (map #(label-placement font font-render-context (:x %)
+                                           (axis-time-text
+                                            (:relative-seconds %)))))
+        minimum-gap (.getSize font)]
+    (every? (fn [[left right]]
+              (<= (+ (:label-right left) minimum-gap)
+                  (:label-left right)))
+            (partition 2 1 labels))))
+
+(defn x-axis-layout
+  "Lays out timer-origin ticks and the densest labels fitting actual font bounds."
+  [graphics graph-left graph-right duration-seconds timer font]
+  (let [font-render-context (.getFontRenderContext graphics)
+        ticks (mapv (fn [tick]
+                      (assoc tick
+                             :x (x-for graph-left graph-right duration-seconds
+                                       (:section-seconds tick))
+                             :tick-size
+                             (x-axis-tick-size
+                              font (:tick-multiple-seconds tick))))
+                    (x-axis-ticks duration-seconds timer))
+        cadence (or (some #(when (label-cadence-fits?
+                                  ticks font font-render-context %)
+                             %)
+                          [5 15 30 60])
+                    60)]
+    {:label-cadence-seconds cadence
+     :ticks
+     (mapv (fn [tick]
+             (if (zero? (rem (:relative-seconds tick) cadence))
+               (merge tick
+                      (label-placement font font-render-context (:x tick)
+                                       (axis-time-text
+                                        (:relative-seconds tick))))
+               tick))
+           ticks)}))
+
+(defn- draw-x-axis!
+  [graphics graph-left graph-right graph-bottom duration-seconds timer font]
   (let [metrics (.getFontMetrics graphics font)
-        tick-count (max 2 (min 8 (inc (long duration-seconds))))
-        tick-size (max 2 (int (Math/round (* (.getSize font) 0.22))))
+        {:keys [ticks]} (x-axis-layout graphics graph-left graph-right
+                                       duration-seconds timer font)
         label-gap (max 3 (int (Math/round (* (.getSize font) 0.30))))]
     (.setFont graphics font)
     (.setColor graphics (color-with-alpha [255 255 255] 210))
     (.setStroke graphics (BasicStroke. 1.0))
     (.drawLine graphics graph-left graph-bottom graph-right graph-bottom)
-    (doseq [index (range tick-count)]
-      (let [ratio (/ index (double (dec tick-count)))
-            x (int (Math/round (+ graph-left (* ratio (- graph-right graph-left)))))
-            label (elapsed-text (* ratio duration-seconds))
-            label-width (.stringWidth metrics label)]
-        (.drawLine graphics x graph-bottom x (+ graph-bottom tick-size))
-        (.drawString graphics label
-                     (int (- x (/ label-width 2)))
+    (doseq [{:keys [x tick-size label label-x]} ticks]
+      (.drawLine graphics x graph-bottom x (+ graph-bottom tick-size))
+      (when label
+        (.drawString graphics ^String label
+                     (int label-x)
                      (int (+ graph-bottom (.getAscent metrics) label-gap)))))))
 
 (defn- text-parts-width [graphics font parts]
@@ -347,7 +436,8 @@
                                     seconds)
         parts (cond-> [[(readout-time-text (:section-start-at layout)
                                            (:display-time-zone layout)
-                                           seconds)
+                                           seconds
+                                           (:timer layout))
                         [255 255 255]]
                        ["   HR " [255 255 255]]
                        [(format "%.0f" heart-rate) heart-rate-color]]
@@ -360,7 +450,8 @@
                         (:color spo2-contract)]])
                 (:timer layout)
                 (conj ["   Timer " [255 255 255]]
-                      [(timer-text (:timer layout) seconds) [255 255 255]]))
+                      [(timer-readout-text (:timer layout) seconds)
+                       [255 255 255]]))
         total-width (text-parts-width graphics font parts)
         metrics (.getFontMetrics graphics font)
         baseline (max (.getAscent metrics)
@@ -445,8 +536,8 @@
       (when spo2-samples
         (draw-y-axis! g spo2-axis graph-right :right graph-top graph-bottom
                       (:color spo2-contract) "SpO2 (%)" axis-font))
-      (draw-x-axis! g graph-left graph-right graph-bottom (:duration-seconds layout)
-                    axis-font)
+      (draw-x-axis! g graph-left graph-right graph-bottom
+                    (:duration-seconds layout) (:timer layout) axis-font)
       (draw-future-aware-series! g
                                  (value-key-samples heart-rate-samples :heart-rate)
                                  heart-rate-y

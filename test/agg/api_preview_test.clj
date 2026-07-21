@@ -81,6 +81,43 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest preview-api-and-durable-submit-share-the-explicit-total-exposure
+  (let [auth-system (auth-system nil)
+        owner {:subject "google-subject-1" :email "owner@example.com"}
+        owner-session (auth/issue-session auth-system owner)
+        owner-csrf (auth/issue-csrf-token auth-system owner)
+        system (jobs/in-memory-system
+                {:monthly-budget-minor-units 35
+                 :preview-reservation-minor-units 10
+                 :render-reservation-minor-units 25})
+        port (available-port)
+        server (api/start! port {:auth-system auth-system
+                                 :job-service (:service system)
+                                 :preview-job-service (:service system)})
+        headers {"Content-Type" "application/json"
+                 "Cookie" (str "agg_session=" owner-session)
+                 "X-CSRF-Token" owner-csrf}
+        post (fn [path idempotency-key]
+               (test-http/send-string!
+                :post (str "http://127.0.0.1:" port path)
+                (json/write-str (fixture/render-request))
+                (assoc headers "Idempotency-Key" idempotency-key)))]
+    (try
+      (let [preview (post "/v1/preview" "bounded-preview")
+            replay (post "/v1/preview" "bounded-preview")
+            submit (post "/v1/jobs" "bounded-submit")
+            second-preview (post "/v1/preview" "bounded-preview-2")]
+        (is (= 202 (.statusCode preview)))
+        (is (= 202 (.statusCode replay)))
+        (is (= (:id (json/read-str (.body preview) :key-fn keyword))
+               (:id (json/read-str (.body replay) :key-fn keyword))))
+        (is (= 202 (.statusCode submit)))
+        (is (= 429 (.statusCode second-preview)))
+        (is (= {:error "monthly_budget_exhausted"}
+               (json/read-str (.body second-preview) :key-fn keyword))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest durable-submit-is-not-blocked-by-failed-preview
   (let [auth-system (auth-system nil)
         owner {:subject "google-subject-1" :email "owner@example.com"}

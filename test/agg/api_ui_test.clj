@@ -684,6 +684,11 @@
                        "id=\"submit-button\" class=\"primary\" type=\"submit\">Submit render"))
     (is (str/includes? page "id=\"preview-submit-status\""))
     (is (str/includes? page "Preview is optional"))
+    (doseq [disclosure ["Each Preview attempt reserves up to PLN 1.25"
+                        "Preview plus one Submit reserves up to PLN 2.50"
+                        "Reservations remain counted after success, failure, cancellation, or expiry"
+                        "Retrying Preview reserves another PLN 1.25"]]
+      (is (str/includes? page disclosure)))
     (is (str/includes? page
                        "class=\"button-spinner\" aria-hidden=\"true\" hidden"))
     (is (str/includes?
@@ -765,7 +770,7 @@
     (is (false? (get-in outcome [:platformFailure :submitDisabled])))
     (is (not (str/includes? (get-in outcome [:platformFailure :text]) "504")))
     (is (str/includes? (get-in outcome [:platformFailure :text])
-                       "No durable render was submitted or charged"))
+                       "reservation remains counted"))
     (is (false? (get-in outcome [:gatewayFailure :disabled])))
     (is (not (str/includes? (get-in outcome [:gatewayFailure :text]) "502")))
     (is (= false (get-in outcome [:connectionLoss :disabled])))
@@ -795,7 +800,7 @@
       (is (not (str/includes? (get-in outcome [:terminalFailure :text])
                               developer-detail))))
     (is (str/includes? (get-in outcome [:terminalFailure :text])
-                       "No durable render was submitted or charged"))
+                       "reservation remains counted"))
     (is (= {:text "Preview ready."
             :disabled false
             :submitDisabled false
@@ -835,7 +840,7 @@
         outcome)
     (is (= "Preview failed. See details below." (:status outcome)) outcome)
     (is (str/includes? (:text outcome)
-                       "No durable render was submitted or charged"))
+                       "reservation remains counted"))
     (doseq [developer-detail ["preview_rendering" "Source content"
                               "worker_failed" "Failure code" "Request ID"]]
       (is (not (str/includes? (:text outcome) developer-detail)) outcome))))
@@ -1048,7 +1053,7 @@
       (is (not (str/includes? failed detail))))
     (is (str/includes? failed "Preview did not finish"))
     (is (str/includes? failed
-                       "No durable render was submitted or charged"))
+                       "reservation remains counted"))
     (is (str/includes? failed "retry with the Preview button"))
     (is (str/includes? empty "No preview moments"))))
 

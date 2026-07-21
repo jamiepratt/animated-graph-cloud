@@ -746,7 +746,13 @@ components:
             endAt:
               allOf: [{$ref: "#/components/schemas/Instant"}]
               description: Timer end, exclusive, after startAt and no later than sectionEndAt.
-          description: Optional elapsed timer interval.
+          description: |
+            Optional elapsed timer interval. The rendered readout counts down
+            negatively before startAt, shows elapsed timer time from startAt,
+            and at and after endAt shows the fixed timer duration plus elapsed
+            time since the end. When present, this timer replaces section
+            elapsed in the readout and makes x-axis values relative to startAt.
+            Axis ticks remain aligned to visible five-second timer multiples.
         watermark:
           type: object
           additionalProperties: false

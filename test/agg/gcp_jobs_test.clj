@@ -366,6 +366,7 @@
                                       :queue queue
                                       :clock clock
                                       :monthly-budget-minor-units monthly-budget-minor-units
+                                      :preview-reservation-minor-units 10
                                       :render-reservation-minor-units 25}))
           exception-type (fn [f]
                            (try
@@ -398,19 +399,40 @@
         (doseq [collection ["jobs" "job-idempotency" "orchestration"]]
           (.get (.recursiveDelete firestore (.collection firestore collection))))
         (reset! enqueued [])
-        (let [budget-service (service 50)]
-          (let [first-job (jobs/submit-job! budget-service "budget-load-1"
-                                            (fixture/render-request))
-                second-job (jobs/submit-job! budget-service "budget-load-2"
+        (let [budget-service (service 35)
+              preview-request (assoc (fixture/render-request)
+                                     :previewOperation
+                                     jobs/preview-operation-version)]
+          (let [first-job (jobs/submit-job! budget-service "budget-load-preview"
+                                            preview-request)
+                replay (jobs/submit-job! budget-service "budget-load-preview"
+                                         preview-request)
+                second-job (jobs/submit-job! budget-service "budget-load-render"
                                              (fixture/render-request))
+                preview-snapshot
+                (.get (.get (.document (.collection firestore "jobs")
+                                       (get-in first-job [:job :id]))))
+                render-snapshot
+                (.get (.get (.document (.collection firestore "jobs")
+                                       (get-in second-job [:job :id]))))
                 budget-snapshot
                 (.get (.get (.document (.collection firestore "orchestration")
                                        "budget-2026-07")))]
             (is (:created? first-job))
+            (is (false? (:created? replay)))
             (is (:created? second-job))
-            (is (= 50 (.getLong budget-snapshot "reservedMinorUnits")))
-            (is (= 50 (.getLong budget-snapshot "limitMinorUnits")))
-            (is (= 25 (.getLong budget-snapshot "reservationMinorUnits")))
+            (is (= "preview" (.getString preview-snapshot "reservationKind")))
+            (is (= 10 (.getLong preview-snapshot "reservationMinorUnits")))
+            (is (= "render" (.getString render-snapshot "reservationKind")))
+            (is (= 25 (.getLong render-snapshot "reservationMinorUnits")))
+            (is (= 35 (.getLong budget-snapshot "reservedMinorUnits")))
+            (is (= 35 (.getLong budget-snapshot "limitMinorUnits")))
+            (is (= 10 (.getLong budget-snapshot
+                                "previewReservationMinorUnits")))
+            (is (= 25 (.getLong budget-snapshot
+                                "renderReservationMinorUnits")))
+            (is (= 35 (.getLong budget-snapshot
+                                "previewPlusRenderExposureMinorUnits")))
             (is (= "PLN" (.getString budget-snapshot "currency")))
             (jobs/cancel-job! budget-service (get-in first-job [:job :id]))
             (is (= ::jobs/monthly-budget-exhausted
@@ -419,9 +441,10 @@
                                       (get-in first-job [:job :id]))))))
           (is (= ::jobs/monthly-budget-exhausted
                  (exception-type
-                  #(jobs/submit-job! budget-service "budget-load-3"
-                                     (fixture/render-request)))))
-          (is (= 2 (count @enqueued))))
+                  #(jobs/submit-job! budget-service "budget-load-preview-2"
+                                     preview-request))))
+          (is (= 3 (count @enqueued))
+              "idempotent task redelivery is harmless and reserves nothing"))
         (finally
           (.close firestore))))
     (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
