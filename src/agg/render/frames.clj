@@ -201,8 +201,9 @@
      :value (+ (:value previous)
                (* ratio (- (:value current) (:value previous))))}))
 
-(defn- draw-future-aware-series! [graphics samples y-for seconds color stroke]
-  (let [future-color (color-with-alpha color 128)
+(defn- draw-future-aware-series!
+  [graphics samples y-for seconds color stroke future-alpha]
+  (let [future-color (color-with-alpha color future-alpha)
         present-color (color-with-alpha color 255)]
     (.setStroke graphics stroke)
     (doseq [[previous current] (partition 2 1 samples)]
@@ -340,7 +341,13 @@
                                    graph-left graph-right)
         spo2-samples (when (seq (:spo2 render-spec))
                        (series-samples render-spec :spo2 :spo2
-                                       graph-left graph-right))]
+                                       graph-left graph-right))
+        future-trace-alpha
+        (int (Math/round (* 255.0
+                            (/ (double (get render-spec
+                                            :future-trace-opacity-percent
+                                            25))
+                               100.0))))]
     {:width width
      :height height
      :duration-seconds duration-seconds
@@ -352,6 +359,7 @@
      :axis-font axis-font
      :readout-font readout-font
      :heart-rate-samples hr-samples
+     :future-trace-alpha future-trace-alpha
      :spo2-samples spo2-samples
      :heart-rate-axis (axis-bounds hr-samples
                                    :heart-rate
@@ -367,7 +375,7 @@
   (let [g (.createGraphics image)
         {:keys [width height graph-left graph-right graph-top graph-bottom
                 axis-font heart-rate-samples spo2-samples
-                heart-rate-axis spo2-axis watermark]} layout
+                heart-rate-axis spo2-axis watermark future-trace-alpha]} layout
         heart-rate-y (fn [value]
                        (y-for heart-rate-axis graph-top graph-bottom value))
         spo2-y (fn [value]
@@ -393,14 +401,16 @@
                                  heart-rate-y
                                  seconds
                                  heart-rate-color
-                                 stroke)
+                                 stroke
+                                 future-trace-alpha)
       (when spo2-samples
         (draw-future-aware-series! g
                                    (value-key-samples spo2-samples :spo2)
                                    spo2-y
                                    seconds
                                    (:color spo2-contract)
-                                   stroke))
+                                   stroke
+                                   128))
       (let [heart-rate-seconds (clamp seconds 0.0 (:duration-seconds layout))
             heart-rate-point {:x (x-for graph-left graph-right
                                         (:duration-seconds layout)

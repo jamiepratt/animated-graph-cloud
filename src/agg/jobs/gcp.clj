@@ -630,8 +630,9 @@
   lifecycle/JobService
   (submit-job! [_ idempotency-key request]
     (require-idempotency-key! idempotency-key)
-    (contract/prepare request)
-    (let [job-id (str (UUID/randomUUID))
+    (let [request (contract/normalize-request request)
+          _ (contract/prepare request)
+          job-id (str (UUID/randomUUID))
           digest (lifecycle/request-digest request)
           request-object (lifecycle/save-request! request-store job-id request)
           now (now-ms clock)

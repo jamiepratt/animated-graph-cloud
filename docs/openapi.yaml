@@ -699,6 +699,12 @@ components:
           type: string
           enum: [1080p25, 2.7k25]
           description: 1080p25 is 1920×1080 at 25 fps for up to 8 minutes; 2.7k25 is 2704×1520 at 25 fps for up to 4 minutes.
+        futureTraceOpacityPercent:
+          type: number
+          minimum: 0
+          maximum: 100
+          default: 25
+          description: Opacity percentage for the not-yet-reached heart-rate trace. Zero hides it; 100 makes it fully opaque.
         telemetrySyncAt:
           allOf: [{$ref: "#/components/schemas/Instant"}]
           description: Timestamp in telemetry at the camera synchronization moment.
@@ -1066,6 +1072,9 @@ components:
             - token_not_found
             - admin_required
         retryable: {type: boolean}
+        field:
+          type: string
+          enum: [futureTraceOpacityPercent]
         recoveryPath: {type: string, const: "/v1/auth/login/start?recovery=true"}
     SynchronousOverlayDurationExceeded:
       type: object

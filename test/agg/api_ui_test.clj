@@ -486,6 +486,33 @@
      "Browser-level telemetry file regression requires Chrome or Chromium"
      html)))
 
+(defn- future-trace-opacity-browser-outcome [page]
+  (let [request (fixture/render-request)
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{"
+         "const raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),opacity=document.getElementById('future-trace-opacity-percent'),jsonStatus=document.getElementById('json-status'),formStatus=document.getElementById('form-status'),preview=document.getElementById('preview-button'),base="
+         (json/write-str request) ";"
+         "const bounds={type:opacity.type,min:opacity.min,max:opacity.max,defaultValue:Number(opacity.value)};"
+         "raw.value=JSON.stringify(base);apply.click();const omitted={form:Number(opacity.value),json:JSON.parse(raw.value).futureTraceOpacityPercent};"
+         "raw.value=JSON.stringify({...base,futureTraceOpacityPercent:100});apply.click();const applied={form:Number(opacity.value),json:JSON.parse(raw.value).futureTraceOpacityPercent};"
+         "opacity.value='0';opacity.dispatchEvent(new Event('input',{bubbles:true}));const generated=JSON.parse(raw.value).futureTraceOpacityPercent;"
+         "raw.value=JSON.stringify({...base,futureTraceOpacityPercent:'25'});apply.click();const nonNumeric=jsonStatus.textContent;"
+         "raw.value=JSON.stringify({...base,futureTraceOpacityPercent:101});apply.click();const outOfRange=jsonStatus.textContent;"
+         "opacity.value='';const detail={elt:preview,parameters:{},headers:{}};const event=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail});preview.dispatchEvent(event);const blank={prevented:event.defaultPrevented,message:formStatus.textContent};"
+         "outcome={bounds,omitted,applied,generated,nonNumeric,outOfRange,blank};"
+         "}catch(error){outcome={error:error.message};}"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-future-opacity-browser-"
+     "Future trace opacity form regression requires Chrome or Chromium"
+     html)))
+
 (deftest public-product-and-legal-pages-identify-alpha-compose
   (let [port (available-port)
         {:keys [auth-system]} (fixture)
@@ -570,6 +597,40 @@
            (str/index-of page step-3)))
     (is (not (re-find #"<div class=\"step\">Step [^<]+</div><h2>Optional source video</h2>"
                       page)))))
+
+(deftest compose-page-exposes-bounded-future-trace-opacity-control
+  (let [page (ui/page {:user {:email "member@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})]
+    (is (str/includes? page "Future trace opacity (%)"))
+    (is (str/includes?
+         page
+         "id=\"future-trace-opacity-percent\" type=\"number\" min=\"0\" max=\"100\""))
+    (is (str/includes? page "value=\"25\""))
+    (is (str/includes? page "<code>futureTraceOpacityPercent</code>"))))
+
+(deftest future-trace-opacity-round-trips-and-validates-in-a-browser
+  (let [outcome
+        (future-trace-opacity-browser-outcome
+         (ui/page {:user {:email "member@example.com" :role :member}
+                   :csrf "csrf-test"
+                   :tokens []
+                   :members []
+                   :logs-enabled? false}))]
+    (is (nil? (:error outcome)) outcome)
+    (is (= {:type "number" :min "0" :max "100" :defaultValue 25}
+           (:bounds outcome)))
+    (is (= {:form 25 :json 25} (:omitted outcome)))
+    (is (= {:form 100 :json 100} (:applied outcome)))
+    (is (= 0 (:generated outcome)))
+    (doseq [message [(:nonNumeric outcome) (:outOfRange outcome)]]
+      (is (str/includes? message "Request.futureTraceOpacityPercent"))
+      (is (str/includes? message "number from 0 through 100")))
+    (is (true? (get-in outcome [:blank :prevented])))
+    (is (str/includes? (get-in outcome [:blank :message])
+                       "Future trace opacity"))))
 
 (deftest compose-submit-starts-enabled-with-preview-available
   (let [page (ui/page {:user {:email "member@example.com" :role :member}

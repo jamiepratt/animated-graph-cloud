@@ -129,9 +129,17 @@
            {:timestampColumns (:timestamp-columns expected-schema)
             :valueColumns (:value-columns expected-schema)})))
 
+(defn- public-request-field [error]
+  (some (fn [entry]
+          (let [field (:field entry)]
+            (when (contains? #{"futureTraceOpacityPercent"} field)
+              field)))
+        (error-data error)))
+
 (defn- preview-diagnostics [error]
   (let [data (error-data error)
         telemetry-failure (contract/telemetry-failure error)
+        field (public-request-field error)
         failure-code (some (fn [entry]
                              (let [value (:failure-code entry)]
                                (when (safe-failure-code? value) value)))
@@ -161,6 +169,7 @@
                              (when (safe-preview-timing? value) value)))
                          data)
         diagnostics (cond-> {}
+                      field (assoc :field field)
                       failure-code (assoc :failureCode failure-code)
                       line (assoc :line line)
                       stage (assoc :stage stage)
@@ -1559,8 +1568,11 @@
                           (and (telemetry-api-path? path)
                                (contract/telemetry-failure error)))
                     (respond-preview-failure! dependencies exchange request-id error)
-                    (respond! exchange 400 "application/json; charset=utf-8"
-                              "{\"error\":\"invalid_request\"}"))
+                    (if-let [field (public-request-field error)]
+                      (respond-json! exchange 400
+                                     {:error "invalid_request" :field field})
+                      (respond! exchange 400 "application/json; charset=utf-8"
+                                "{\"error\":\"invalid_request\"}")))
 
                   ::invalid-upload-request
                   (respond-json! exchange 400 {:error "invalid_upload_request"})

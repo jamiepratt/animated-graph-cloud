@@ -716,6 +716,26 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest preview-opacity-validation-identifies-the-public-request-field
+  (let [port (available-port)
+        server (api/start! port {})]
+    (try
+      (doseq [invalid [nil "25" -0.1 100.1]]
+        (let [response (test-http/send-string!
+                        :post
+                        (str "http://127.0.0.1:" port "/v1/preview")
+                        (json/write-str
+                         (assoc (fixture/render-request)
+                                :futureTraceOpacityPercent invalid))
+                        {"Content-Type" "application/json"})
+              body (json/read-str (.body response) :key-fn keyword)]
+          (is (= 400 (.statusCode response)) (pr-str invalid))
+          (is (= "invalid_request" (:error body)) (pr-str invalid))
+          (is (= "futureTraceOpacityPercent" (:field body))
+              (pr-str invalid))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest polar-summary-export-explains-the-timestamped-csv-contract
   (let [events (atom [])
         port (available-port)

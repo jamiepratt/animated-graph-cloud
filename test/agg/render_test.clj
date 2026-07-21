@@ -149,6 +149,25 @@
        :min-y min-y
        :max-y max-y})))
 
+(defn- heart-rate-alphas [^bytes rgba width height frame-index x-predicate]
+  (let [frame-size (* width height 4)
+        offset (* frame-index frame-size)]
+    (->> (range (* width height))
+         (keep (fn [pixel]
+                 (let [x (rem pixel width)
+                       y (quot pixel width)
+                       byte-offset (+ offset (* pixel 4))
+                       color (mapv #(bit-and 0xff (aget rgba (+ byte-offset %)))
+                                   (range 4))
+                       [red green blue alpha] color]
+                   (when (and (x-predicate x)
+                              (< 15 y (- height 10))
+                              (= 255 red)
+                              (<= 50 green 60)
+                              (<= 75 blue 90))
+                     alpha))))
+         set)))
+
 (deftest presets-lock-the-spike-matrix
   (is (= {:id "1080p25"
           :width 1920
@@ -923,6 +942,7 @@
                      {:telemetryFormat "polar-csv"
                       :telemetry telemetry
                       :preset "1080p25"
+                      :futureTraceOpacityPercent 50
                       :telemetrySyncAt "2026-07-17T10:00:00Z"
                       :cameraSyncAt "2026-07-17T09:00:00Z"
                       :sectionStartAt "2026-07-17T09:00:00Z"
@@ -1028,7 +1048,7 @@
         pixels (partition 4 rgba)
         unsigned (fn [pixel] (mapv #(bit-and 0xff %) pixel))
         colors (map unsigned pixels)]
-    (testing "the graph has opaque current pixels and half-alpha future pixels"
+    (testing "the graph has opaque current pixels and subdued future pixels"
       (is (some #(= [255 55 82 255] %) colors))
       (is (some #(and (= [255 55 82] (subvec % 0 3))
                       (pos? (last %))
@@ -1038,6 +1058,55 @@
       (is (some #(= [255 255 255 255] %) colors)))
     (testing "the graph remains transparent outside its drawn content"
       (is (some #(= [0 0 0 0] %) colors)))))
+
+(deftest configured-future-trace-opacity-controls-only-the-unreached-heart-rate-trace
+  (let [width 160
+        height 90
+        midpoint (quot width 2)
+        base-spec {:width width
+                   :height height
+                   :fps 1
+                   :duration-seconds 2
+                   :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                               {:seconds 2.0 :heart-rate 140.0}]}]
+    (doseq [[percent expected-alpha] [[nil 64] [0 nil] [25 64] [100 255]]]
+      (let [{:keys [rgba]}
+            (streamed-rgba
+             (cond-> base-spec
+               (some? percent)
+               (assoc :future-trace-opacity-percent percent)))
+            reached-alphas (heart-rate-alphas rgba width height 1
+                                              #(< 20 % (- midpoint 12)))
+            future-alphas (heart-rate-alphas rgba width height 1
+                                             #(> % (+ midpoint 12)))]
+        (is (contains? reached-alphas 255)
+            (str "reached trace at " percent "%"))
+        (if expected-alpha
+          (is (contains? future-alphas expected-alpha)
+              (str "future trace at " percent "%"))
+          (is (empty? future-alphas)
+              "0% hides the future trace"))))))
+
+(deftest preview-frames-use-the-same-future-trace-opacity
+  (let [base-spec {:width 160
+                   :height 90
+                   :fps 1
+                   :duration-seconds 2
+                   :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                               {:seconds 2.0 :heart-rate 140.0}]}
+        preview-hash
+        (fn [percent]
+          (let [output (ByteArrayOutputStream.)]
+            (frames/render-frame-png!
+             frames/java2d-frame-renderer
+             (cond-> base-spec
+               (some? percent)
+               (assoc :future-trace-opacity-percent percent))
+             1 output)
+            (sha256-bytes (.toByteArray output))))
+        hashes (mapv preview-hash [0 25 100])]
+    (is (= 3 (count (set hashes))))
+    (is (= (preview-hash nil) (preview-hash 25)))))
 
 (deftest production-frame-dimensions-keep-the-trace-near-every-edge
   (doseq [preset-id ["1080p25" "2.7k25"]]
