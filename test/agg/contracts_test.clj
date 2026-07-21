@@ -35,6 +35,28 @@
             {:seconds 2.0 :heart-rate 128.0}]
            (:telemetry prepared)))))
 
+(deftest omitted-future-trace-opacity-defaults-in-the-render-contract
+  (is (= 25
+         (:future-trace-opacity-percent
+          (contract/prepare (valid-request))))))
+
+(deftest future-trace-opacity-accepts-percent-boundaries-and-rejects-invalid-values
+  (doseq [percent [0 25 100 37.5]]
+    (is (= percent
+           (:future-trace-opacity-percent
+            (contract/prepare
+             (assoc (valid-request) :futureTraceOpacityPercent percent))))))
+  (doseq [invalid [nil "25" -0.1 100.1]]
+    (try
+      (contract/prepare
+       (assoc (valid-request) :futureTraceOpacityPercent invalid))
+      (is false (str "accepted invalid opacity " (pr-str invalid)))
+      (catch clojure.lang.ExceptionInfo error
+        (is (= ::contract/invalid-future-trace-opacity
+               (:type (ex-data error))))
+        (is (= "futureTraceOpacityPercent"
+               (:field (ex-data error))))))))
+
 (deftest polar-sensor-gap-zeros-after-the-requested-window-are-ignored
   (let [prepared (contract/prepare
                   (assoc (valid-request)
@@ -213,6 +235,14 @@
     (is (not (str/includes? openapi "Preview-Operation-Id")))
     (is (not (str/includes? openapi "PreviewGateError:")))
     (is (not (str/includes? openapi "receiptExpiresAt:")))))
+
+(deftest openapi-documents-future-trace-opacity-units-range-and-default
+  (let [openapi (slurp "docs/openapi.yaml")]
+    (is (str/includes? openapi "futureTraceOpacityPercent:"))
+    (is (re-find #"(?s)futureTraceOpacityPercent:\s+type: number\s+minimum: 0\s+maximum: 100\s+default: 25"
+                 openapi))
+    (is (str/includes? openapi
+                       "Opacity percentage for the not-yet-reached heart-rate trace"))))
 
 (deftest specific-telemetry-causes-win-over-parser-wrappers
   (let [specific (ex-info "private telemetry value"

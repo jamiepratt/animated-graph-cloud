@@ -133,6 +133,39 @@
     (is (nil? (:operationKind render)))
     (is (= (* 24 60 60) jobs/preview-retention-seconds))))
 
+(deftest future-trace-opacity-is-normalized-before-durable-storage-and-retry
+  (doseq [[requested expected] [[::omitted 25] [0 0] [100 100]]]
+    (let [received-request (promise)
+          worker (reify jobs/RenderWorker
+                   (perform-render! [_ _job-id request]
+                     (deliver received-request request)
+                     {:output-bytes 10
+                      :object "jobs/normalized/output.mov"}))
+          system (jobs/in-memory-system {:worker worker})
+          service (:service system)
+          request (cond-> (render-request)
+                    (not= ::omitted requested)
+                    (assoc :futureTraceOpacityPercent requested))
+          job-id (get-in (jobs/submit-job! service
+                                           (str "opacity-" requested)
+                                           request)
+                         [:job :id])]
+      (jobs/cancel-job! service job-id)
+      (jobs/retry-job! service job-id)
+      (jobs/dispatch-job! service job-id)
+      (jobs/run-job! service job-id)
+      (is (= expected (:futureTraceOpacityPercent @received-request))
+          (str "requested " requested)))))
+
+(deftest render-request-digest-normalizes-omitted-future-opacity
+  (let [request (render-request)]
+    (is (= (jobs/render-request-digest request)
+           (jobs/render-request-digest
+            (assoc request :futureTraceOpacityPercent 25))))
+    (is (not= (jobs/render-request-digest request)
+              (jobs/render-request-digest
+               (assoc request :futureTraceOpacityPercent 0))))))
+
 (deftest member-cleanup-cancels-only-its-generation-and-legacy-jobs
   (let [service (:service (jobs/in-memory-system))
         request (assoc (render-request)
@@ -438,7 +471,25 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
-(deftest job-submission-stores-the-original-request
+(deftest invalid-job-opacity-identifies-the-public-request-field
+  (let [port (available-port)
+        system (jobs/in-memory-system)
+        server (start-api! port {:job-service (:service system)})]
+    (try
+      (let [response (request! port :post "/v1/jobs"
+                               (assoc (render-request)
+                                      :futureTraceOpacityPercent 101)
+                               {"Content-Type" "application/json"
+                                "Idempotency-Key" "invalid-opacity"})]
+        (is (= 400 (.statusCode response)))
+        (is (= {:error "invalid_request"
+                :field "futureTraceOpacityPercent"}
+               (response-json response)))
+        (is (empty? @(:enqueued system))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest job-submission-stores-the-normalized-request
   (let [port (available-port)
         received-request (promise)
         worker (reify jobs/RenderWorker
@@ -458,7 +509,8 @@
         (request! port :post (str "/internal/v1/jobs/" job-id "/dispatch") {}
                   {"X-CloudTasks-TaskName" "tasks/original-render"})
         (jobs/run-job! service job-id)
-        (is (= submitted-request @received-request)))
+        (is (= (assoc submitted-request :futureTraceOpacityPercent 25)
+               @received-request)))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

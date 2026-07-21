@@ -260,7 +260,8 @@
 
 (defn render-request-digest [request]
   (request-digest
-   (dissoc request :previewOperation :sourceVideoServerMetadata
+   (dissoc (contract/normalize-request request)
+           :previewOperation :sourceVideoServerMetadata
            :requesterSubject :requesterEmail :requesterMembershipVersion)))
 
 (defn job-resource
@@ -384,8 +385,9 @@
                    (<= 1 (count idempotency-key) 128))
       (throw (errors/raise! "A bounded Idempotency-Key header is required"
                             {:type ::invalid-idempotency-key})))
-    (contract/prepare request)
-    (let [request-digest (request-digest request)
+    (let [request (contract/normalize-request request)
+          _ (contract/prepare request)
+          request-digest (request-digest request)
           submit
           (fn []
             (locking state

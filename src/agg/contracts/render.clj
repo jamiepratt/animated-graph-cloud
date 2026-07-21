@@ -140,6 +140,24 @@
   (when-not condition
     (throw (errors/raise! message data))))
 
+(def default-future-trace-opacity-percent 25)
+
+(defn- future-trace-opacity-percent [request]
+  (let [value (if (contains? request :futureTraceOpacityPercent)
+                (:futureTraceOpacityPercent request)
+                default-future-trace-opacity-percent)]
+    (require! (and (number? value) (<= 0 value 100))
+              "futureTraceOpacityPercent must be a number from 0 through 100"
+              {:type ::invalid-future-trace-opacity
+               :field "futureTraceOpacityPercent"})
+    value))
+
+(defn normalize-request
+  "Defaults and validates values that must be persisted with a render request."
+  [request]
+  (assoc request :futureTraceOpacityPercent
+         (future-trace-opacity-percent request)))
+
 (defn- source-options [source-video output-format fit-mode audio-mode]
   (when source-video
     (require! (and (map? source-video)
@@ -211,8 +229,11 @@
   "Validates a render request and returns its shared normalized contract."
   [{:keys [telemetryFormat telemetry preset telemetrySyncAt cameraSyncAt
            sectionStartAt sectionEndAt spo2 timer watermark sourceVideo
-           outputFormat fitMode audioMode format fit audio sourceVideoServerMetadata]}]
-  (let [source (source-options sourceVideo
+           outputFormat fitMode audioMode format fit audio sourceVideoServerMetadata]
+    :as request}]
+  (let [future-trace-opacity-percent
+        (future-trace-opacity-percent request)
+        source (source-options sourceVideo
                                (or outputFormat format)
                                (or fitMode fit)
                                (or audioMode audio))]
@@ -313,6 +334,8 @@
                   {:type ::insufficient-spo2-coverage
                    :field "spo2.telemetry"}))
       (cond-> (assoc (spec/with-duration render-preset duration-seconds)
+                     :future-trace-opacity-percent
+                     future-trace-opacity-percent
                      :telemetry (timeline/section samples
                                                   telemetry-start
                                                   telemetry-end))

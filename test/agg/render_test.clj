@@ -14,7 +14,7 @@
             [clojure.test :refer [deftest is testing]])
   (:import (java.awt Color)
            (java.awt.image BufferedImage)
-           (java.io ByteArrayOutputStream IOException OutputStream)
+           (java.io ByteArrayInputStream ByteArrayOutputStream IOException OutputStream)
            (java.nio.file Files OpenOption)
            (java.security MessageDigest)
            (java.util HexFormat)
@@ -39,6 +39,58 @@
   (let [output (ByteArrayOutputStream.)]
     {:result (frames/stream! render-spec output)
      :rgba (.toByteArray output)}))
+
+(defn- rendered-png [render-spec frame-index]
+  (let [output (ByteArrayOutputStream.)]
+    (frames/render-frame-png! frames/java2d-frame-renderer
+                              render-spec frame-index output)
+    (ImageIO/read (ByteArrayInputStream. (.toByteArray output)))))
+
+(defn- heart-rate-red? [^Color color]
+  (and (= 255 (.getRed color))
+       (<= 50 (.getGreen color) 60)
+       (<= 75 (.getBlue color) 90)
+       (pos? (.getAlpha color))))
+
+(defn- heart-rate-red-ys [^BufferedImage image x top bottom]
+  (->> (range top (inc bottom))
+       (filter (fn [y]
+                 (heart-rate-red? (Color. (.getRGB image x y) true))))
+       set))
+
+(defn- heart-rate-red-rgba-ys
+  [^bytes rgba width height frame-index x top bottom]
+  (let [frame-offset (* frame-index width height 4)]
+    (->> (range top (inc bottom))
+         (filter
+          (fn [y]
+            (let [offset (+ frame-offset (* (+ x (* y width)) 4))
+                  color (Color. (bit-and 0xff (aget rgba offset))
+                                (bit-and 0xff (aget rgba (inc offset)))
+                                (bit-and 0xff (aget rgba (+ offset 2)))
+                                (bit-and 0xff (aget rgba (+ offset 3))))]
+              (heart-rate-red? color))))
+         set)))
+
+(defn- heart-rate-red-alphas [^BufferedImage image x top bottom]
+  (->> (range top (inc bottom))
+       (keep (fn [y]
+               (let [color (Color. (.getRGB image x y) true)]
+                 (when (heart-rate-red? color)
+                   (.getAlpha color)))))
+       set))
+
+(defn- spo2-cyan? [^Color color]
+  (and (<= 50 (.getRed color) 55)
+       (<= 195 (.getGreen color) 205)
+       (<= 230 (.getBlue color) 240)
+       (pos? (.getAlpha color))))
+
+(defn- color-ys [^BufferedImage image x top bottom color?]
+  (->> (range top (inc bottom))
+       (filter (fn [y]
+                 (color? (Color. (.getRGB image x y) true))))
+       set))
 
 (defn- executable-script! [contents]
   (let [path (Files/createTempFile
@@ -148,6 +200,25 @@
        :max-x max-x
        :min-y min-y
        :max-y max-y})))
+
+(defn- heart-rate-alphas [^bytes rgba width height frame-index x-predicate]
+  (let [frame-size (* width height 4)
+        offset (* frame-index frame-size)]
+    (->> (range (* width height))
+         (keep (fn [pixel]
+                 (let [x (rem pixel width)
+                       y (quot pixel width)
+                       byte-offset (+ offset (* pixel 4))
+                       color (mapv #(bit-and 0xff (aget rgba (+ byte-offset %)))
+                                   (range 4))
+                       [red green blue alpha] color]
+                   (when (and (x-predicate x)
+                              (< 15 y (- height 10))
+                              (= 255 red)
+                              (<= 50 green 60)
+                              (<= 75 blue 90))
+                     alpha))))
+         set)))
 
 (deftest presets-lock-the-spike-matrix
   (is (= {:id "1080p25"
@@ -923,6 +994,7 @@
                      {:telemetryFormat "polar-csv"
                       :telemetry telemetry
                       :preset "1080p25"
+                      :futureTraceOpacityPercent 50
                       :telemetrySyncAt "2026-07-17T10:00:00Z"
                       :cameraSyncAt "2026-07-17T09:00:00Z"
                       :sectionStartAt "2026-07-17T09:00:00Z"
@@ -1028,7 +1100,7 @@
         pixels (partition 4 rgba)
         unsigned (fn [pixel] (mapv #(bit-and 0xff %) pixel))
         colors (map unsigned pixels)]
-    (testing "the graph has opaque current pixels and half-alpha future pixels"
+    (testing "the graph has opaque current pixels and subdued future pixels"
       (is (some #(= [255 55 82 255] %) colors))
       (is (some #(and (= [255 55 82] (subvec % 0 3))
                       (pos? (last %))
@@ -1038,6 +1110,207 @@
       (is (some #(= [255 255 255 255] %) colors)))
     (testing "the graph remains transparent outside its drawn content"
       (is (some #(= [0 0 0 0] %) colors)))))
+
+(deftest timer-bounds-render-as-dashed-heart-rate-markers-at-their-trace-points
+  (let [base-spec {:width 400
+                   :height 200
+                   :fps 4
+                   :duration-seconds 4
+                   :future-trace-opacity-percent 100
+                   :telemetry [{:seconds 0.0 :heart-rate 120.0}
+                               {:seconds 4.0 :heart-rate 120.0}]}
+        without-timer (:rgba (streamed-rgba (assoc base-spec :fps 1)))
+        with-timer (:rgba
+                    (streamed-rgba
+                     (assoc base-spec
+                            :fps 1
+                            :timer {:start-seconds 1.0 :end-seconds 3.0})))]
+    (doseq [x [115 298]]
+      (let [without-marker (heart-rate-red-rgba-ys
+                            without-timer 400 200 0 x 80 120)
+            marker (heart-rate-red-rgba-ys
+                    with-timer 400 200 0 x 80 120)]
+        (is (<= (count without-marker) 4) (str "no timer marker at x=" x))
+        (is (> (count marker) 10) (str "timer marker at x=" x))
+        (is (<= (apply min marker) 82) (str "upper half at x=" x))
+        (is (>= (apply max marker) 118) (str "lower half at x=" x))
+        (is (seq (remove marker (range 83 118)))
+            (str "dashed gaps at x=" x))))))
+
+(deftest timer-marker-alpha-follows-each-event-before-at-and-after-its-time
+  (let [base-spec {:width 400
+                   :height 200
+                   :fps 4
+                   :duration-seconds 4
+                   :telemetry [{:seconds 0.0 :heart-rate 120.0}
+                               {:seconds 4.0 :heart-rate 120.0}]
+                   :timer {:start-seconds 1.0 :end-seconds 3.0}}
+        marker-alphas (fn [image x]
+                        (heart-rate-red-alphas image x 80 120))]
+    (doseq [[percent future-alpha] [[nil 64] [0 nil] [25 64] [100 255]]]
+      (let [render-spec (cond-> base-spec
+                          (some? percent)
+                          (assoc :future-trace-opacity-percent percent))
+            before (rendered-png render-spec 0)
+            at-start (rendered-png render-spec 4)
+            at-end (rendered-png render-spec 12)]
+        (if future-alpha
+          (is (contains? (marker-alphas before 115) future-alpha)
+              (str percent "% before start"))
+          (is (empty? (marker-alphas before 115)) "0% before start"))
+        (is (contains? (marker-alphas at-start 115) 255)
+            (str percent "% at start"))
+        (if future-alpha
+          (is (contains? (marker-alphas at-start 298) future-alpha)
+              (str percent "% before end"))
+          (is (empty? (marker-alphas at-start 298)) "0% before end"))
+        (is (contains? (marker-alphas at-end 298) 255)
+            (str percent "% at end"))))))
+
+(deftest timer-marker-lower-end-clamps-without-lengthening-its-upper-half
+  (let [render-spec {:width 400
+                     :height 200
+                     :fps 4
+                     :duration-seconds 4
+                     :future-trace-opacity-percent 100
+                     :telemetry [{:seconds 0.0 :heart-rate 10.0}
+                                 {:seconds 1.0 :heart-rate 10.0}
+                                 {:seconds 4.0 :heart-rate 110.0}]
+                     :timer {:start-seconds 1.0 :end-seconds 3.0}}
+        image (rendered-png render-spec 0)
+        marker (heart-rate-red-ys image 115 130 190)]
+    (is (<= 144 (apply min marker) 147)
+        "upper end remains one nominal half-height above the trace")
+    (is (<= (apply max marker) 175)
+        "lower end does not cross the x-axis")))
+
+(deftest timer-markers-center-on-heart-rate-when-spo2-is-rendered
+  (let [base-spec {:width 400
+                   :height 200
+                   :fps 4
+                   :duration-seconds 4
+                   :future-trace-opacity-percent 100
+                   :telemetry [{:seconds 0.0 :heart-rate 10.0}
+                               {:seconds 2.0 :heart-rate 90.0}
+                               {:seconds 4.0 :heart-rate 10.0}]
+                   :spo2 [{:seconds 0.0 :spo2 90.0}
+                          {:seconds 2.0 :spo2 90.0}
+                          {:seconds 4.0 :spo2 100.0}]}
+        without-timer (rendered-png base-spec 0)
+        with-timer (rendered-png
+                    (assoc base-spec
+                           :timer {:start-seconds 2.0 :end-seconds 3.0})
+                    0)
+        x 200
+        heart-rate-ys (heart-rate-red-ys without-timer x 20 175)
+        spo2-ys (color-ys without-timer x 20 175 spo2-cyan?)
+        added-marker-ys
+        (->> (range 20 176)
+             (filter (fn [y]
+                       (and (heart-rate-red?
+                             (Color. (.getRGB with-timer x y) true))
+                            (not (heart-rate-red?
+                                  (Color. (.getRGB without-timer x y)
+                                          true))))))
+             set)
+        trace-center (/ (+ (apply min heart-rate-ys)
+                           (apply max heart-rate-ys))
+                        2.0)
+        spo2-center (/ (+ (apply min spo2-ys) (apply max spo2-ys)) 2.0)
+        marker-center (/ (+ (apply min added-marker-ys)
+                            (apply max added-marker-ys))
+                         2.0)]
+    (is (<= (Math/abs (- marker-center trace-center)) 3.0))
+    (is (> (Math/abs (- marker-center spo2-center)) 40.0))
+    (is (< (apply min added-marker-ys) 24)
+        "upper endpoint may extend above the graph plot")))
+
+(deftest timer-marker-half-heights-scale-from-full-video-height-at-both-presets
+  (doseq [preset-id ["1080p25" "2.7k25"]]
+    (let [{:keys [width height]} (spec/preset preset-id)
+          graph-left (int (Math/round (* width 0.060)))
+          graph-right (- width (int (Math/round (* width 0.025))) 1)
+          graph-top (int (Math/round (* height 0.120)))
+          graph-bottom (- height (int (Math/round (* height 0.120))) 1)
+          center-y (int (Math/round (/ (+ graph-top graph-bottom) 2.0)))
+          half-height (int (Math/round (* height 0.10)))
+          expected-top (- center-y half-height)
+          expected-bottom (+ center-y half-height)
+          final-dash-length (int (Math/ceil (* height 0.0125)))
+          render-spec {:width width
+                       :height height
+                       :fps 1
+                       :duration-seconds 4
+                       :future-trace-opacity-percent 100
+                       :telemetry [{:seconds 0.0 :heart-rate 120.0}
+                                   {:seconds 4.0 :heart-rate 120.0}]
+                       :timer {:start-seconds 1.0 :end-seconds 3.0}}
+          image (rendered-png render-spec 0)]
+      (doseq [ratio [0.25 0.75]]
+        (let [x (int (Math/round
+                      (+ graph-left (* ratio (- graph-right graph-left)))))
+              marker (heart-rate-red-ys image x
+                                        (- expected-top 2)
+                                        (+ expected-bottom 2))]
+          (is (<= (Math/abs (- (apply min marker) expected-top)) 1)
+              (str preset-id " upper endpoint"))
+          (is (<= (- expected-bottom final-dash-length 2)
+                  (apply max marker)
+                  (inc expected-bottom))
+              (str preset-id " lower endpoint"))
+          (is (> (count (remove marker
+                                (range (inc expected-top) expected-bottom)))
+                 10)
+              (str preset-id " dashed stroke")))))))
+
+(deftest configured-future-trace-opacity-controls-only-the-unreached-heart-rate-trace
+  (let [width 160
+        height 90
+        midpoint (quot width 2)
+        base-spec {:width width
+                   :height height
+                   :fps 1
+                   :duration-seconds 2
+                   :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                               {:seconds 2.0 :heart-rate 140.0}]}]
+    (doseq [[percent expected-alpha] [[nil 64] [0 nil] [25 64] [100 255]]]
+      (let [{:keys [rgba]}
+            (streamed-rgba
+             (cond-> base-spec
+               (some? percent)
+               (assoc :future-trace-opacity-percent percent)))
+            reached-alphas (heart-rate-alphas rgba width height 1
+                                              #(< 20 % (- midpoint 12)))
+            future-alphas (heart-rate-alphas rgba width height 1
+                                             #(> % (+ midpoint 12)))]
+        (is (contains? reached-alphas 255)
+            (str "reached trace at " percent "%"))
+        (if expected-alpha
+          (is (contains? future-alphas expected-alpha)
+              (str "future trace at " percent "%"))
+          (is (empty? future-alphas)
+              "0% hides the future trace"))))))
+
+(deftest preview-frames-use-the-same-future-trace-opacity
+  (let [base-spec {:width 160
+                   :height 90
+                   :fps 1
+                   :duration-seconds 2
+                   :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                               {:seconds 2.0 :heart-rate 140.0}]}
+        preview-hash
+        (fn [percent]
+          (let [output (ByteArrayOutputStream.)]
+            (frames/render-frame-png!
+             frames/java2d-frame-renderer
+             (cond-> base-spec
+               (some? percent)
+               (assoc :future-trace-opacity-percent percent))
+             1 output)
+            (sha256-bytes (.toByteArray output))))
+        hashes (mapv preview-hash [0 25 100])]
+    (is (= 3 (count (set hashes))))
+    (is (= (preview-hash nil) (preview-hash 25)))))
 
 (deftest production-frame-dimensions-keep-the-trace-near-every-edge
   (doseq [preset-id ["1080p25" "2.7k25"]]
