@@ -21,7 +21,7 @@
            (java.net InetSocketAddress URLDecoder)
            (java.nio.charset StandardCharsets)
            (java.nio.file Files OpenOption Path)
-           (java.time Instant)
+           (java.time Clock Instant)
            (java.util UUID)))
 
 (def ^:private health-body "{\"status\":\"ok\"}")
@@ -702,7 +702,7 @@
                             error)))))
 
 (defn- submit-preview-operation!
-  [preview-job-service auth-system user prepared idempotency-key]
+  [preview-job-service auth-system user prepared idempotency-key ^Clock clock]
   (let [{:keys [request render-spec]} prepared
         _ (when (and (:source-video render-spec)
                      (not (and auth-system user)))
@@ -727,26 +727,28 @@
                                   (str (:subject user) ":" idempotency-key)))
                             (str "preview-" (UUID/randomUUID)))
                           request)]
-    (preview/operation-resource job)))
+    (preview/operation-resource job (Instant/now clock))))
 
-(defn- preview! [exchange preview-job-service auth-system user]
+(defn- preview! [exchange preview-job-service auth-system user clock]
   (respond-json! exchange 202
                  (submit-preview-operation! preview-job-service auth-system user
                                             (request-render-request exchange)
                                             (some-> exchange .getRequestHeaders
-                                                    (.getFirst "Idempotency-Key")))))
+                                                    (.getFirst "Idempotency-Key"))
+                                            clock)))
 
-(defn- poll-preview! [exchange preview-job-service operation-id]
+(defn- poll-preview! [exchange preview-job-service operation-id ^Clock clock]
   (if-let [operation
            (some-> (jobs/get-job preview-job-service operation-id)
-                   preview/operation-resource)]
+                   (preview/operation-resource (Instant/now clock)))]
     (respond-json! exchange 200 operation)
     (respond-json! exchange 404 {:error "preview_not_found"})))
 
 (defn- respond-preview-image!
-  [^HttpExchange exchange preview-job-service asset-store operation-id asset-id size]
+  [^HttpExchange exchange preview-job-service asset-store operation-id asset-id size
+   ^Clock clock]
   (let [operation (some-> (jobs/get-job preview-job-service operation-id)
-                          preview/operation-resource)
+                          (preview/operation-resource (Instant/now clock)))
         asset (when (= "succeeded" (:state operation))
                 (preview/get-asset asset-store operation-id asset-id size))]
     (if-not asset
@@ -1150,22 +1152,22 @@
     (str (UUID/randomUUID))))
 
 (defn- preview-ui!
-  [^HttpExchange exchange preview-job-service auth-system user]
+  [^HttpExchange exchange preview-job-service auth-system user clock]
   (let [generation (preview-generation
                     (some-> exchange .getRequestHeaders
                             (.getFirst "X-Preview-Generation")))
         operation (submit-preview-operation!
                    preview-job-service auth-system user
-                   (ui-render-request exchange) generation)]
+                   (ui-render-request exchange) generation clock)]
     (.set (.getResponseHeaders exchange) "X-Preview-Generation" generation)
     (respond! exchange 202 "text/html; charset=utf-8"
               (ui/preview-operation-fragment operation generation))))
 
 (defn- poll-preview-ui!
-  [^HttpExchange exchange preview-job-service operation-id]
+  [^HttpExchange exchange preview-job-service operation-id ^Clock clock]
   (let [generation (preview-generation (get (query-params exchange) "generation"))
         operation (some-> (jobs/get-job preview-job-service operation-id)
-                          preview/operation-resource)]
+                          (preview/operation-resource (Instant/now clock)))]
     (.set (.getResponseHeaders exchange) "X-Preview-Generation" generation)
     (respond! exchange 200 "text/html; charset=utf-8"
               (if operation
@@ -1266,7 +1268,7 @@
                               preview-job-service preview-asset-store
                               upload-signer auth-system picker-api-key
                               picker-app-id token-service admin-service log-store
-                              service-profile]
+                              service-profile clock]
                        :as dependencies}]
   (reify HttpHandler
     (handle [_ exchange]
@@ -1330,7 +1332,7 @@
                                   (let [user (require-session-user! exchange auth-system)]
                                     (require-csrf! exchange auth-system user)
                                     (preview-ui! exchange preview-job-service
-                                                 auth-system user))
+                                                 auth-system user clock))
 
                                   (and auth-system preview-job-service
                                        (= "GET" method)
@@ -1340,7 +1342,7 @@
                                     (require-job-owner! preview-job-service user
                                                         operation-id)
                                     (poll-preview-ui! exchange preview-job-service
-                                                      operation-id))
+                                                      operation-id clock))
 
                                   (and auth-system job-service (= "POST" method)
                                        (= "/ui/jobs" path))
@@ -1422,14 +1424,15 @@
                                   (let [user (authenticated-user! exchange auth-system token-service)]
                                     (require-csrf! exchange auth-system user)
                                     (preview! exchange preview-job-service
-                                              auth-system user))
+                                              auth-system user clock))
 
                                   (and preview-job-service (= "GET" method)
                                        (re-matches preview-api-path-pattern path))
                                   (let [user (authenticated-user! exchange auth-system token-service)
                                         operation-id (last (.split path "/"))]
                                     (require-job-owner! preview-job-service user operation-id)
-                                    (poll-preview! exchange preview-job-service operation-id))
+                                    (poll-preview! exchange preview-job-service operation-id
+                                                   clock))
 
                                   (and preview-job-service preview-asset-store
                                        (= "GET" method)
@@ -1442,7 +1445,7 @@
                                     (require-job-owner! preview-job-service user operation-id)
                                     (respond-preview-image!
                                      exchange preview-job-service preview-asset-store
-                                     operation-id asset-id size))
+                                     operation-id asset-id size clock))
 
                                   (and auth-system token-service (= "POST" method)
                                        (= "/v1/tokens" path))
@@ -1744,7 +1747,8 @@
   ([port]
    (start! port {}))
   ([port dependencies]
-   (let [local-preview-system (jobs/in-memory-system)
+   (let [clock (or (:clock dependencies) (Clock/systemUTC))
+         local-preview-system (jobs/in-memory-system {:clock clock})
          preview-job-service (or (:preview-job-service dependencies)
                                  (:job-service dependencies)
                                  (:service local-preview-system))
@@ -1752,6 +1756,7 @@
                               :video-encoder (media/ffmpeg-video-encoder)
                               :preview-job-service preview-job-service
                               :preview-asset-store (preview/in-memory-asset-store)
+                              :clock clock
                               :service-profile "api"}
                              dependencies
                              {:preview-job-service preview-job-service})

@@ -139,6 +139,7 @@
         durable-system (jobs/in-memory-system)
         port (available-port)
         server (api/start! port {:auth-system auth-system
+                                 :clock clock
                                  :job-service (:service durable-system)
                                  :preview-job-service
                                  (:service preview-system)})
