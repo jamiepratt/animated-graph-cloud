@@ -90,7 +90,7 @@
                              (get-in dependencies
                                      [:original-request :previewOperation])})
           {:output-bytes 42
-           :version 1
+           :version 2
            :mode "overlay"
            :sections []
            :assets []})
@@ -122,8 +122,8 @@
         render-cloud!
         (fn [_render-spec _dependencies]
           {:output-bytes 42
-           :version 1
-           :mode "source-final"
+           :version 2
+           :mode "final"
            :sections []
            :assets []
            :warnings [{:reason "source_duration_too_short"

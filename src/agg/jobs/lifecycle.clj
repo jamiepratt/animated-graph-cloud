@@ -65,7 +65,7 @@
 (def lease-seconds (* 65 60))
 (def max-output-bytes (* 18 1024 1024 1024))
 
-(def preview-operation-version "key-moment-gallery-v1")
+(def preview-operation-version "key-moment-gallery-v2")
 (def preview-retention-seconds (* 24 60 60))
 
 (defn preview-request? [request]
