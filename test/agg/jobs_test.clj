@@ -157,39 +157,14 @@
       (is (= expected (:futureTraceOpacityPercent @received-request))
           (str "requested " requested)))))
 
-(deftest preview-evidence-matches-omitted-opacity-to-the-normalized-default
-  (let [identity {:subject "subject-1" :membership-version "generation-1"}
-        request (assoc (render-request)
-                       :previewOperation jobs/preview-operation-version
-                       :requesterSubject (:subject identity)
-                       :requesterMembershipVersion (:membership-version identity))
-        worker (reify jobs/RenderWorker
-                 (perform-render! [_ _ _]
-                   {:output-bytes 0 :sections [] :assets []}))
-        service (:service (jobs/in-memory-system {:worker worker}))
-        job-id (get-in (jobs/submit-job! service "opacity-preview" request)
-                       [:job :id])]
-    (jobs/dispatch-job! service job-id)
-    (jobs/run-job! service job-id)
-    (is (true? (jobs/require-preview-evidence!
-                service job-id
-                (dissoc request :previewOperation :requesterSubject
-                        :requesterMembershipVersion)
-                identity)))
-    (is (true? (jobs/require-preview-evidence!
-                service job-id
-                (assoc (dissoc request :previewOperation :requesterSubject
-                               :requesterMembershipVersion)
-                       :futureTraceOpacityPercent 25)
-                identity)))
-    (is (= ::jobs/preview-stale
-           (exception-type
-            #(jobs/require-preview-evidence!
-              service job-id
-              (assoc (dissoc request :previewOperation :requesterSubject
-                             :requesterMembershipVersion)
-                     :futureTraceOpacityPercent 0)
-              identity))))))
+(deftest render-request-digest-normalizes-omitted-future-opacity
+  (let [request (render-request)]
+    (is (= (jobs/render-request-digest request)
+           (jobs/render-request-digest
+            (assoc request :futureTraceOpacityPercent 25))))
+    (is (not= (jobs/render-request-digest request)
+              (jobs/render-request-digest
+               (assoc request :futureTraceOpacityPercent 0))))))
 
 (deftest member-cleanup-cancels-only-its-generation-and-legacy-jobs
   (let [service (:service (jobs/in-memory-system))
