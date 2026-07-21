@@ -1,6 +1,5 @@
 (ns agg.preview.core
   (:require [agg.errors :as errors]
-            [agg.jobs.lifecycle :as jobs]
             [agg.render.frames :as frames]
             [agg.render.media :as media]
             [clojure.string :as str])
@@ -227,10 +226,7 @@
                     :updatedAt (:updatedAt job)
                     :expiresAt expires-at}
              (= "succeeded" state)
-             (assoc :result (dissoc (:output job) :output-bytes)
-                    :receiptExpiresAt
-                    (str (.plusSeconds (Instant/parse (:updatedAt job))
-                                       jobs/preview-evidence-seconds)))
+             (assoc :result (dissoc (:output job) :output-bytes))
              (= "failed" state)
              (assoc :error
                     (let [code (or (:failureCode job) "preview_failed")]

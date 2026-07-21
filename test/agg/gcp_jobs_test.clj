@@ -127,7 +127,7 @@
               (millis [] (.toEpochMilli ^Instant @now))))]
     (clock-for ZoneOffset/UTC)))
 
-(deftest firestore-preview-evidence-is-private-owner-bound-and-expiring
+(deftest firestore-preview-request-digest-is-private
   (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
     (let [firestore (-> (FirestoreOptions/newBuilder)
                         (.setProjectId "animated-graph-cloud-preview-evidence-test")
@@ -170,27 +170,7 @@
                 public (jobs/get-job service operation-id)]
             (is (re-matches #"[0-9a-f]{64}"
                             (.getString snapshot "requestDigest")))
-            (is (not (contains? public :requestDigest)))
-            (is (true? (jobs/require-preview-evidence!
-                        service operation-id (fixture/render-request)
-                        identity))))
-          (is (= ::jobs/preview-stale
-                 (try
-                   (jobs/require-preview-evidence!
-                    service operation-id (fixture/render-request)
-                    (assoc identity :membership-version "membership-2"))
-                   nil
-                   (catch clojure.lang.ExceptionInfo error
-                     (:type (ex-data error))))))
-          (swap! now #(.plusSeconds ^Instant %
-                                    (inc jobs/preview-evidence-seconds)))
-          (is (= ::jobs/preview-expired
-                 (try
-                   (jobs/require-preview-evidence!
-                    service operation-id (fixture/render-request) identity)
-                   nil
-                   (catch clojure.lang.ExceptionInfo error
-                     (:type (ex-data error)))))))
+            (is (not (contains? public :requestDigest)))))
         (finally
           (.close firestore))))
     (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))

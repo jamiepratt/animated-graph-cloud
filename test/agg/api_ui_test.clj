@@ -22,8 +22,7 @@
 (defn- start-api!
   ([port] (start-api! port {}))
   ([port dependencies]
-   (api/start!
-    port (assoc dependencies :test-only-disable-preview-submit-gate? true))))
+   (api/start! port dependencies)))
 
 (defn- request! [port method path body headers]
   (test-http/send-string! method (str "http://127.0.0.1:" port path)
@@ -300,12 +299,12 @@
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
          "const terminalFragment=" (json/write-str terminal-fragment) ";"
-         "const button=document.querySelector('[hx-post=\"/ui/preview\"]'),submit=document.getElementById('submit-button'),receipt=document.getElementById('preview-operation-id'),spinner=button.querySelector('.button-spinner');function buttonPresentation(){const previewStyle=getComputedStyle(button),submitStyle=getComputedStyle(submit);return {spinnerHidden:spinner?.hidden??null,spinnerInside:!!spinner&&button.contains(spinner),previewBackground:previewStyle.backgroundColor,submitBackground:submitStyle.backgroundColor,previewCursor:previewStyle.cursor,submitCursor:submitStyle.cursor,previewShadow:previewStyle.boxShadow,submitShadow:submitStyle.boxShadow};}const initial={submitDisabled:submit.disabled,receipt:receipt.value,status:document.getElementById('preview-submit-status').textContent,presentation:buttonPresentation()};"
+         "const button=document.querySelector('[hx-post=\"/ui/preview\"]'),submit=document.getElementById('submit-button'),spinner=button.querySelector('.button-spinner');function buttonPresentation(){const previewStyle=getComputedStyle(button),submitStyle=getComputedStyle(submit);return {spinnerHidden:spinner?.hidden??null,spinnerInside:!!spinner&&button.contains(spinner),previewBackground:previewStyle.backgroundColor,submitBackground:submitStyle.backgroundColor,previewCursor:previewStyle.cursor,submitCursor:submitStyle.cursor,previewShadow:previewStyle.boxShadow,submitShadow:submitStyle.boxShadow};}const initial={submitDisabled:submit.disabled,status:document.getElementById('preview-submit-status').textContent,presentation:buttonPresentation()};"
          "document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
          "function configure(){const detail={elt:button,parameters:{},headers:{}};const event=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail});button.dispatchEvent(event);return {event,detail};}"
          "function transport(name,status=0){const target=document.getElementById('preview-result');target.dispatchEvent(new CustomEvent(name,{bubbles:true,detail:{elt:button,target,xhr:{status,getResponseHeader:()=>null}}}));return target;}"
          "const first=configure(),firstGeneration=first.detail.headers['X-Preview-Generation'],firstResult=document.getElementById('preview-result');"
-         "const pending={text:document.getElementById('form-status').textContent,disabled:button.disabled,submitDisabled:submit.disabled,receipt:receipt.value,cleared:!firstResult.textContent.includes('stale prior success'),className:firstResult.className,presentation:buttonPresentation()};"
+         "const pending={text:document.getElementById('form-status').textContent,disabled:button.disabled,submitDisabled:submit.disabled,cleared:!firstResult.textContent.includes('stale prior success'),className:firstResult.className,presentation:buttonPresentation()};"
          "const unrelated=document.getElementById('job-result');unrelated.dispatchEvent(new CustomEvent('htmx:sendError',{bubbles:true,detail:{elt:unrelated,target:unrelated,xhr:{status:0,getResponseHeader:()=>null}}}));const unrelatedIgnored=button.disabled&&document.getElementById('preview-result').classList.contains('preview-pending');"
          "const duplicate=configure();"
          "const duplicateSuppressed=duplicate.event.defaultPrevented&&duplicate.detail.headers['X-Preview-Generation']===undefined;"
@@ -316,9 +315,9 @@
          "transport('htmx:sendError');const dropped=document.getElementById('preview-result');const connectionLoss={text:dropped.textContent,disabled:button.disabled,lateRejected:!lateDetail.shouldSwap,presentation:buttonPresentation()};"
          "configure();transport('htmx:sendAbort');const aborted=document.getElementById('preview-result');const clientAbort={text:aborted.textContent,disabled:button.disabled,presentation:buttonPresentation()};"
          "configure();transport('htmx:timeout');const timedOut=document.getElementById('preview-result');const browserTimeout={text:timedOut.textContent,disabled:button.disabled,presentation:buttonPresentation()};"
-         "const successfulRetry=configure(),successGeneration=successfulRetry.detail.headers['X-Preview-Generation'];const target=document.getElementById('preview-result');target.outerHTML='<article id=\"preview-result\" class=\"preview-gallery\" data-preview-operation=\"00000000-0000-0000-0000-000000000063\" data-preview-receipt-expires-at=\"2099-07-20T10:15:00Z\" data-preview-generation=\"'+successGeneration+'\"><img></article>';const success=document.getElementById('preview-result');success.dispatchEvent(new CustomEvent('htmx:afterSettle',{bubbles:true,detail:{target:success}}));"
-         "const succeeded={text:document.getElementById('form-status').textContent,disabled:button.disabled,submitDisabled:submit.disabled,receipt:receipt.value,retried:successGeneration!==retryGeneration,presentation:buttonPresentation()};const submitDetail={elt:submit,parameters:{},headers:{}};const submitEvent=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail:submitDetail});submit.dispatchEvent(submitEvent);const duplicateSubmitDetail={elt:submit,parameters:{},headers:{}};const duplicateSubmitEvent=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail:duplicateSubmitDetail});submit.dispatchEvent(duplicateSubmitEvent);const submitFlow={firstAllowed:!submitEvent.defaultPrevented,duplicateSuppressed:duplicateSubmitEvent.defaultPrevented,idempotencyKey:submitDetail.headers['Idempotency-Key'],operation:submitDetail.parameters.previewOperationId};const jobResult=document.getElementById('job-result');jobResult.innerHTML='<article class=\"preview-submit-blocked\" data-preview-gate=\"preview_expired\"><h2>Preview expired</h2></article>';jobResult.dispatchEvent(new CustomEvent('htmx:afterSettle',{bubbles:true,detail:{target:jobResult}}));const serverGate={submitDisabled:submit.disabled,receipt:receipt.value,status:document.getElementById('preview-submit-status').textContent};const raw=document.getElementById('raw-json'),invalidationAttempt=configure(),invalidationWasPending=!spinner.hidden;raw.value='changed';raw.dispatchEvent(new Event('input',{bubbles:true}));const rawInvalidated={submitDisabled:submit.disabled,receipt:receipt.value,className:document.getElementById('preview-result').className,invalidationWasPending,presentation:buttonPresentation()};const terminalAttempt=configure(),terminalGeneration=terminalAttempt.detail.headers['X-Preview-Generation'],terminalPending=document.getElementById('preview-result');terminalPending.outerHTML=terminalFragment.replace('terminal-generation',terminalGeneration);const terminalError=document.getElementById('preview-result');document.body.dispatchEvent(new CustomEvent('htmx:afterSettle',{bubbles:true,detail:{elt:terminalError,target:terminalPending,xhr:{aggPreviewGeneration:terminalGeneration,getResponseHeader:()=>terminalGeneration}}}));const terminalFailure={className:terminalError.className,text:terminalError.textContent,previewDisabled:button.disabled,submitDisabled:submit.disabled,submitStatus:document.getElementById('preview-submit-status').textContent,status:document.getElementById('form-status').textContent,presentation:buttonPresentation()};"
-         "outcome={initial,pending,unrelatedIgnored,duplicateSuppressed,platformFailure,gatewayFailure,connectionLoss,clientAbort,browserTimeout,terminalFailure,succeeded,submitFlow,serverGate,rawInvalidated};"
+         "const successfulRetry=configure(),successGeneration=successfulRetry.detail.headers['X-Preview-Generation'];const target=document.getElementById('preview-result');target.outerHTML='<article id=\"preview-result\" class=\"preview-gallery\" data-preview-operation=\"00000000-0000-0000-0000-000000000063\" data-preview-generation=\"'+successGeneration+'\"><img></article>';const success=document.getElementById('preview-result');success.dispatchEvent(new CustomEvent('htmx:afterSettle',{bubbles:true,detail:{target:success}}));"
+         "const succeeded={text:document.getElementById('form-status').textContent,disabled:button.disabled,submitDisabled:submit.disabled,retried:successGeneration!==retryGeneration,presentation:buttonPresentation()};const submitDetail={elt:submit,parameters:{},headers:{}};const submitEvent=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail:submitDetail});submit.dispatchEvent(submitEvent);const duplicateSubmitDetail={elt:submit,parameters:{},headers:{}};const duplicateSubmitEvent=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail:duplicateSubmitDetail});submit.dispatchEvent(duplicateSubmitEvent);const submitFlow={firstAllowed:!submitEvent.defaultPrevented,duplicateSuppressed:duplicateSubmitEvent.defaultPrevented,idempotencyKey:submitDetail.headers['Idempotency-Key']};const raw=document.getElementById('raw-json'),invalidationAttempt=configure(),invalidationWasPending=!spinner.hidden;raw.value='changed';raw.dispatchEvent(new Event('input',{bubbles:true}));const rawInvalidated={submitDisabled:submit.disabled,className:document.getElementById('preview-result').className,invalidationWasPending,presentation:buttonPresentation()};const terminalAttempt=configure(),terminalGeneration=terminalAttempt.detail.headers['X-Preview-Generation'],terminalPending=document.getElementById('preview-result');terminalPending.outerHTML=terminalFragment.replace('terminal-generation',terminalGeneration);const terminalError=document.getElementById('preview-result');document.body.dispatchEvent(new CustomEvent('htmx:afterSettle',{bubbles:true,detail:{elt:terminalError,target:terminalPending,xhr:{aggPreviewGeneration:terminalGeneration,getResponseHeader:()=>terminalGeneration}}}));const terminalFailure={className:terminalError.className,text:terminalError.textContent,previewDisabled:button.disabled,submitDisabled:submit.disabled,submitStatus:document.getElementById('preview-submit-status').textContent,status:document.getElementById('form-status').textContent,presentation:buttonPresentation()};"
+         "outcome={initial,pending,unrelatedIgnored,duplicateSuppressed,platformFailure,gatewayFailure,connectionLoss,clientAbort,browserTimeout,terminalFailure,succeeded,submitFlow,rawInvalidated};"
          "}catch(error){outcome={error:error.message};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));"
          "document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
@@ -338,7 +337,6 @@
    :operationKind "key-moment-gallery"
    :state "succeeded"
    :progressPercent 100
-   :receiptExpiresAt "2099-07-20T10:15:00Z"
    :result
    {:version 1
     :mode "source-final"
@@ -506,18 +504,14 @@
     (is (not (re-find #"<div class=\"step\">Step [^<]+</div><h2>Optional source video</h2>"
                       page)))))
 
-(deftest compose-submit-starts-preview-gated-and-success-carries-private-evidence
+(deftest compose-submit-starts-enabled-with-preview-available
   (let [page (ui/page {:user {:email "member@example.com" :role :member}
                        :csrf "csrf-test" :tokens [] :members []
-                       :logs-enabled? false})
-        fragment (ui/preview-operation-fragment
-                  (preview-gallery-operation) "generation-1")]
+                       :logs-enabled? false})]
     (is (str/includes? page
-                       "name=\"previewOperationId\" value=\"\""))
-    (is (str/includes? page
-                       "id=\"submit-button\" class=\"primary\" type=\"submit\" disabled"))
+                       "id=\"submit-button\" class=\"primary\" type=\"submit\">Submit render"))
     (is (str/includes? page "id=\"preview-submit-status\""))
-    (is (str/includes? page "Preview required"))
+    (is (str/includes? page "Preview is optional"))
     (is (str/includes? page
                        "class=\"button-spinner\" aria-hidden=\"true\" hidden"))
     (is (str/includes?
@@ -525,11 +519,7 @@
          "@media(prefers-reduced-motion:reduce){.button-spinner{animation:none}}"))
     (is (str/includes? page "button.primary:disabled:hover"))
     (is (not (str/includes? page "localStorage")))
-    (is (not (str/includes? page "sessionStorage")))
-    (is (str/includes? fragment
-                       "data-preview-receipt-expires-at=\"2099-07-20T10:15:00Z\""))
-    (is (not (str/includes? fragment "requestDigest")))
-    (is (not (str/includes? fragment "sourceVideo")))))
+    (is (not (str/includes? page "sessionStorage")))))
 
 (deftest picker-initialization-and-click-flow-recovers-in-a-browser
   (let [outcome (picker-browser-outcome
@@ -558,7 +548,7 @@
     (is (every? #(= #{:phase :view :listState} (set (keys %)))
                 (:diagnostics outcome)))))
 
-(deftest preview-request-is-terminal-stale-safe-and-retriable-in-a-browser
+(deftest preview-remains-stale-safe-and-retriable-without-gating-submit
   (let [outcome (preview-status-browser-outcome
                  (ui/page {:user {:email "owner@example.com" :role :member}
                            :csrf "csrf-test"
@@ -566,46 +556,41 @@
                            :members []
                            :logs-enabled? false}))]
     (is (nil? (:error outcome)) outcome)
-    (is (= {:submitDisabled true
-            :receipt ""
-            :status "Preview required before Submit."}
+    (is (= {:submitDisabled false
+            :status "Preview is optional. Submit when ready."}
            (select-keys (:initial outcome)
-                        [:submitDisabled :receipt :status])))
+                        [:submitDisabled :status])))
     (is (= {:spinnerHidden true
             :spinnerInside true
-            :previewCursor "pointer"
-            :submitCursor "not-allowed"
-            :submitShadow "none"}
+            :previewCursor "pointer"}
            (select-keys (get-in outcome [:initial :presentation])
-                        [:spinnerHidden :spinnerInside :previewCursor
-                         :submitCursor :submitShadow])))
-    (is (not= (get-in outcome [:initial :presentation :previewBackground])
-              (get-in outcome [:initial :presentation :submitBackground])))
+                        [:spinnerHidden :spinnerInside :previewCursor])))
+    (is (= (get-in outcome [:initial :presentation :previewBackground])
+           (get-in outcome [:initial :presentation :submitBackground])))
     (is (= {:text "Preparing preview…"
             :disabled true
-            :submitDisabled true
-            :receipt ""
+            :submitDisabled false
             :cleared true
             :className "preview-pending"}
            (select-keys (:pending outcome)
-                        [:text :disabled :submitDisabled :receipt
+                        [:text :disabled :submitDisabled
                          :cleared :className])))
     (is (= {:spinnerHidden false
             :spinnerInside true
             :previewCursor "not-allowed"
-            :submitCursor "not-allowed"
-            :previewShadow "none"
-            :submitShadow "none"}
+            :submitCursor "pointer"
+            :previewShadow "none"}
            (select-keys (get-in outcome [:pending :presentation])
                         [:spinnerHidden :spinnerInside :previewCursor
-                         :submitCursor :previewShadow :submitShadow])))
-    (is (= (get-in outcome [:pending :presentation :previewBackground])
-           (get-in outcome [:pending :presentation :submitBackground])
+                         :submitCursor :previewShadow])))
+    (is (not= (get-in outcome [:pending :presentation :previewBackground])
+              (get-in outcome [:pending :presentation :submitBackground])))
+    (is (= (get-in outcome [:pending :presentation :submitBackground])
            (get-in outcome [:initial :presentation :submitBackground])))
     (is (:unrelatedIgnored outcome))
     (is (:duplicateSuppressed outcome))
     (is (false? (get-in outcome [:platformFailure :disabled])))
-    (is (get-in outcome [:platformFailure :submitDisabled]))
+    (is (false? (get-in outcome [:platformFailure :submitDisabled])))
     (is (str/includes? (get-in outcome [:platformFailure :text]) "504"))
     (is (str/includes? (get-in outcome [:platformFailure :text])
                        "No durable render was submitted or charged"))
@@ -624,10 +609,10 @@
                        "did not finish"))
     (is (= "preview-error" (get-in outcome [:terminalFailure :className])))
     (is (false? (get-in outcome [:terminalFailure :previewDisabled])))
-    (is (get-in outcome [:terminalFailure :submitDisabled]))
+    (is (false? (get-in outcome [:terminalFailure :submitDisabled])))
     (is (true? (get-in outcome
                        [:terminalFailure :presentation :spinnerHidden])))
-    (is (= "Preview failed. Run Preview again."
+    (is (= "Preview failed. Submit remains available."
            (get-in outcome [:terminalFailure :submitStatus])))
     (is (= "Preview failed. See details below."
            (get-in outcome [:terminalFailure :status])))
@@ -642,25 +627,20 @@
     (is (= {:text "Preview ready."
             :disabled false
             :submitDisabled false
-            :receipt "00000000-0000-0000-0000-000000000063"
             :retried true}
            (select-keys (:succeeded outcome)
-                        [:text :disabled :submitDisabled :receipt :retried])))
+                        [:text :disabled :submitDisabled :retried])))
     (is (true? (get-in outcome [:succeeded :presentation :spinnerHidden])))
-    (is (= {:firstAllowed true
-            :duplicateSuppressed true
-            :idempotencyKey
-            "ui-preview-00000000-0000-0000-0000-000000000063"
-            :operation "00000000-0000-0000-0000-000000000063"}
-           (:submitFlow outcome)))
-    (is (= {:submitDisabled true
-            :receipt ""
-            :status "Preview expired. Run Preview again."}
-           (:serverGate outcome)))
-    (is (= {:submitDisabled true :receipt "" :className "preview-stale"
+    (is (= {:firstAllowed true :duplicateSuppressed true}
+           (select-keys (:submitFlow outcome)
+                        [:firstAllowed :duplicateSuppressed])))
+    (is (re-matches #"ui-submit-[0-9a-f-]{36}"
+                    (get-in outcome [:submitFlow :idempotencyKey])))
+    (is (not (contains? (:submitFlow outcome) :operation)))
+    (is (= {:submitDisabled false :className "preview-stale"
             :invalidationWasPending true}
            (select-keys (:rawInvalidated outcome)
-                        [:submitDisabled :receipt :className
+                        [:submitDisabled :className
                          :invalidationWasPending])))
     (is (true? (get-in outcome
                        [:rawInvalidated :presentation :spinnerHidden])))))
@@ -678,8 +658,8 @@
     (is (= "preview-error" (:className outcome)) outcome)
     (is (false? (:previewDisabled outcome)) outcome)
     (is (:spinnerHidden outcome) outcome)
-    (is (:submitDisabled outcome) outcome)
-    (is (= "Preview failed. Run Preview again." (:submitStatus outcome))
+    (is (false? (:submitDisabled outcome)) outcome)
+    (is (= "Preview failed. Submit remains available." (:submitStatus outcome))
         outcome)
     (is (= "Preview failed. See details below." (:status outcome)) outcome)
     (doseq [detail ["preview_rendering" "Source content" "worker_failed"
