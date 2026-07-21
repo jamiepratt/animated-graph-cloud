@@ -89,18 +89,21 @@ polling and authenticated image retrieval.
 
 The result enumerates one generic section per rendered telemetry trace. Each
 section contains chronological, actual-frame moments for video and trace
-boundaries plus up to three prominent minima and maxima. Coincident events share
-one frame reference and combine labels. Assets are deduplicated across sections.
+boundaries, configured timer start and end, plus up to three prominent minima
+and maxima. Every candidate is mapped to a real output frame before coincident
+events share one frame reference and combine labels. Assets are deduplicated
+across sections.
 Overlay-only requests expose checkerboard-ready transparent Overlay images.
 Selected-source requests expose fitted Source and exact production-composited
 Final images, merging them when the complete overlay is transparent. Thumbnail
 and full-size PNG URLs are opaque, authenticated, owner-bound, bounded,
 `Cache-Control: no-store`, and retained for 24 hours.
 
-The browser renders eager responsive thumbnails. Desktop aligns Source and Final
-rows across moment columns; narrow screens use vertical moment cards. A native
-dialog provides keyboard-accessible larger images and restores focus when
-closed. Starting a new preview or editing its request invalidates the old result.
+The browser renders eager responsive thumbnails. Desktop uses compact moment
+columns with independently titled Source and Final photographs; narrow screens use vertical moment cards.
+A native dialog provides keyboard-accessible larger images and restores focus
+when closed. Starting a new preview or editing its request invalidates the old
+result.
 The source video remains streamed and unpersisted; all unique requested frames
 are batch-decoded in one worker workflow.
 

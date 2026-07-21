@@ -270,6 +270,10 @@
                        (:moments section))]
     (is (= [10 30 50] (mapv :frameIndex maxima)))
     (is (= [3.0 3.0 3.0] (mapv :value maxima)))
+    (is (= ["Video start" "Trace start"]
+           (:labels (first (:moments section)))))
+    (is (= ["Trace stop" "Video end"]
+           (:labels (last (:moments section)))))
     (is (= (sort (map :frameIndex (:moments section)))
            (map :frameIndex (:moments section))))))
 
@@ -333,10 +337,57 @@
                                       [0.0 1.0 2.0]
                                       values)}))]
       (is (= 2 (count (:moments section))))
-      (is (= ["Video start"]
+      (is (= ["Video start" "Trace start"]
              (:labels (first (:moments section)))))
-      (is (= ["Trace stop"]
+      (is (= ["Trace stop" "Video end"]
              (:labels (last (:moments section))))))))
+
+(deftest monotonic-preview-includes-distinct-timer-boundaries
+  (let [moments
+        (:moments
+         (first
+          (frames/preview-sections
+           {:fps 2 :duration-seconds 4
+            :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                        {:seconds 2.0 :heart-rate 120.0}
+                        {:seconds 4.0 :heart-rate 140.0}]
+            :timer {:start-seconds 1.0 :end-seconds 3.0}})))]
+    (is (= [0 2 6 7] (mapv :frameIndex moments)))
+    (is (= [["Video start" "Trace start"]
+            ["Timer start"]
+            ["Timer end"]
+            ["Trace stop" "Video end"]]
+           (mapv :labels moments)))))
+
+(deftest timer-boundaries-combine-with-coincident-section-boundaries
+  (let [moments
+        (:moments
+         (first
+          (frames/preview-sections
+           {:fps 2 :duration-seconds 2
+            :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                        {:seconds 1.0 :heart-rate 120.0}
+                        {:seconds 2.0 :heart-rate 140.0}]
+            :timer {:start-seconds 0.0 :end-seconds 2.0}})))]
+    (is (= [0 3] (mapv :frameIndex moments)))
+    (is (= [["Video start" "Trace start" "Timer start"]
+            ["Timer end" "Trace stop" "Video end"]]
+           (mapv :labels moments)))))
+
+(deftest timer-boundaries-deduplicate-after-sub-frame-mapping
+  (let [moments
+        (:moments
+         (first
+          (frames/preview-sections
+           {:fps 4 :duration-seconds 1
+            :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                        {:seconds 1.0 :heart-rate 140.0}]
+            :timer {:start-seconds 0.24 :end-seconds 0.26}})))
+        timer-moment (first (filter #(some #{"Timer start"} (:labels %))
+                                    moments))]
+    (is (= 1 (:frameIndex timer-moment)))
+    (is (= ["Timer start" "Timer end"] (:labels timer-moment)))
+    (is (= 1 (count (filter #(= 1 (:frameIndex %)) moments))))))
 
 (deftest preview-sections-are-a-generic-trace-collection
   (let [sections
@@ -423,19 +474,32 @@
         manifest
         (preview/render-gallery!
          "00000000-0000-0000-0000-000000000061"
-         {:width 64 :height 36 :fps 2 :duration-seconds 2
+         {:width 64 :height 36 :fps 2 :duration-seconds 4
           :telemetry [{:seconds 0.0 :heart-rate 120.0}
-                      {:seconds 1.0 :heart-rate 140.0}
-                      {:seconds 2.0 :heart-rate 110.0}]
+                      {:seconds 2.0 :heart-rate 140.0}
+                      {:seconds 4.0 :heart-rate 160.0}]
           :spo2 [{:seconds 0.0 :spo2 96.0}
-                 {:seconds 1.0 :spo2 92.0}
-                 {:seconds 2.0 :spo2 97.0}]}
+                 {:seconds 2.0 :spo2 95.0}
+                 {:seconds 4.0 :spo2 94.0}]
+          :timer {:start-seconds 1.0 :end-seconds 3.0}}
          store frames/java2d-frame-renderer nil nil)
         moments (mapcat :moments (:sections manifest))]
     (is (= "overlay" (:mode manifest)))
     (is (= 2 (count (:sections manifest))))
+    (is (every? #(= [0 2 6 7] (mapv :frameIndex (:moments %)))
+                (:sections manifest)))
+    (is (every? #(= [["Video start" "Trace start"]
+                     ["Timer start"]
+                     ["Timer end"]
+                     ["Trace stop" "Video end"]]
+                    (mapv :labels (:moments %)))
+                (:sections manifest)))
+    (is (every? #(= ["a000" "a001" "a002" "a003"]
+                    (mapv :frameRef (:moments %)))
+                (:sections manifest)))
     (is (= (count (set (map :frameIndex moments)))
            (count (:assets manifest))))
+    (is (= [0 2 6 7] (mapv :frameIndex (:assets manifest))))
     (is (= (:frameRef (first (get-in manifest [:sections 0 :moments])))
            (:frameRef (first (get-in manifest [:sections 1 :moments])))))
     (is (every? #(= "overlay" (:kind %)) (:assets manifest)))

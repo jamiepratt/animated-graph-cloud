@@ -404,6 +404,7 @@
   (let [metadata-count (atom 0)
         source-count (atom 0)
         decode-count (atom 0)
+        decoded-frames (atom [])
         source-gateway
         (reify drive/SourceGateway
           (source-metadata! [_ _ file-id]
@@ -423,6 +424,7 @@
           (render-composite-gallery!
             [_ _ source-stream! overlays consume-frame!]
             (swap! decode-count inc)
+            (reset! decoded-frames (mapv :frameIndex overlays))
             (with-open [output (java.io.ByteArrayOutputStream.)]
               (source-stream! output))
             (doseq [{:keys [frameIndex overlay]} overlays]
@@ -443,7 +445,9 @@
                                  :preview-asset-store asset-store})
         request (assoc (fixture/render-request)
                        :sourceVideo {:fileId "drive-file-1"}
-                       :fitMode "letterbox")]
+                       :fitMode "letterbox"
+                       :timer {:startAt "2026-07-17T09:00:00.500Z"
+                               :endAt "2026-07-17T09:00:01.500Z"})]
     (try
       (let [started (test-http/send-string!
                      :post (str "http://127.0.0.1:" port "/v1/preview")
@@ -464,9 +468,31 @@
               result (:result (json/read-str (.body completed) :key-fn keyword))]
           (is (= 1 @source-count))
           (is (= 1 @decode-count))
+          (is (= [0 13 38 49] @decoded-frames))
           (is (= 0 @metadata-count))
           (is (= "source-final" (:mode result)))
+          (is (= [0 13 38 49]
+                 (mapv :frameIndex (get-in result [:sections 0 :moments]))))
+          (is (= [["Video start" "Trace start"]
+                  ["Timer start"]
+                  ["Timer end"]
+                  ["Trace stop" "Video end"]]
+                 (mapv :labels (get-in result [:sections 0 :moments]))))
+          (is (= ["a000" "a001" "a002" "a003"]
+                 (mapv :frameRef (get-in result [:sections 0 :moments]))
+                 (mapv :id (:assets result))))
+          (is (= [0 13 38 49] (mapv :frameIndex (:assets result))))
           (is (every? #(= "source-final" (:kind %)) (:assets result)))
+          (is (every? false? (map :merged (:assets result))))
+          (doseq [{:keys [id source final]} (:assets result)]
+            (is (= (preview/image-reference (:id operation) (str id "-source"))
+                   source))
+            (is (= (preview/image-reference (:id operation) (str id "-final"))
+                   final))
+            (doseq [asset-id [(str id "-source") (str id "-final")]
+                    size [:thumbnail :full]]
+              (is (some? (preview/get-asset asset-store (:id operation)
+                                            asset-id size)))))
           (is (not (str/includes? (pr-str result) "private-name")))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
