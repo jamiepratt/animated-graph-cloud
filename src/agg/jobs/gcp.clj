@@ -110,6 +110,9 @@
            (long (get-in job [:failure-diagnostics :timeout-ms])))
     (:output job) (assoc "outputJson" (json/write-str (:output job)))
     (:operation-kind job) (assoc "operationKind" (name (:operation-kind job)))
+    (:reservation-kind job) (assoc "reservationKind" (name (:reservation-kind job)))
+    (:reservation-minor-units job)
+    (assoc "reservationMinorUnits" (long (:reservation-minor-units job)))
     (:requester-subject job) (assoc "requesterSubject" (:requester-subject job))
     (:requester-email job) (assoc "requesterEmail" (:requester-email job))
     (:requester-membership-version job)
@@ -159,6 +162,11 @@
         (assoc :output (json/read-str (get data "outputJson") :key-fn keyword))
         (get data "operationKind")
         (assoc :operation-kind (keyword (get data "operationKind")))
+        (get data "reservationKind")
+        (assoc :reservation-kind (keyword (get data "reservationKind")))
+        (contains? data "reservationMinorUnits")
+        (assoc :reservation-minor-units
+               (long (get data "reservationMinorUnits")))
         (get data "requesterSubject")
         (assoc :requester-subject (get data "requesterSubject"))
         (get data "requesterEmail")
@@ -359,6 +367,19 @@
 (defn- released-capacity [snapshot job-id now]
   (capacity-data (dissoc (capacity-leases snapshot now) job-id)))
 
+(defn- budget-data
+  [month reserved monthly-budget-minor-units
+   preview-reservation-minor-units render-reservation-minor-units now]
+  {"month" month
+   "reservedMinorUnits" reserved
+   "limitMinorUnits" monthly-budget-minor-units
+   "previewReservationMinorUnits" preview-reservation-minor-units
+   "renderReservationMinorUnits" render-reservation-minor-units
+   "previewPlusRenderExposureMinorUnits"
+   (+ preview-reservation-minor-units render-reservation-minor-units)
+   "currency" "PLN"
+   "updatedAt" now})
+
 (defn- terminal-job [job state now]
   (-> job
       (assoc :state state :updated-at now)
@@ -464,6 +485,7 @@
 (defrecord FirestoreJobService [^Firestore firestore request-store queue launcher
                                 worker ^Clock clock daily-limit
                                 monthly-budget-minor-units
+                                preview-reservation-minor-units
                                 render-reservation-minor-units
                                 member-directory]
   lifecycle/JobAccess
@@ -646,6 +668,11 @@
           month (billing-month clock)
           day-ref (.document orchestration (str "submissions-" day))
           budget-ref (.document orchestration (str "budget-" month))
+          preview? (lifecycle/preview-request? request)
+          reservation-minor-units
+          (lifecycle/reservation-minor-units
+           request preview-reservation-minor-units
+           render-reservation-minor-units)
           candidate (cond->
                      {:id job-id :state :queued :attempt 1
                       :request-object request-object
@@ -655,13 +682,15 @@
                       :requester-email (:requesterEmail request)
                       :requester-membership-version
                       (:requesterMembershipVersion request)
+                      :reservation-kind (if preview? :preview :render)
+                      :reservation-minor-units reservation-minor-units
                       :created-at now :updated-at now
                       :expires-at
                       (+ now (* 1000
-                                (if (lifecycle/preview-request? request)
+                                (if preview?
                                   lifecycle/preview-retention-seconds
                                   (* 90 24 60 60))))}
-                      (lifecycle/preview-request? request)
+                      preview?
                       (assoc :operation-kind :preview))
           result
           (try
@@ -707,7 +736,7 @@
                                "Daily submission limit is exhausted"
                                {:type
                                 ::lifecycle/daily-submission-limit-exhausted})))
-                     (when (> (+ reserved render-reservation-minor-units)
+                     (when (> (+ reserved reservation-minor-units)
                               monthly-budget-minor-units)
                        (throw (errors/raise! "Monthly compute budget is exhausted"
                                              {:type
@@ -721,14 +750,11 @@
                             "submissionCount" (inc submitted)
                             "updatedAt" now})
                      (.set ^Transaction transaction budget-ref
-                           {"month" month
-                            "reservedMinorUnits"
-                            (+ reserved render-reservation-minor-units)
-                            "limitMinorUnits" monthly-budget-minor-units
-                            "reservationMinorUnits"
-                            render-reservation-minor-units
-                            "currency" "PLN"
-                            "updatedAt" now})
+                           (budget-data
+                            month (+ reserved reservation-minor-units)
+                            monthly-budget-minor-units
+                            preview-reservation-minor-units
+                            render-reservation-minor-units now))
                      {:created? true :job candidate})))))
             (catch Throwable error
               (rethrow-transaction-contention!
@@ -871,6 +897,10 @@
                  (let [capacity (transaction-snapshot transaction capacity-ref)
                        budget (transaction-snapshot transaction budget-ref)
                        identity (job-member-identity job)
+                       reservation-minor-units
+                       (if (= :preview (:operation-kind job))
+                         preview-reservation-minor-units
+                         render-reservation-minor-units)
                        reserved (long (or (some-> ^DocumentSnapshot budget
                                                   .getData
                                                   (get "reservedMinorUnits"))
@@ -886,7 +916,7 @@
                              lifecycle/max-active-leases)
                      (throw (errors/raise! "All render leases are held"
                                            {:type ::lifecycle/capacity-exhausted})))
-                   (when (> (+ reserved render-reservation-minor-units)
+                   (when (> (+ reserved reservation-minor-units)
                             monthly-budget-minor-units)
                      (throw (errors/raise! "Monthly compute budget is exhausted"
                                            {:type
@@ -894,20 +924,23 @@
                    (let [updated (-> job
                                      (assoc :state :queued
                                             :attempt (inc (:attempt job))
+                                            :reservation-kind
+                                            (if (= :preview (:operation-kind job))
+                                              :preview
+                                              :render)
+                                            :reservation-minor-units
+                                            reservation-minor-units
                                             :updated-at now)
                                      (dissoc :failure :failure-diagnostics
                                              :output :execution
                                              :lease-token :lease-expires-at))]
                      (.set ^Transaction transaction job-ref (job-doc updated))
                      (.set ^Transaction transaction budget-ref
-                           {"month" month
-                            "reservedMinorUnits"
-                            (+ reserved render-reservation-minor-units)
-                            "limitMinorUnits" monthly-budget-minor-units
-                            "reservationMinorUnits"
-                            render-reservation-minor-units
-                            "currency" "PLN"
-                            "updatedAt" now})
+                           (budget-data
+                            month (+ reserved reservation-minor-units)
+                            monthly-budget-minor-units
+                            preview-reservation-minor-units
+                            render-reservation-minor-units now))
                      updated)))))
             (catch Throwable error
               (rethrow-transaction-contention!
@@ -1042,20 +1075,25 @@
 
 (defn job-service [{:keys [firestore request-store queue launcher worker clock
                            daily-limit monthly-budget-minor-units
+                           preview-reservation-minor-units
                            render-reservation-minor-units member-directory]
                     :or {clock (Clock/systemUTC)
                          daily-limit lifecycle/max-daily-submissions
                          monthly-budget-minor-units
                          lifecycle/default-monthly-budget-minor-units
+                         preview-reservation-minor-units
+                         lifecycle/default-preview-reservation-minor-units
                          render-reservation-minor-units
                          lifecycle/default-render-reservation-minor-units}}]
   (lifecycle/validate-admission-limits! daily-limit monthly-budget-minor-units
+                                        preview-reservation-minor-units
                                         render-reservation-minor-units)
   (->FirestoreJobService
    (or firestore (.getService (FirestoreOptions/getDefaultInstance)))
    request-store queue launcher worker clock daily-limit
    monthly-budget-minor-units
-   render-reservation-minor-units member-directory))
+   preview-reservation-minor-units render-reservation-minor-units
+   member-directory))
 
 (defn- env [name default]
   (get (System/getenv) name default))
@@ -1129,6 +1167,9 @@
             :monthly-budget-minor-units
             (env-long "AGG_MONTHLY_BUDGET_MINOR_UNITS"
                       lifecycle/default-monthly-budget-minor-units)
+            :preview-reservation-minor-units
+            (env-long "AGG_PREVIEW_RESERVATION_MINOR_UNITS"
+                      lifecycle/default-preview-reservation-minor-units)
             :render-reservation-minor-units
             (env-long "AGG_RENDER_RESERVATION_MINOR_UNITS"
                       lifecycle/default-render-reservation-minor-units)

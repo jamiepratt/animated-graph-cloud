@@ -16,12 +16,19 @@ job IDs, filenames, telemetry, tokens, or signed URLs in logs.
 One Firestore transaction admits each new idempotency key. It rejects when the
 UTC-day counter has reached 100, when five unexpired capacity leases exist, or
 when another conservative compute reservation would exceed the monthly ceiling.
-The development ceiling is PLN 400 and each attempt reserves 125 grosz
-(PLN 1.25), above the measured maximum-render compute cost. Its month resets at
-Cloud Billing's fixed midnight UTC−8 boundary rather than daylight-saving-aware
+The development ceiling is PLN 400. Preview attempts reserve 125 grosz
+independently from the 125-grosz (PLN 1.25) durable-attempt reservation, making
+one Preview plus one Submit a configured 250-grosz maximum exposure. Each job
+records its reservation kind and amount. The budget document records both
+configured amounts and their combined exposure. Its month resets at Cloud
+Billing's fixed midnight UTC−8 boundary rather than daylight-saving-aware
 Pacific local time.
-Explicit retries reserve again; duplicate
-submissions do not. Stable errors are `daily_submission_limit_exhausted`,
+
+Explicit retries and new Preview generations reserve their operation-specific
+amount again; duplicate submissions using the same idempotency key do not.
+Preview success, failure, cancellation, or 24-hour expiry does not release its
+reservation. Durable reservations remain non-refundable as before. Stable
+errors are `daily_submission_limit_exhausted`,
 `capacity_exhausted`, and `monthly_budget_exhausted`. Existing executions are
 never killed by a later budget decision.
 

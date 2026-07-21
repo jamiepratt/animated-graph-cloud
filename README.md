@@ -295,11 +295,17 @@ retries. Request and output objects expire after one day; Firestore job metadata
 expires after 90 days.
 
 New jobs are admitted atomically against a global 100-submission UTC-day limit,
-the five live leases, and a conservative 125-grosz (PLN 1.25) reservation from
-the PLN 400 monthly development ceiling using Cloud Billing's fixed UTC−8
-calendar month. Explicit retries reserve compute again. Rejections
-use stable `daily_submission_limit_exhausted`, `capacity_exhausted`, and
-`monthly_budget_exhausted` error codes; already-running work may finish.
+the five live leases, and the PLN 400 monthly development ceiling using Cloud
+Billing's fixed UTC−8 calendar month. Preview attempts reserve 125 grosz
+independently from the 125-grosz (PLN 1.25) durable-attempt reservation. The
+configured maximum for one Preview plus one Submit is therefore 250 grosz (PLN
+2.50). Replaying the same idempotency key and body reserves nothing again. A new
+Preview generation or explicit retry reserves its operation-specific amount
+again. Reservations are conservative: success, failure, cancellation, or
+24-hour expiry do not release the Preview reservation, and durable reservations
+are likewise retained. Rejections use stable `daily_submission_limit_exhausted`,
+`capacity_exhausted`, and `monthly_budget_exhausted` error codes;
+already-running work may finish.
 
 An OIDC-authenticated Cloud Scheduler request uses its own `agg-scheduler`
 identity to reconcile Firestore every five minutes; the dispatcher accepts only
