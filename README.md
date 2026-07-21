@@ -107,6 +107,17 @@ result.
 The source video remains streamed and unpersisted; all unique requested frames
 are batch-decoded in one worker workflow.
 
+If the selected video ends before every requested key moment, the operation
+returns a successful partial gallery containing every complete Source and Final
+pair. Its bounded warning reports requested, generated, and omitted moment
+counts plus the stable source-duration reason. The browser explains what
+happened and says: Shorten the section or choose a longer video. If no requested
+moment is available, the operation fails without broken image references and
+shows the same recovery guidance. Normal browser feedback does not display failure codes, request IDs, internal stages,
+elapsed timings,
+retryability flags, stack traces, or FFmpeg output; API responses and
+operational events retain only the privacy-safe structured diagnosis.
+
 `POST /v1/overlay` still returns a seekable `video/quicktime` ProRes 4444 overlay
 with AAC heartbeat audio. That synchronous route is limited to a one-second production diagnostic.
 Longer requests return HTTP 422 before rendering and

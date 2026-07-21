@@ -733,6 +733,11 @@
                                  {:type ::typed-render-failure
                                   :failure-code "composition_encode_failed"
                                   :stage "composition_encode"
+                                  :reason "source_duration_too_short"
+                                  :limits {:requested-moment-count 4
+                                           :generated-moment-count 0
+                                           :omitted-moment-count 4
+                                           :requested-duration-seconds 20}
                                   :status 422
                                   :retryable false})))
               diagnostic-service
@@ -756,11 +761,19 @@
             (is (nil? (:job-id (ex-data cause))))
             (is (= {:failureCode "composition_encode_failed"
                     :stage "composition_encode"
+                    :reason "source_duration_too_short"
+                    :requestedMomentCount 4
+                    :generatedMomentCount 0
+                    :omittedMomentCount 4
+                    :requestedDurationSeconds 20
                     :status 422
                     :retryable false
                     :attempt 1}
-                   (select-keys failed [:failureCode :stage :status :retryable
-                                        :attempt])))
+                   (select-keys failed
+                                [:failureCode :stage :reason
+                                 :requestedMomentCount :generatedMomentCount
+                                 :omittedMomentCount :requestedDurationSeconds
+                                 :status :retryable :attempt])))
             (is (nat-int? (:elapsedMs failed)))))
         (let [race-service (service blocking-launcher)
               job-id (get-in (jobs/submit-job!

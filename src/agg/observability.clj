@@ -10,7 +10,8 @@
     :jobsCancelled :cleanupErrors :components :failureCode :errorType :port
     :requestId :category :status :phase :view :listState :tokenStatus
     :accountStatus :mimeFilter :indexStatus :stage :elapsedMs :timeoutMs
-    :progressPercent :retryable :attempt})
+    :progressPercent :retryable :attempt :requestedMomentCount
+    :generatedMomentCount :omittedMomentCount :requestedDurationSeconds})
 
 (def ^:private safe-value-keys
   #{:severity :component :event :message :reason :failureCode :errorType
@@ -22,6 +23,10 @@
     "request_load" "request_prepare" "source_content" "overlay_render"
     "composition_encode" "artifact_upload" "drive_delivery"
     "completion_persistence"})
+
+(def ^:private preview-count-keys
+  [:requestedMomentCount :generatedMomentCount :omittedMomentCount
+   :requestedDurationSeconds])
 
 (defn- safe-string? [value]
   (and (string? value)
@@ -45,13 +50,31 @@
     (boolean? value) true
     :else false))
 
+(defn- valid-preview-counts? [fields]
+  (let [{:keys [requestedMomentCount generatedMomentCount omittedMomentCount
+                requestedDurationSeconds]}
+        fields]
+    (and (every? #(contains? fields %) preview-count-keys)
+         (every? integer? (map fields preview-count-keys))
+         (<= 1 requestedMomentCount 32)
+         (<= 0 generatedMomentCount requestedMomentCount)
+         (<= 1 omittedMomentCount requestedMomentCount)
+         (= requestedMomentCount
+            (+ generatedMomentCount omittedMomentCount))
+         (<= 1 requestedDurationSeconds 480))))
+
 (defn safe-event-fields [fields]
-  (into {}
-        (keep (fn [[key value]]
-                (when (and (contains? safe-event-keys key)
-                           (safe-event-value? key value))
-                  [key value])))
-        fields))
+  (let [safe-fields
+        (into {}
+              (keep (fn [[key value]]
+                      (when (and (contains? safe-event-keys key)
+                                 (safe-event-value? key value))
+                        [key value])))
+              fields)]
+    (if (and (some #(contains? safe-fields %) preview-count-keys)
+             (not (valid-preview-counts? safe-fields)))
+      (apply dissoc safe-fields preview-count-keys)
+      safe-fields)))
 
 (defn- severity [level]
   (case level

@@ -5,6 +5,7 @@
             [agg.jobs.lifecycle :as jobs]
             [agg.jobs-test :as fixture]
             [agg.observability :as observability]
+            [agg.preview.core :as preview]
             [agg.renderer.main :as renderer]
             [clojure.test :refer [deftest is]])
   (:import (java.nio.file Files OpenOption)))
@@ -115,6 +116,45 @@
     (is (= "overlay" (:mode result)))
     (is (= 42 (:output-bytes result)))))
 
+(deftest partial-preview-emits-a-bounded-correlated-warning-event
+  (let [operation-id "00000000-0000-0000-0000-000000000084"
+        events (atom [])
+        render-cloud!
+        (fn [_render-spec _dependencies]
+          {:output-bytes 42
+           :version 1
+           :mode "source-final"
+           :sections []
+           :assets []
+           :warnings [{:reason "source_duration_too_short"
+                       :requestId operation-id
+                       :requestedMomentCount 4
+                       :generatedMomentCount 3
+                       :omittedMomentCount 1
+                       :requestedDurationSeconds 20
+                       :retryable false}]})
+        worker (renderer/->CloudRenderWorker "temporary-bucket" nil
+                                             render-cloud!)]
+    (with-redefs [observability/emit-event! #(swap! events conj %)]
+      (jobs/perform-render!
+       worker operation-id
+       (assoc (fixture/render-request)
+              :previewOperation jobs/preview-operation-version)))
+    (is (= [{:severity "WARNING"
+             :component "renderer"
+             :event "preview_partial_gallery"
+             :message "Preview gallery has unavailable source frames"
+             :requestId operation-id
+             :reason "source_duration_too_short"
+             :requestedMomentCount 4
+             :generatedMomentCount 3
+             :omittedMomentCount 1
+             :requestedDurationSeconds 20
+             :retryable false}]
+           (filterv #(= "preview_partial_gallery" (:event %)) @events)))
+    (is (not (re-find #"source-video|telemetry|filename|token"
+                      (pr-str @events))))))
+
 (deftest drive-reauthorization-has-a-data-free-operational-event
   (let [revoked (ex-info "secret-token filename.mov"
                          {:type ::auth/drive-grant-required
@@ -190,6 +230,101 @@
     (is (not (re-find #"private|secret|token"
                       (pr-str event))))
     (is (not (re-find (re-pattern job-id) (pr-str event))))))
+
+(deftest zero-frame-preview-retains-bounded-api-and-operational-diagnostics
+  (let [worker
+        (reify jobs/RenderWorker
+          (perform-render! [_ _job-id _request]
+            (jobs/with-durable-stage
+              "composition_encode"
+              #(errors/raise!
+                "private-source.mov ended before a requested preview frame"
+                {:type ::source-duration-too-short
+                 :reason "source_duration_too_short"
+                 :limits {:requested-moment-count 4
+                          :generated-moment-count 0
+                          :omitted-moment-count 4
+                          :requested-duration-seconds 20}
+                 :retryable false}))))
+        system (jobs/in-memory-system {:worker worker})
+        service (:service system)
+        job-id (get-in (jobs/submit-job!
+                        service "zero-frame-preview"
+                        (assoc (fixture/render-request)
+                               :previewOperation jobs/preview-operation-version))
+                       [:job :id])
+        _ (jobs/dispatch-job! service job-id)
+        cause (try
+                (jobs/run-job-attempt! service job-id 1)
+                (catch Throwable error error))
+        failed (jobs/get-job service job-id)
+        operation (preview/operation-resource failed)
+        event (renderer/cloud-failure-event cause)]
+    (is (= {:failureCode "composition_encode_failed"
+            :stage "composition_encode"
+            :reason "source_duration_too_short"
+            :requestedMomentCount 4
+            :generatedMomentCount 0
+            :omittedMomentCount 4
+            :requestedDurationSeconds 20
+            :retryable false}
+           (select-keys failed
+                        [:failureCode :stage :reason :requestedMomentCount
+                         :generatedMomentCount :omittedMomentCount
+                         :requestedDurationSeconds :retryable])))
+    (is (= {:code "composition_encode_failed"
+            :category "preview_rendering"
+            :requestId job-id
+            :retryable false
+            :stage "composition_encode"
+            :reason "source_duration_too_short"
+            :requestedMomentCount 4
+            :generatedMomentCount 0
+            :omittedMomentCount 4
+            :requestedDurationSeconds 20}
+           (dissoc (:error operation) :elapsedMs)))
+    (is (nat-int? (get-in operation [:error :elapsedMs])))
+    (is (= {:severity "ERROR"
+            :component "renderer"
+            :event "cloud_render_failed"
+            :message "Cloud renderer job failed"
+            :failureCode "composition_encode_failed"
+            :stage "composition_encode"
+            :reason "source_duration_too_short"
+            :requestId job-id
+            :requestedMomentCount 4
+            :generatedMomentCount 0
+            :omittedMomentCount 4
+            :requestedDurationSeconds 20
+            :retryable false
+            :attempt 1}
+           (dissoc event :elapsedMs)))
+    (is (not (re-find #"private-source" (pr-str [failed operation event]))))))
+
+(deftest invalid-source-duration-limits-are-not-published
+  (let [cause
+        (try
+          (jobs/with-durable-stage
+            "composition_encode"
+            #(errors/raise!
+              "private malformed limits"
+              {:type ::source-duration-too-short
+               :reason "source_duration_too_short"
+               :limits {:requested-moment-count 100
+                        :generated-moment-count 0
+                        :omitted-moment-count 100
+                        :requested-duration-seconds 481}
+               :retryable false}))
+          (catch Throwable error error))
+        diagnostics (jobs/failure-diagnostics cause 1)]
+    (is (= {:failure-code "composition_encode_failed"
+            :stage "composition_encode"
+            :reason "source_duration_too_short"
+            :retryable false
+            :elapsed-ms 1}
+           diagnostics))
+    (is (not (re-find #"private|100|481"
+                      (pr-str diagnostics))))))
 
 (deftest durable-render-stages-have-bounded-owned-failure-codes
   (doseq [[stage failure-code]

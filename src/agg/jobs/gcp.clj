@@ -90,6 +90,19 @@
     (assoc "failureStage" (get-in job [:failure-diagnostics :stage]))
     (get-in job [:failure-diagnostics :reason])
     (assoc "failureReason" (get-in job [:failure-diagnostics :reason]))
+    (get-in job [:failure-diagnostics :requested-moment-count])
+    (assoc "failureRequestedMomentCount"
+           (long (get-in job [:failure-diagnostics :requested-moment-count])))
+    (some? (get-in job [:failure-diagnostics :generated-moment-count]))
+    (assoc "failureGeneratedMomentCount"
+           (long (get-in job [:failure-diagnostics :generated-moment-count])))
+    (get-in job [:failure-diagnostics :omitted-moment-count])
+    (assoc "failureOmittedMomentCount"
+           (long (get-in job [:failure-diagnostics :omitted-moment-count])))
+    (get-in job [:failure-diagnostics :requested-duration-seconds])
+    (assoc "failureRequestedDurationSeconds"
+           (long (get-in job [:failure-diagnostics
+                              :requested-duration-seconds])))
     (get-in job [:failure-diagnostics :status])
     (assoc "failureStatus" (long (get-in job [:failure-diagnostics :status])))
     (get-in job [:failure-diagnostics :timeout-ms])
@@ -126,6 +139,18 @@
                  (assoc :stage (get data "failureStage"))
                  (get data "failureReason")
                  (assoc :reason (get data "failureReason"))
+                 (contains? data "failureRequestedMomentCount")
+                 (assoc :requested-moment-count
+                        (long (get data "failureRequestedMomentCount")))
+                 (contains? data "failureGeneratedMomentCount")
+                 (assoc :generated-moment-count
+                        (long (get data "failureGeneratedMomentCount")))
+                 (contains? data "failureOmittedMomentCount")
+                 (assoc :omitted-moment-count
+                        (long (get data "failureOmittedMomentCount")))
+                 (contains? data "failureRequestedDurationSeconds")
+                 (assoc :requested-duration-seconds
+                        (long (get data "failureRequestedDurationSeconds")))
                  (contains? data "failureStatus")
                  (assoc :status (long (get data "failureStatus")))
                  (contains? data "failureTimeoutMs")

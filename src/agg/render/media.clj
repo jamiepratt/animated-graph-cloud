@@ -256,15 +256,11 @@
      (bit-shift-left (bit-and 0xff (aget ^bytes bytes (+ offset 2))) 8)
      (bit-and 0xff (aget ^bytes bytes (+ offset 3)))))
 
-(defn- concatenated-pngs [bytes expected-count]
+(defn- concatenated-pngs [bytes]
   (loop [offset 0
          images []]
     (if (= offset (alength ^bytes bytes))
-      (if (= expected-count (count images))
-        images
-        (throw (errors/raise! "Source gallery emitted an incomplete image set"
-                              {:type ::incomplete-gallery-output
-                               :limit expected-count})))
+      images
       (do
         (when-not (bytes-match? bytes offset png-signature)
           (throw (errors/raise! "Source gallery emitted invalid PNG data"
@@ -359,12 +355,21 @@
               (throw (errors/raise! "Selected-source gallery output is too large"
                                     {:type ::gallery-output-too-large
                                      :limit maximum-output-bytes})))
-            (doseq [[frame-index png]
-                    (map vector frame-indexes
-                         (concatenated-pngs output (count frame-indexes)))]
-              (consume-gallery-png! render-spec frame-index png consume-frame!))
-            {:frame-count (count frame-indexes)
-             :source-decodes 1})
+            (let [pngs (concatenated-pngs output)
+                  requested (count frame-indexes)
+                  generated (count pngs)]
+              (when (> generated requested)
+                (throw (errors/raise! "Source gallery emitted too many images"
+                                      {:type ::invalid-gallery-output
+                                       :limit requested})))
+              (doseq [[frame-index png] (map vector frame-indexes pngs)]
+                (consume-gallery-png! render-spec frame-index png consume-frame!))
+              (cond-> {:requested-frame-count requested
+                       :generated-frame-count generated
+                       :omitted-frame-count (- requested generated)
+                       :source-decodes 1}
+                (< generated requested)
+                (assoc :reason "source_duration_too_short"))))
           (catch Throwable error
             (.destroyForcibly process)
             (future-cancel stdout)

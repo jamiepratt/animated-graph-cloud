@@ -497,6 +497,78 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest partial-selected-source-preview-is-a-successful-bounded-api-result
+  (let [auth-system (auth-system nil)
+        session (auth/issue-session auth-system
+                                    {:subject "google-subject-1"
+                                     :email "owner@example.com"})
+        csrf (auth/issue-csrf-token auth-system {:subject "google-subject-1"})
+        asset-store (preview/in-memory-asset-store)
+        source-count (atom 0)
+        gallery-renderer
+        (reify media/CompositeGalleryRenderer
+          (render-composite-gallery!
+            [_ _ source-stream! overlays consume-frame!]
+            (with-open [output (java.io.ByteArrayOutputStream.)]
+              (source-stream! output))
+            (doseq [{:keys [frameIndex overlay]} (take 3 overlays)]
+              (consume-frame! frameIndex overlay overlay))
+            {:requested-frame-count 4
+             :generated-frame-count 3
+             :omitted-frame-count 1
+             :reason "source_duration_too_short"
+             :source-decodes 1}))
+        worker
+        (reify jobs/RenderWorker
+          (perform-render! [_ operation-id request]
+            (preview/render-gallery!
+             operation-id (contract/prepare request) asset-store
+             frames/java2d-frame-renderer gallery-renderer
+             (fn [output]
+               (swap! source-count inc)
+               (.write ^java.io.OutputStream output (byte-array 1024))))))
+        system (jobs/in-memory-system {:worker worker})
+        port (available-port)
+        server (api/start! port {:auth-system auth-system
+                                 :preview-job-service (:service system)
+                                 :preview-asset-store asset-store})
+        request (assoc (fixture/render-request)
+                       :sourceVideo {:fileId "drive-file-1"}
+                       :fitMode "letterbox"
+                       :timer {:startAt "2026-07-17T09:00:00.500Z"
+                               :endAt "2026-07-17T09:00:01.500Z"})]
+    (try
+      (let [started (test-http/send-string!
+                     :post (str "http://127.0.0.1:" port "/v1/preview")
+                     (json/write-str request)
+                     {"Content-Type" "application/json"
+                      "Cookie" (str "agg_session=" session)
+                      "X-CSRF-Token" csrf})
+            operation (json/read-str (.body started) :key-fn keyword)]
+        (jobs/dispatch-job! (:service system) (:id operation))
+        (jobs/run-job! (:service system) (:id operation))
+        (let [completed (test-http/send-string!
+                         :get (str "http://127.0.0.1:" port
+                                   (:statusUrl operation))
+                         nil {"Cookie" (str "agg_session=" session)})
+              body (json/read-str (.body completed) :key-fn keyword)]
+          (is (= 202 (.statusCode started)))
+          (is (= 200 (.statusCode completed)))
+          (is (= "succeeded" (:state body)))
+          (is (= 1 @source-count))
+          (is (= [0 13 38]
+                 (mapv :frameIndex (get-in body [:result :assets]))))
+          (is (= [{:reason "source_duration_too_short"
+                   :requestId (:id operation)
+                   :requestedMomentCount 4
+                   :generatedMomentCount 3
+                   :omittedMomentCount 1
+                   :requestedDurationSeconds 2
+                   :retryable false}]
+                 (get-in body [:result :warnings])))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest asynchronous-preview-failures-expose-only-bounded-diagnostics
   (let [auth-system (auth-system nil)
         session (auth/issue-session auth-system
