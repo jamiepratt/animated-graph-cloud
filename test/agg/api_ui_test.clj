@@ -342,18 +342,36 @@
     :mode "source-final"
     :sections
     [{:id "heart-rate" :name "Heart rate" :unit "bpm"
-      :moments [{:frameIndex 25 :elapsedSeconds 1.0 :elapsed "00:01.000"
+      :moments [{:frameIndex 0 :elapsedSeconds 0.0 :elapsed "00:00.000"
+                 :labels ["Video start"]
+                 :eventLabel "Video start"
+                 :value 120.0
+                 :title "Video start - 120 bpm - 00:00.000"
+                 :frameRef "a000"}
+                {:frameIndex 25 :elapsedSeconds 1.0 :elapsed "00:01.000"
                  :labels ["Prominent maximum"]
                  :eventLabel "Prominent maximum"
                  :value 168.0
-                 :title "Prominent maximum - 168.0 bpm - 00:01.000"
+                 :title "Prominent maximum - 168 bpm - 00:01.000"
+                 :frameRef "a001"}]}
+     {:id "spo2" :name "SpO2" :unit "%"
+      :moments [{:frameIndex 0 :elapsedSeconds 0.0 :elapsed "00:00.000"
+                 :labels ["Video start"]
+                 :eventLabel "Video start"
+                 :value 97.0
+                 :title "Video start - 97 % - 00:00.000"
                  :frameRef "a000"}]}]
     :assets
     [{:id "a000" :frameIndex 25 :kind "source-final" :merged false
       :source {:thumbnailUrl "/v1/previews/x/images/a000-source/thumbnail"
                :fullUrl "/v1/previews/x/images/a000-source/full"}
       :final {:thumbnailUrl "/v1/previews/x/images/a000-final/thumbnail"
-              :fullUrl "/v1/previews/x/images/a000-final/full"}}]}})
+              :fullUrl "/v1/previews/x/images/a000-final/full"}}
+     {:id "a001" :frameIndex 25 :kind "source-final" :merged true
+      :source {:thumbnailUrl "/v1/previews/x/images/a001-source/thumbnail"
+               :fullUrl "/v1/previews/x/images/a001-source/full"}
+      :final {:thumbnailUrl "/v1/previews/x/images/a001-source/thumbnail"
+              :fullUrl "/v1/previews/x/images/a001-source/full"}}]}})
 
 (defn- preview-gallery-browser-outcome [narrow?]
   (let [fragment (ui/preview-operation-fragment
@@ -367,11 +385,13 @@
         scenario
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
-         "let outcome;try{const moments=document.querySelector('.preview-moments'),source=document.querySelector('.preview-cell .frame-role'),final=[...document.querySelectorAll('.frame-role')].find(node=>node.textContent==='Final'),buttons=[...document.querySelectorAll('.preview-open')],open=buttons[0],dialog=document.getElementById('preview-dialog');"
-         "const display=getComputedStyle(moments).display,roles=[...document.querySelectorAll('.frame-role')].map(node=>node.textContent),noOverflow=document.documentElement.scrollWidth<=window.innerWidth,meaningfulAlts=buttons.every(button=>button.querySelector('img').alt.length>12),eagerImages=buttons.every(button=>button.querySelector('img').loading==='eager'),nativeButtons=buttons.every(button=>button.tagName==='BUTTON');"
-         "open.focus();open.click();const dialogOpened=dialog.open&&dialog.querySelector('img').alt===open.dataset.alt;dialog.querySelector('.preview-dialog-close').click();const focusReturned=document.activeElement===open;"
+         "let outcome;try{const moments=document.querySelector('.preview-moments'),source=document.querySelector('.preview-cell .frame-role'),final=[...document.querySelectorAll('.frame-role')].find(node=>node.textContent==='Final'),buttons=[...document.querySelectorAll('.preview-open')],titles=[...document.querySelectorAll('.photo-title')],open=buttons[3],dialog=document.getElementById('preview-dialog');"
+         "const display=getComputedStyle(moments).display,roles=[...document.querySelectorAll('.frame-role')].map(node=>node.textContent),photoTitles=titles.map(node=>node.textContent),titlePlacement=titles.every((title,index)=>title.nextElementSibling===buttons[index]&&title.getBoundingClientRect().bottom<=buttons[index].getBoundingClientRect().top+1),titleRects=titles.map(title=>title.getBoundingClientRect()),titlesDoNotOverlap=titleRects.every((rect,index)=>titleRects.every((other,otherIndex)=>index===otherIndex||rect.right<=other.left||other.right<=rect.left||rect.bottom<=other.top||other.bottom<=rect.top)),thumbnailWidth=buttons[0].getBoundingClientRect().width,viewportWidth=window.innerWidth,noOverflow=document.documentElement.scrollWidth<=viewportWidth,meaningfulAlts=buttons.every(button=>button.querySelector('img').alt.length>12),eagerImages=buttons.every(button=>button.querySelector('img').loading==='eager'),nativeButtons=buttons.every(button=>button.tagName==='BUTTON');"
+         "const sequenceTitles=buttons.map(button=>button.dataset.title),sequenceFullUrls=buttons.map(button=>button.dataset.full),thumbnailUrlsOnly=buttons.every(button=>button.querySelector('img').getAttribute('src').endsWith('/thumbnail'));const previous=dialog.querySelector('.preview-previous'),next=dialog.querySelector('.preview-next'),counter=dialog.querySelector('.preview-counter'),dialogTitle=dialog.querySelector('#preview-dialog-title'),dialogImage=dialog.querySelector('img'),viewerControls=!!(previous&&next&&counter&&dialogTitle);"
+         "open.focus();open.click();const dialogRect=dialog.getBoundingClientRect(),dialogOpened=dialog.open&&dialogImage.alt===open.dataset.alt&&dialogImage.getAttribute('src')===open.dataset.full,clickedPosition=viewerControls&&dialogTitle.textContent===open.dataset.title&&counter.textContent==='Image 4 of 5',modalFocus=dialog.matches(':modal')&&dialog.contains(document.activeElement),viewportFit=dialogRect.width>=window.innerWidth-24&&dialogRect.height>=window.innerHeight-24&&getComputedStyle(dialogImage).objectFit==='contain',controlsVisible=viewerControls&&[previous,next].every(button=>button.getBoundingClientRect().width>0),accessibleViewer=viewerControls&&dialog.getAttribute('aria-labelledby')===dialogTitle.id&&counter.getAttribute('aria-live')==='polite'&&[previous,next,dialog.querySelector('.preview-dialog-close')].every(button=>(button.getAttribute('aria-label')||button.textContent).trim().length>0);"
+         "let buttonNavigation=false,keyboardNavigation=false,endStates=false,escapePreserved=false;if(viewerControls){next.click();buttonNavigation=counter.textContent==='Image 5 of 5'&&dialogTitle.textContent===sequenceTitles[4]&&next.disabled&&!previous.disabled;dialog.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));const stoppedAtEnd=counter.textContent==='Image 5 of 5';dialog.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true,cancelable:true}));keyboardNavigation=stoppedAtEnd&&counter.textContent==='Image 4 of 5'&&dialogTitle.textContent===sequenceTitles[3];dialog.querySelector('.preview-dialog-close').click();const first=buttons[0];first.focus();first.click();dialog.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true,cancelable:true}));endStates=previous.disabled&&!next.disabled&&counter.textContent==='Image 1 of 5';const cancelEvent=new Event('cancel',{cancelable:true});escapePreserved=dialog.dispatchEvent(cancelEvent);if(escapePreserved)dialog.close();}else{dialog.querySelector('.preview-dialog-close').click();}const focusReturned=document.activeElement===buttons[0];"
          "let stale=false,staleSwapRejected=false;if(!" narrow? "){const raw=document.getElementById('raw-json');raw.value=" (json/write-str request-json) ";document.getElementById('apply-json').click();const staleTarget=document.querySelector('.preview-stale');stale=!!staleTarget;const detail={target:staleTarget,xhr:{getResponseHeader:()=>\"generation-1\"},shouldSwap:true};staleTarget.dispatchEvent(new CustomEvent('htmx:beforeSwap',{bubbles:true,detail}));staleSwapRejected=!detail.shouldSwap;}"
-         "outcome={display,roles,noOverflow,meaningfulAlts,eagerImages,nativeButtons,dialogOpened,focusReturned,stale,staleSwapRejected,sourceBeforeFinal:source&&final&&source.compareDocumentPosition(final)&Node.DOCUMENT_POSITION_FOLLOWING};"
+         "outcome={display,roles,photoTitles,titlePlacement,titlesDoNotOverlap,titleRects:titleRects.map(rect=>({left:rect.left,top:rect.top,right:rect.right,bottom:rect.bottom})),thumbnailWidth,viewportWidth,noOverflow,meaningfulAlts,eagerImages,nativeButtons,sequenceTitles,sequenceFullUrls,thumbnailUrlsOnly,viewerControls,dialogOpened,clickedPosition,modalFocus,viewportFit,controlsVisible,accessibleViewer,buttonNavigation,keyboardNavigation,endStates,escapePreserved,focusReturned,stale,staleSwapRejected,sourceBeforeFinal:source&&final&&source.compareDocumentPosition(final)&Node.DOCUMENT_POSITION_FOLLOWING};"
          "}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
          "</script>")
         html (str/replace page "</body>" (str scenario "</body>"))]
@@ -671,18 +691,47 @@
         narrow (preview-gallery-browser-outcome true)]
     (is (nil? (:error desktop)) desktop)
     (is (= "grid" (:display desktop)))
-    (is (= ["Source" "Final"] (:roles desktop)))
+    (is (= ["Source" "Final" "Source and Final - identical" "Source" "Final"]
+           (:roles desktop)))
+    (is (= ["Source - Video start - 120 bpm - 00:00.000"
+            "Final - Video start - 120 bpm - 00:00.000"
+            "Source and Final - identical - Prominent maximum - 168 bpm - 00:01.000"
+            "Source - Video start - 97 % - 00:00.000"
+            "Final - Video start - 97 % - 00:00.000"]
+           (:photoTitles desktop)
+           (:sequenceTitles desktop)))
+    (is (= ["/v1/previews/x/images/a000-source/full"
+            "/v1/previews/x/images/a000-final/full"
+            "/v1/previews/x/images/a001-source/full"
+            "/v1/previews/x/images/a000-source/full"
+            "/v1/previews/x/images/a000-final/full"]
+           (:sequenceFullUrls desktop)))
+    (is (<= 124 (:thumbnailWidth desktop) 132))
+    (is (:titlesDoNotOverlap desktop) desktop)
     (is (every? true? (map desktop
-                           [:noOverflow :meaningfulAlts :eagerImages
-                            :nativeButtons :dialogOpened :focusReturned :stale
-                            :staleSwapRejected])))
+                           [:titlePlacement :noOverflow :meaningfulAlts :eagerImages
+                            :nativeButtons :thumbnailUrlsOnly :viewerControls
+                            :dialogOpened :clickedPosition :modalFocus :viewportFit
+                            :controlsVisible :accessibleViewer :buttonNavigation
+                            :keyboardNavigation :endStates :escapePreserved
+                            :focusReturned :stale :staleSwapRejected])))
     (is (pos? (:sourceBeforeFinal desktop)))
     (is (nil? (:error narrow)) narrow)
     (is (= "block" (:display narrow)))
-    (is (= ["Source" "Final"] (:roles narrow)))
+    (is (= (:roles desktop) (:roles narrow)))
+    (is (= (:photoTitles desktop) (:photoTitles narrow)))
+    (is (= (:sequenceTitles desktop) (:sequenceTitles narrow)))
+    (is (= (:sequenceFullUrls desktop) (:sequenceFullUrls narrow)))
+    (is (> (:thumbnailWidth narrow) (:thumbnailWidth desktop)))
+    (is (<= (:thumbnailWidth narrow) (:viewportWidth narrow)))
+    (is (:titlesDoNotOverlap narrow) narrow)
     (is (every? true? (map narrow
-                           [:noOverflow :meaningfulAlts :eagerImages
-                            :nativeButtons :dialogOpened :focusReturned])))
+                           [:titlePlacement :noOverflow :meaningfulAlts :eagerImages
+                            :nativeButtons :thumbnailUrlsOnly :viewerControls
+                            :dialogOpened :clickedPosition :modalFocus :viewportFit
+                            :controlsVisible :accessibleViewer :buttonNavigation
+                            :keyboardNavigation :endStates :escapePreserved
+                            :focusReturned])))
     (is (pos? (:sourceBeforeFinal narrow)))))
 
 (deftest overlay-only-hr-and-spo2-gallery-has-trace-sections-and-overlay-row
@@ -706,6 +755,16 @@
     (is (str/includes? fragment ">Heart rate</h2>"))
     (is (str/includes? fragment ">SpO2</h2>"))
     (is (= 2 (count (re-seq #">Overlay</span>" fragment))))
+    (is (= 2 (count (re-seq #"class=\"preview-open\"" fragment))))
+    (is (= 2 (count (re-seq
+                     #"data-full=\"/v1/previews/x/images/a000-overlay/full\""
+                     fragment))))
+    (is (str/includes?
+         fragment
+         "data-title=\"Overlay - Video start - 120 bpm - 00:00.000\""))
+    (is (str/includes?
+         fragment
+         "data-title=\"Overlay - Video start - 97 % - 00:01.000\""))
     (is (= 2 (count (re-seq #"class=\"checkerboard\"" fragment))))
     (is (not (str/includes? fragment ">Source</span>")))
     (is (not (str/includes? fragment ">Final</span>")))))
