@@ -12,7 +12,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]])
-  (:import (java.awt Color)
+  (:import (java.awt Color Font)
            (java.awt.image BufferedImage)
            (java.io ByteArrayInputStream ByteArrayOutputStream IOException OutputStream)
            (java.nio.file Files OpenOption)
@@ -561,6 +561,74 @@
     (is (= "14:37:12   00:12"
            (frames/readout-time-text section-start warsaw 12.0)))))
 
+(deftest timer-readout-has-pre-start-active-and-post-end-states
+  (let [timer {:start-seconds 1.2 :end-seconds 46.7}]
+    (testing "every production frame before the timer remains negative"
+      (is (= "-00:01" (frames/timer-readout-text timer (/ 29.0 25))))
+      (is (= "-00:01" (frames/timer-readout-text timer 1.199999))))
+    (testing "the active timer starts at zero and floors whole seconds"
+      (is (= "00:00" (frames/timer-readout-text timer 1.2)))
+      (is (= "00:45" (frames/timer-readout-text timer 46.699999))))
+    (testing "the completed timer freezes its duration and adds post elapsed"
+      (is (= "00:45 + 00:00" (frames/timer-readout-text timer 46.7)))
+      (is (= "00:45 + 00:07" (frames/timer-readout-text timer 53.999))))))
+
+(deftest timer-replaces-section-elapsed-without-replacing-local-clock
+  (let [section-start (Instant/parse "2026-07-17T12:37:00Z")
+        warsaw (ZoneId/of "Europe/Warsaw")
+        timer {:start-seconds 20.0 :end-seconds 65.0}]
+    (is (= "14:37:12   00:12"
+           (frames/readout-time-text section-start warsaw 12.0 nil)))
+    (is (= "14:37:12"
+           (frames/readout-time-text section-start warsaw 12.0 timer)))))
+
+(deftest x-axis-ticks-are-five-second-multiples-of-the-selected-origin
+  (testing "without a timer the section start is zero and endpoints are not added"
+    (is (= [[0.0 0 60] [5.0 5 5] [10.0 10 5]]
+           (mapv (juxt :section-seconds :relative-seconds
+                       :tick-multiple-seconds)
+                 (frames/x-axis-ticks 12.3 nil)))))
+  (testing "a fractional timer start becomes zero with negative and positive ticks"
+    (is (= [[2.25 -10] [7.25 -5] [12.25 0]
+            [17.25 5] [22.25 10] [27.25 15]]
+           (mapv (juxt :section-seconds :relative-seconds)
+                 (frames/x-axis-ticks
+                  28.5 {:start-seconds 12.25 :end-seconds 20.0})))))
+  (testing "tick-size precedence is 60, then 30, then 15, then 5"
+    (is (= {0 60, 5 5, 15 15, 30 30, 60 60}
+           (->> (frames/x-axis-ticks
+                 125.0 {:start-seconds 60.0 :end-seconds 120.0})
+                (filter #(contains? #{0 5 15 30 60} (:relative-seconds %)))
+                (map (juxt :relative-seconds :tick-multiple-seconds))
+                (into {})))))
+  (is (= ["-01:00" "00:00" "01:00"]
+         (mapv frames/axis-time-text [-60 0 60]))))
+
+(deftest x-axis-labels-use-the-densest-cadence-that-fits-font-bounds
+  (let [image (BufferedImage. 1 1 BufferedImage/TYPE_INT_ARGB)
+        graphics (.createGraphics image)
+        font (Font. Font/SANS_SERIF Font/BOLD 16)
+        timer {:start-seconds 30.0 :end-seconds 45.0}]
+    (try
+      (doseq [[axis-width expected-cadence] [[1000 5] [450 15] [240 30] [100 60]]]
+        (let [layout (frames/x-axis-layout graphics 0 axis-width 60.0 timer font)]
+          (is (= expected-cadence (:label-cadence-seconds layout))
+              (str "axis width " axis-width))
+          (is (every? #(or (nil? (:label %))
+                           (zero? (rem (:relative-seconds %) expected-cadence)))
+                      (:ticks layout)))))
+      (let [ticks (:ticks (frames/x-axis-layout graphics 0 1000 60.0 timer font))
+            tick-size (fn [multiple]
+                        (:tick-size
+                         (first (filter #(= multiple
+                                            (:tick-multiple-seconds %))
+                                        ticks))))]
+        (is (< (tick-size 5) (tick-size 15) (tick-size 30) (tick-size 60)))
+        (is (= "00:00"
+               (:label (first (filter #(zero? (:relative-seconds %)) ticks))))))
+      (finally
+        (.dispose graphics)))))
+
 (deftest frame-readout-pixels-follow-the-selected-display-zone
   (let [render-spec {:width 800
                      :height 450
@@ -592,32 +660,36 @@
                          {:seconds 1.0 :heart-rate 140.0}]})
           4 output)))))
 
-(deftest preview-and-streamed-output-share-identical-clock-pixels
-  (let [render-spec {:width 160
-                     :height 90
-                     :fps 2
-                     :duration-seconds 2
-                     :section-start-at (Instant/parse "2026-07-17T12:37:00Z")
-                     :display-time-zone (ZoneId/of "Europe/Warsaw")
-                     :telemetry [{:seconds 0.0 :heart-rate 140.0}
-                                 {:seconds 2.0 :heart-rate 140.0}]}
-        frame-index 2
-        image (rendered-png render-spec frame-index)
-        rgba (:rgba (streamed-rgba render-spec))
-        frame-size (* (:width render-spec) (:height render-spec) 4)
-        frame-offset (* frame-index frame-size)]
-    (is (every?
-         true?
-         (for [pixel (range (* (:width render-spec) (:height render-spec)))
-               :let [color (Color. (.getRGB image
-                                            (rem pixel (:width render-spec))
-                                            (quot pixel (:width render-spec)))
-                                   true)
-                     offset (+ frame-offset (* pixel 4))]]
-           (= [(.getRed color) (.getGreen color)
-               (.getBlue color) (.getAlpha color)]
-              (mapv #(bit-and 0xff (aget ^bytes rgba (+ offset %)))
-                    (range 4))))))))
+(deftest preview-and-streamed-output-share-identical-readout-and-axis-pixels
+  (doseq [timer [nil {:start-seconds 0.75 :end-seconds 1.25}]]
+    (let [render-spec (cond-> {:width 160
+                               :height 90
+                               :fps 2
+                               :duration-seconds 2
+                               :section-start-at
+                               (Instant/parse "2026-07-17T12:37:00Z")
+                               :display-time-zone (ZoneId/of "Europe/Warsaw")
+                               :telemetry [{:seconds 0.0 :heart-rate 140.0}
+                                           {:seconds 2.0 :heart-rate 140.0}]}
+                        timer (assoc :timer timer))
+          frame-index 2
+          image (rendered-png render-spec frame-index)
+          rgba (:rgba (streamed-rgba render-spec))
+          frame-size (* (:width render-spec) (:height render-spec) 4)
+          frame-offset (* frame-index frame-size)]
+      (is (every?
+           true?
+           (for [pixel (range (* (:width render-spec) (:height render-spec)))
+                 :let [color (Color. (.getRGB image
+                                              (rem pixel (:width render-spec))
+                                              (quot pixel (:width render-spec)))
+                                     true)
+                       offset (+ frame-offset (* pixel 4))]]
+             (= [(.getRed color) (.getGreen color)
+                 (.getBlue color) (.getAlpha color)]
+                (mapv #(bit-and 0xff (aget ^bytes rgba (+ offset %)))
+                      (range 4)))))
+          (str "timer " (boolean timer))))))
 
 (deftest preview-operation-results-expire-logically-at-24-hours
   (let [created (java.time.Instant/parse "2026-07-20T00:00:00Z")
@@ -1194,6 +1266,31 @@
             (str preset-id " readout is not left-clipped"))
         (is (< (apply max visible-xs) (dec (:width render-spec)))
             (str preset-id " readout is not right-clipped"))))))
+
+(deftest both-presets-fit-spo2-and-the-longest-post-timer-expression
+  (doseq [preset-id ["1080p25" "2.7k25"]]
+    (let [{:keys [width height fps duration-seconds]} (spec/preset preset-id)
+          render-spec {:width width
+                       :height height
+                       :fps fps
+                       :duration-seconds duration-seconds
+                       :telemetry [{:seconds 0.0 :heart-rate 140.0}
+                                   {:seconds duration-seconds
+                                    :heart-rate 140.0}]
+                       :spo2 [{:seconds 0.0 :spo2 98.0}
+                              {:seconds duration-seconds :spo2 98.0}]
+                       :timer {:start-seconds 0.0 :end-seconds 0.04}}
+          frame-index (dec (spec/frame-count render-spec))
+          image (rendered-png render-spec frame-index)
+          readout-bottom (int (Math/round (* height 0.10)))
+          visible-xs (for [y (range readout-bottom)
+                           x (range width)
+                           :when (pos? (.getAlpha
+                                        (Color. (.getRGB image x y) true)))]
+                       x)]
+      (is (seq visible-xs) (str preset-id " visible post-timer readout"))
+      (is (pos? (apply min visible-xs)) (str preset-id " left edge"))
+      (is (< (apply max visible-xs) (dec width)) (str preset-id " right edge")))))
 
 (deftest frames-render-axes-readout-cursor-and-future-opacity
   (let [{:keys [rgba]}

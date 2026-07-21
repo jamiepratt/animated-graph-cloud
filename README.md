@@ -176,10 +176,11 @@ mapped section boundaries.
 Heart rate is linearly interpolated on one shared section timeline. Preview and
 MOV use a fixed 40–220 bpm scale and a stable 30-second centered/clamped window
 (or the whole section when shorter); heartbeat timing uses the same interpolated
-values. The frame readout shows deterministic 24-hour local video time
-(`HH:mm:ss`), then section elapsed time, then telemetry values. Preview and
-completed renders derive both times from the same production frame instant.
-See ADR 0004 for the rendering decision.
+values. The frame readout always shows deterministic 24-hour local video time
+(`HH:mm:ss`). Without a timer it also shows section elapsed time. With a timer,
+the timer replaces section elapsed as the single elapsed-time reference. Preview
+and completed renders derive all readout values from the same production frame
+instant. See ADR 0004 for the rendering decision.
 
 The same `telemetry` field also accepts these locked formats:
 
@@ -205,11 +206,16 @@ Optional inputs extend the same JSON body:
 ```
 
 SpO2 must cover the requested section and is linearly interpolated on the same
-camera-aligned timeline. Timer bounds must remain inside the section; the timer
-shows zero before its start and its final elapsed value after its end. A
-watermark must decode as PNG, be at most 2 MiB, no larger than 1024 by 1024, and
-contain at most 1,048,576 pixels. It is decoded once and composited without
-creating frame collections.
+camera-aligned timeline. Timer bounds must remain inside the section. Before
+timer start the readout shows a negative countdown rounded up to the next whole
+second. It shows elapsed timer time from the exact start, then at and after the
+end shows the fixed timer duration plus whole seconds elapsed since the end.
+With a timer, x-axis values are relative to timer start; otherwise they are
+relative to section start. Ticks occur only at visible 5-second multiples, with
+larger ticks at 15, 30, and 60 seconds and the densest non-overlapping label
+cadence selected from those intervals. A watermark must decode as PNG, be at
+most 2 MiB, no larger than 1024 by 1024, and contain at most 1,048,576 pixels.
+It is decoded once and composited without creating frame collections.
 
 All timestamps are absolute instants, so timezone offsets and local-midnight
 crossings normalize deterministically. Missing one-second samples interpolate;
