@@ -8,7 +8,7 @@
             [agg.telemetry.timeline :as timeline]
             [clojure.string :as str])
   (:import (java.nio.charset StandardCharsets)
-           (java.time Duration Instant)))
+           (java.time Duration Instant ZoneId)))
 
 (def max-telemetry-bytes (* 10 1024 1024))
 
@@ -140,6 +140,15 @@
   (when-not condition
     (throw (errors/raise! message data))))
 
+(defn- display-time-zone [value]
+  (require! (and (string? value)
+                 (not (str/blank? value))
+                 (contains? (ZoneId/getAvailableZoneIds) value))
+            "displayTimeZone must be a known IANA timezone identifier"
+            {:type ::invalid-display-time-zone
+             :field "displayTimeZone"})
+  (ZoneId/of value))
+
 (def default-future-trace-opacity-percent 25)
 
 (defn- future-trace-opacity-percent [request]
@@ -228,7 +237,7 @@
 (defn prepare
   "Validates a render request and returns its shared normalized contract."
   [{:keys [telemetryFormat telemetry preset telemetrySyncAt cameraSyncAt
-           sectionStartAt sectionEndAt spo2 timer watermark sourceVideo
+           sectionStartAt sectionEndAt displayTimeZone spo2 timer watermark sourceVideo
            outputFormat fitMode audioMode format fit audio sourceVideoServerMetadata]
     :as request}]
   (let [future-trace-opacity-percent
@@ -279,6 +288,7 @@
           camera-sync (instant cameraSyncAt :cameraSyncAt)
           section-start (instant sectionStartAt :sectionStartAt)
           section-end (instant sectionEndAt :sectionEndAt)
+          display-time-zone (display-time-zone displayTimeZone)
           timer-start (when timer (instant (:startAt timer) :timerStartAt))
           timer-end (when timer (instant (:endAt timer) :timerEndAt))
           duration-nanos (.toNanos (Duration/between section-start section-end))
@@ -336,6 +346,8 @@
       (cond-> (assoc (spec/with-duration render-preset duration-seconds)
                      :future-trace-opacity-percent
                      future-trace-opacity-percent
+                     :section-start-at section-start
+                     :display-time-zone display-time-zone
                      :telemetry (timeline/section samples
                                                   telemetry-start
                                                   telemetry-end))

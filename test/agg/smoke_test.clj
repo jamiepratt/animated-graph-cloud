@@ -45,7 +45,8 @@
                :telemetrySyncAt "2026-07-17T10:00:00Z"
                :cameraSyncAt "2026-07-17T09:00:00Z"
                :sectionStartAt "2026-07-17T09:00:00Z"
-               :sectionEndAt "2026-07-17T09:00:02Z"})]
+               :sectionEndAt "2026-07-17T09:00:02Z"
+               :displayTimeZone "Europe/Warsaw"})]
     (try
       (let [response (test-http/send-string!
                       :post (str "http://127.0.0.1:" port "/v1/preview")
@@ -104,7 +105,8 @@
                :telemetrySyncAt "2026-07-17T10:00:00Z"
                :cameraSyncAt "2026-07-17T09:00:00Z"
                :sectionStartAt "2026-07-17T09:00:00Z"
-               :sectionEndAt "2026-07-17T09:00:01Z"})]
+               :sectionEndAt "2026-07-17T09:00:01Z"
+               :displayTimeZone "Europe/Warsaw"})]
     (try
       (let [response (test-http/send-bytes!
                       :post (str "http://127.0.0.1:" port "/v1/overlay")

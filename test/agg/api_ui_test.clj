@@ -513,6 +513,22 @@
      "Future trace opacity form regression requires Chrome or Chromium"
      html)))
 
+(defn- display-time-zone-browser-outcome [page]
+  (let [base (assoc (fixture/render-request)
+                    :displayTimeZone "Europe/Warsaw")
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{const base=" (json/write-str base) ",raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),selector=document.getElementById('timezone'),hidden=document.getElementById('render-request'),jsonStatus=document.getElementById('json-status');function applyRequest(request){raw.value=JSON.stringify(request);apply.click();return {selector:selector.value,option:[...selector.options].some(option=>option.value===request.displayTimeZone),status:jsonStatus.textContent,request:JSON.parse(hidden.value)}}const preset=applyRequest({...base,displayTimeZone:'Europe/Warsaw'}),custom=applyRequest({...base,displayTimeZone:'Pacific/Auckland'});document.getElementById('section-start-at').dispatchEvent(new Event('input',{bubbles:true}));custom.regenerated=JSON.parse(hidden.value);custom.absoluteTimestampsPreserved=['telemetrySyncAt','cameraSyncAt','sectionStartAt','sectionEndAt'].every(key=>Date.parse(custom.regenerated[key])===Date.parse(base[key]));selector.value='local';selector.dispatchEvent(new Event('input',{bubbles:true}));const local={browserZone:Intl.DateTimeFormat().resolvedOptions().timeZone,request:JSON.parse(hidden.value)};const missingRequest={...base};delete missingRequest.displayTimeZone;const missing=applyRequest(missingRequest);const unknown=applyRequest({...base,displayTimeZone:'Private/Unknown-Zone'});outcome={preset,custom,local,missing,unknown};}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-display-time-zone-browser-"
+     "Browser-level display timezone regression requires Chrome or Chromium"
+     html)))
+
 (deftest public-product-and-legal-pages-identify-alpha-compose
   (let [port (available-port)
         {:keys [auth-system]} (fixture)
@@ -631,6 +647,34 @@
     (is (true? (get-in outcome [:blank :prevented])))
     (is (str/includes? (get-in outcome [:blank :message])
                        "Future trace opacity"))))
+
+(deftest display-time-zone-generates-valid-iana-and-round-trips-raw-json
+  (let [outcome
+        (display-time-zone-browser-outcome
+         (ui/page {:user {:email "member@example.com" :role :member}
+                   :csrf "csrf-test"
+                   :tokens []
+                   :members []
+                   :logs-enabled? false}))]
+    (is (nil? (:error outcome)) outcome)
+    (is (= "Europe/Warsaw" (get-in outcome [:preset :selector])))
+    (is (= "Europe/Warsaw"
+           (get-in outcome [:preset :request :displayTimeZone])))
+    (is (= "Pacific/Auckland" (get-in outcome [:custom :selector])))
+    (is (true? (get-in outcome [:custom :option])))
+    (is (= "Pacific/Auckland"
+           (get-in outcome [:custom :request :displayTimeZone])))
+    (is (= "Pacific/Auckland"
+           (get-in outcome [:custom :regenerated :displayTimeZone])))
+    (is (true? (get-in outcome [:custom :absoluteTimestampsPreserved])))
+    (is (= (get-in outcome [:local :browserZone])
+           (get-in outcome [:local :request :displayTimeZone])))
+    (is (str/includes? (get-in outcome [:missing :status])
+                       "Request.displayTimeZone is required"))
+    (is (str/includes? (get-in outcome [:unknown :status])
+                       "Request.displayTimeZone"))
+    (is (str/includes? (get-in outcome [:unknown :status])
+                       "IANA timezone"))))
 
 (deftest compose-submit-starts-enabled-with-preview-available
   (let [page (ui/page {:user {:email "member@example.com" :role :member}

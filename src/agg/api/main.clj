@@ -132,7 +132,8 @@
 (defn- public-request-field [error]
   (some (fn [entry]
           (let [field (:field entry)]
-            (when (contains? #{"futureTraceOpacityPercent"} field)
+            (when (contains? #{"displayTimeZone"
+                               "futureTraceOpacityPercent"} field)
               field)))
         (error-data error)))
 

@@ -23,6 +23,7 @@
   (:import (java.nio.file Files OpenOption Path StandardOpenOption)
            (com.google.cloud.firestore FirestoreOptions)
            (java.security MessageDigest)
+           (java.time Instant ZoneId)
            (java.util HexFormat UUID)))
 
 (defn- sha256 [^Path path]
@@ -241,6 +242,8 @@
                          (Files/createTempFile "agg-profile-" ".jfr"
                                                (make-array java.nio.file.attribute.FileAttribute 0)))))]
     (cond-> (assoc (if duration (spec/with-duration preset duration) preset)
+                   :section-start-at Instant/EPOCH
+                   :display-time-zone (ZoneId/of "UTC")
                    :output-path output-path
                    :report-path report-path
                    :jfr-path jfr-path

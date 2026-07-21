@@ -5,6 +5,9 @@
            (java.awt.image BufferedImage ComponentColorModel DataBuffer DataBufferByte Raster)
            (java.awt.color ColorSpace)
            (java.io OutputStream)
+           (java.time Instant ZoneId)
+           (java.time.format DateTimeFormatter)
+           (java.util Locale)
            (javax.imageio ImageIO)))
 
 (def trace-contract
@@ -18,6 +21,9 @@
 
 (def heart-rate-color [255 55 82])
 (def max-frame-progress-steps 10)
+
+(def ^:private local-clock-formatter
+  (DateTimeFormatter/ofPattern "HH:mm:ss" Locale/ROOT))
 
 (defprotocol FrameRenderer
   (stream-frames! [renderer render-spec output]
@@ -61,6 +67,21 @@
     (if (pos? hours)
       (format "%d:%02d:%02d" hours minutes seconds)
       (format "%02d:%02d" minutes seconds))))
+
+(defn local-clock-text
+  "Formats the section instant at elapsed production-frame time in its display zone."
+  [^Instant section-start-at ^ZoneId display-time-zone seconds]
+  (let [elapsed-nanos (long (Math/round (* (double seconds) 1000000000.0)))]
+    (.format local-clock-formatter
+             (.atZone (.plusNanos section-start-at elapsed-nanos)
+                      display-time-zone))))
+
+(defn readout-time-text
+  "Formats the local video clock followed by section elapsed time."
+  [^Instant section-start-at ^ZoneId display-time-zone seconds]
+  (str (local-clock-text section-start-at display-time-zone seconds)
+       "   "
+       (elapsed-text seconds)))
 
 (defn- timer-text [{:keys [start-seconds end-seconds]} seconds]
   (elapsed-text
@@ -324,8 +345,10 @@
         heart-rate (value-at-series (:heart-rate-samples layout)
                                     :heart-rate
                                     seconds)
-        parts (cond-> [["T " [255 255 255]]
-                       [(elapsed-text seconds) [255 255 255]]
+        parts (cond-> [[(readout-time-text (:section-start-at layout)
+                                           (:display-time-zone layout)
+                                           seconds)
+                        [255 255 255]]
                        ["   HR " [255 255 255]]
                        [(format "%.0f" heart-rate) heart-rate-color]]
                 (:spo2-samples layout)
@@ -384,6 +407,8 @@
      :right-margin right-margin
      :axis-font axis-font
      :readout-font readout-font
+     :section-start-at (:section-start-at render-spec)
+     :display-time-zone (:display-time-zone render-spec)
      :heart-rate-samples hr-samples
      :future-trace-alpha future-trace-alpha
      :spo2-samples spo2-samples

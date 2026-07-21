@@ -17,6 +17,7 @@
            (java.io ByteArrayInputStream ByteArrayOutputStream IOException OutputStream)
            (java.nio.file Files OpenOption)
            (java.security MessageDigest)
+           (java.time Instant ZoneId)
            (java.util HexFormat)
            (javax.imageio ImageIO)))
 
@@ -35,15 +36,20 @@
 (defn- golden-resource [name]
   (str "fixtures/golden/" name "-" (golden-platform) ".sha256"))
 
+(defn- with-test-clock [render-spec]
+  (merge {:section-start-at Instant/EPOCH
+          :display-time-zone (ZoneId/of "UTC")}
+         render-spec))
+
 (defn- streamed-rgba [render-spec]
   (let [output (ByteArrayOutputStream.)]
-    {:result (frames/stream! render-spec output)
+    {:result (frames/stream! (with-test-clock render-spec) output)
      :rgba (.toByteArray output)}))
 
 (defn- rendered-png [render-spec frame-index]
   (let [output (ByteArrayOutputStream.)]
     (frames/render-frame-png! frames/java2d-frame-renderer
-                              render-spec frame-index output)
+                              (with-test-clock render-spec) frame-index output)
     (ImageIO/read (ByteArrayInputStream. (.toByteArray output)))))
 
 (defn- heart-rate-red? [^Color color]
@@ -242,6 +248,18 @@
                         #"Duration"
                         (renderer/parse-options ["--preset" "1080p25"
                                                  "--duration-seconds" "eight"]))))
+
+(deftest renderer-cli-request-has-explicit-deterministic-clock-context
+  (let [{:keys [output-path report-path] :as request}
+        (renderer/parse-options ["--preset" "1080p25"
+                                 "--duration-seconds" "1"
+                                 "--profile" "false"])]
+    (try
+      (is (= Instant/EPOCH (:section-start-at request)))
+      (is (= (ZoneId/of "UTC") (:display-time-zone request)))
+      (finally
+        (Files/deleteIfExists output-path)
+        (Files/deleteIfExists report-path)))))
 
 (deftest prores-4444-locks-encoder-input-and-decoder-output-formats
   (is (= {:encoder "prores_ks"
@@ -521,11 +539,45 @@
                                  {:seconds 1.0 :heart-rate 140.0}]}
         output (ByteArrayOutputStream.)
         result (frames/render-frame-png! frames/java2d-frame-renderer
-                                         render-spec 3 output)]
+                                         (with-test-clock render-spec) 3 output)]
     (is (= {:width 64 :height 36 :frameIndex 3 :elapsedSeconds 0.75}
            result))
     (is (= [137 80 78 71 13 10 26 10]
            (mapv #(bit-and 0xff %) (take 8 (.toByteArray output)))))))
+
+(deftest local-video-clock-follows-production-frame-timing-and-zone-rules
+  (let [warsaw (ZoneId/of "Europe/Warsaw")
+        section-start (Instant/parse "2026-07-17T12:37:00Z")]
+    (is (= "14:37:11"
+           (frames/local-clock-text section-start warsaw (/ 299.0 25))))
+    (is (= "14:37:12"
+           (frames/local-clock-text section-start warsaw (/ 300.0 25))))
+    (is (= "00:00:00"
+           (frames/local-clock-text
+            (Instant/parse "2026-07-17T21:59:59Z") warsaw 1.0)))
+    (is (= "03:00:00"
+           (frames/local-clock-text
+            (Instant/parse "2026-03-29T00:59:59Z") warsaw 1.0)))
+    (is (= "14:37:12   00:12"
+           (frames/readout-time-text section-start warsaw 12.0)))))
+
+(deftest frame-readout-pixels-follow-the-selected-display-zone
+  (let [render-spec {:width 800
+                     :height 450
+                     :fps 25
+                     :duration-seconds 13
+                     :section-start-at (Instant/parse "2026-07-17T12:37:00Z")
+                     :telemetry [{:seconds 0.0 :heart-rate 140.0}
+                                 {:seconds 13.0 :heart-rate 140.0}]}
+        render (fn [zone]
+                 (let [output (ByteArrayOutputStream.)]
+                   (frames/render-frame-png!
+                    frames/java2d-frame-renderer
+                    (assoc render-spec :display-time-zone (ZoneId/of zone))
+                    300 output)
+                   (.toByteArray output)))]
+    (is (not (java.util.Arrays/equals (render "Europe/Warsaw")
+                                      (render "UTC"))))))
 
 (deftest arbitrary-preview-frames-reject-the-exclusive-section-end
   (let [output (ByteArrayOutputStream.)]
@@ -534,10 +586,38 @@
          #"real output frame"
          (frames/render-frame-png!
           frames/java2d-frame-renderer
-          {:width 64 :height 36 :fps 4 :duration-seconds 1
-           :telemetry [{:seconds 0.0 :heart-rate 100.0}
-                       {:seconds 1.0 :heart-rate 140.0}]}
+          (with-test-clock
+            {:width 64 :height 36 :fps 4 :duration-seconds 1
+             :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                         {:seconds 1.0 :heart-rate 140.0}]})
           4 output)))))
+
+(deftest preview-and-streamed-output-share-identical-clock-pixels
+  (let [render-spec {:width 160
+                     :height 90
+                     :fps 2
+                     :duration-seconds 2
+                     :section-start-at (Instant/parse "2026-07-17T12:37:00Z")
+                     :display-time-zone (ZoneId/of "Europe/Warsaw")
+                     :telemetry [{:seconds 0.0 :heart-rate 140.0}
+                                 {:seconds 2.0 :heart-rate 140.0}]}
+        frame-index 2
+        image (rendered-png render-spec frame-index)
+        rgba (:rgba (streamed-rgba render-spec))
+        frame-size (* (:width render-spec) (:height render-spec) 4)
+        frame-offset (* frame-index frame-size)]
+    (is (every?
+         true?
+         (for [pixel (range (* (:width render-spec) (:height render-spec)))
+               :let [color (Color. (.getRGB image
+                                            (rem pixel (:width render-spec))
+                                            (quot pixel (:width render-spec)))
+                                   true)
+                     offset (+ frame-offset (* pixel 4))]]
+           (= [(.getRed color) (.getGreen color)
+               (.getBlue color) (.getAlpha color)]
+              (mapv #(bit-and 0xff (aget ^bytes rgba (+ offset %)))
+                    (range 4))))))))
 
 (deftest preview-operation-results-expire-logically-at-24-hours
   (let [created (java.time.Instant/parse "2026-07-20T00:00:00Z")
@@ -585,14 +665,15 @@
         manifest
         (preview/render-gallery!
          "00000000-0000-0000-0000-000000000061"
-         {:width 64 :height 36 :fps 2 :duration-seconds 4
-          :telemetry [{:seconds 0.0 :heart-rate 120.0}
-                      {:seconds 2.0 :heart-rate 140.0}
-                      {:seconds 4.0 :heart-rate 160.0}]
-          :spo2 [{:seconds 0.0 :spo2 96.0}
-                 {:seconds 2.0 :spo2 95.0}
-                 {:seconds 4.0 :spo2 94.0}]
-          :timer {:start-seconds 1.0 :end-seconds 3.0}}
+         (with-test-clock
+           {:width 64 :height 36 :fps 2 :duration-seconds 4
+            :telemetry [{:seconds 0.0 :heart-rate 120.0}
+                        {:seconds 2.0 :heart-rate 140.0}
+                        {:seconds 4.0 :heart-rate 160.0}]
+            :spo2 [{:seconds 0.0 :spo2 96.0}
+                   {:seconds 2.0 :spo2 95.0}
+                   {:seconds 4.0 :spo2 94.0}]
+            :timer {:start-seconds 1.0 :end-seconds 3.0}})
          store frames/java2d-frame-renderer nil nil)
         moments (mapcat :moments (:sections manifest))]
     (is (= "overlay" (:mode manifest)))
@@ -635,10 +716,11 @@
         manifest
         (preview/render-gallery!
          "00000000-0000-0000-0000-000000000062"
-         {:width 64 :height 36 :fps 25 :duration-seconds 480
-          :source-video {:file-id "not-exposed"}
-          :telemetry [{:seconds 0.0 :heart-rate 100.0}
-                      {:seconds 480.0 :heart-rate 140.0}]}
+         (with-test-clock
+           {:width 64 :height 36 :fps 25 :duration-seconds 480
+            :source-video {:file-id "not-exposed"}
+            :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                        {:seconds 480.0 :heart-rate 140.0}]})
          store frames/java2d-frame-renderer gallery-renderer
          (fn [output]
            (swap! source-count inc)
@@ -672,12 +754,13 @@
         manifest
         (preview/render-gallery!
          operation-id
-         {:width 64 :height 36 :fps 2 :duration-seconds 4
-          :source-video {:file-id "not-exposed"}
-          :telemetry [{:seconds 0.0 :heart-rate 100.0}
-                      {:seconds 2.0 :heart-rate 120.0}
-                      {:seconds 4.0 :heart-rate 140.0}]
-          :timer {:start-seconds 1.0 :end-seconds 3.0}}
+         (with-test-clock
+           {:width 64 :height 36 :fps 2 :duration-seconds 4
+            :source-video {:file-id "not-exposed"}
+            :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                        {:seconds 2.0 :heart-rate 120.0}
+                        {:seconds 4.0 :heart-rate 140.0}]
+            :timer {:start-seconds 1.0 :end-seconds 3.0}})
          store frames/java2d-frame-renderer gallery-renderer
          (fn [output]
            (swap! source-count inc)
@@ -716,10 +799,11 @@
         (try
           (preview/render-gallery!
            operation-id
-           {:width 64 :height 36 :fps 2 :duration-seconds 1
-            :source-video {:file-id "not-exposed"}
-            :telemetry [{:seconds 0.0 :heart-rate 100.0}
-                        {:seconds 1.0 :heart-rate 140.0}]}
+           (with-test-clock
+             {:width 64 :height 36 :fps 2 :duration-seconds 1
+              :source-video {:file-id "not-exposed"}
+              :telemetry [{:seconds 0.0 :heart-rate 100.0}
+                          {:seconds 1.0 :heart-rate 140.0}]})
            store frames/java2d-frame-renderer gallery-renderer
            (fn [output]
              (.write ^OutputStream output (byte-array 1024))))
@@ -998,7 +1082,8 @@
                       :telemetrySyncAt "2026-07-17T10:00:00Z"
                       :cameraSyncAt "2026-07-17T09:00:00Z"
                       :sectionStartAt "2026-07-17T09:00:00Z"
-                      :sectionEndAt "2026-07-17T09:00:02Z"})
+                      :sectionEndAt "2026-07-17T09:00:02Z"
+                      :displayTimeZone "Europe/Warsaw"})
         first-output (ByteArrayOutputStream.)
         second-output (ByteArrayOutputStream.)]
     (is (= {:padding-ratio 0.10
@@ -1033,8 +1118,9 @@
   (let [progress (atom [])
         output (ByteArrayOutputStream.)]
     (frames/stream!
-     {:width 64 :height 36 :fps 10 :duration-seconds 10
-      :frame-progress! #(swap! progress conj %)}
+     (with-test-clock
+       {:width 64 :height 36 :fps 10 :duration-seconds 10
+        :frame-progress! #(swap! progress conj %)})
      output)
     (is (= 0 (first @progress)))
     (is (= 100 (last @progress)))
@@ -1087,7 +1173,27 @@
           preset-id)
       (is (= [137 80 78 71 13 10 26 10]
              (mapv #(bit-and 0xff %) (take 8 (.toByteArray first-output))))
-          preset-id))))
+          preset-id)
+      (is (= (str/trim
+              (slurp (io/resource
+                      (golden-resource
+                       (str "complete-" preset-id "-preview")))))
+             (sha256-bytes (.toByteArray first-output)))
+          preset-id)
+      (let [image (ImageIO/read
+                   (ByteArrayInputStream. (.toByteArray first-output)))
+            readout-bottom (int (Math/round (* (:height render-spec) 0.10)))
+            visible-xs
+            (for [y (range readout-bottom)
+                  x (range (:width render-spec))
+                  :when (pos? (.getAlpha
+                               (Color. (.getRGB image x y) true)))]
+              x)]
+        (is (seq visible-xs) (str preset-id " visible readout"))
+        (is (pos? (apply min visible-xs))
+            (str preset-id " readout is not left-clipped"))
+        (is (< (apply max visible-xs) (dec (:width render-spec)))
+            (str preset-id " readout is not right-clipped"))))))
 
 (deftest frames-render-axes-readout-cursor-and-future-opacity
   (let [{:keys [rgba]}
@@ -1303,9 +1409,10 @@
           (let [output (ByteArrayOutputStream.)]
             (frames/render-frame-png!
              frames/java2d-frame-renderer
-             (cond-> base-spec
-               (some? percent)
-               (assoc :future-trace-opacity-percent percent))
+             (with-test-clock
+               (cond-> base-spec
+                 (some? percent)
+                 (assoc :future-trace-opacity-percent percent)))
              1 output)
             (sha256-bytes (.toByteArray output))))
         hashes (mapv preview-hash [0 25 100])]
@@ -1374,13 +1481,14 @@
             {:video {:codec "prores" :profile "4444" :alpha true}
              :audio {:codec "aac" :profile "LC" :channels 2}}))]
     (try
-      (let [result (renderer/render! {:id "test"
-                                      :width 64
-                                      :height 36
-                                      :fps 2
-                                      :duration-seconds 1
-                                      :output-path output
-                                      :profile? false}
+      (let [result (renderer/render! (with-test-clock
+                                       {:id "test"
+                                        :width 64
+                                        :height 36
+                                        :fps 2
+                                        :duration-seconds 1
+                                        :output-path output
+                                        :profile? false})
                                      {:media fake-media})]
         (is (= 2 (:frame-count result)))
         (is (= 0 (:ffmpeg-exit-status result)))
@@ -1414,14 +1522,15 @@
              :audio {:codec "aac"}}))]
     (try
       (renderer/render!
-       {:id "progress-test"
-        :width 64 :height 36 :fps 10 :duration-seconds 10
-        :output-format "h264-mp4"
-        :source-video {:file-id "not-emitted"}
-        :telemetry [{:seconds 0.0 :heart-rate 120.0}
-                    {:seconds 10.0 :heart-rate 120.0}]
-        :output-path output
-        :profile? false}
+       (with-test-clock
+         {:id "progress-test"
+          :width 64 :height 36 :fps 10 :duration-seconds 10
+          :output-format "h264-mp4"
+          :source-video {:file-id "not-emitted"}
+          :telemetry [{:seconds 0.0 :heart-rate 120.0}
+                      {:seconds 10.0 :heart-rate 120.0}]
+          :output-path output
+          :profile? false})
        {:media fake-media
         :source-stream! (fn [_])
         :progress! (fn ([_]) ([_ fields]

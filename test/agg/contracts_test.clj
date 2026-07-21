@@ -6,7 +6,8 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]])
-  (:import (java.nio.charset StandardCharsets)))
+  (:import (java.nio.charset StandardCharsets)
+           (java.time Instant ZoneId)))
 
 (defn valid-request []
   {:telemetryFormat "polar-csv"
@@ -15,7 +16,8 @@
    :telemetrySyncAt "2026-07-17T10:00:00Z"
    :cameraSyncAt "2026-07-17T09:00:00Z"
    :sectionStartAt "2026-07-17T09:00:00Z"
-   :sectionEndAt "2026-07-17T09:00:02Z"})
+   :sectionEndAt "2026-07-17T09:00:02Z"
+   :displayTimeZone "Europe/Warsaw"})
 
 (deftest request-envelope-fits-all-individually-bounded-inputs
   (is (> contract/max-render-request-bytes
@@ -33,7 +35,11 @@
     (is (= [{:seconds 0.0 :heart-rate 120.0}
             {:seconds 1.0 :heart-rate 124.0}
             {:seconds 2.0 :heart-rate 128.0}]
-           (:telemetry prepared)))))
+           (:telemetry prepared)))
+    (is (= (Instant/parse "2026-07-17T09:00:00Z")
+           (:section-start-at prepared)))
+    (is (= (ZoneId/of "Europe/Warsaw")
+           (:display-time-zone prepared)))))
 
 (deftest omitted-future-trace-opacity-defaults-in-the-render-contract
   (is (= 25
@@ -153,6 +159,31 @@
     (catch clojure.lang.ExceptionInfo error
       (:type (ex-data error)))))
 
+(deftest display-time-zone-is-required-valid-iana-and-privacy-safe
+  (doseq [[label request]
+          [["missing" (dissoc (valid-request) :displayTimeZone)]
+           ["blank" (assoc (valid-request) :displayTimeZone "  ")]
+           ["offset" (assoc (valid-request) :displayTimeZone "+02:00")]
+           ["unknown" (assoc (valid-request)
+                             :displayTimeZone "Private/Unknown-Zone")]]]
+    (testing label
+      (try
+        (contract/prepare request)
+        (is false "accepted invalid displayTimeZone")
+        (catch clojure.lang.ExceptionInfo error
+          (is (= ::contract/invalid-display-time-zone
+                 (:type (ex-data error))))
+          (is (= "displayTimeZone" (:field (ex-data error))))
+          (is (not (str/includes? (pr-str (ex-data error))
+                                  "Private/Unknown-Zone"))))))))
+
+(deftest display-time-zone-does-not-reinterpret-absolute-timestamps
+  (let [warsaw (contract/prepare (valid-request))
+        utc (contract/prepare (assoc (valid-request) :displayTimeZone "UTC"))]
+    (is (= (dissoc warsaw :display-time-zone)
+           (dissoc utc :display-time-zone)))
+    "only the display zone changes"))
+
 (defn- telemetry-failure [request]
   (try
     (contract/prepare request)
@@ -243,6 +274,22 @@
                  openapi))
     (is (str/includes? openapi
                        "Opacity percentage for the not-yet-reached heart-rate trace"))))
+
+(deftest openapi-documents-required-display-time-zone-without-a-fallback
+  (let [openapi (slurp "docs/openapi.yaml")
+        zone-start (str/index-of openapi "        displayTimeZone:")
+        next-field (when zone-start
+                     (str/index-of openapi
+                                   "        futureTraceOpacityPercent:"
+                                   zone-start))]
+    (is (str/includes? openapi "        - displayTimeZone"))
+    (is (re-find #"(?s)displayTimeZone:\s+type: string\s+minLength: 1"
+                 openapi))
+    (is (str/includes? openapi "IANA timezone identifier"))
+    (is (str/includes? openapi "does not reinterpret any input timestamp"))
+    (is (and zone-start next-field
+             (not (str/includes? (subs openapi zone-start next-field)
+                                 "default:"))))))
 
 (deftest specific-telemetry-causes-win-over-parser-wrappers
   (let [specific (ex-info "private telemetry value"
