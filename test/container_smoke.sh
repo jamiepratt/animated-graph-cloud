@@ -123,9 +123,8 @@ docker run --rm "$image" clojure.main -e '
            [{:frameIndex 0 :overlay (.toByteArray overlay-output)}
             {:frameIndex 24 :overlay (.toByteArray overlay-output)}
             {:frameIndex 49 :overlay (.toByteArray overlay-output)}]
-           (fn [frame-index source-png final-png]
-             (swap! frames conj [frame-index (alength source-png)
-                                 (alength final-png)])))]
+           (fn [frame-index final-png]
+             (swap! frames conj [frame-index (alength final-png)])))]
       (when-not (and (= {:requested-frame-count 3
                          :generated-frame-count 2
                          :omitted-frame-count 1

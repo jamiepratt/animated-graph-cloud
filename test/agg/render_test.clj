@@ -296,7 +296,10 @@
     (is (= 1 (count (filter #{"pipe:0"} command))))
     (is (some #{"/tmp/selected-overlays.rgba"} command))
     (is (str/includes? joined "eq(n\\,0)+eq(n\\,2500)+eq(n\\,11999)"))
-    (is (str/includes? joined "hstack=inputs=2"))
+    (is (not (str/includes? joined "split=")))
+    (is (not (str/includes? joined "hstack=")))
+    (is (str/includes? joined
+                       "[base][overlay]overlay=0:0:format=auto:eof_action=endall[v]"))
     (is (= "3" (second (drop-while #(not= "-frames:v" %) command))))
     (is (= "pipe:1" (last command)))))
 
@@ -363,7 +366,7 @@
         transparent (png-bytes 64 36 false)
         emitted (atom [])]
     (try
-      (Files/write combined-path (png-bytes 128 36 true)
+      (Files/write combined-path (png-bytes 64 36 true)
                    (make-array OpenOption 0))
       (is (= {:requested-frame-count 2
               :generated-frame-count 1
@@ -378,10 +381,8 @@
                 (.write ^OutputStream source-output (byte-array 1024)))
               [{:frameIndex 0 :overlay transparent}
                {:frameIndex 49 :overlay transparent}]
-              (fn [frame-index source-png final-png]
-                (swap! emitted conj [frame-index
-                                     (alength source-png)
-                                     (alength final-png)])))))
+              (fn [frame-index final-png]
+                (swap! emitted conj [frame-index (alength final-png)])))))
       (is (= [0] (mapv first @emitted)))
       (finally
         (Files/deleteIfExists ffmpeg)
@@ -698,10 +699,10 @@
              :state "succeeded"
              :createdAt (str created)
              :updatedAt (str created)
-             :output {:output-bytes 123 :version 1 :sections [] :assets []}}
+             :output {:output-bytes 123 :version 2 :sections [] :assets []}}
         resource (preview/operation-resource
                   job (.minusMillis (.plusSeconds created (* 24 60 60)) 1))]
-    (is (= 1 (get-in resource [:result :version])))
+    (is (= 2 (get-in resource [:result :version])))
     (is (nil? (get-in resource [:result :output-bytes])))
     (is (nil? (preview/operation-resource
                job (.plusSeconds created (* 24 60 60)))))))
@@ -749,6 +750,7 @@
          store frames/java2d-frame-renderer nil nil)
         moments (mapcat :moments (:sections manifest))]
     (is (= "overlay" (:mode manifest)))
+    (is (= 2 (:version manifest)))
     (is (= 2 (count (:sections manifest))))
     (is (every? #(= [0 2 6 7] (mapv :frameIndex (:moments %)))
                 (:sections manifest)))
@@ -776,6 +778,7 @@
   (let [decode-count (atom 0)
         source-count (atom 0)
         store (preview/in-memory-asset-store)
+        final-png (png-bytes 64 36 true)
         gallery-renderer
         (reify media/CompositeGalleryRenderer
           (render-composite-gallery!
@@ -783,8 +786,8 @@
             (swap! decode-count inc)
             (with-open [output (ByteArrayOutputStream.)]
               (source-stream! output))
-            (doseq [{:keys [frameIndex overlay]} overlays]
-              (consume-frame! frameIndex (png-bytes 64 36 true) overlay))))
+            (doseq [{:keys [frameIndex]} overlays]
+              (consume-frame! frameIndex final-png))))
         manifest
         (preview/render-gallery!
          "00000000-0000-0000-0000-000000000062"
@@ -799,8 +802,24 @@
            (.write ^OutputStream output (byte-array 1024))))]
     (is (= 1 @decode-count))
     (is (= 1 @source-count))
-    (is (= "source-final" (:mode manifest)))
+    (is (= 2 (:version manifest)))
+    (is (= "final" (:mode manifest)))
     (is (= 2 (count (:assets manifest))))
+    (is (= (* 4 (alength ^bytes final-png)) (:output-bytes manifest)))
+    (is (every? #(= #{:id :frameIndex :kind :image} (set (keys %)))
+                (:assets manifest)))
+    (is (every? #(= "final" (:kind %)) (:assets manifest)))
+    (doseq [{:keys [id image]} (:assets manifest)
+            size [:thumbnail :full]]
+      (is (= (preview/image-reference
+              "00000000-0000-0000-0000-000000000062" (str id "-final"))
+             image))
+      (is (some? (preview/get-asset
+                  store "00000000-0000-0000-0000-000000000062"
+                  (str id "-final") size)))
+      (is (nil? (preview/get-asset
+                 store "00000000-0000-0000-0000-000000000062"
+                 (str id "-source") size))))
     (is (nil? (:warnings manifest)))))
 
 (deftest partial-source-gallery-keeps-complete-moments-and-bounded-warning
@@ -815,9 +834,9 @@
             (swap! decode-count inc)
             (with-open [output (ByteArrayOutputStream.)]
               (source-stream! output))
-            (doseq [{:keys [frameIndex overlay]}
+            (doseq [{:keys [frameIndex]}
                     (filter #(contains? #{0 6} (:frameIndex %)) overlays)]
-              (consume-frame! frameIndex (png-bytes 64 36 true) overlay))
+              (consume-frame! frameIndex (png-bytes 64 36 true)))
             {:requested-frame-count 4
              :generated-frame-count 2
              :omitted-frame-count 2
@@ -893,7 +912,7 @@
       (is (nil? (preview/get-asset store operation-id asset-id :thumbnail)))
       (is (nil? (preview/get-asset store operation-id asset-id :full))))))
 
-(deftest transparent-complete-overlays-merge-source-and-final-assets
+(deftest transparent-complete-overlays-retain-the-truthful-final-frame
   (let [transparent (png-bytes 64 36 false)
         source (png-bytes 64 36 true)
         store (preview/in-memory-asset-store)
@@ -907,7 +926,7 @@
           (render-composite-gallery!
             [_ _ _ overlays consume-frame!]
             (doseq [{:keys [frameIndex]} overlays]
-              (consume-frame! frameIndex source source))))
+              (consume-frame! frameIndex source))))
         manifest
         (preview/render-gallery!
          "00000000-0000-0000-0000-000000000063"
@@ -916,8 +935,13 @@
           :telemetry [{:seconds 0.0 :heart-rate 100.0}
                       {:seconds 1.0 :heart-rate 140.0}]}
          store frame-renderer gallery-renderer (fn [_]))]
-    (is (every? :merged (:assets manifest)))
-    (is (every? #(= (:source %) (:final %)) (:assets manifest)))))
+    (is (= 2 (:version manifest)))
+    (is (= "final" (:mode manifest)))
+    (is (every? #(= "final" (:kind %)) (:assets manifest)))
+    (is (every? :image (:assets manifest)))
+    (is (not-any? #(some (fn [field] (contains? % field))
+                         [:source :final :merged])
+                  (:assets manifest)))))
 
 (deftest compositing-command-keeps-drive-source-on-a-non-seekable-pipe
   (let [command (media/composite-command

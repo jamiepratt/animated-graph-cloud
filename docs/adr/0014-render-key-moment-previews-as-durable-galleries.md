@@ -2,13 +2,14 @@
 
 - Status: Accepted
 - Date: 2026-07-20
+- Amended: 2026-07-21, manifest v2 and Final-only selected-source previews
 - Supersedes: The preview portions of ADR 0003 and ADR 0004
 
 ## Context
 
 One synchronous midpoint PNG could not explain trace boundaries or prominent
 events. Selected-source composition also depended on finishing within the public
-request deadline. Rendering each comparison cell independently would repeatedly
+request deadline. Rendering each selected frame independently would repeatedly
 download and decode the same private source video.
 
 ## Decision
@@ -26,12 +27,13 @@ share frame assets across trace sections.
 
 Overlay-only previews store transparent overlay PNGs. Selected-source previews
 stream the source once into one FFmpeg workflow, batch-select every unique frame,
-apply the production fit and full overlay composition, and emit paired Source and
-Final PNGs. An empty complete overlay shares one image reference for both cells.
-The source video is never persisted.
+apply the production fit and full overlay composition, and emit only the exact
+composited Final PNG. Fitted unoverlaid Source PNGs are not generated, split,
+stored, referenced, served, or displayed. A transparent complete overlay still
+emits and retains the truthful Final frame. The source video is never persisted.
 
 If that single decode reaches source EOF before every selected frame, retain
-each complete Source and Final pair. At least one emitted moment is a successful
+each available Final frame. At least one emitted moment is a successful
 partial gallery with one bounded `source_duration_too_short` warning containing
 requested, generated, and omitted counts. Zero emitted moments are a terminal
 failure with the same bounded diagnosis. Nonzero decoder exits, source stream
@@ -41,8 +43,17 @@ classification.
 Store opaque preview assets in the existing private temporary bucket. Serve
 owner-bound thumbnail and full-size routes with `Cache-Control: no-store` and
 fixed size limits. The operation result is a generic trace-section manifest.
-The browser polls it, rejects stale generations, and renders responsive,
-accessible comparison galleries.
+Manifest version 2 uses `mode: "final"`, `kind: "final"`, and one `image`
+reference for selected-source assets. Overlay-only results also use version 2
+with `mode: "overlay"`, `kind: "overlay"`, and their transparent `image`
+reference. Version 1 is not preserved. The browser polls the operation, rejects
+stale generations, and renders responsive, accessible galleries.
+
+Within each trace section, Final cards retain chronological order, use fixed
+approximately 128 CSS pixel desktop widths, wrap into centered rows without
+stretching incomplete rows, and avoid horizontal gallery scrolling. Narrow
+screens use larger centered viewport-bounded cards. The full-image viewer uses
+trace section order then moment order, one image per selected-source moment.
 
 ## Consequences
 

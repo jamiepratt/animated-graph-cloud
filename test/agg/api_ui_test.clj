@@ -387,8 +387,8 @@
    :state "succeeded"
    :progressPercent 100
    :result
-   {:version 1
-    :mode "source-final"
+   {:version 2
+    :mode "final"
     :sections
     [{:id "heart-rate" :name "Heart rate" :unit "bpm"
       :moments [{:frameIndex 0 :elapsedSeconds 0.0 :elapsed "00:00.000"
@@ -411,16 +411,12 @@
                  :title "Video start - 97 % - 00:00.000"
                  :frameRef "a000"}]}]
     :assets
-    [{:id "a000" :frameIndex 25 :kind "source-final" :merged false
-      :source {:thumbnailUrl "/v1/previews/x/images/a000-source/thumbnail"
-               :fullUrl "/v1/previews/x/images/a000-source/full"}
-      :final {:thumbnailUrl "/v1/previews/x/images/a000-final/thumbnail"
+    [{:id "a000" :frameIndex 0 :kind "final"
+      :image {:thumbnailUrl "/v1/previews/x/images/a000-final/thumbnail"
               :fullUrl "/v1/previews/x/images/a000-final/full"}}
-     {:id "a001" :frameIndex 25 :kind "source-final" :merged true
-      :source {:thumbnailUrl "/v1/previews/x/images/a001-source/thumbnail"
-               :fullUrl "/v1/previews/x/images/a001-source/full"}
-      :final {:thumbnailUrl "/v1/previews/x/images/a001-source/thumbnail"
-              :fullUrl "/v1/previews/x/images/a001-source/full"}}]}})
+     {:id "a001" :frameIndex 25 :kind "final"
+      :image {:thumbnailUrl "/v1/previews/x/images/a001-final/thumbnail"
+              :fullUrl "/v1/previews/x/images/a001-final/full"}}]}})
 
 (defn- timer-preview-gallery-operation []
   {:id "00000000-0000-0000-0000-000000000082"
@@ -428,8 +424,8 @@
    :state "succeeded"
    :progressPercent 100
    :result
-   {:version 1
-    :mode "source-final"
+   {:version 2
+    :mode "final"
     :sections
     [{:id "heart-rate" :name "Heart rate" :unit "bpm"
       :moments
@@ -456,22 +452,50 @@
     :assets
     (mapv (fn [index frame]
             (let [id (format "a%03d" index)]
-              {:id id :frameIndex frame :kind "source-final" :merged false
-               :source {:thumbnailUrl (str "/v1/previews/x/images/" id
-                                           "-source/thumbnail")
-                        :fullUrl (str "/v1/previews/x/images/" id
-                                      "-source/full")}
-               :final {:thumbnailUrl (str "/v1/previews/x/images/" id
+              {:id id :frameIndex frame :kind "final"
+               :image {:thumbnailUrl (str "/v1/previews/x/images/" id
                                           "-final/thumbnail")
                        :fullUrl (str "/v1/previews/x/images/" id
                                      "-final/full")}}))
           (range 4) [0 13 38 49])}})
 
+(defn- wrapping-preview-gallery-operation []
+  (let [operation (timer-preview-gallery-operation)
+        extra-moments
+        (mapv (fn [index frame]
+                {:frameIndex frame
+                 :elapsedSeconds (/ frame 25.0)
+                 :elapsed (format "00:0%d.%03d" (quot frame 25)
+                                  (* 40 (mod frame 25)))
+                 :labels [(str "Selected moment " (inc index))]
+                 :eventLabel (str "Selected moment " (inc index))
+                 :value (+ 128.0 index)
+                 :title (str "Selected moment " (inc index) " - "
+                             (+ 128 index) " bpm - 00:0" (quot frame 25))
+                 :frameRef (format "a%03d" index)})
+              (range 4 7) [60 70 80])
+        extra-assets
+        (mapv (fn [index frame]
+                (let [id (format "a%03d" index)]
+                  {:id id :frameIndex frame :kind "final"
+                   :image {:thumbnailUrl (str "/v1/previews/x/images/" id
+                                              "-final/thumbnail")
+                           :fullUrl (str "/v1/previews/x/images/" id
+                                         "-final/full")}}))
+              (range 4 7) [60 70 80])]
+    (-> operation
+        (update-in [:result :sections 0 :moments] into extra-moments)
+        (update-in [:result :assets] into extra-assets))))
+
 (defn- preview-gallery-browser-outcome
   ([narrow?]
    (preview-gallery-browser-outcome (preview-gallery-operation) narrow?))
-  ([operation narrow?]
-   (let [fragment (ui/preview-operation-fragment operation "generation-1")
+  ([operation viewport-or-narrow?]
+   (let [viewport (if (keyword? viewport-or-narrow?)
+                    viewport-or-narrow?
+                    (if viewport-or-narrow? :narrow :wide))
+         narrow? (= :narrow viewport)
+         fragment (ui/preview-operation-fragment operation "generation-1")
          page (-> (ui/page {:user {:email "owner@example.com" :role :member}
                             :csrf "csrf-test"
                             :tokens [] :members [] :logs-enabled? false})
@@ -481,20 +505,25 @@
          scenario
          (str
           "<pre id=\"browser-result\">pending</pre><script>"
-          "let outcome;try{const moments=document.querySelector('.preview-moments'),source=document.querySelector('.preview-cell .frame-role'),final=[...document.querySelectorAll('.frame-role')].find(node=>node.textContent==='Final'),buttons=[...document.querySelectorAll('.preview-open')],titles=[...document.querySelectorAll('.photo-title')],openIndex=Math.min(3,buttons.length-2),open=buttons[openIndex],dialog=document.getElementById('preview-dialog');"
-          "const momentCount=document.querySelectorAll('.preview-moment').length,display=getComputedStyle(moments).display,roles=[...document.querySelectorAll('.frame-role')].map(node=>node.textContent),photoTitles=titles.map(node=>node.textContent),titlePlacement=titles.every((title,index)=>title.nextElementSibling===buttons[index]&&title.getBoundingClientRect().bottom<=buttons[index].getBoundingClientRect().top+1),titleRects=titles.map(title=>title.getBoundingClientRect()),titlesDoNotOverlap=titleRects.every((rect,index)=>titleRects.every((other,otherIndex)=>index===otherIndex||rect.right<=other.left||other.right<=rect.left||rect.bottom<=other.top||other.bottom<=rect.top)),thumbnailWidth=buttons[0].getBoundingClientRect().width,viewportWidth=window.innerWidth,noOverflow=document.documentElement.scrollWidth<=viewportWidth,meaningfulAlts=buttons.every(button=>button.querySelector('img').alt.length>12),eagerImages=buttons.every(button=>button.querySelector('img').loading==='eager'),nativeButtons=buttons.every(button=>button.tagName==='BUTTON');"
+          "let outcome;try{const moments=document.querySelector('.preview-moments'),buttons=[...document.querySelectorAll('.preview-open')],titles=[...document.querySelectorAll('.photo-title')],openIndex=Math.min(3,buttons.length-2),open=buttons[openIndex],dialog=document.getElementById('preview-dialog');"
+          "const momentCount=document.querySelectorAll('.preview-moment').length,display=getComputedStyle(moments).display,roles=[...document.querySelectorAll('.frame-role')].map(node=>node.textContent),photoTitles=titles.map(node=>node.textContent),titlePlacement=titles.every((title,index)=>title.nextElementSibling===buttons[index]&&title.getBoundingClientRect().bottom<=buttons[index].getBoundingClientRect().top+1),titleRects=titles.map(title=>title.getBoundingClientRect()),titlesDoNotOverlap=titleRects.every((rect,index)=>titleRects.every((other,otherIndex)=>index===otherIndex||rect.right<=other.left||other.right<=rect.left||rect.bottom<=other.top||other.bottom<=rect.top)),thumbnailWidth=buttons[0].getBoundingClientRect().width,viewportWidth=window.innerWidth,noOverflow=document.documentElement.scrollWidth<=viewportWidth,meaningfulAlts=buttons.every(button=>button.querySelector('img').alt.length>12),eagerImages=buttons.every(button=>button.querySelector('img').loading==='eager'),nativeButtons=buttons.every(button=>button.tagName==='BUTTON');const sectionLayouts=[...document.querySelectorAll('.trace-preview')].map(section=>{const container=section.querySelector('.preview-moments'),containerRect=container.getBoundingClientRect(),rows=[];[...container.querySelectorAll('.preview-moment')].forEach(card=>{const rect=card.getBoundingClientRect();let row=rows.find(candidate=>Math.abs(candidate.top-rect.top)<2);if(!row){row={top:rect.top,left:rect.left,right:rect.right,count:0};rows.push(row);}row.left=Math.min(row.left,rect.left);row.right=Math.max(row.right,rect.right);row.count+=1;});return {containerWidth:containerRect.width,sectionWidth:section.getBoundingClientRect().width,flexWrap:getComputedStyle(container).flexWrap,rowCounts:rows.map(row=>row.count),centered:rows.every(row=>Math.abs(((row.left+row.right)/2)-((containerRect.left+containerRect.right)/2))<2),noOverflow:section.scrollWidth<=section.clientWidth+1};}),multipleOnFirstRow=sectionLayouts.some(layout=>layout.rowCounts[0]>1),wrapped=sectionLayouts.some(layout=>layout.rowCounts.length>1),rowsCentered=sectionLayouts.every(layout=>layout.centered),traceNoOverflow=sectionLayouts.every(layout=>layout.noOverflow);"
           "const sequenceTitles=buttons.map(button=>button.dataset.title),sequenceFullUrls=buttons.map(button=>button.dataset.full),thumbnailUrlsOnly=buttons.every(button=>button.querySelector('img').getAttribute('src').endsWith('/thumbnail'));const previous=dialog.querySelector('.preview-previous'),next=dialog.querySelector('.preview-next'),counter=dialog.querySelector('.preview-counter'),dialogTitle=dialog.querySelector('#preview-dialog-title'),dialogImage=dialog.querySelector('img'),viewerControls=!!(previous&&next&&counter&&dialogTitle);"
-          "open.focus();open.click();const dialogRect=dialog.getBoundingClientRect(),dialogOpened=dialog.open&&dialogImage.alt===open.dataset.alt&&dialogImage.getAttribute('src')===open.dataset.full,clickedPosition=viewerControls&&dialogTitle.textContent===open.dataset.title&&counter.textContent==='Image '+(openIndex+1)+' of '+buttons.length,modalFocus=dialog.matches(':modal')&&dialog.contains(document.activeElement),viewportFit=dialogRect.width>=window.innerWidth-24&&dialogRect.height>=window.innerHeight-24&&getComputedStyle(dialogImage).objectFit==='contain',controlsVisible=viewerControls&&[previous,next].every(button=>button.getBoundingClientRect().width>0),accessibleViewer=viewerControls&&dialog.getAttribute('aria-labelledby')===dialogTitle.id&&counter.getAttribute('aria-live')==='polite'&&[previous,next,dialog.querySelector('.preview-dialog-close')].every(button=>(button.getAttribute('aria-label')||button.textContent).trim().length>0);"
+          "open.focus();open.click();const dialogRect=dialog.getBoundingClientRect(),dialogOpened=dialog.open&&dialogImage.alt===open.dataset.alt&&dialogImage.getAttribute('src')===open.dataset.full,clickedPosition=viewerControls&&dialogTitle.textContent===open.dataset.title&&counter.textContent==='Image '+(openIndex+1)+' of '+buttons.length,modalFocus=dialog.matches(':modal')&&dialog.contains(document.activeElement);document.getElementById('preview-button').focus();const focusContained=dialog.contains(document.activeElement);dialog.focus();const viewportFit=dialogRect.width>=window.innerWidth-24&&dialogRect.height>=window.innerHeight-24&&getComputedStyle(dialogImage).objectFit==='contain',controlsVisible=viewerControls&&[previous,next].every(button=>button.getBoundingClientRect().width>0),accessibleViewer=viewerControls&&dialog.getAttribute('aria-labelledby')===dialogTitle.id&&counter.getAttribute('aria-live')==='polite'&&[previous,next,dialog.querySelector('.preview-dialog-close')].every(button=>(button.getAttribute('aria-label')||button.textContent).trim().length>0);"
           "let buttonNavigation=false,keyboardNavigation=false,endStates=false,escapePreserved=false;if(viewerControls){while(!next.disabled)next.click();buttonNavigation=counter.textContent==='Image '+buttons.length+' of '+buttons.length&&dialogTitle.textContent===sequenceTitles.at(-1)&&next.disabled&&!previous.disabled;dialog.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));const stoppedAtEnd=counter.textContent==='Image '+buttons.length+' of '+buttons.length;dialog.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true,cancelable:true}));keyboardNavigation=stoppedAtEnd&&counter.textContent==='Image '+(buttons.length-1)+' of '+buttons.length&&dialogTitle.textContent===sequenceTitles.at(-2);dialog.querySelector('.preview-dialog-close').click();const first=buttons[0];first.focus();first.click();dialog.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true,cancelable:true}));endStates=previous.disabled&&!next.disabled&&counter.textContent==='Image 1 of '+buttons.length;const cancelEvent=new Event('cancel',{cancelable:true});escapePreserved=dialog.dispatchEvent(cancelEvent);if(escapePreserved)dialog.close();}else{dialog.querySelector('.preview-dialog-close').click();}const focusReturned=document.activeElement===buttons[0];"
           "let stale=false,staleSwapRejected=false;if(!" narrow? "){const raw=document.getElementById('raw-json');raw.value=" (json/write-str request-json) ";document.getElementById('apply-json').click();const staleTarget=document.querySelector('.preview-stale');stale=!!staleTarget;const detail={target:staleTarget,xhr:{getResponseHeader:()=>\"generation-1\"},shouldSwap:true};staleTarget.dispatchEvent(new CustomEvent('htmx:beforeSwap',{bubbles:true,detail}));staleSwapRejected=!detail.shouldSwap;}"
-          "outcome={momentCount,buttonCount:buttons.length,display,roles,photoTitles,ariaLabels:buttons.map(button=>button.getAttribute('aria-label')),titlePlacement,titlesDoNotOverlap,titleRects:titleRects.map(rect=>({left:rect.left,top:rect.top,right:rect.right,bottom:rect.bottom})),thumbnailWidth,viewportWidth,noOverflow,meaningfulAlts,eagerImages,nativeButtons,sequenceTitles,sequenceFullUrls,thumbnailUrlsOnly,viewerControls,dialogOpened,clickedPosition,modalFocus,viewportFit,controlsVisible,accessibleViewer,buttonNavigation,keyboardNavigation,endStates,escapePreserved,focusReturned,stale,staleSwapRejected,sourceBeforeFinal:source&&final&&source.compareDocumentPosition(final)&Node.DOCUMENT_POSITION_FOLLOWING};"
+          "outcome={momentCount,buttonCount:buttons.length,display,roles,photoTitles,ariaLabels:buttons.map(button=>button.getAttribute('aria-label')),titlePlacement,titlesDoNotOverlap,titleRects:titleRects.map(rect=>({left:rect.left,top:rect.top,right:rect.right,bottom:rect.bottom})),thumbnailWidth,viewportWidth,noOverflow,traceNoOverflow,multipleOnFirstRow,wrapped,rowsCentered,sectionLayouts,meaningfulAlts,eagerImages,nativeButtons,sequenceTitles,sequenceFullUrls,thumbnailUrlsOnly,viewerControls,dialogOpened,clickedPosition,modalFocus,focusContained,viewportFit,controlsVisible,accessibleViewer,buttonNavigation,keyboardNavigation,endStates,escapePreserved,focusReturned,stale,staleSwapRejected};"
           "}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
           "</script>")
          html (str/replace page "</body>" (str scenario "</body>"))]
-     (if narrow?
+     (case viewport
+       :narrow
        (browser-outcome "agg-preview-narrow-"
                         "Narrow preview regression requires Chrome or Chromium"
                         html "--window-size=390,844")
+       :wrapping
+       (browser-outcome "agg-preview-wrapping-"
+                        "Wrapping preview regression requires Chrome or Chromium"
+                        html "--window-size=720,900")
        (browser-outcome "agg-preview-desktop-"
                         "Desktop preview regression requires Chrome or Chromium"
                         html "--window-size=1280,900")))))
@@ -974,36 +1003,46 @@
 
 (deftest preview-gallery-is-responsive-accessible-and-stale-safe-in-a-browser
   (let [desktop (preview-gallery-browser-outcome false)
+        wrapping (preview-gallery-browser-outcome
+                  (wrapping-preview-gallery-operation) :wrapping)
         narrow (preview-gallery-browser-outcome true)]
     (is (nil? (:error desktop)) desktop)
-    (is (= "grid" (:display desktop)))
-    (is (= ["Source" "Final" "Source and Final - identical" "Source" "Final"]
+    (is (= "flex" (:display desktop)))
+    (is (= ["Final" "Final" "Final"]
            (:roles desktop)))
-    (is (= ["Source - Video start - 120 bpm - 00:00.000"
-            "Final - Video start - 120 bpm - 00:00.000"
-            "Source and Final - identical - Prominent maximum - 168 bpm - 00:01.000"
-            "Source - Video start - 97 % - 00:00.000"
+    (is (= ["Final - Video start - 120 bpm - 00:00.000"
+            "Final - Prominent maximum - 168 bpm - 00:01.000"
             "Final - Video start - 97 % - 00:00.000"]
            (:photoTitles desktop)
            (:sequenceTitles desktop)))
-    (is (= ["/v1/previews/x/images/a000-source/full"
-            "/v1/previews/x/images/a000-final/full"
-            "/v1/previews/x/images/a001-source/full"
-            "/v1/previews/x/images/a000-source/full"
+    (is (= ["/v1/previews/x/images/a000-final/full"
+            "/v1/previews/x/images/a001-final/full"
             "/v1/previews/x/images/a000-final/full"]
            (:sequenceFullUrls desktop)))
     (is (<= 124 (:thumbnailWidth desktop) 132))
     (is (:titlesDoNotOverlap desktop) desktop)
     (is (every? true? (map desktop
-                           [:titlePlacement :noOverflow :meaningfulAlts :eagerImages
+                           [:titlePlacement :noOverflow :traceNoOverflow
+                            :multipleOnFirstRow :rowsCentered
+                            :meaningfulAlts :eagerImages
                             :nativeButtons :thumbnailUrlsOnly :viewerControls
-                            :dialogOpened :clickedPosition :modalFocus :viewportFit
+                            :dialogOpened :clickedPosition :modalFocus
+                            :focusContained :viewportFit
                             :controlsVisible :accessibleViewer :buttonNavigation
                             :keyboardNavigation :endStates :escapePreserved
                             :focusReturned :stale :staleSwapRejected])))
-    (is (pos? (:sourceBeforeFinal desktop)))
+    (is (nil? (:error wrapping)) wrapping)
+    (is (= "flex" (:display wrapping)))
+    (is (= 7 (:momentCount wrapping) (:buttonCount wrapping)))
+    (is (<= 124 (:thumbnailWidth wrapping) 132))
+    (is (every? true? (map wrapping
+                           [:multipleOnFirstRow :wrapped :rowsCentered
+                            :noOverflow :traceNoOverflow :titlesDoNotOverlap])))
+    (let [row-counts (get-in wrapping [:sectionLayouts 0 :rowCounts])]
+      (is (> (count row-counts) 1))
+      (is (< (last row-counts) (first row-counts))))
     (is (nil? (:error narrow)) narrow)
-    (is (= "block" (:display narrow)))
+    (is (= "flex" (:display narrow)))
     (is (= (:roles desktop) (:roles narrow)))
     (is (= (:photoTitles desktop) (:photoTitles narrow)))
     (is (= (:sequenceTitles desktop) (:sequenceTitles narrow)))
@@ -1012,31 +1051,28 @@
     (is (<= (:thumbnailWidth narrow) (:viewportWidth narrow)))
     (is (:titlesDoNotOverlap narrow) narrow)
     (is (every? true? (map narrow
-                           [:titlePlacement :noOverflow :meaningfulAlts :eagerImages
+                           [:titlePlacement :noOverflow :traceNoOverflow
+                            :wrapped :rowsCentered :meaningfulAlts :eagerImages
                             :nativeButtons :thumbnailUrlsOnly :viewerControls
-                            :dialogOpened :clickedPosition :modalFocus :viewportFit
+                            :dialogOpened :clickedPosition :modalFocus
+                            :focusContained :viewportFit
                             :controlsVisible :accessibleViewer :buttonNavigation
                             :keyboardNavigation :endStates :escapePreserved
-                            :focusReturned])))
-    (is (pos? (:sourceBeforeFinal narrow)))))
+                            :focusReturned])))))
 
 (deftest timer-preview-manifest-reaches-every-thumbnail-and-viewer-position
   (let [operation (timer-preview-gallery-operation)
         moments (get-in operation [:result :sections 0 :moments])
         assets (get-in operation [:result :assets])
         expected-titles
-        (vec (mapcat (fn [{:keys [title]}]
-                       [(str "Source - " title) (str "Final - " title)])
-                     moments))
+        (mapv (fn [{:keys [title]}] (str "Final - " title)) moments)
         expected-full-urls
-        (vec (mapcat (fn [{:keys [source final]}]
-                       [(:fullUrl source) (:fullUrl final)])
-                     assets))
+        (mapv #(get-in % [:image :fullUrl]) assets)
         outcome (preview-gallery-browser-outcome operation false)]
     (is (nil? (:error outcome)) outcome)
     (is (= 4 (:momentCount outcome)))
-    (is (= 8 (:buttonCount outcome)))
-    (is (= (vec (take 8 (cycle ["Source" "Final"]))) (:roles outcome)))
+    (is (= 4 (:buttonCount outcome)))
+    (is (= (vec (repeat 4 "Final")) (:roles outcome)))
     (is (= expected-titles (:photoTitles outcome) (:sequenceTitles outcome)))
     (is (= expected-full-urls (:sequenceFullUrls outcome)))
     (is (= (mapv #(str "Open larger image: " %) expected-titles)
@@ -1069,7 +1105,7 @@
               "before the 20-second section, so 1 later preview frame is "
               "unavailable. Shorten the section or choose a longer video.")))
     (is (= 3 (count (re-seq #"class=\"preview-moment\"" fragment))))
-    (is (= 6 (count (re-seq #"class=\"preview-open\"" fragment))))
+    (is (= 3 (count (re-seq #"class=\"preview-open\"" fragment))))
     (doseq [developer-detail
             ["source_duration_too_short" "Failure code" "Category"
              "Request ID" "Stage" "Elapsed" "Retryable" "stack trace"

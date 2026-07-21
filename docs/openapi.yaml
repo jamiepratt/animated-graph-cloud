@@ -193,9 +193,10 @@ paths:
         and prominent extrema from every rendered trace. Candidates map to real
         output frames before coincident labels and assets are deduplicated.
         Selected-source previews batch-decode each unique output frame once and
-        return fitted Source and exact composited Final image references. When a
+        return only the exact composited Final image reference. Fitted unoverlaid
+        Source images are not generated or retained. When a
         selected video ends before every requested moment, a successful partial
-        gallery returns each complete Source and Final pair plus bounded warning
+        gallery returns each available Final image plus bounded warning
         counts and recovery guidance. Zero available moments fail with the same
         structured source-duration diagnosis. This is
         a breaking replacement for the former synchronous `image/png` midpoint response.
@@ -221,7 +222,7 @@ paths:
       operationId: getPreview
       tags: [Rendering]
       summary: Get an owned preview operation and its completed manifest.
-      description: Preview operations and assets expire 24 hours after creation. A selected-source partial result remains succeeded, exposes every complete image pair, and reports bounded warning counts. Zero available moments are a failed operation with an actionable source-duration reason.
+      description: Preview operations and assets expire 24 hours after creation. A selected-source partial result remains succeeded, exposes every available Final image, and reports bounded warning counts. Zero available moments are a failed operation with an actionable source-duration reason.
       parameters:
         - name: previewId
           in: path
@@ -902,8 +903,8 @@ components:
       additionalProperties: false
       required: [version, mode, sections, assets]
       properties:
-        version: {const: 1}
-        mode: {type: string, enum: [overlay, source-final]}
+        version: {const: 2}
+        mode: {type: string, enum: [overlay, final]}
         sections:
           type: array
           items: {$ref: "#/components/schemas/PreviewTraceSection"}
@@ -916,6 +917,23 @@ components:
           maxItems: 1
           description: Bounded diagnostics for a successful partial selected-source gallery.
           items: {$ref: "#/components/schemas/PreviewWarning"}
+      allOf:
+        - if:
+            properties:
+              mode: {const: overlay}
+            required: [mode]
+          then:
+            properties:
+              assets:
+                items: {$ref: "#/components/schemas/PreviewOverlayFrameAsset"}
+        - if:
+            properties:
+              mode: {const: final}
+            required: [mode]
+          then:
+            properties:
+              assets:
+                items: {$ref: "#/components/schemas/PreviewFinalFrameAsset"}
     PreviewWarning:
       type: object
       additionalProperties: false
@@ -956,19 +974,46 @@ components:
         title: {type: string}
         frameRef: {type: string, pattern: "^[A-Za-z0-9_-]{1,64}$"}
     PreviewFrameAsset:
+      oneOf:
+        - $ref: "#/components/schemas/PreviewOverlayFrameAsset"
+        - $ref: "#/components/schemas/PreviewFinalFrameAsset"
+      discriminator:
+        propertyName: kind
+        mapping:
+          overlay: "#/components/schemas/PreviewOverlayFrameAsset"
+          final: "#/components/schemas/PreviewFinalFrameAsset"
+    PreviewOverlayFrameAsset:
       type: object
       additionalProperties: false
-      required: [id, frameIndex, kind]
+      required: [id, frameIndex, kind, image]
       properties:
         id: {type: string, pattern: "^[A-Za-z0-9_-]{1,64}$"}
         frameIndex: {type: integer, minimum: 0}
-        kind: {type: string, enum: [overlay, source-final]}
-        merged:
-          type: boolean
-          description: True when the complete overlay is transparent and Source equals Final.
+        kind: {const: overlay}
         image: {$ref: "#/components/schemas/PreviewImageReference"}
-        source: {$ref: "#/components/schemas/PreviewImageReference"}
-        final: {$ref: "#/components/schemas/PreviewImageReference"}
+      examples:
+        - id: a000
+          frameIndex: 0
+          kind: overlay
+          image:
+            thumbnailUrl: /v1/previews/00000000-0000-0000-0000-000000000061/images/a000-overlay/thumbnail
+            fullUrl: /v1/previews/00000000-0000-0000-0000-000000000061/images/a000-overlay/full
+    PreviewFinalFrameAsset:
+      type: object
+      additionalProperties: false
+      required: [id, frameIndex, kind, image]
+      properties:
+        id: {type: string, pattern: "^[A-Za-z0-9_-]{1,64}$"}
+        frameIndex: {type: integer, minimum: 0}
+        kind: {const: final}
+        image: {$ref: "#/components/schemas/PreviewImageReference"}
+      examples:
+        - id: a000
+          frameIndex: 0
+          kind: final
+          image:
+            thumbnailUrl: /v1/previews/00000000-0000-0000-0000-000000000061/images/a000-final/thumbnail
+            fullUrl: /v1/previews/00000000-0000-0000-0000-000000000061/images/a000-final/full
     PreviewImageReference:
       type: object
       additionalProperties: false

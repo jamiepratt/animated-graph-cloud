@@ -87,20 +87,25 @@ structured `result`. This is a breaking API change: clients that expected the
 former synchronous midpoint `image/png` response must switch to operation
 polling and authenticated image retrieval.
 
-The result enumerates one generic section per rendered telemetry trace. Each
+The version 2 result enumerates one generic section per rendered telemetry trace. Each
 section contains chronological, actual-frame moments for video and trace
 boundaries, configured timer start and end, plus up to three prominent minima
 and maxima. Every candidate is mapped to a real output frame before coincident
 events share one frame reference and combine labels. Assets are deduplicated
 across sections.
 Overlay-only requests expose checkerboard-ready transparent Overlay images.
-Selected-source requests expose fitted Source and exact production-composited
-Final images, merging them when the complete overlay is transparent. Thumbnail
-and full-size PNG URLs are opaque, authenticated, owner-bound, bounded,
-`Cache-Control: no-store`, and retained for 24 hours.
+Selected-source requests expose only exact production-composited Final images,
+including a truthful Final frame when the complete overlay is transparent. The
+fitted unoverlaid Source image is never generated, stored, referenced, served,
+or displayed. Each available unique frame retains exactly one full Final PNG
+and one thumbnail. Thumbnail and full-size PNG URLs are opaque, authenticated,
+owner-bound, bounded, `Cache-Control: no-store`, and retained for 24 hours.
 
-The browser renders eager responsive thumbnails. Desktop uses compact moment
-columns with independently titled Source and Final photographs; narrow screens use vertical moment cards.
+The browser renders eager responsive thumbnails in chronological DOM order.
+Desktop Final cards stay approximately 128 CSS pixels wide, fill centered rows,
+and wrap without horizontal gallery scrolling. Incomplete rows remain centered
+without stretching. Narrow screens use larger centered cards bounded by the
+viewport, with preserved aspect ratio.
 A native dialog provides keyboard-accessible larger images and restores focus
 when closed. Starting a new preview or editing its request invalidates the old
 result.
@@ -108,8 +113,8 @@ The source video remains streamed and unpersisted; all unique requested frames
 are batch-decoded in one worker workflow.
 
 If the selected video ends before every requested key moment, the operation
-returns a successful partial gallery containing every complete Source and Final
-pair. Its bounded warning reports requested, generated, and omitted moment
+returns a successful partial gallery containing every available Final frame.
+Its bounded warning reports requested, generated, and omitted moment
 counts plus the stable source-duration reason. The browser explains what
 happened and says: Shorten the section or choose a longer video. If no requested
 moment is available, the operation fails without broken image references and

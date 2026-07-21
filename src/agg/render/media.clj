@@ -2,8 +2,7 @@
   (:require [agg.errors :as errors]
             [clojure.data.json :as json]
             [clojure.string :as str])
-  (:import (java.awt.image BufferedImage)
-           (java.io ByteArrayInputStream ByteArrayOutputStream IOException OutputStream RandomAccessFile)
+  (:import (java.io ByteArrayInputStream IOException OutputStream RandomAccessFile)
            (java.nio.file Files OpenOption Path)
            (java.util Arrays)
            (java.util.concurrent TimeUnit)
@@ -21,7 +20,7 @@
 (defprotocol CompositeGalleryRenderer
   (render-composite-gallery! [renderer render-spec source-stream! overlays
                               consume-frame!]
-    "Batch-decodes selected source frames and emits source/final PNG pairs."))
+    "Batch-decodes selected source frames and emits composited Final PNGs."))
 
 (def prores-4444-contract
   {:encoder "prores_ks"
@@ -198,10 +197,9 @@
                                      frame-indexes))
         video-filter
         (str "[0:v]" (fit-filter render-spec) ",fps=" fps
-             ",select='" selection "',setpts=N/(" fps "*TB),split=2[base][source];"
+             ",select='" selection "',setpts=N/(" fps "*TB)[base];"
              "[1:v]format=rgba[overlay];"
-             "[base][overlay]overlay=0:0:format=auto:eof_action=endall[final];"
-             "[source][final]hstack=inputs=2[v]")]
+             "[base][overlay]overlay=0:0:format=auto:eof_action=endall[v]")]
     [ffmpeg "-hide_banner" "-nostdin" "-loglevel" "error"
      "-i" "pipe:0"
      "-f" "rawvideo"
@@ -282,23 +280,14 @@
                     (recur chunk-end))))]
           (recur end (conj images (Arrays/copyOfRange bytes offset end))))))))
 
-(defn- image-png [^BufferedImage image]
-  (let [output (ByteArrayOutputStream.)]
-    (when-not (ImageIO/write image "png" output)
-      (throw (errors/raise! "PNG encoder unavailable"
-                            {:type ::png-unavailable})))
-    (.toByteArray output)))
-
-(defn- consume-gallery-png! [render-spec frame-index combined-png consume-frame!]
+(defn- consume-gallery-png! [render-spec frame-index final-png consume-frame!]
   (let [{:keys [width height]} render-spec
-        image (ImageIO/read (ByteArrayInputStream. combined-png))]
-    (when-not (and image (= (* 2 width) (.getWidth image))
+        image (ImageIO/read (ByteArrayInputStream. final-png))]
+    (when-not (and image (= width (.getWidth image))
                    (= height (.getHeight image)))
       (throw (errors/raise! "Source gallery frame dimensions are invalid"
                             {:type ::invalid-gallery-output})))
-    (consume-frame! frame-index
-                    (image-png (.getSubimage image 0 0 width height))
-                    (image-png (.getSubimage image width 0 width height)))))
+    (consume-frame! frame-index final-png)))
 
 (declare monitored-pipe-output caused-by?)
 
@@ -310,7 +299,7 @@
                       "agg-preview-overlays-" ".rgba"
                       (make-array java.nio.file.attribute.FileAttribute 0))
         maximum-output-bytes (* (count overlays)
-                                (+ (* width height 8) (* 1024 1024)))]
+                                (+ (* width height 4) (* 1024 1024)))]
     (try
       (write-overlay-rgba! overlay-path overlays width height)
       (let [process (.start

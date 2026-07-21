@@ -129,7 +129,7 @@
         preview (get-in (jobs/submit-job!
                          service "preview-operation"
                          (assoc (render-request)
-                                :previewOperation "key-moment-gallery-v1"))
+                                :previewOperation "key-moment-gallery-v2"))
                         [:job])
         render (get-in (jobs/submit-job! service "durable-render"
                                          (render-request))

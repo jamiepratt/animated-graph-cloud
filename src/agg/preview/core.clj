@@ -61,20 +61,6 @@
    :fullUrl (str "/v1/previews/" operation-id "/images/"
                  asset-id "/full")})
 
-(defn png-visible? [bytes]
-  (let [image (ImageIO/read (ByteArrayInputStream. bytes))]
-    (when-not image
-      (throw (errors/raise! "Preview image is not PNG"
-                            {:type ::invalid-png})))
-    (boolean
-     (some (fn [y]
-             (some (fn [x]
-                     (pos? (bit-and 0xff
-                                    (unsigned-bit-shift-right
-                                     (.getRGB image x y) 24))))
-                   (range (.getWidth image))))
-           (range (.getHeight image))))))
-
 (defn thumbnail-png [bytes]
   (let [source (ImageIO/read (ByteArrayInputStream. bytes))]
     (when-not source
@@ -184,21 +170,14 @@
          gallery-result
          (media/render-composite-gallery!
           gallery-renderer render-spec source-stream! overlays
-          (fn [frame-index source-png final-png]
-            (let [{:keys [id overlay]}
-                  (first (filter #(= frame-index (:frameIndex %)) overlays))
-                  visible? (png-visible? overlay)
-                  source-ref (store! (str id "-source") source-png)
-                  final-ref (if visible?
-                              (store! (str id "-final") final-png)
-                              source-ref)]
+          (fn [frame-index final-png]
+            (let [{:keys [id]}
+                  (first (filter #(= frame-index (:frameIndex %)) overlays))]
               (swap! stored-by-frame assoc frame-index
                      {:id id
                       :frameIndex frame-index
-                      :kind "source-final"
-                      :merged (not visible?)
-                      :source source-ref
-                      :final final-ref})))))
+                      :kind "final"
+                      :image (store! (str id "-final") final-png)})))))
         (when-not (or (= (set (map :frameIndex assets))
                          (set (keys @stored-by-frame)))
                       (= "source_duration_too_short" (:reason @gallery-result)))
@@ -226,8 +205,8 @@
                                 (:duration-seconds render-spec)}
                                :retryable false})))
       (cond-> {:output-bytes @output-bytes
-               :version 1
-               :mode (if source-stream! "source-final" "overlay")
+               :version 2
+               :mode (if source-stream! "final" "overlay")
                :sections (manifest-sections sections asset-id-by-frame
                                             available-frames)
                :assets (into [] (keep #(get @stored-by-frame (:frameIndex %)))

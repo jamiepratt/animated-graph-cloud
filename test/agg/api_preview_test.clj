@@ -170,7 +170,7 @@
         owner-csrf (auth/issue-csrf-token auth-system owner)
         worker (reify jobs/RenderWorker
                  (perform-render! [_ _ _]
-                   {:output-bytes 0 :version 1 :mode "overlay"
+                   {:output-bytes 0 :version 2 :mode "overlay"
                     :sections [] :assets []}))
         preview-system (jobs/in-memory-system {:clock clock :worker worker})
         durable-system (jobs/in-memory-system)
@@ -420,6 +420,9 @@
                                                     :key-fn keyword))))
           (is (= ["heart-rate" "spo2"]
                  (mapv :id (:sections result))))
+          (is (= 2 (:version result)))
+          (is (= "overlay" (:mode result)))
+          (is (every? #(= "overlay" (:kind %)) (:assets result)))
           (is (not (contains? result :output-bytes)))
           (is (= (count (:assets result))
                  (count (set (map :id (:assets result))))))
@@ -466,7 +469,7 @@
             (with-open [output (java.io.ByteArrayOutputStream.)]
               (source-stream! output))
             (doseq [{:keys [frameIndex overlay]} overlays]
-              (consume-frame! frameIndex overlay overlay))))
+              (consume-frame! frameIndex overlay))))
         worker
         (reify jobs/RenderWorker
           (perform-render! [_ operation-id request]
@@ -508,7 +511,8 @@
           (is (= 1 @decode-count))
           (is (= [0 13 38 49] @decoded-frames))
           (is (= 0 @metadata-count))
-          (is (= "source-final" (:mode result)))
+          (is (= 2 (:version result)))
+          (is (= "final" (:mode result)))
           (is (= [0 13 38 49]
                  (mapv :frameIndex (get-in result [:sections 0 :moments]))))
           (is (= [["Video start" "Trace start"]
@@ -520,17 +524,17 @@
                  (mapv :frameRef (get-in result [:sections 0 :moments]))
                  (mapv :id (:assets result))))
           (is (= [0 13 38 49] (mapv :frameIndex (:assets result))))
-          (is (every? #(= "source-final" (:kind %)) (:assets result)))
-          (is (every? false? (map :merged (:assets result))))
-          (doseq [{:keys [id source final]} (:assets result)]
-            (is (= (preview/image-reference (:id operation) (str id "-source"))
-                   source))
+          (is (every? #(= "final" (:kind %)) (:assets result)))
+          (is (every? #(= #{:id :frameIndex :kind :image} (set (keys %)))
+                      (:assets result)))
+          (doseq [{:keys [id image]} (:assets result)]
             (is (= (preview/image-reference (:id operation) (str id "-final"))
-                   final))
-            (doseq [asset-id [(str id "-source") (str id "-final")]
-                    size [:thumbnail :full]]
+                   image))
+            (doseq [size [:thumbnail :full]]
               (is (some? (preview/get-asset asset-store (:id operation)
-                                            asset-id size)))))
+                                            (str id "-final") size)))
+              (is (nil? (preview/get-asset asset-store (:id operation)
+                                           (str id "-source") size)))))
           (is (not (str/includes? (pr-str result) "private-name")))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
@@ -550,7 +554,7 @@
             (with-open [output (java.io.ByteArrayOutputStream.)]
               (source-stream! output))
             (doseq [{:keys [frameIndex overlay]} (take 3 overlays)]
-              (consume-frame! frameIndex overlay overlay))
+              (consume-frame! frameIndex overlay))
             {:requested-frame-count 4
              :generated-frame-count 3
              :omitted-frame-count 1
@@ -594,6 +598,10 @@
           (is (= 200 (.statusCode completed)))
           (is (= "succeeded" (:state body)))
           (is (= 1 @source-count))
+          (is (= 2 (get-in body [:result :version])))
+          (is (= "final" (get-in body [:result :mode])))
+          (is (every? #(= "final" (:kind %))
+                      (get-in body [:result :assets])))
           (is (= [0 13 38]
                  (mapv :frameIndex (get-in body [:result :assets]))))
           (is (= [{:reason "source_duration_too_short"

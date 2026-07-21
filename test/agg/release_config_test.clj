@@ -180,6 +180,9 @@
                       "PreviewGallery"
                       "PreviewTraceSection"
                       "PreviewFrameAsset"
+                      "PreviewFinalFrameAsset"
+                      "PreviewOverlayFrameAsset"
+                      "version: {const: 2}"
                       "operationKind: {const: key-moment-gallery}"
                       "schema: {const: no-store}"
                       "synchronous `image/png` midpoint response"]]
@@ -187,11 +190,15 @@
         (is (str/includes? openapi contract))))
     (doseq [migration ["breaking API change"
                        "Poll its `statusUrl`"
+                       "version 2 result"
                        "authenticated image retrieval"
                        "retained for 24 hours"
-                       "narrow screens use vertical moment cards"]]
+                       "fill centered rows"
+                       "Narrow screens use larger centered cards"]]
       (testing migration
-        (is (str/includes? readme migration))))))
+        (is (str/includes? readme migration))))
+    (is (not (str/includes? openapi "source-final")))
+    (is (not (str/includes? readme "Source and Final")))))
 
 (deftest preview-contract-publishes-partial-gallery-recovery
   (let [openapi (slurp "docs/openapi.yaml")
