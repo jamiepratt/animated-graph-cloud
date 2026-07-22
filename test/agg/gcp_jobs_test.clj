@@ -13,11 +13,16 @@
             [agg.tokens.gcp :as tokens-gcp]
             [clojure.data.json :as json]
             [clojure.test :refer [deftest is]])
-  (:import (com.google.api.gax.rpc AbortedException AlreadyExistsException
-                                   CancelledException StatusCode StatusCode$Code)
+  (:import (com.google.api.core ApiFutures)
+           (com.google.api.gax.longrunning OperationFuture)
+           (com.google.api.gax.rpc AbortedException AlreadyExistsException
+                                   CancelledException FailedPreconditionException
+                                   OperationCallable StatusCode StatusCode$Code
+                                   UnaryCallable)
            (com.google.cloud.firestore FirestoreException FirestoreOptions)
            (com.google.cloud.run.v2 Condition Condition$State Container
-                                    Execution TaskTemplate)
+                                    Execution ExecutionsClient TaskTemplate)
+           (com.google.cloud.run.v2.stub ExecutionsStub)
            (com.google.cloud.storage StorageOptions)
            (com.google.protobuf Timestamp)
            (io.grpc Status)
@@ -226,6 +231,65 @@
                           .build))
       .build))
 
+(defn- operation-future [future]
+  (reify OperationFuture
+    (addListener [_ runnable executor]
+      (.execute executor runnable))
+    (cancel [_ may-interrupt?]
+      (.cancel future may-interrupt?))
+    (isCancelled [_]
+      (.isCancelled future))
+    (isDone [_]
+      (.isDone future))
+    (get [_]
+      (.get future))
+    (get [_ timeout unit]
+      (.get future timeout unit))
+    (getName [_]
+      "operations/cancel")
+    (getInitialFuture [_]
+      (ApiFutures/immediateFuture nil))
+    (getPollingFuture [_]
+      nil)
+    (peekMetadata [_]
+      (ApiFutures/immediateFuture nil))
+    (getMetadata [_]
+      (ApiFutures/immediateFuture nil))))
+
+(defn- executions-client [operation lookup]
+  (let [cancel-callable
+        (proxy [OperationCallable] []
+          (futureCall [request]
+            (if (fn? operation)
+              (operation (.getName request))
+              operation))
+          (resumeFutureCall [_operation-name _context]
+            operation)
+          (cancel [_operation-name _context]
+            (ApiFutures/immediateFuture nil)))
+        get-callable
+        (proxy [UnaryCallable] []
+          (futureCall [request]
+            (ApiFutures/immediateFuture (lookup (.getName request)))))
+        stub
+        (proxy [ExecutionsStub] []
+          (cancelExecutionOperationCallable []
+            cancel-callable)
+          (getExecutionCallable []
+            get-callable)
+          (close []))]
+    (ExecutionsClient/create stub)))
+
+(defn- failed-precondition-operation []
+  (let [status (reify StatusCode
+                 (getCode [_] StatusCode$Code/FAILED_PRECONDITION)
+                 (getTransportCode [_] Status/FAILED_PRECONDITION))
+        future (CompletableFuture.)]
+    (.completeExceptionally
+     future
+     (FailedPreconditionException. "cancellation rejected" nil status false))
+    (operation-future future)))
+
 (deftest cloud-run-execution-correlation-is-active-and-attempt-exact
   (let [unrelated (cloud-run-execution "executions/unrelated" "other-job" 2
                                        false)
@@ -256,6 +320,58 @@
     (is (nil? (#'gcp/await-cancellation! operation)))
     (is (thrown-with-msg? AbortedException #"remote cancellation failed"
                           (#'gcp/await-cancellation! failed-operation)))))
+
+(deftest cloud-run-already-cancelled-precondition-requires-authoritative-state
+  (let [execution-name "projects/test/locations/test/executions/execution-1"
+        reads (atom [])
+        client (executions-client
+                (failed-precondition-operation)
+                (fn [name]
+                  (swap! reads conj name)
+                  (production-cancelled-execution name)))
+        launcher (gcp/->CloudRunLauncher nil client "jobs/renderer")]
+    (try
+      (is (nil? (jobs/request-execution-cancellation! launcher execution-name)))
+      (is (= [execution-name] @reads)
+          "FAILED_PRECONDITION requires a separate read of the exact execution")
+      (finally
+        (.close client)))))
+
+(deftest cloud-run-precondition-without-proven-cancellation-still-fails
+  (let [execution-name "projects/test/locations/test/executions/execution-1"
+        unconfirmed
+        [(-> (Execution/newBuilder)
+             (.setName execution-name)
+             (.setTaskCount 1)
+             (.setRunningCount 1)
+             .build)
+         (production-cancelled-execution
+          "projects/test/locations/test/executions/different")]]
+    (doseq [execution unconfirmed]
+      (let [client (executions-client (failed-precondition-operation)
+                                      (constantly execution))
+            launcher (gcp/->CloudRunLauncher nil client "jobs/renderer")]
+        (try
+          (is (thrown-with-msg?
+               FailedPreconditionException #"cancellation rejected"
+               (jobs/request-execution-cancellation! launcher execution-name)))
+          (finally
+            (.close client)))))
+    (let [read-status (reify StatusCode
+                        (getCode [_] StatusCode$Code/ABORTED)
+                        (getTransportCode [_] Status/ABORTED))
+          client (executions-client
+                  (failed-precondition-operation)
+                  (fn [_]
+                    (throw (AbortedException. "execution read failed" nil
+                                              read-status true))))
+          launcher (gcp/->CloudRunLauncher nil client "jobs/renderer")]
+      (try
+        (is (thrown-with-msg?
+             AbortedException #"execution read failed"
+             (jobs/request-execution-cancellation! launcher execution-name)))
+        (finally
+          (.close client))))))
 
 (deftest signed-upload-is-a-bounded-content-type-locked-v4-put
   (let [signer (reify com.google.auth.ServiceAccountSigner
@@ -696,6 +812,21 @@
           enqueued (atom [])
           launched (atom [])
           cancelled (atom [])
+          execution-reads (atom [])
+          platform-client
+          (executions-client
+           (fn [execution]
+             (swap! cancelled conj execution)
+             (if (= 1 (count @cancelled))
+               (let [future (CompletableFuture.)]
+                 (.complete future (production-cancelled-execution execution))
+                 (operation-future future))
+               (failed-precondition-operation)))
+           (fn [execution]
+             (swap! execution-reads conj execution)
+             (production-cancelled-execution execution)))
+          platform-launcher
+          (gcp/->CloudRunLauncher nil platform-client "jobs/renderer")
           request-store
           (reify jobs/RequestStore
             (save-request! [_ job-id request]
@@ -713,8 +844,8 @@
                 (swap! launched conj execution)
                 execution))
             (cancel-execution! [_ execution]
-              (swap! cancelled conj execution)
-              (production-cancelled-execution execution)))
+              (jobs/request-execution-cancellation!
+               platform-launcher execution)))
           service (gcp/job-service {:firestore firestore
                                     :request-store request-store
                                     :queue queue
@@ -772,6 +903,14 @@
           (is (= [(str "executions/" job-id "-attempt-1")
                   (str "executions/" job-id "-attempt-1")]
                  @cancelled))
+          (is (= [(str "executions/" job-id "-attempt-1")]
+                 @execution-reads)
+              "precondition acknowledgement reads the exact execution once")
+          (is (= {:repaired-jobs 0 :released-leases 0}
+                 (jobs/reconcile-jobs! service))
+              "terminal reconciliation is idempotent")
+          (is (= 2 (count @cancelled))
+              "terminal reconciliation does not repeat platform cancellation")
 
           (let [repeated-cancel
                 (test-http/send-string!
@@ -786,6 +925,7 @@
                 "terminal idempotency does not repeat platform cancellation")))
         (finally
           (.close ^java.lang.AutoCloseable server)
+          (.close platform-client)
           (.close firestore))))
     (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
 
