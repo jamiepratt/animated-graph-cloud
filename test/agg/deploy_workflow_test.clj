@@ -8,6 +8,12 @@
 (def ^:private terraform-variables (slurp "infra/dev/variables.tf"))
 (def ^:private cloud-spike (slurp "script/run_cloud_spike.sh"))
 
+(defn- workflow-section [start-marker end-marker]
+  (let [start (str/index-of workflow start-marker)
+        end (and start (str/index-of workflow end-marker start))]
+    (when (and start end)
+      (subs workflow start end))))
+
 (deftest docker-build-includes-runtime-resources
   (is (str/includes? dockerfile "COPY resources ./resources"))
   (is (str/includes? dockerfile "RUN clojure -T:build uber")))
@@ -41,6 +47,53 @@
   (is (str/includes? workflow
                      "CLOUD_RUN_ID_TOKEN: ${{ steps.health-auth.outputs.id_token }}"))
   (is (not (str/includes? workflow "gcloud auth print-identity-token"))))
+
+(deftest development-promotes-the-durable-renderer-before-api-activation
+  (let [image-push (str/index-of workflow
+                                 "Push and resolve immutable image digest")
+        durable-promotion (str/index-of workflow
+                                        "Promote durable renderer")
+        api-deploy (str/index-of workflow "Deploy private API service")
+        image-verification (str/index-of workflow
+                                         "Verify API and durable renderer image parity")
+        lifecycle-activation (str/index-of workflow
+                                           "Enable authenticated durable job lifecycle")
+        durable-section (or (workflow-section
+                             "- name: Promote durable renderer"
+                             "- name: Deploy private API service")
+                            "")
+        api-section (or (workflow-section
+                         "- name: Deploy private API service"
+                         "- name: Deploy and execute renderer smoke job")
+                        "")
+        verification-section (or (workflow-section
+                                  "- name: Verify API and durable renderer image parity"
+                                  "- id: service-url")
+                                 "")]
+    (is (str/includes? workflow "DURABLE_JOB: agg-renderer"))
+    (is (str/includes? workflow "SMOKE_JOB: agg-renderer-smoke"))
+    (doseq [position [image-push durable-promotion api-deploy
+                      image-verification lifecycle-activation]]
+      (is (number? position)))
+    (when (every? number? [image-push durable-promotion api-deploy
+                           image-verification lifecycle-activation])
+      (is (< image-push durable-promotion api-deploy
+             image-verification lifecycle-activation)))
+    (is (str/includes? workflow
+                       "echo \"uri=$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/animated-graph-cloud@$digest\""))
+    (is (str/includes? durable-section
+                       "gcloud run jobs update \"$DURABLE_JOB\""))
+    (is (str/includes? durable-section "--image \"$IMAGE_DIGEST\""))
+    (doseq [preserved-setting ["--service-account" "--args" "--tasks"
+                               "--max-retries" "--task-timeout" "--cpu"
+                               "--memory" "--update-env-vars"
+                               "--update-secrets"]]
+      (is (not (str/includes? durable-section preserved-setting))))
+    (is (str/includes? api-section "--image \"$IMAGE_DIGEST\""))
+    (is (str/includes? verification-section
+                       "test \"$service_image\" = \"$durable_image\""))
+    (is (str/includes? verification-section
+                       "test \"$service_image\" = \"$IMAGE_DIGEST\""))))
 
 (deftest terraform-locks-the-measured-renderer-job-shape
   (is (str/includes? terraform "resource \"google_cloud_run_v2_job\" \"renderer\""))
