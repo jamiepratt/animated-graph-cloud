@@ -56,6 +56,9 @@
         api-deploy (str/index-of workflow "Deploy private API service")
         image-verification (str/index-of workflow
                                          "Verify API and durable renderer image parity")
+        api-activation (str/index-of workflow "Activate verified API revision")
+        smoke-execution (str/index-of workflow
+                                      "Deploy and execute renderer smoke job")
         lifecycle-activation (str/index-of workflow
                                            "Enable authenticated durable job lifecycle")
         durable-section (or (workflow-section
@@ -64,21 +67,26 @@
                             "")
         api-section (or (workflow-section
                          "- name: Deploy private API service"
-                         "- name: Deploy and execute renderer smoke job")
+                         "- name: Verify API and durable renderer image parity")
                         "")
         verification-section (or (workflow-section
                                   "- name: Verify API and durable renderer image parity"
-                                  "- id: service-url")
-                                 "")]
+                                  "- name: Activate verified API revision")
+                                 "")
+        activation-section (or (workflow-section
+                                "- name: Activate verified API revision"
+                                "- name: Deploy and execute renderer smoke job")
+                               "")]
     (is (str/includes? workflow "DURABLE_JOB: agg-renderer"))
     (is (str/includes? workflow "SMOKE_JOB: agg-renderer-smoke"))
-    (doseq [position [image-push durable-promotion api-deploy
-                      image-verification lifecycle-activation]]
+    (doseq [position [image-push durable-promotion api-deploy image-verification
+                      api-activation smoke-execution lifecycle-activation]]
       (is (number? position)))
-    (when (every? number? [image-push durable-promotion api-deploy
-                           image-verification lifecycle-activation])
+    (when (every? number? [image-push durable-promotion api-deploy image-verification
+                           api-activation smoke-execution lifecycle-activation])
       (is (< image-push durable-promotion api-deploy
-             image-verification lifecycle-activation)))
+             image-verification api-activation smoke-execution
+             lifecycle-activation)))
     (is (str/includes? workflow
                        "echo \"uri=$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/animated-graph-cloud@$digest\""))
     (is (str/includes? durable-section
@@ -90,10 +98,14 @@
                                "--update-secrets"]]
       (is (not (str/includes? durable-section preserved-setting))))
     (is (str/includes? api-section "--image \"$IMAGE_DIGEST\""))
+    (is (str/includes? api-section "--no-traffic"))
     (is (str/includes? verification-section
                        "test \"$service_image\" = \"$durable_image\""))
     (is (str/includes? verification-section
-                       "test \"$service_image\" = \"$IMAGE_DIGEST\""))))
+                       "test \"$service_image\" = \"$IMAGE_DIGEST\""))
+    (is (str/includes? activation-section
+                       "gcloud run services update-traffic \"$SERVICE\""))
+    (is (str/includes? activation-section "--to-latest"))))
 
 (deftest terraform-locks-the-measured-renderer-job-shape
   (is (str/includes? terraform "resource \"google_cloud_run_v2_job\" \"renderer\""))
