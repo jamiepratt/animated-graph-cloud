@@ -3,10 +3,13 @@
             [agg.api.main :as api]
             [agg.auth.core :as auth]
             [agg.drive.core :as drive]
+            [agg.early-access.core :as early-access]
+            [agg.errors :as errors]
             [agg.http-test-support :as test-http]
             [agg.jobs-test :as fixture]
             [agg.jobs.lifecycle :as jobs]
             [clojure.data.json :as json]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]))
 
 (defn- available-port []
@@ -24,6 +27,17 @@
 (defn- get! [port path headers]
   (test-http/send-string! :get (str "http://127.0.0.1:" port path)
                           nil headers))
+
+(defn- post-form! [port path form]
+  (test-http/send-string!
+   :post (str "http://127.0.0.1:" port path)
+   (->> form
+        (map (fn [[key value]]
+               (str (java.net.URLEncoder/encode (name key) "UTF-8") "="
+                    (java.net.URLEncoder/encode (str value) "UTF-8"))))
+        (str/join "&"))
+   {"Content-Type" "application/x-www-form-urlencoded"
+    "Accept" "text/html"}))
 
 (defn- auth-fixture []
   (let [oauth (reify auth/OAuthClient
@@ -587,17 +601,21 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
-(deftest browser-login-callback-explains-allowlist-access-without-exposing-identity
+(deftest browser-login-callback-offers-verified-nonmembers-early-access-contact
   (let [port (available-port)
         events (atom [])
         {:keys [system]} (drive-callback-fixture
                           (valid-drive-oauth)
                           {:allowlist #{"approved@example.com"}})
+        early-access-system
+        (early-access/system
+         {:proof-key (.getBytes "01234567890123456789012345678901")})
         flow (auth/begin-flow! system :login nil)
         browser-cookie (auth/issue-browser-cookie
                         system {:oauth (:stateCookie flow)})
         server (start-api! port
                            {:auth-system system
+                            :early-access-system early-access-system
                             :event-sink #(swap! events conj [%1 %2])})]
     (try
       (let [response (get! port
@@ -606,16 +624,135 @@
                            {"Accept" "text/html"
                             "Cookie" (str "__session=" browser-cookie)})
             body (.body response)
+            proof (second (re-find #"name=\"proof\" value=\"([^\"]+)\""
+                                   body))
             set-cookie (first (.allValues (.headers response) "Set-Cookie"))]
         (is (= 403 (.statusCode response)))
-        (is (re-find #"Google account does not have Alpha Compose access" body))
-        (is (re-find #"approved Google account" body))
-        (is (re-find #"administrator" body))
+        (is (re-find #"Alpha Compose is in early access" body))
+        (is (re-find #"limited to approved testers" body))
+        (is (re-find #"leave your details" body))
+        (is (re-find #"action=\"/v1/early-access/request\"" body))
+        (is (re-find #"type=\"email\"[^>]+value=\"owner@example\.com\"[^>]+readonly"
+                     body))
+        (is (re-find #"name=\"instagram\"[^>]+maxlength=\"64\"" body))
+        (is (re-find #"name=\"message\"[^>]+maxlength=\"2000\"" body))
+        (is (re-find #"mailto:me@jamiep\.org" body))
+        (is (re-find #"No session, Drive grant, membership binding, or render was created"
+                     body))
         (is (re-find #"href=\"/v1/auth/login/start\"" body))
-        (is (not (re-find #"owner@example\.com|google-subject-1|private-code"
-                          body)))
+        (is (= "owner@example.com"
+               (:email (early-access/verify-proof! early-access-system proof))))
+        (is (not (re-find #"google-subject-1|private-code" body)))
         (is (re-find #"^__session=.*Max-Age=0" set-cookie))
-        (is (= "not_allowlisted" (:category (second (first @events))))))
+        (is (= "not_allowlisted" (:category (second (first @events)))))
+        (is (not (re-find #"owner@example\.com|google-subject-1|private-code|proof"
+                          (pr-str @events)))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest verified-early-access-request-succeeds-or-retries-without-application-access
+  (let [port (available-port)
+        events (atom [])
+        notifications (atom [])
+        provider-mode (atom :success)
+        notifier
+        (reify early-access/Notifier
+          (send-notification! [_ notification]
+            (case @provider-mode
+              :success (swap! notifications conj notification)
+              :failure (throw (errors/raise! "Provider unavailable"
+                                             {:type ::provider-unavailable
+                                              :status 503
+                                              :retryable true}))
+              :unexpected
+              (throw (RuntimeException.
+                      "owner@example.com private provider response")))))
+        {:keys [system]} (drive-callback-fixture
+                          (valid-drive-oauth)
+                          {:allowlist #{"approved@example.com"}})
+        early-access-system
+        (early-access/system
+         {:proof-key (.getBytes "01234567890123456789012345678901")
+          :notifier notifier})
+        flow (auth/begin-flow! system :login nil)
+        browser-cookie (auth/issue-browser-cookie
+                        system {:oauth (:stateCookie flow)})
+        server (start-api! port
+                           {:auth-system system
+                            :early-access-system early-access-system
+                            :event-sink #(swap! events conj [%1 %2])})]
+    (try
+      (let [denial (get! port
+                         (str "/v1/auth/login/callback?code=private-code&state="
+                              (:state flow))
+                         {"Accept" "text/html"
+                          "Cookie" (str "__session=" browser-cookie)})
+            proof (second (re-find #"name=\"proof\" value=\"([^\"]+)\""
+                                   (.body denial)))
+            success (post-form! port "/v1/early-access/request"
+                                {:proof proof
+                                 :email "attacker@example.com"
+                                 :instagram "  @runner  "
+                                 :message "  Please let me test.  "})]
+        (is (= 200 (.statusCode success)))
+        (is (re-find #"Request sent" (.body success)))
+        (is (re-find #"role=\"status\"[^>]+tabindex=\"-1\""
+                     (.body success)))
+        (is (not (re-find (re-pattern (java.util.regex.Pattern/quote proof))
+                          (.body success))))
+        (is (= 1 (count @notifications)))
+        (is (= "owner@example.com" (:reply-to (first @notifications))))
+        (is (re-find #"Instagram handle: @runner"
+                     (:text (first @notifications))))
+        (is (not (re-find #"attacker@example\.com"
+                          (:text (first @notifications)))))
+
+        (let [invalid (post-form! port "/v1/early-access/request"
+                                  {:proof (str proof "tampered")
+                                   :message "private-invalid-message"})]
+          (is (= 400 (.statusCode invalid)))
+          (is (re-find #"could not verify this request" (.body invalid)))
+          (is (re-find #"mailto:me@jamiep\.org" (.body invalid)))
+          (is (not (re-find #"private-invalid-message|name=\"proof\""
+                            (.body invalid))))
+          (is (= 1 (count @notifications))))
+
+        (reset! provider-mode :failure)
+        (let [failure (post-form! port "/v1/early-access/request"
+                                  {:proof proof
+                                   :email "attacker@example.com"
+                                   :instagram " <script>alert(1)</script> "
+                                   :message " retry message "})
+              failure-event (second (last @events))]
+          (is (= 503 (.statusCode failure)))
+          (is (re-find #"could not send your request" (.body failure)))
+          (is (re-find #"&lt;script&gt;alert\(1\)&lt;/script&gt;" (.body failure)))
+          (is (not (re-find #"<script>alert\(1\)</script>" (.body failure))))
+          (is (re-find #"name=\"proof\"" (.body failure)))
+          (is (re-find #"mailto:me@jamiep\.org" (.body failure)))
+          (is (= "early_access_delivery" (:category failure-event)))
+          (is (= 503 (:upstreamStatus failure-event)))
+          (is (true? (:retryable failure-event)))
+          (is (string? (:sourceFile failure-event)))
+          (is (integer? (:sourceLine failure-event)))
+          (is (not (re-find #"owner@example\.com|attacker@example\.com|runner|retry message|proof"
+                            (pr-str @events)))))
+
+        (reset! provider-mode :unexpected)
+        (let [failure (post-form! port "/v1/early-access/request"
+                                  {:proof proof
+                                   :message "private unexpected message"})
+              [event-name failure-event] (last @events)]
+          (is (= 502 (.statusCode failure)))
+          (is (re-find #"could not send your request" (.body failure)))
+          (is (re-find #"name=\"proof\"" (.body failure)))
+          (is (= "early_access_notification_failed" event-name))
+          (is (= "early_access_delivery" (:category failure-event)))
+          (is (true? (:retryable failure-event)))
+          (is (string? (:sourceFile failure-event)))
+          (is (integer? (:sourceLine failure-event)))
+          (is (not (re-find #"owner@example\.com|private provider|unexpected message|proof"
+                            (pr-str @events))))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

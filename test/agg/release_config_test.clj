@@ -123,6 +123,65 @@
                             runbook))))
     (is (not (re-find #"openssl rand 48 \|" runbook)))))
 
+(deftest early-access-email-release-is-secret-backed-and-checkpointed
+  (let [shared (slurp "infra/dev/main.tf")
+        production-module (slurp "infra/prod/main.tf")
+        development-workflow (slurp ".github/workflows/deploy.yml")
+        production-workflow (slurp ".github/workflows/deploy-production.yml")
+        runtime (slurp "src/agg/jobs/gcp.clj")
+        auth-runtime (slurp "src/agg/auth/gcp.clj")
+        runbook (slurp "docs/production-runbook.md")
+        decision (slurp "docs/adr/0015-signed-no-session-early-access-contact.md")
+        terraform-apply (str/index-of production-workflow
+                                      "Plan and apply production Terraform")
+        secret-check (str/index-of production-workflow
+                                   "Verify enabled Resend secret version")
+        image-push (str/index-of production-workflow
+                                 "Push and resolve immutable image digest")]
+    (is (str/includes? shared "\"resend-api-key\""))
+    (is (re-find #"(?s)resource \"google_secret_manager_secret_iam_member\" \"api_resend_access\".*?secret_id\s*=\s*google_secret_manager_secret\.application\[\"resend-api-key\"\]\.secret_id.*?member\s*=\s*\"serviceAccount:\$\{google_service_account\.api\.email\}\""
+                 shared))
+    (is (str/includes? production-module "source = \"../dev\""))
+    (doseq [workflow [development-workflow production-workflow]]
+      (is (str/includes? workflow
+                         "AGG_RESEND_API_KEY=resend-api-key:latest"))
+      (is (str/includes? workflow
+                         "AGG_EARLY_ACCESS_SENDER=$EARLY_ACCESS_SENDER"))
+      (is (str/includes? workflow
+                         "AGG_EARLY_ACCESS_RECIPIENT=$EARLY_ACCESS_RECIPIENT"))
+      (is (str/includes? workflow
+                         "EARLY_ACCESS_SENDER: Alpha Compose <early-access@alphacompose.com>"))
+      (is (str/includes? workflow "EARLY_ACCESS_RECIPIENT: me@jamiep.org")))
+    (doseq [setting ["AGG_RESEND_API_KEY"
+                     "AGG_EARLY_ACCESS_SENDER"
+                     "AGG_EARLY_ACCESS_RECIPIENT"]]
+      (is (str/includes? runtime setting)))
+    (is (str/includes? auth-runtime ":early-access-system"))
+    (doseq [position [terraform-apply secret-check image-push]]
+      (is (number? position)))
+    (when (every? number? [terraform-apply secret-check image-push])
+      (is (< terraform-apply secret-check image-push)))
+    (doseq [checkpoint ["gcloud secrets versions describe latest"
+                        "--secret=resend-api-key"
+                        "test \"$resend_secret_state\" = \"ENABLED\""]]
+      (is (str/includes? production-workflow checkpoint)))
+    (is (not (str/includes? production-workflow
+                            "gcloud secrets versions access latest --secret=resend-api-key")))
+    (doseq [manual ["Resend account creation"
+                    "alphacompose.com sender-domain DNS verification"
+                    "first production `resend-api-key` version"
+                    "gcloud secrets versions add resend-api-key"
+                    "gcloud secrets versions disable"
+                    "Do not push or merge until all three"]]
+      (testing manual (is (str/includes? runbook manual))))
+    (doseq [contract ["signed no-session contact flow"
+                      "10 minutes"
+                      "early-access-contact"
+                      "Resend"
+                      "Idempotency-Key"
+                      "does not persist"]]
+      (testing contract (is (str/includes? decision contract))))))
+
 (deftest internal-service-tokens-use-the-cloud-run-audience
   (let [runtime (slurp "src/agg/jobs/gcp.clj")
         auth-runtime (slurp "src/agg/auth/gcp.clj")]

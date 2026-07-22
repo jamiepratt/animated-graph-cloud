@@ -595,6 +595,7 @@
        ".hero-card,.card{background:white;border:1px solid #e1e7f0;border-radius:1.1rem;box-shadow:0 1rem 3rem #243b5a0d;padding:1.35rem}.hero-card{background:#152238;color:white;border:0;display:flex;flex-direction:column;justify-content:space-between}.hero-card .muted{color:#b9c6d9}"
        ".step{color:#8794a8;font-weight:800;font-size:.8rem}.hero-card .step{color:#9fb8df}.hero-card-note{color:#dce9ff;margin:2rem 0 0}"
        ".actions{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-top:1.25rem}.button,.cta{border:0;border-radius:.65rem;padding:.7rem 1rem;font-weight:800;cursor:pointer;background:#e8eef8;color:#1a3154;text-decoration:none;display:inline-block}.button.primary,.cta{background:#4374c5;color:white;box-shadow:0 .35rem .8rem #4374c533}"
+       "form.card{display:grid;gap:.55rem;margin-top:1rem}input,textarea{width:100%;min-width:0;border:1px solid #c9d3e2;border-radius:.55rem;padding:.7rem;font:inherit;color:inherit;background:white}input[readonly]{background:#f0f3f8;color:#526078}textarea{resize:vertical}.card:focus{outline:3px solid #4374c5;outline-offset:3px}"
        ".feature-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem;margin:1rem 0}.feature-grid .card{margin:0}.trust-card{margin-top:1rem}.trust-card p:last-child{margin-bottom:0}"
        "footer{margin-top:2rem;color:#6c7a90}footer a{margin-right:.75rem}"
        "@media(max-width:680px){.shell{padding:1rem .8rem 3rem}.public-header{display:block}.public-header nav{margin-top:1rem}.hero{grid-template-columns:1fr;margin-top:1.5rem}.hero-copy{padding:1rem 0}.feature-grid{grid-template-columns:1fr}}"
@@ -653,10 +654,56 @@
         "<div class=\"actions\"><a class=\"cta\" href=\"/v1/auth/login/start?recovery=true\">"
         "Continue with Google</a></div></div></section>")))
 
+(defn early-access-page
+  [{:keys [email proof instagram message feedback request-id]}]
+  (public-page
+   "Early access"
+   (str
+    "<section class=\"hero\"><div class=\"hero-copy\">"
+    "<div class=\"eyebrow\">Verified Google account</div>"
+    "<h1>Alpha Compose is in early access</h1>"
+    "<p class=\"muted\">Access is currently limited to approved testers. "
+    "If you would like to test Alpha Compose, leave your details below.</p>"
+    "<p><strong>No session, Drive grant, membership binding, or render was created.</strong></p>"
+    (when feedback
+      (str "<div class=\"card\" role=\"" (if (= :success (:kind feedback))
+                                           "status" "alert")
+           "\" tabindex=\"-1\" id=\"early-access-feedback\"><h2>"
+           (escape-html (:title feedback)) "</h2><p>"
+           (escape-html (:message feedback)) "</p></div>"))
+    (when (and email proof)
+      (str
+       "<form class=\"card\" method=\"post\" action=\"/v1/early-access/request\" "
+       "aria-describedby=\"early-access-privacy form-status\">"
+       "<input type=\"hidden\" name=\"proof\" value=\"" (escape-html proof) "\">"
+       "<label for=\"early-access-email\"><strong>Email</strong></label>"
+       "<input id=\"early-access-email\" type=\"email\" name=\"email\" value=\""
+       (escape-html email) "\" readonly required>"
+       "<p class=\"muted\">This is the Google email address just verified.</p>"
+       "<label for=\"early-access-instagram\"><strong>Instagram handle (optional)</strong></label>"
+       "<input id=\"early-access-instagram\" name=\"instagram\" maxlength=\"64\" value=\""
+       (escape-html instagram) "\">"
+       "<label for=\"early-access-message\"><strong>Message (optional)</strong></label>"
+       "<textarea id=\"early-access-message\" name=\"message\" maxlength=\"2000\" rows=\"6\">"
+       (escape-html message) "</textarea>"
+       "<p id=\"early-access-privacy\" class=\"muted\">Your details are used only to email "
+       "the Alpha Compose operator about this request. Alpha Compose does not retain them.</p>"
+       "<p id=\"form-status\" aria-live=\"polite\"></p>"
+       "<button class=\"button primary\" type=\"submit\">Ask to test Alpha Compose</button>"
+       "</form>"))
+    "<div class=\"actions\"><a href=\"mailto:me@jamiep.org\">Email me@jamiep.org directly</a>"
+    "<a href=\"/v1/auth/login/start\">Try another Google account</a></div>"
+    (when request-id
+      (str "<p class=\"muted\"><small>Request ID: "
+           (escape-html request-id) "</small></p>"))
+    "</div></section>"
+    (when feedback
+      "<script>document.getElementById('early-access-feedback')?.focus();</script>"))))
+
 (def privacy-page
   (public-page
    "Privacy policy"
-   (str "<h1>Privacy policy</h1><p><strong>Effective 17 July 2026.</strong></p>"
+   (str "<h1>Privacy policy</h1><p><strong>Effective 22 July 2026.</strong></p>"
         "<p>Questions or deletion "
         "requests may be sent to <a href=\"mailto:me@jamiep.org\">me@jamiep.org</a>.</p>"
         "<h2>Information used</h2><p>We use your Google account identifier and "
@@ -664,21 +711,28 @@
         "As part of the same authorization, Alpha Compose receives only the "
         "<code>drive.file</code> permission, allowing access to files you select or "
         "that Alpha Compose creates. We process telemetry and optional watermark "
-        "content solely to create the requested overlay.</p>"
+        "content solely to create the requested overlay. For an early-access request, "
+        "we collect the verified Google email address, an optional Instagram handle, "
+        "and an optional message solely so the operator can respond about testing.</p>"
         "<h2>Storage and retention</h2><p>Encrypted Google Drive authorization, "
         "membership, and job records are stored in Google Cloud. Temporary request "
         "and output objects are deleted after 24 hours; job metadata is scheduled for "
         "deletion after 90 days. Completed overlays are delivered to your Google Drive "
-        "and remain there until you delete them.</p>"
+        "and remain there until you delete them. Alpha Compose does not retain early-access requests "
+        "in Firestore, application logs, analytics, or another application data store. "
+        "Those details exist only during bounded request processing and in the configured "
+        "email processor and recipient mailbox.</p>"
         "<h2>Sharing and security</h2><p>We use Google Cloud and Google Drive to "
-        "operate the service. We do not sell personal information or use telemetry for "
+        "operate the service, and Resend processes the plain-text early-access notification. "
+        "We do not sell personal information or use telemetry for "
         "advertising. Access is limited to approved accounts; credentials are encrypted, "
         "and application logs exclude telemetry values, filenames, email addresses, and tokens. "
         "Use and transfer of information received from Google APIs follows the "
         "<a href=\"https://developers.google.com/terms/api-services-user-data-policy\">Google API Services User Data Policy</a>, "
         "including its Limited Use requirements.</p>"
         "<h2>Your choices</h2><p>You may disconnect Alpha Compose in your Google Account, "
-        "delete delivered files from Drive, or contact us to request deletion of service records. "
+        "delete delivered files from Drive, or email me@jamiep.org with a contact or deletion request "
+        "covering service records or an early-access notification. "
         "Revoking Drive access may prevent pending renders from completing.</p>")))
 
 (def terms-page

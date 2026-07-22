@@ -125,18 +125,19 @@
         (is (string? (:session result)))
         (is (= :login (:flow (first @exchanges))))))))
 
-(deftest login-rejects-a-valid-google-user-outside-the-allowlist
-  (let [system (assoc (:system (drive-fixture))
-                      :allowlist #{"another@example.com"})
-        flow (auth/begin-flow! system :login nil)]
-    (is (= ::auth/not-allowlisted
-           (try
-             (auth/finish-login! system {:code "code"
-                                         :state (:state flow)
-                                         :state-cookie (:stateCookie flow)})
-             nil
-             (catch clojure.lang.ExceptionInfo error
-               (:type (ex-data error))))))))
+(deftest verified-nonmember-login-returns-a-private-denial-without-drive-effects
+  (let [{:keys [system grants encrypted folders]} (drive-fixture)
+        system (assoc system :allowlist #{"another@example.com"})
+        flow (auth/begin-flow! system :login nil)
+        result (auth/finish-login! system {:code "code"
+                                           :state (:state flow)
+                                           :state-cookie (:stateCookie flow)})]
+    (is (= {:outcome :not-allowlisted
+            :verified-email "owner@example.com"}
+           result))
+    (is (empty? @grants))
+    (is (empty? @encrypted))
+    (is (empty? @folders))))
 
 (deftest combined-login-accepts-googles-normalized-identity-scope-names
   (let [oauth (reify auth/OAuthClient

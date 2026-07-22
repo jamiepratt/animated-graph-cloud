@@ -15,6 +15,8 @@
             [agg.garmin-test]
             [agg.drive-test]
             [agg.drive-gcp-test]
+            [agg.early-access-resend-test]
+            [agg.early-access-test]
             [agg.gcp-jobs-test]
             [agg.jobs-test]
             [agg.logs-test]
@@ -49,6 +51,8 @@
                                              'agg.garmin-test
                                              'agg.drive-test
                                              'agg.drive-gcp-test
+                                             'agg.early-access-resend-test
+                                             'agg.early-access-test
                                              'agg.gcp-jobs-test
                                              'agg.jobs-test
                                              'agg.logs-test

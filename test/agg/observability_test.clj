@@ -79,6 +79,33 @@
            fields))
     (is (empty? (observability/safe-event-fields {:stage "private.mov"})))))
 
+(deftest early-access-delivery-event-keeps-only-bounded-operations-data
+  (is (= {:severity "ERROR"
+          :component "api"
+          :event "early_access_notification_failed"
+          :category "early_access_delivery"
+          :upstreamStatus 503
+          :retryable true
+          :sourceFile "agg/early_access/resend.clj"
+          :sourceLine 91
+          :sourceColumn 18}
+         (observability/safe-event-fields
+          {:severity "ERROR"
+           :component "api"
+           :event "early_access_notification_failed"
+           :category "early_access_delivery"
+           :upstreamStatus 503
+           :retryable true
+           :sourceFile "agg/early_access/resend.clj"
+           :sourceLine 91
+           :sourceColumn 18
+           :email "verified@example.com"
+           :instagram "@runner"
+           :message "private message"
+           :proof "private-proof"
+           :apiKey "private-key"
+           :providerBody "private response"}))))
+
 (deftest partial-preview-event-keeps-bounded-source-duration-counts
   (let [base {:severity "WARNING"
               :component "renderer"

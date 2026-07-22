@@ -607,6 +607,21 @@
      "Browser-level display timezone regression requires Chrome or Chromium"
      html)))
 
+(defn- early-access-browser-outcome [page window-size]
+  (let [scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "const form=document.querySelector('form[action=\"/v1/early-access/request\"]'),feedback=document.getElementById('early-access-feedback'),email=document.getElementById('early-access-email'),instagram=document.getElementById('early-access-instagram'),message=document.getElementById('early-access-message'),interactive=[...document.querySelectorAll('input:not([type=hidden]),textarea,button,a[href]')];"
+         "const outcome={activeId:document.activeElement?.id||null,feedbackRole:feedback?.getAttribute('role')||null,formAction:form?.getAttribute('action')||null,emailReadOnly:email?.readOnly??null,emailLabel:email?.labels?.[0]?.getAttribute('for')||null,instagramLabel:instagram?.labels?.[0]?.getAttribute('for')||null,messageLabel:message?.labels?.[0]?.getAttribute('for')||null,keyboardReachable:interactive.every(node=>node.tabIndex>=0),keyboardOrder:interactive.map(node=>node.id||node.getAttribute('href')||node.tagName.toLowerCase()),mailto:document.querySelector('a[href=\"mailto:me@jamiep.org\"]')?.href||null,viewportWidth:window.innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth,formFits:!form||form.getBoundingClientRect().right<=window.innerWidth};"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (str/replace page "</body>" (str scenario "</body>"))]
+    (browser-outcome
+     "agg-early-access-browser-"
+     "Early-access browser regression requires Chrome or Chromium"
+     html
+     (str "--window-size=" window-size))))
+
 (deftest public-product-and-legal-pages-identify-alpha-compose
   (let [port (available-port)
         {:keys [auth-system]} (fixture)
@@ -635,11 +650,67 @@
         (is (str/includes? (.body privacy) "Google Drive"))
         (is (str/includes? (.body privacy) "Google API Services User Data Policy"))
         (is (str/includes? (.body privacy) "Limited Use"))
+        (is (str/includes? (.body privacy) "early-access request"))
+        (is (str/includes? (.body privacy) "Instagram handle"))
+        (is (str/includes? (.body privacy) "optional message"))
+        (is (str/includes? (.body privacy) "Resend"))
+        (is (str/includes? (.body privacy)
+                           "does not retain early-access requests"))
+        (is (str/includes? (.body privacy) "contact or deletion request"))
         (is (= 200 (.statusCode terms)))
         (is (str/includes? (.body terms) "Terms of service"))
         (is (str/includes? (.body terms) "me@jamiep.org")))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
+
+(deftest early-access-feedback-and-form-are-keyboard-and-mobile-safe
+  (let [initial-page
+        (ui/early-access-page
+         {:email "verified@example.com"
+          :proof "signed-proof"})
+        retry-page
+        (ui/early-access-page
+         {:email "verified@example.com"
+          :proof "signed-proof"
+          :instagram "@runner"
+          :message "Please let me test."
+          :feedback {:kind :failure
+                     :title "Request not sent"
+                     :message "Retry below or email directly."}})
+        success-page
+        (ui/early-access-page
+         {:feedback {:kind :success
+                     :title "Request sent"
+                     :message "Your request was sent."}})
+        initial (early-access-browser-outcome initial-page "1280,900")
+        retry (early-access-browser-outcome retry-page "375,800")
+        success (early-access-browser-outcome success-page "1280,900")]
+    (is (= 1280 (:viewportWidth initial)))
+    (is (= "/v1/early-access/request" (:formAction initial)))
+    (is (true? (:noHorizontalOverflow initial)))
+    (is (true? (:formFits initial)))
+    (is (= "early-access-feedback" (:activeId retry)))
+    (is (= "alert" (:feedbackRole retry)))
+    (is (= "/v1/early-access/request" (:formAction retry)))
+    (is (true? (:emailReadOnly retry)))
+    (is (= "early-access-email" (:emailLabel retry)))
+    (is (= "early-access-instagram" (:instagramLabel retry)))
+    (is (= "early-access-message" (:messageLabel retry)))
+    (is (true? (:keyboardReachable retry)))
+    (is (= ["/" "/privacy" "/terms" "early-access-email"
+            "early-access-instagram" "early-access-message" "button"
+            "mailto:me@jamiep.org" "/v1/auth/login/start"
+            "mailto:me@jamiep.org"]
+           (:keyboardOrder retry)))
+    (is (= "mailto:me@jamiep.org" (:mailto retry)))
+    (is (<= (:viewportWidth retry) 500))
+    (is (true? (:noHorizontalOverflow retry)))
+    (is (true? (:formFits retry)))
+    (is (= "early-access-feedback" (:activeId success)))
+    (is (= "status" (:feedbackRole success)))
+    (is (nil? (:formAction success)))
+    (is (= "mailto:me@jamiep.org" (:mailto success)))
+    (is (true? (:noHorizontalOverflow success)))))
 
 (deftest authenticated-compose-page-renders-parseable-inline-script
   (let [port (available-port)
