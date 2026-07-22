@@ -19,7 +19,8 @@ env:
   REGION: europe-central2
   REPOSITORY: containers
   SERVICE: agg-api
-  JOB: agg-renderer-smoke
+  DURABLE_JOB: agg-renderer
+  SMOKE_JOB: agg-renderer-smoke
   IMAGE: europe-central2-docker.pkg.dev/animated-graph-cloud-jp/containers/animated-graph-cloud:${{ github.sha }}
   DEPLOYER_SERVICE_ACCOUNT: agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com
   API_SERVICE_ACCOUNT: agg-api@animated-graph-cloud-jp.iam.gserviceaccount.com
@@ -65,17 +66,34 @@ jobs:
         with:
           version: ">= 541.0.0"
 
-      - name: Push image
+      - id: image
+        name: Push and resolve immutable image digest
         run: |
           gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
           docker push "$IMAGE"
+          digest="$(gcloud artifacts docker images describe "$IMAGE" \
+            --format='value(image_summary.digest)')"
+          test -n "$digest"
+          echo "uri=$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/animated-graph-cloud@$digest" >>"$GITHUB_OUTPUT"
+
+      - name: Promote durable renderer
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+        run: |
+          gcloud run jobs update "$DURABLE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE_DIGEST" \
+            --quiet
 
       - name: Deploy private API service
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
         run: |
           gcloud run deploy "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
-            --image "$IMAGE" \
+            --image "$IMAGE_DIGEST" \
             --service-account "$API_SERVICE_ACCOUNT" \
             --port 8080 \
             --cpu 1 \
@@ -87,12 +105,29 @@ jobs:
             --no-allow-unauthenticated \
             --quiet
 
-      - name: Deploy and execute renderer smoke job
+      - name: Verify API and durable renderer image parity
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
         run: |
-          gcloud run jobs deploy "$JOB" \
+          service_image="$(gcloud run services describe "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
-            --image "$IMAGE" \
+            --format='value(spec.template.spec.containers[0].image)')"
+          durable_image="$(gcloud run jobs describe "$DURABLE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(spec.template.spec.template.spec.containers[0].image)')"
+          test "$service_image" = "$durable_image"
+          test "$service_image" = "$IMAGE_DIGEST"
+
+      - name: Deploy and execute renderer smoke job
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+        run: |
+          gcloud run jobs deploy "$SMOKE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE_DIGEST" \
             --service-account "$RENDERER_SERVICE_ACCOUNT" \
             --args clojure.main,-m,agg.renderer.main \
             --tasks 1 \
@@ -101,7 +136,7 @@ jobs:
             --cpu 1 \
             --memory 512Mi \
             --quiet
-          gcloud run jobs execute "$JOB" \
+          gcloud run jobs execute "$SMOKE_JOB" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --wait
@@ -162,7 +197,7 @@ jobs:
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --format 'value(spec.template.spec.serviceAccountName)')"
-          job_identity="$(gcloud run jobs describe "$JOB" \
+          job_identity="$(gcloud run jobs describe "$SMOKE_JOB" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --format 'value(spec.template.spec.template.spec.serviceAccountName)')"
