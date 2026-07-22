@@ -46,7 +46,12 @@ compare-and-set. Completed or different attempts are never adopted. The
 reconciler otherwise fails expired launching/running jobs with `stale_lease`,
 completes an expired cancellation as cancelled, and removes expired,
 mismatched, terminal, or missing-job capacity leases in the same transaction.
-Reconciliation is idempotent.
+Reconciliation is idempotent. When Cloud Run acknowledges cancellation but the
+immediate terminal Firestore transaction fails, the API returns HTTP 202 with
+the already-durable `cancellation-requested` resource. The reconciler completes
+and releases that exact attempt and lease on the next five-minute Scheduler
+run; it never creates another attempt. A genuine Cloud Run cancellation error
+still fails the request and leaves the same state and lease for bounded retry.
 
 The temporary bucket keeps its one-day delete lifecycle and `jobs.expireAt`
 keeps its Firestore 90-day TTL. Structured application events expose only a

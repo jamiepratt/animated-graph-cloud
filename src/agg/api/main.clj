@@ -1097,7 +1097,10 @@
       (respond-json! exchange 200 {:accepted true}))))
 
 (defn- cancel-job! [exchange job-service job-id]
-  (respond-json! exchange 200 (jobs/cancel-job! job-service job-id)))
+  (let [job (jobs/cancel-job! job-service job-id)]
+    (respond-json! exchange
+                   (if (= "cancellation-requested" (:state job)) 202 200)
+                   job)))
 
 (defn- retry-job! [exchange job-service job-id]
   (respond-json! exchange 202 (jobs/retry-job! job-service job-id)))

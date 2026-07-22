@@ -393,9 +393,8 @@
        (some? (:lease-expires-at job))
        (<= (:lease-expires-at job) now)))
 
-(defn- complete-cancellation! [^Firestore firestore launcher ^Clock clock
-                               job-ref capacity-ref job-id attempt execution]
-  (lifecycle/request-execution-cancellation! launcher execution)
+(defn- persist-cancellation! [^Firestore firestore ^Clock clock
+                              job-ref capacity-ref job-id attempt execution]
   (public-job
    (transaction!
     firestore
@@ -412,6 +411,12 @@
                   (released-capacity capacity job-id now))
             cancelled)
           job))))))
+
+(defn- complete-cancellation! [^Firestore firestore launcher ^Clock clock
+                               job-ref capacity-ref job-id attempt execution]
+  (lifecycle/request-execution-cancellation! launcher execution)
+  (persist-cancellation! firestore clock job-ref capacity-ref
+                         job-id attempt execution))
 
 (defn- member-identity [request]
   {:subject (:requesterSubject request)
@@ -873,8 +878,13 @@
                  (throw (errors/raise! "Terminal job cannot be cancelled"
                                        {:type ::lifecycle/invalid-transition}))))))]
       (if-let [execution (:execution requested)]
-        (complete-cancellation! firestore launcher clock job-ref capacity-ref
-                                job-id (:attempt requested) execution)
+        (do
+          (lifecycle/request-execution-cancellation! launcher execution)
+          (try
+            (persist-cancellation! firestore clock job-ref capacity-ref
+                                   job-id (:attempt requested) execution)
+            (catch Exception _
+              (public-job requested))))
         (public-job requested))))
   (retry-job! [_ job-id]
     (let [job-ref (.document (.collection firestore "jobs") job-id)

@@ -361,7 +361,12 @@ paths:
         - $ref: "#/components/parameters/CsrfToken"
       responses:
         "200":
-          description: Cancellation requested or durably recorded. A Cloud Run cancellation operation that reports the execution cancelled is returned as a cancelled Job, not a render failure. Genuine remote failures remain cancellation-requested and are retried by reconciliation within five minutes.
+          description: Cancellation was durably recorded, or the job was already cancelled.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Job"}
+        "202":
+          description: Cloud Run acknowledged cancellation, but terminal persistence did not complete. The returned Job remains cancellation-requested until reconciliation completes and releases its exact lease within the next five-minute Scheduler run. Genuine remote cancellation failures are not acknowledged by this response.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Job"}
