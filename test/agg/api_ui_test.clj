@@ -635,6 +635,38 @@
      html
      (str "--window-size=" window-size))))
 
+(defn- theme-browser-outcome [page window-size]
+  (let [scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{"
+         "const parse=value=>{const parts=(value.match(/[\\d.]+/g)||[]).map(Number);return {r:parts[0]||0,g:parts[1]||0,b:parts[2]||0,a:parts.length>3?parts[3]:1};};"
+         "const over=(top,bottom)=>{const a=top.a+bottom.a*(1-top.a);return a?{r:(top.r*top.a+bottom.r*bottom.a*(1-top.a))/a,g:(top.g*top.a+bottom.g*bottom.a*(1-top.a))/a,b:(top.b*top.a+bottom.b*bottom.a*(1-top.a))/a,a}:bottom;};"
+         "const background=node=>{const chain=[];for(let current=node;current;current=current.parentElement)chain.unshift(parse(getComputedStyle(current).backgroundColor));return chain.reduce((result,color)=>over(color,result),{r:3,g:18,b:37,a:1});};"
+         "const luminance=color=>{const channel=value=>{value/=255;return value<=.04045?value/12.92:Math.pow((value+.055)/1.055,2.4);};return .2126*channel(color.r)+.7152*channel(color.g)+.0722*channel(color.b);};"
+         "const ratio=(foreground,background)=>{const first=luminance(foreground),second=luminance(background);return (Math.max(first,second)+.05)/(Math.min(first,second)+.05);};"
+         "const visible=node=>{const style=getComputedStyle(node),rect=node.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&rect.width>0&&rect.height>0;};"
+         "const contrastNodes=[...document.querySelectorAll('.brand,h1,h2,.eyebrow,.step,.muted,.hint,label,input,select,textarea,button,.button,.cta,a,summary,footer')].filter(visible);"
+         "const contrasts=contrastNodes.map(node=>({tag:node.tagName,id:node.id||null,className:node.className||null,text:(node.textContent||node.value||'').trim().slice(0,60),ratio:ratio(parse(getComputedStyle(node).color),background(node))}));"
+         "const contrastOffenders=contrasts.filter(entry=>entry.ratio<4.5);"
+         "const layoutNodes=[...document.querySelectorAll('.shell,.public-header,.hero,.hero-copy,.hero-card,.feature-grid,.card,form,.field-grid,.actions,input,select,textarea,button,a')].filter(visible);"
+         "const layoutOffenders=layoutNodes.map(node=>{const rect=node.getBoundingClientRect();return {tag:node.tagName,id:node.id||null,className:node.className||null,left:rect.left,right:rect.right};}).filter(rect=>rect.left<-.5||rect.right>window.innerWidth+.5);"
+         "const focusTarget=document.querySelector('.cta,button.primary,button,a[href]');focusTarget?.focus({focusVisible:true});const focusStyle=focusTarget?getComputedStyle(focusTarget):null;"
+         "const focusRule=[...document.styleSheets].flatMap(sheet=>[...sheet.cssRules]).find(rule=>rule.selectorText?.includes(':focus')&&parseFloat(rule.style.outlineWidth)>=3);"
+         "const declaredFocus=[...document.querySelectorAll('style')].some(style=>style.textContent.includes(':focus,:focus-visible{outline:3px solid var(--color-warning)'));"
+         "const heroCopy=document.querySelector('.hero-copy'),surface=parse(heroCopy?getComputedStyle(heroCopy).backgroundColor:getComputedStyle(document.querySelector('.card')).backgroundColor),topHeader=document.querySelector('.shell>header'),headerSurface=parse(getComputedStyle(topHeader).backgroundColor),bodyStyle=getComputedStyle(document.body);"
+         "const computedFocusVisible=!!focusTarget&&focusStyle.outlineStyle!=='none'&&parseFloat(focusStyle.outlineWidth)>=3;outcome={viewportWidth:window.innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth,layoutOffenders,contrastOffenders,minContrast:Math.min(...contrasts.map(entry=>entry.ratio)),focusVisible:!!focusTarget&&focusTarget.tabIndex>=0&&(computedFocusVisible||!!focusRule||declaredFocus),computedFocusVisible,focusActive:document.activeElement===focusTarget,focusMatches:focusTarget?.matches(':focus')||false,focusOutlineStyle:focusStyle?.outlineStyle||null,focusOutlineWidth:focusStyle?.outlineWidth||null,focusOutlineColor:focusStyle?.outlineColor||null,contentSurfaceAlpha:surface.a,headerSurfaceAlpha:headerSurface.a,backgroundIncludesAsset:bodyStyle.backgroundImage.includes('telemetry-background.webp'),backgroundAnimated:bodyStyle.animationName!=='none'};"
+         "}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-telemetry-theme-browser-"
+     "Telemetry theme regression requires Chrome or Chromium"
+     html
+     (str "--window-size=" window-size))))
+
 (deftest public-product-and-legal-pages-identify-alpha-compose
   (let [port (available-port)
         {:keys [auth-system]} (fixture)
@@ -653,11 +685,21 @@
         (is (str/includes? (.body homepage) "Continue with Google"))
         (is (str/includes? (.body homepage) "href=\"/privacy\""))
         (is (str/includes? (.body homepage) "href=\"/terms\""))
-        (is (str/includes? (.body homepage) "Google identity"))
-        (is (str/includes? (.body homepage) "approved access"))
-        (is (str/includes? (.body homepage) "drive.file"))
-        (is (str/includes? (.body homepage) "files you select"))
-        (is (str/includes? (.body homepage) "required output delivery"))
+        (doseq [copy ["Workout data, built into your video"
+                      "Turn your activity into a video worth sharing."
+                      "No video editing required."
+                      "Your video, finished for you."
+                      "Choose your video and data"
+                      "Make it yours"
+                      "Get the finished video"
+                      "Your Google Drive stays under your control."
+                      "only use files you choose"
+                      "cannot access the rest of your Google Drive"]]
+          (is (str/includes? (.body homepage) copy) copy))
+        (doseq [old-term ["drive.file" "composition" "render"
+                          "transparent overlay" "your editor"]]
+          (is (not (str/includes? (str/lower-case (.body homepage)) old-term))
+              old-term))
         (is (= 200 (.statusCode privacy)))
         (is (str/includes? (.body privacy) "Privacy policy"))
         (is (str/includes? (.body privacy) "Google Drive"))
@@ -675,6 +717,66 @@
         (is (str/includes? (.body terms) "me@jamiep.org")))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
+
+(deftest full-page-surfaces-share-the-telemetry-theme
+  (let [pages
+        {"anonymous" ui/anonymous-page
+         "privacy" ui/privacy-page
+         "terms" ui/terms-page
+         "Drive recovery" ui/drive-recovery-page
+         "early access" (ui/early-access-page
+                         {:email "verified@example.com"
+                          :proof "signed-proof"})
+         "signed-in compose, tokens, and administration"
+         (ui/page {:user {:email "owner@example.com" :role :owner}
+                   :csrf "csrf-test"
+                   :tokens [{:id "token-1"
+                             :name "Automation"
+                             :createdAt "2026-07-22T12:00:00Z"
+                             :revoked false}]
+                   :members [{:email "member@example.com"
+                              :role "member"
+                              :status "active"}]
+                   :logs-enabled? true})
+         "operational logs"
+         (ui/logs-page {:user {:email "owner@example.com"}
+                        :logs []
+                        :view "formatted"})}]
+    (doseq [[surface page] pages]
+      (testing surface
+        (is (str/includes? page "data-theme=\"telemetry\""))
+        (is (str/includes? page "--color-background:#031225"))
+        (is (str/includes? page "background-color:var(--color-background)"))
+        (is (str/includes? page "url('/telemetry-background.webp')"))
+        (is (str/includes? page ":focus-visible"))
+        (is (str/includes? page "<meta name=\"color-scheme\" content=\"dark\">"))))))
+
+(deftest telemetry-theme-has-aa-contrast-focus-and-responsive-layout
+  (let [compose (ui/page {:user {:email "owner@example.com" :role :owner}
+                          :csrf "csrf-test"
+                          :tokens []
+                          :members []
+                          :logs-enabled? true})
+        outcomes {"anonymous desktop" (theme-browser-outcome ui/anonymous-page
+                                                             "1280,900")
+                  "anonymous mobile" (theme-browser-outcome ui/anonymous-page
+                                                            "390,844")
+                  "compose desktop" (theme-browser-outcome compose "1280,900")
+                  "compose mobile" (theme-browser-outcome compose "390,844")}]
+    (doseq [[surface outcome] outcomes]
+      (testing surface
+        (is (nil? (:error outcome)) (:error outcome))
+        (is (true? (:noHorizontalOverflow outcome)))
+        (is (empty? (:layoutOffenders outcome))
+            (pr-str (:layoutOffenders outcome)))
+        (is (empty? (:contrastOffenders outcome))
+            (pr-str (:contrastOffenders outcome)))
+        (is (<= 4.5 (:minContrast outcome)))
+        (is (true? (:focusVisible outcome)))
+        (is (<= 0.9 (:contentSurfaceAlpha outcome)))
+        (is (<= 0.9 (:headerSurfaceAlpha outcome)))
+        (is (true? (:backgroundIncludesAsset outcome)))
+        (is (false? (:backgroundAnimated outcome)))))))
 
 (deftest early-access-feedback-and-form-are-keyboard-and-mobile-safe
   (let [initial-page
@@ -1434,7 +1536,13 @@
             png (test-http/send-bytes! :get
                                        (str "http://127.0.0.1:" port "/favicon-32.png")
                                        nil
-                                       {})]
+                                       {})
+            background (test-http/send-bytes!
+                        :get
+                        (str "http://127.0.0.1:" port
+                             "/telemetry-background.webp")
+                        nil
+                        {})]
         (is (= 200 (.statusCode homepage)))
         (is (str/includes? (.body homepage) "href=\"/favicon.svg\""))
         (is (str/includes? (.body homepage) "href=\"/apple-touch-icon.png\""))
@@ -1452,7 +1560,12 @@
         (is (= "image/png"
                (.orElse (.firstValue (.headers png) "Content-Type") nil)))
         (is (= [-119 80 78 71 13 10 26 10]
-               (mapv int (take 8 (.body png))))))
+               (mapv int (take 8 (.body png)))))
+        (is (= 200 (.statusCode background)))
+        (is (= "image/webp"
+               (.orElse (.firstValue (.headers background) "Content-Type") nil)))
+        (is (= "RIFF" (apply str (map char (take 4 (.body background))))))
+        (is (= "WEBP" (apply str (map char (take 4 (drop 8 (.body background))))))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

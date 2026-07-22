@@ -65,6 +65,7 @@
    "/favicon.svg" ["public/favicon.svg" "image/svg+xml; charset=utf-8"]
    "/favicon-16.png" ["public/favicon-16.png" "image/png"]
    "/favicon-32.png" ["public/favicon-32.png" "image/png"]
+   "/telemetry-background.webp" ["public/telemetry-background.webp" "image/webp"]
    "/apple-touch-icon.png" ["public/apple-touch-icon.png" "image/png"]
    "/icon-192.png" ["public/icon-192.png" "image/png"]
    "/icon-512.png" ["public/icon-512.png" "image/png"]})
@@ -471,15 +472,19 @@
                        "No session, Drive grant, membership binding, or render was created.")]
     (str "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
          "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+         "<meta name=\"color-scheme\" content=\"dark\">"
          "<title>Authorization error · Alpha Compose</title>"
-         "<style>:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#152238;background:#f5f7fb;line-height:1.5}"
+         "<style>:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;line-height:1.5}"
          "*{box-sizing:border-box}body{margin:0}.shell{max-width:48rem;margin:0 auto;padding:2rem 1.25rem 4rem}"
-         ".brand{color:#152238;font-weight:800;text-decoration:none}.card{margin-top:3rem;background:#fff;border:1px solid #e1e7f0;border-radius:1.1rem;padding:clamp(1.25rem,4vw,2.5rem);box-shadow:0 1rem 3rem #243b5a0d}"
-         ".eyebrow{color:#a13e3e;font-size:.75rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}"
+         ".brand{color:var(--color-text);font-weight:800;text-decoration:none}.card{margin-top:3rem;background:var(--color-surface);border:1px solid var(--color-border);border-radius:1.1rem;padding:clamp(1.25rem,4vw,2.5rem);box-shadow:var(--shadow-surface)}"
+         ".eyebrow{color:var(--color-danger);font-size:.75rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}"
          "h1{font-size:clamp(2rem,6vw,3.5rem);line-height:1.05;letter-spacing:-.04em;margin:.6rem 0 1rem}"
-         ".muted{color:#5c6b82}.button{display:inline-block;margin-top:.75rem;border-radius:.65rem;padding:.75rem 1rem;background:#4374c5;color:#fff;font-weight:800;text-decoration:none}"
-         "small{display:block;margin-top:1.5rem;color:#6c7a90}</style></head>"
-         "<body><div class=\"shell\"><a class=\"brand\" href=\"/\">Alpha Compose</a>"
+         ".muted{color:var(--color-muted)}.button{display:inline-block;margin-top:.75rem;border-radius:.65rem;padding:.75rem 1rem;background:var(--color-accent);color:var(--color-accent-ink);font-weight:800;text-decoration:none}"
+         "small{display:block;margin-top:1.5rem;color:var(--color-muted)}"
+         (ui/theme-style)
+         ".brand{color:var(--color-text)}.authorization-error .eyebrow{color:var(--color-danger)}"
+         "</style></head>"
+         "<body class=\"authorization-error\" data-theme=\"telemetry\"><div class=\"shell\"><a class=\"brand\" href=\"/\">Alpha Compose</a>"
          "<main class=\"card\" role=\"alert\"><div class=\"eyebrow\">Authorization incomplete</div>"
          "<h1>" title "</h1><p>" explanation "</p><p class=\"muted\">"
          next-step " " no-effects "</p>"
@@ -1133,10 +1138,16 @@
           app-id (json/write-str picker-app-id)
           csrf (json/write-str (auth/issue-csrf-token auth-system user))
           html
-          (str "<!doctype html><html><head><meta charset=\"utf-8\">"
+          (str "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+               "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+               "<meta name=\"color-scheme\" content=\"dark\">"
                "<title>Select Drive input</title>"
                "<script src=\"https://apis.google.com/js/api.js\"></script>"
-               "</head><body><p>Opening Google Drive Picker…</p>"
+               "<style>" (ui/theme-style)
+               ".shell{max-width:48rem;margin:0 auto;padding:clamp(1rem,5vw,3rem)}"
+               ".picker-card{margin-top:clamp(1rem,5vw,3rem);padding:clamp(1.25rem,4vw,2.5rem);border-radius:1.1rem}"
+               ".picker-card h1{font-size:clamp(2rem,6vw,3.5rem);line-height:1.05;letter-spacing:-.04em;margin:.5rem 0 1rem}"
+               "</style></head><body data-theme=\"telemetry\"><main class=\"shell\"><section class=\"card picker-card\"><div class=\"eyebrow\">Google Drive</div><h1>Select a video</h1><p>Opening Google Drive Picker…</p>"
                "<p>Choose a supported video from My Drive, a file shared with you, or a Shared Drive. Folders are for navigation only. You can also use the Upload tab.</p>"
                "<p>Selected: <output id=\"picker-selection\">None</output></p>"
                "<button id=\"report-empty\" type=\"button\">Report an empty Drive list</button>"
@@ -1170,12 +1181,12 @@
                "reportDiagnostic('opened','drive','unknown');});}"
                "document.getElementById('report-empty').addEventListener('click',()=>{"
                "reportDiagnostic('empty','drive','empty');});"
-               "openPicker();</script></body></html>")]
+               "openPicker();</script></section></main></body></html>")]
       (doto (.getResponseHeaders exchange)
         (.set "Cache-Control" "no-store")
         (.set "Referrer-Policy" "no-referrer")
         (.set "Content-Security-Policy"
-              "default-src 'none'; script-src 'unsafe-inline' https://apis.google.com https://www.gstatic.com; frame-src https://docs.google.com https://accounts.google.com; style-src 'unsafe-inline'; connect-src 'self' https://www.googleapis.com; base-uri 'none'; frame-ancestors 'none'"))
+              "default-src 'none'; script-src 'unsafe-inline' https://apis.google.com https://www.gstatic.com; frame-src https://docs.google.com https://accounts.google.com; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://www.googleapis.com; base-uri 'none'; frame-ancestors 'none'"))
       (respond! exchange 200 "text/html; charset=utf-8" html))))
 
 (defn- picker-diagnostic! [^HttpExchange exchange auth-system dependencies]
