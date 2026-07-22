@@ -167,12 +167,12 @@
       (is (str/includes? production-workflow checkpoint)))
     (is (not (str/includes? production-workflow
                             "gcloud secrets versions access latest --secret=resend-api-key")))
-    (doseq [manual ["Resend account creation"
-                    "alphacompose.com sender-domain DNS verification"
-                    "first production `resend-api-key` version"
+    (doseq [manual ["Create the Resend account and verify sender DNS"
+                    "Apply the Resend Terraform bootstrap"
+                    "Add enabled development and production versions"
                     "gcloud secrets versions add resend-api-key"
                     "gcloud secrets versions disable"
-                    "Do not push or merge until all three"]]
+                    "No application image may be pushed or promoted"]]
       (testing manual (is (str/includes? runbook manual))))
     (doseq [contract ["signed no-session contact flow"
                       "10 minutes"
@@ -181,6 +181,49 @@
                       "Idempotency-Key"
                       "does not persist"]]
       (testing contract (is (str/includes? decision contract))))))
+
+(deftest resend-bootstrap-is-terraform-first-and-recoverable-in-both-environments
+  (let [runbook (slurp "docs/production-runbook.md")
+        production-workflow (slurp ".github/workflows/deploy-production.yml")
+        account-and-dns (str/index-of runbook
+                                      "Create the Resend account and verify sender DNS")
+        terraform-bootstrap (str/index-of runbook
+                                          "Apply the Resend Terraform bootstrap")
+        enabled-versions (str/index-of runbook
+                                       "Add enabled development and production versions")
+        workflow-recovery (str/index-of runbook
+                                        "Rerun the guarded deployment workflows")
+        terraform-apply (str/index-of production-workflow
+                                      "Plan and apply production Terraform")
+        secret-check (str/index-of production-workflow
+                                   "Verify enabled Resend secret version")
+        image-push (str/index-of production-workflow
+                                 "Push and resolve immutable image digest")]
+    (doseq [position [account-and-dns terraform-bootstrap enabled-versions
+                      workflow-recovery terraform-apply secret-check image-push]]
+      (is (number? position)))
+    (when (every? number? [account-and-dns terraform-bootstrap enabled-versions
+                           workflow-recovery])
+      (is (< account-and-dns terraform-bootstrap enabled-versions
+             workflow-recovery)))
+    (when (every? number? [terraform-apply secret-check image-push])
+      (is (< terraform-apply secret-check image-push)))
+    (doseq [target ["-target='google_secret_manager_secret.application[\"resend-api-key\"]'"
+                    "-target=google_secret_manager_secret_iam_member.api_resend_access"
+                    "-target=google_secret_manager_secret_iam_member.deployer_resend_metadata"
+                    "-target='module.application.google_secret_manager_secret.application[\"resend-api-key\"]'"
+                    "-target=module.application.google_secret_manager_secret_iam_member.api_resend_access"
+                    "-target=module.application.google_secret_manager_secret_iam_member.deployer_resend_metadata"]]
+      (testing target (is (str/includes? runbook target))))
+    (doseq [command ["--project=animated-graph-cloud-jp --data-file=-"
+                     "--project=animated-graph-cloud-prod-jp --data-file=-"
+                     "gh-axi workflow run deploy.yml --ref main"
+                     "gh-axi workflow run deploy-production.yml --ref main"]]
+      (testing command (is (str/includes? runbook command))))
+    (is (str/includes? production-workflow
+                       "then rerun this workflow through workflow_dispatch"))
+    (is (not (str/includes? runbook
+                            "Do not push or merge until all three are complete")))))
 
 (deftest internal-service-tokens-use-the-cloud-run-audience
   (let [runtime (slurp "src/agg/jobs/gcp.clj")

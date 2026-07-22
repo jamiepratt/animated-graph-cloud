@@ -21,9 +21,10 @@ Stop for explicit owner approval before each item:
 4. Publish the external Google OAuth app and approve the public legal, domain,
    and OAuth configuration.
 5. Approve every costed production acceptance render and load test.
-6. Complete Resend account creation, verify the `alphacompose.com` sender domain,
-   and add the first production `resend-api-key` version. These are manual
-   release prerequisites. Do not push or merge until all three are complete.
+6. Complete the Resend bootstrap sequence below in both projects. Resend account
+   creation and `alphacompose.com` sender-domain verification remain manual.
+   No application image may be pushed or promoted until Terraform owns both
+   secret containers and IAM bindings and both projects have an enabled version.
 
 ### Preview plus Submit approval template
 
@@ -272,21 +273,107 @@ printf %s "$PICKER_API_KEY" | gcloud secrets versions add picker-api-key \
 unset PICKER_API_KEY
 ```
 
-Resend account creation and alphacompose.com sender-domain DNS verification
-are external manual checkpoints. Create the account, add `alphacompose.com` in
-Resend, copy only the exact DNS records Resend supplies into the authoritative
-DNS provider, and wait for Resend to report the domain verified. Do not infer or
-invent DNS values. The sender configured by the workflows is
+### Resend bootstrap and guarded workflow recovery
+
+Follow these sections in order. Use the reviewed checkout containing the issue
+#103 Terraform changes. The development workflow checks the version before its
+image push. The production workflow remains Terraform-first: its complete apply
+can create the container and IAM, then its guarded version check halts before
+the image push. A halt is expected and recoverable; it is not permission to
+bypass the check or inject a placeholder value.
+
+#### 1. Create the Resend account and verify sender DNS
+
+Create the Resend account, add `alphacompose.com`, copy only the exact DNS
+records Resend supplies into the authoritative DNS provider, and wait for
+Resend to report the domain verified. Do not infer or invent DNS values. The
+sender configured by both workflows is
 `Alpha Compose <early-access@alphacompose.com>`.
 
-Add the first production `resend-api-key` version without a trailing newline:
+#### 2. Apply the Resend Terraform bootstrap
+
+Initialize both existing remote states. Plan only the Resend secret container,
+API payload binding, and deployer metadata binding. The production plan still
+needs the currently promoted renderer digest to satisfy the root input, but the
+targets do not update an application runtime:
 
 ```sh
-read -rs RESEND_API_KEY
-printf %s "$RESEND_API_KEY" | gcloud secrets versions add resend-api-key \
-  --project=animated-graph-cloud-prod-jp --data-file=-
-unset RESEND_API_KEY
+export GOOGLE_CLOUD_QUOTA_PROJECT=animated-graph-cloud-jp
+terraform -chdir=infra/dev init
+terraform -chdir=infra/dev plan \
+  -input=false \
+  -lock-timeout=5m \
+  -target='google_secret_manager_secret.application["resend-api-key"]' \
+  -target=google_secret_manager_secret_iam_member.api_resend_access \
+  -target=google_secret_manager_secret_iam_member.deployer_resend_metadata \
+  -out=resend-bootstrap-dev.tfplan
+terraform -chdir=infra/dev show resend-bootstrap-dev.tfplan
+
+export GOOGLE_CLOUD_QUOTA_PROJECT=animated-graph-cloud-prod-jp
+production_renderer_image="$(gcloud run jobs describe agg-renderer \
+  --project=animated-graph-cloud-prod-jp \
+  --region=europe-central2 \
+  --format='value(spec.template.spec.template.spec.containers[0].image)')"
+test -n "$production_renderer_image"
+terraform -chdir=infra/prod init
+terraform -chdir=infra/prod plan \
+  -input=false \
+  -lock-timeout=5m \
+  -var="renderer_image=$production_renderer_image" \
+  -target='module.application.google_secret_manager_secret.application["resend-api-key"]' \
+  -target=module.application.google_secret_manager_secret_iam_member.api_resend_access \
+  -target=module.application.google_secret_manager_secret_iam_member.deployer_resend_metadata \
+  -out=resend-bootstrap-prod.tfplan
+terraform -chdir=infra/prod show resend-bootstrap-prod.tfplan
 ```
+
+Review both saved plans. They may create only the Resend container and the two
+least-privilege bindings, plus a required dependency that is genuinely absent.
+Stop on any delete, replacement, unrelated runtime update, missing-state
+resource, or import requirement. Apply only the reviewed plans:
+
+```sh
+terraform -chdir=infra/dev apply resend-bootstrap-dev.tfplan
+terraform -chdir=infra/prod apply resend-bootstrap-prod.tfplan
+```
+
+#### 3. Add enabled development and production versions
+
+Use separate environment values and standard input so neither value enters
+shell history, Terraform state, workflow output, source, or logs:
+
+```sh
+read -rs DEV_RESEND_API_KEY
+printf %s "$DEV_RESEND_API_KEY" | gcloud secrets versions add resend-api-key \
+  --project=animated-graph-cloud-jp --data-file=-
+unset DEV_RESEND_API_KEY
+
+read -rs PROD_RESEND_API_KEY
+printf %s "$PROD_RESEND_API_KEY" | gcloud secrets versions add resend-api-key \
+  --project=animated-graph-cloud-prod-jp --data-file=-
+unset PROD_RESEND_API_KEY
+
+test "$(gcloud secrets versions describe latest \
+  --project=animated-graph-cloud-jp --secret=resend-api-key \
+  --format='value(state)')" = "ENABLED"
+test "$(gcloud secrets versions describe latest \
+  --project=animated-graph-cloud-prod-jp --secret=resend-api-key \
+  --format='value(state)')" = "ENABLED"
+```
+
+#### 4. Rerun the guarded deployment workflows
+
+After the reviewed issue #103 commit is on `main`, rerun development first and
+production second through their existing `workflow_dispatch` entry points:
+
+```sh
+gh-axi workflow run deploy.yml --ref main
+gh-axi workflow run deploy-production.yml --ref main
+```
+
+Do not rerun production when the development workflow failed or when either
+metadata check above is not `ENABLED`. Neither workflow reads the secret
+payload during its preflight.
 
 Rotate the value by adding and verifying the new enabled version before
 disabling the prior version. Replace `PREVIOUS_VERSION_NUMBER` only with the

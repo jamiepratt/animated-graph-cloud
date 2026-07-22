@@ -48,47 +48,84 @@
                      "CLOUD_RUN_ID_TOKEN: ${{ steps.health-auth.outputs.id_token }}"))
   (is (not (str/includes? workflow "gcloud auth print-identity-token"))))
 
-(deftest development-promotes-the-durable-renderer-before-api-activation
+(deftest development-confirms-resend-before-publishing-an-application-image
+  (let [secret-check (str/index-of workflow
+                                   "Verify enabled development Resend secret version")
+        image-push (str/index-of workflow
+                                 "Push and resolve immutable image digest")
+        durable-promotion (str/index-of workflow "Promote durable renderer")
+        api-deploy (str/index-of workflow "Deploy private API service")
+        checkpoint (or (workflow-section
+                        "- name: Verify enabled development Resend secret version"
+                        "- id: image") "")]
+    (doseq [position [secret-check image-push durable-promotion api-deploy]]
+      (is (number? position)))
+    (when (every? number? [secret-check image-push durable-promotion api-deploy])
+      (is (< secret-check image-push))
+      (is (< secret-check durable-promotion))
+      (is (< secret-check api-deploy)))
+    (is (str/includes? checkpoint
+                       "gcloud secrets versions describe latest"))
+    (is (str/includes? checkpoint "--secret=resend-api-key"))
+    (is (str/includes? checkpoint "ENABLED"))
+    (is (str/includes? checkpoint "workflow_dispatch"))
+    (is (not (str/includes? checkpoint
+                            "gcloud secrets versions access latest")))))
+
+(deftest development-rolls-back-a-partial-api-renderer-promotion
   (let [image-push (str/index-of workflow
                                  "Push and resolve immutable image digest")
+        previous-release (str/index-of workflow
+                                       "Capture current API and renderer release")
         durable-promotion (str/index-of workflow
                                         "Promote durable renderer")
         api-deploy (str/index-of workflow "Deploy private API service")
         image-verification (str/index-of workflow
                                          "Verify API and durable renderer image parity")
         api-activation (str/index-of workflow "Activate verified API revision")
+        rollback (str/index-of workflow
+                               "Restore matched previous API and renderer release")
         smoke-execution (str/index-of workflow
                                       "Deploy and execute renderer smoke job")
         lifecycle-activation (str/index-of workflow
                                            "Enable authenticated durable job lifecycle")
+        previous-section (or (workflow-section
+                              "name: Capture current API and renderer release"
+                              "name: Deploy private API service") "")
         durable-section (or (workflow-section
-                             "- name: Promote durable renderer"
-                             "- name: Deploy private API service")
-                            "")
+                             "name: Promote durable renderer"
+                             "name: Verify API and durable renderer image parity") "")
         api-section (or (workflow-section
-                         "- name: Deploy private API service"
-                         "- name: Verify API and durable renderer image parity")
-                        "")
+                         "name: Deploy private API service"
+                         "name: Promote durable renderer") "")
         verification-section (or (workflow-section
-                                  "- name: Verify API and durable renderer image parity"
-                                  "- name: Activate verified API revision")
-                                 "")
+                                  "name: Verify API and durable renderer image parity"
+                                  "name: Activate verified API revision") "")
         activation-section (or (workflow-section
-                                "- name: Activate verified API revision"
-                                "- name: Deploy and execute renderer smoke job")
-                               "")]
+                                "name: Activate verified API revision"
+                                "- name: Restore matched previous API and renderer release") "")
+        rollback-section (or (workflow-section
+                              "- name: Restore matched previous API and renderer release"
+                              "- name: Deploy and execute renderer smoke job") "")]
     (is (str/includes? workflow "DURABLE_JOB: agg-renderer"))
     (is (str/includes? workflow "SMOKE_JOB: agg-renderer-smoke"))
-    (doseq [position [image-push durable-promotion api-deploy image-verification
-                      api-activation smoke-execution lifecycle-activation]]
+    (doseq [position [image-push previous-release api-deploy durable-promotion
+                      image-verification api-activation rollback smoke-execution
+                      lifecycle-activation]]
       (is (number? position)))
-    (when (every? number? [image-push durable-promotion api-deploy image-verification
-                           api-activation smoke-execution lifecycle-activation])
-      (is (< image-push durable-promotion api-deploy
-             image-verification api-activation smoke-execution
+    (when (every? number? [image-push previous-release api-deploy durable-promotion
+                           image-verification api-activation rollback smoke-execution
+                           lifecycle-activation])
+      (is (< image-push previous-release api-deploy durable-promotion
+             image-verification api-activation rollback smoke-execution
              lifecycle-activation)))
     (is (str/includes? workflow
                        "echo \"uri=$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/animated-graph-cloud@$digest\""))
+    (is (str/includes? previous-section "select(.percent == 100"))
+    (is (str/includes? previous-section
+                       "echo \"api_revision=$api_revision\" >>\"$GITHUB_OUTPUT\""))
+    (is (str/includes? previous-section
+                       "echo \"renderer_image=$renderer_image\" >>\"$GITHUB_OUTPUT\""))
     (is (str/includes? durable-section
                        "gcloud run jobs update \"$DURABLE_JOB\""))
     (is (str/includes? durable-section "--image \"$IMAGE_DIGEST\""))
@@ -105,7 +142,16 @@
                        "test \"$service_image\" = \"$IMAGE_DIGEST\""))
     (is (str/includes? activation-section
                        "gcloud run services update-traffic \"$SERVICE\""))
-    (is (str/includes? activation-section "--to-latest"))))
+    (is (str/includes? activation-section "--to-latest"))
+    (is (str/includes? rollback-section "failure()"))
+    (is (str/includes? rollback-section
+                       "steps.durable-promotion.outcome != 'skipped'"))
+    (is (str/includes? rollback-section
+                       "steps.api-activation.outcome != 'success'"))
+    (is (str/includes? rollback-section
+                       "--image \"${{ steps.previous-release.outputs.renderer_image }}\""))
+    (is (str/includes? rollback-section
+                       "--to-revisions \"${{ steps.previous-release.outputs.api_revision }}=100\""))))
 
 (deftest terraform-locks-the-measured-renderer-job-shape
   (is (str/includes? terraform "resource \"google_cloud_run_v2_job\" \"renderer\""))
