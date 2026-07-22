@@ -55,6 +55,19 @@
         nil
         (throw error)))))
 
+(defn- failed-precondition? [^ApiException error]
+  (= StatusCode$Code/FAILED_PRECONDITION
+     (some-> error .getStatusCode .getCode)))
+
+(defn- fully-cancelled-execution? [execution-name ^Execution execution]
+  (let [task-count (.getTaskCount execution)]
+    (and (= execution-name (.getName execution))
+         (pos? task-count)
+         (= task-count (.getCancelledCount execution))
+         (zero? (.getRunningCount execution))
+         (zero? (.getSucceededCount execution))
+         (zero? (.getFailedCount execution)))))
+
 (defn- now-ms [^Clock clock]
   (.toEpochMilli (Instant/now clock)))
 
@@ -346,8 +359,15 @@
   (launch-job! [_ job-id]
     (launch-cloud-run! jobs-client renderer-job job-id 1))
   (cancel-execution! [_ execution]
-    (await-cancellation!
-     (.cancelExecutionAsync executions-client execution)))
+    (try
+      (await-cancellation!
+       (.cancelExecutionAsync executions-client execution))
+      (catch ApiException error
+        (if (and (failed-precondition? error)
+                 (fully-cancelled-execution?
+                  execution (.getExecution executions-client execution)))
+          nil
+          (throw error)))))
   lifecycle/RecoverableJobLauncher
   (launch-job-attempt! [_ job-id attempt]
     (launch-cloud-run! jobs-client renderer-job job-id attempt))
