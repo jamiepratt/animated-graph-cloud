@@ -1,19 +1,23 @@
 (ns agg.gcp-jobs-test
   (:require [agg.admin.core :as admin]
             [agg.admin.gcp :as admin-gcp]
+            [agg.api.main :as api]
             [agg.auth.core :as auth]
             [agg.auth.gcp :as auth-gcp]
             [agg.errors :as errors]
+            [agg.http-test-support :as test-http]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
             [agg.jobs-test :as fixture]
             [agg.tokens.core :as tokens]
             [agg.tokens.gcp :as tokens-gcp]
+            [clojure.data.json :as json]
             [clojure.test :refer [deftest is]])
   (:import (com.google.api.gax.rpc AbortedException AlreadyExistsException
                                    CancelledException StatusCode StatusCode$Code)
            (com.google.cloud.firestore FirestoreException FirestoreOptions)
-           (com.google.cloud.run.v2 Container Execution TaskTemplate)
+           (com.google.cloud.run.v2 Condition Condition$State Container
+                                    Execution TaskTemplate)
            (com.google.cloud.storage StorageOptions)
            (com.google.protobuf Timestamp)
            (io.grpc Status)
@@ -202,6 +206,25 @@
                                       (.setSeconds 1)
                                       .build)))
     (.build builder)))
+
+(defn- production-cancelled-execution [name]
+  (-> (Execution/newBuilder)
+      (.setName name)
+      (.setTaskCount 1)
+      (.setReconciling true)
+      (.setRunningCount 0)
+      (.setSucceededCount 0)
+      (.setFailedCount 0)
+      (.setCancelledCount 1)
+      (.addConditions (-> (Condition/newBuilder)
+                          (.setType "Started")
+                          (.setState Condition$State/CONDITION_RECONCILING)
+                          .build))
+      (.addConditions (-> (Condition/newBuilder)
+                          (.setType "Completed")
+                          (.setState Condition$State/CONDITION_FAILED)
+                          .build))
+      .build))
 
 (deftest cloud-run-execution-correlation-is-active-and-attempt-exact
   (let [unrelated (cloud-run-execution "executions/unrelated" "other-job" 2
@@ -659,6 +682,110 @@
           (is (nil? (get-in (.getData (.get (.get capacity-ref)))
                             ["leases" job-id]))))
         (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
+(deftest successful-platform-cancel-survives-terminal-persistence-failure
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId "animated-graph-cloud-cancel-persistence-test")
+                        (.setEmulatorHost host)
+                        .build
+                        .getService)
+          requests (atom {})
+          enqueued (atom [])
+          launched (atom [])
+          cancelled (atom [])
+          request-store
+          (reify jobs/RequestStore
+            (save-request! [_ job-id request]
+              (let [object (str "jobs/" job-id "/request.json")]
+                (swap! requests assoc object request)
+                object))
+            (load-request [_ object] (get @requests object)))
+          queue (reify jobs/JobQueue
+                  (enqueue-job! [_ job-id attempt]
+                    (swap! enqueued conj [job-id attempt])))
+          launcher
+          (reify jobs/JobLauncher
+            (launch-job! [_ job-id]
+              (let [execution (str "executions/" job-id "-attempt-1")]
+                (swap! launched conj execution)
+                execution))
+            (cancel-execution! [_ execution]
+              (swap! cancelled conj execution)
+              (production-cancelled-execution execution)))
+          service (gcp/job-service {:firestore firestore
+                                    :request-store request-store
+                                    :queue queue
+                                    :launcher launcher})
+          port (test-http/available-port)
+          server (api/start! port {:job-service service})
+          real-transaction (deref #'gcp/transaction!)]
+      (try
+        (doseq [collection ["jobs" "job-idempotency" "orchestration"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (let [job-id (get-in (jobs/submit-job! service "cancel-persistence"
+                                               (fixture/render-request))
+                             [:job :id])
+              _ (jobs/dispatch-job! service job-id)
+              job-ref (.document (.collection firestore "jobs") job-id)
+              capacity-ref (.document (.collection firestore "orchestration")
+                                      "capacity")
+              lease-before
+              (get-in (.getData (.get (.get capacity-ref))) ["leases" job-id])
+              transaction-count (atom 0)
+              first-cancel
+              (with-redefs-fn
+                {#'gcp/transaction!
+                 (fn [firestore callback]
+                   (if (= 2 (swap! transaction-count inc))
+                     (throw (ex-info "simulated terminal persistence failure" {}))
+                     (real-transaction firestore callback)))}
+                #(test-http/send-string!
+                  :post
+                  (str "http://127.0.0.1:" port "/v1/jobs/" job-id "/cancel")
+                  (json/write-str {}) {}))
+              first-body (json/read-str (.body first-cancel) :key-fn keyword)]
+          (is (= 202 (.statusCode first-cancel)))
+          (is (= {:state "cancellation-requested" :attempt 1}
+                 (select-keys first-body [:state :attempt])))
+          (is (= {:state "cancellation-requested" :attempt 1}
+                 (select-keys (jobs/get-job service job-id) [:state :attempt])))
+          (is (= lease-before
+                 (get-in (.getData (.get (.get capacity-ref)))
+                         ["leases" job-id]))
+              "truthful pending response retains the exact active lease")
+
+          (is (= {:repaired-jobs 1 :released-leases 1}
+                 (jobs/reconcile-jobs! service)))
+          (is (= {:state "cancelled" :attempt 1}
+                 (select-keys (jobs/get-job service job-id) [:state :attempt])))
+          (is (nil? (get-in (.getData (.get (.get capacity-ref)))
+                            ["leases" job-id]))
+              "reconciliation releases the exact cancelled job lease")
+          (is (= 1 (.getLong (.get (.get job-ref)) "attempt")))
+          (is (= 125 (.getLong (.get (.get job-ref))
+                               "reservationMinorUnits")))
+          (is (= [[job-id 1]] @enqueued))
+          (is (= [(str "executions/" job-id "-attempt-1")] @launched))
+          (is (= [(str "executions/" job-id "-attempt-1")
+                  (str "executions/" job-id "-attempt-1")]
+                 @cancelled))
+
+          (let [repeated-cancel
+                (test-http/send-string!
+                 :post
+                 (str "http://127.0.0.1:" port "/v1/jobs/" job-id "/cancel")
+                 (json/write-str {}) {})]
+            (is (= 200 (.statusCode repeated-cancel)))
+            (is (= "cancelled"
+                   (:state (json/read-str (.body repeated-cancel)
+                                          :key-fn keyword))))
+            (is (= 2 (count @cancelled))
+                "terminal idempotency does not repeat platform cancellation")))
+        (finally
+          (.close ^java.lang.AutoCloseable server)
           (.close firestore))))
     (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
 
