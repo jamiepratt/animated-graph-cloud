@@ -99,6 +99,63 @@
     (is (not (str/includes? runbook
                             "Other production Terraform drift remains a\nseparate reviewed apply.")))))
 
+(deftest production-release-waits-for-same-commit-development-success
+  (let [workflow (slurp ".github/workflows/deploy-production.yml")
+        runbook (slurp "docs/production-runbook.md")
+        gate (or (config-section workflow
+                                 "  development-gate:"
+                                 "  deploy:")
+                 "")
+        deploy-position (str/index-of workflow "  deploy:")
+        deploy (if (number? deploy-position)
+                 (subs workflow deploy-position)
+                 "")
+        gate-position (str/index-of workflow "  development-gate:")
+        build-position (str/index-of workflow
+                                     "name: Build immutable release candidate")
+        terraform-position (str/index-of workflow
+                                         "name: Plan and apply production Terraform")]
+    (is (re-find #"(?s)on:\s+push:\s+branches: \[main\]\s+workflow_dispatch:"
+                 workflow))
+    (is (str/includes? workflow "permissions: {}"))
+    (doseq [contract ["timeout-minutes: 65"
+                      "actions: read"
+                      "contents: read"
+                      "test \"$GITHUB_REF\" = \"refs/heads/main\""
+                      "EXPECTED_SHA: ${{ github.sha }}"
+                      "EXPECTED_REPOSITORY: ${{ github.repository }}"
+                      "/actions/workflows/deploy.yml/runs?branch=main&per_page=100"
+                      "script/require_development_success.sh"
+                      "for attempt in $(seq 1 120); do"
+                      "if [ \"$gate_status\" -ne 75 ]"
+                      "Development gate timed out"]]
+      (testing contract (is (str/includes? gate contract))))
+    (is (not (str/includes? gate "id-token: write")))
+    (doseq [contract ["needs: development-gate"
+                      "contents: read"
+                      "id-token: write"]]
+      (testing contract (is (str/includes? deploy contract))))
+    (doseq [mutation ["docker build"
+                      "terraform -chdir=infra/prod"
+                      "docker push"
+                      "gcloud run deploy"
+                      "module.application.google_cloud_run_v2_job.renderer"]]
+      (testing mutation
+        (is (not (str/includes? gate mutation)))
+        (is (str/includes? deploy mutation))))
+    (doseq [position [gate-position build-position terraform-position]]
+      (is (number? position)))
+    (when (every? number? [gate-position build-position terraform-position])
+      (is (< gate-position build-position))
+      (is (< gate-position terraform-position)))
+    (is (not (str/includes? workflow "workflow_run:")))
+    (doseq [recovery ["gh-axi workflow run deploy.yml --ref main"
+                      "--commit \"$release_sha\""
+                      "gh-axi run watch DEVELOPMENT_RUN_ID"
+                      "gh-axi workflow run deploy-production.yml --ref main"
+                      "there is no input that bypasses the development gate"]]
+      (testing recovery (is (str/includes? runbook recovery))))))
+
 (deftest artifact-registry-bootstrap-target-is-isolated-and-state-compatible
   (let [shared (slurp "infra/dev/main.tf")
         runbook (slurp "docs/production-runbook.md")

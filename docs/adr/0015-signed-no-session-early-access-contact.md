@@ -41,10 +41,18 @@ bounded request and in Resend and the recipient mailbox. Terraform creates the
 `resend-api-key` container and grants only the API runtime payload access. The
 normal workflows inject the secret plus explicit sender and recipient values.
 Development verifies an enabled version before publishing an image. Production
-applies the complete Terraform plan first, then verifies the enabled version
-before publishing an image. A targeted, reviewed Terraform bootstrap can create
-the container and IAM in both environments without changing an application
-runtime.
+requires a successful development deployment for the exact release commit
+before any production mutation. The gate has only Actions and repository read
+permissions, accepts only the trusted development workflow on `main` from this
+repository, and fails closed for missing, unfinished, failed, cancelled,
+timed-out, ambiguous, or wrong-commit results. Workflow response fields are
+compared as data and never executed. After the gate, production applies the
+complete Terraform plan first, then verifies the enabled version before
+publishing an image. A targeted, reviewed Terraform bootstrap can create the
+container and IAM in both environments without changing an application
+runtime. Manual recovery dispatches development on `main` first and production
+on `main` only after the exact development run succeeds; no dispatch input
+bypasses the gate.
 
 ## Consequences
 
