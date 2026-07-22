@@ -220,11 +220,17 @@ jobs:
       - name: Verify enabled Resend secret version
         run: |
           set -euo pipefail
-          resend_secret_state="$(gcloud secrets versions describe latest \
+          if ! resend_secret_state="$(gcloud secrets versions describe latest \
             --project="$PROJECT_ID" \
             --secret=resend-api-key \
-            --format='value(state)')"
-          test "$resend_secret_state" = "ENABLED"
+            --format='value(state)')"; then
+            echo "::error title=Resend bootstrap required::The production Terraform apply created the secret container and IAM. Add an enabled production resend-api-key version, then rerun this workflow through workflow_dispatch."
+            exit 1
+          fi
+          if ! test "$resend_secret_state" = "ENABLED"; then
+            echo "::error title=Resend bootstrap required::Enable a production resend-api-key version, then rerun this workflow through workflow_dispatch."
+            exit 1
+          fi
 
       - id: image
         name: Push and resolve immutable image digest

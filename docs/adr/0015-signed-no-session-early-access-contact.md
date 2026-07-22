@@ -40,11 +40,16 @@ analytics, or another application store. Personal data exists only during the
 bounded request and in Resend and the recipient mailbox. Terraform creates the
 `resend-api-key` container and grants only the API runtime payload access. The
 normal workflows inject the secret plus explicit sender and recipient values.
+Development verifies an enabled version before publishing an image. Production
+applies the complete Terraform plan first, then verifies the enabled version
+before publishing an image. A targeted, reviewed Terraform bootstrap can create
+the container and IAM in both environments without changing an application
+runtime.
 
 ## Consequences
 
 Provider idempotency supplies replay protection without adding an application
 database. Replays after the provider's idempotency retention window are outside
-the proof's 10-minute lifetime. Production release requires manual Resend
-account creation, sender-domain DNS verification, and the first enabled secret
-version before code promotion.
+the proof's 10-minute lifetime. Release requires manual Resend account creation,
+sender-domain DNS verification, reviewed Terraform bootstrap, and enabled
+development and production secret versions before application promotion.

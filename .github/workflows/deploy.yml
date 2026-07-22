@@ -68,6 +68,17 @@ jobs:
         with:
           version: ">= 541.0.0"
 
+      - name: Verify enabled development Resend secret version
+        run: |
+          set -euo pipefail
+          if ! resend_secret_state="$(gcloud secrets versions describe latest \
+            --project="$PROJECT_ID" \
+            --secret=resend-api-key \
+            --format='value(state)')" || [ "$resend_secret_state" != "ENABLED" ]; then
+            echo "::error title=Resend bootstrap required::Apply the issue #103 Terraform secret bootstrap, add an enabled development resend-api-key version, then rerun this workflow through workflow_dispatch."
+            exit 1
+          fi
+
       - id: image
         name: Push and resolve immutable image digest
         run: |
@@ -78,17 +89,28 @@ jobs:
           test -n "$digest"
           echo "uri=$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/animated-graph-cloud@$digest" >>"$GITHUB_OUTPUT"
 
-      - name: Promote durable renderer
-        env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+      - id: previous-release
+        name: Capture current API and renderer release
         run: |
-          gcloud run jobs update "$DURABLE_JOB" \
+          set -euo pipefail
+          service_json="$(gcloud run services describe "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
-            --image "$IMAGE_DIGEST" \
-            --quiet
+            --format=json)"
+          api_revision="$(jq -r \
+            '[.status.traffic[]? | select(.percent == 100 and .revisionName != null)] | if length == 1 then .[0].revisionName else empty end' \
+            <<<"$service_json")"
+          renderer_image="$(gcloud run jobs describe "$DURABLE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(spec.template.spec.template.spec.containers[0].image)')"
+          test -n "$api_revision"
+          test -n "$renderer_image"
+          echo "api_revision=$api_revision" >>"$GITHUB_OUTPUT"
+          echo "renderer_image=$renderer_image" >>"$GITHUB_OUTPUT"
 
-      - name: Deploy private API service
+      - id: api-candidate
+        name: Deploy private API service
         env:
           IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
         run: |
@@ -108,7 +130,19 @@ jobs:
             --no-traffic \
             --quiet
 
-      - name: Verify API and durable renderer image parity
+      - id: durable-promotion
+        name: Promote durable renderer
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+        run: |
+          gcloud run jobs update "$DURABLE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE_DIGEST" \
+            --quiet
+
+      - id: image-parity
+        name: Verify API and durable renderer image parity
         env:
           IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
         run: |
@@ -123,13 +157,30 @@ jobs:
           test "$service_image" = "$durable_image"
           test "$service_image" = "$IMAGE_DIGEST"
 
-      - name: Activate verified API revision
+      - id: api-activation
+        name: Activate verified API revision
         run: |
           gcloud run services update-traffic "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --to-latest \
             --quiet
+
+      - name: Restore matched previous API and renderer release
+        if: ${{ failure() && steps.durable-promotion.outcome != 'skipped' && steps.api-activation.outcome != 'success' }}
+        run: |
+          rollback_failed=0
+          gcloud run jobs update "$DURABLE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "${{ steps.previous-release.outputs.renderer_image }}" \
+            --quiet || rollback_failed=1
+          gcloud run services update-traffic "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --to-revisions "${{ steps.previous-release.outputs.api_revision }}=100" \
+            --quiet || rollback_failed=1
+          test "$rollback_failed" = 0
 
       - name: Deploy and execute renderer smoke job
         env:
