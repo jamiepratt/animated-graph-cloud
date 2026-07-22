@@ -30,9 +30,6 @@
 
 (def ^:private service-profiles #{"api" "overlay"})
 
-(def ^:private picker-selectable-mime-types
-  "video/mp4,video/quicktime,video/webm,video/mpeg,video/ogg,video/x-msvideo,video/x-matroska")
-
 (def ^:private picker-diagnostic-phases
   #{"opened" "loaded" "empty" "selected" "cancelled" "error"})
 
@@ -1135,19 +1132,18 @@
           api-key (json/write-str picker-api-key)
           app-id (json/write-str picker-app-id)
           csrf (json/write-str (auth/issue-csrf-token auth-system user))
-          mime-types (json/write-str picker-selectable-mime-types)
           html
           (str "<!doctype html><html><head><meta charset=\"utf-8\">"
                "<title>Select Drive input</title>"
                "<script src=\"https://apis.google.com/js/api.js\"></script>"
                "</head><body><p>Opening Google Drive Picker…</p>"
-               "<p>Choose a video from Drive, or use the Picker's Upload tab.</p>"
+               "<p>Choose a supported video from My Drive, a file shared with you, or a Shared Drive. Folders are for navigation only. You can also use the Upload tab.</p>"
                "<p>Selected: <output id=\"picker-selection\">None</output></p>"
                "<button id=\"report-empty\" type=\"button\">Report an empty Drive list</button>"
                "<script>"
                "const diagnosticPath='/v1/drive/picker/diagnostic';"
                "const diagnosticCsrf=" csrf ";"
-               "const pickerMimeTypes=" mime-types ";"
+               (ui/picker-policy-script)
                "const selection=document.getElementById('picker-selection');"
                "function reportDiagnostic(phase,view='unknown',listState='unknown'){"
                "fetch(diagnosticPath,{method:'POST',credentials:'same-origin',keepalive:true,"
@@ -1157,17 +1153,16 @@
                "if(data.action===google.picker.Action.LOADED){reportDiagnostic('loaded','drive','unknown');}"
                "if(data.action===google.picker.Action.PICKED){"
                "const d=data.docs&&data.docs[0];const file=d?{id:d.id,name:d.name,mimeType:d.mimeType}:null;"
-               "if(!file||!file.mimeType||!file.mimeType.startsWith('video/')){"
+               "if(!file||typeof file.id!=='string'||!file.id||typeof file.mimeType!=='string'||!pickerMimeTypeSet.has(file.mimeType)){"
                "selection.textContent='Choose a video file';reportDiagnostic('error','drive','unknown');return;}"
                "selection.textContent=file.name||'Selected video';"
                "reportDiagnostic('selected','drive','selected');"
                "if(window.opener){window.opener.postMessage({type:'agg-picker',file},location.origin);}}"
                "if(data.action===google.picker.Action.CANCEL){reportDiagnostic('cancelled','drive','unknown');}}"
                "function openPicker(){gapi.load('picker',()=>{"
-               "const view=new google.picker.DocsView().setIncludeFolders(false)"
-               ".setSelectFolderEnabled(false);"
-               "const upload=new google.picker.DocsUploadView().setIncludeFolders(false);"
-               "new google.picker.PickerBuilder().addView(view).addView(upload)"
+               (ui/picker-views-script)
+               "new google.picker.PickerBuilder()"
+               ".addView(driveView).addView(sharedDrivesView).addView(upload)"
                ".setSelectableMimeTypes(pickerMimeTypes)"
                ".setOAuthToken(" token ").setDeveloperKey(" api-key ")"
                ".setAppId(" app-id ").setOrigin(location.origin)"
@@ -1221,7 +1216,7 @@
                     :listState listState
                     :tokenStatus token-status
                     :accountStatus account-status
-                    :mimeFilter "selectable-video-mime-types"
+                    :mimeFilter "supported-source-video-mime-types"
                     :indexStatus index-status})
       (respond-json! exchange 200 {:accepted true}))))
 

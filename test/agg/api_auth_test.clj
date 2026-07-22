@@ -28,6 +28,22 @@
   (test-http/send-string! :get (str "http://127.0.0.1:" port path)
                           nil headers))
 
+(defn- assert-supported-video-picker [body]
+  (let [mime-types (str/join "," drive/supported-source-video-mime-types)]
+    (is (str/includes? body
+                       (str "const pickerMimeTypes="
+                            (json/write-str mime-types))))
+    (is (str/includes? body ".setMimeTypes(pickerMimeTypes)"))
+    (is (str/includes? body ".setIncludeFolders(true)"))
+    (is (str/includes? body ".setSelectFolderEnabled(false)"))
+    (is (str/includes? body
+                       ".setMode(google.picker.DocsViewMode.LIST)"))
+    (is (str/includes? body ".setEnableDrives(true)"))
+    (is (str/includes? body ".addView(driveView).addView(sharedDrivesView)"))
+    (is (str/includes? body "new google.picker.DocsUploadView()"))
+    (is (str/includes? body "pickerMimeTypeSet.has(file.mimeType)"))
+    (is (not (str/includes? body "mimeType.startsWith('video/')")))))
+
 (defn- post-form! [port path form]
   (test-http/send-string!
    :post (str "http://127.0.0.1:" port path)
@@ -992,6 +1008,10 @@
         (is (re-find #"selection\.textContent" (.body response)))
         (is (re-find #"google\.picker\.DocsUploadView" (.body response)))
         (is (re-find #"setSelectableMimeTypes" (.body response)))
+        (assert-supported-video-picker (.body response))
+        (doseq [copy ["My Drive" "shared with you" "Shared Drive"
+                      "Folders are for navigation only" "Upload tab"]]
+          (is (str/includes? (.body response) copy) copy))
         (is (not (re-find #"setMimeTypes\('video/\*'\)" (.body response))))
         (is (re-find #"/v1/drive/picker/diagnostic" (.body response)))
         (is (re-find #"connect-src 'self' https://www\.googleapis\.com"
@@ -1050,7 +1070,7 @@
         (is (= "empty" (:listState event)))
         (is (= "refreshed" (:tokenStatus event)))
         (is (= "resolved" (:accountStatus event)))
-        (is (= "selectable-video-mime-types" (:mimeFilter event)))
+        (is (= "supported-source-video-mime-types" (:mimeFilter event)))
         (is (= "video-empty" (:indexStatus event)))
         (is (not-any? #(contains? event %)
                       [:token :accessToken :email :filename :fileId])))
@@ -1100,8 +1120,16 @@
         (is (re-find #"picker\.setVisible\(true\)" (.body authenticated)))
         (is (re-find #"google\.picker\.Action\.CANCEL" (.body authenticated)))
         (is (re-find #"setSelectableMimeTypes" (.body authenticated)))
+        (assert-supported-video-picker (.body authenticated))
         (is (re-find #"id=\"picker-selection\"" (.body authenticated)))
         (is (re-find #"source-video-file-id.*file\.id" (.body authenticated)))
+        (doseq [copy ["files shared with you"
+                      "folders are only for navigation"
+                      "Shared Drive"
+                      "upload a source video"
+                      "access to that file only"
+                      "2 GiB limit"]]
+          (is (str/includes? (.body authenticated) copy) copy))
         (is (not (re-find #"window\.open\('/v1/drive/picker'" (.body authenticated))))
         (is (not (re-find #"addEventListener\('message'" (.body authenticated))))
         (is (not (re-find #"Select Drive input" (.body authenticated)))))
@@ -1158,6 +1186,40 @@
         (is (not (re-find #"prompt=consent"
                           (.orElse (.firstValue (.headers forged-recovery) "Location")
                                    "")))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest crafted-unsupported-source-is-rejected-before-job-creation
+  (let [port (available-port)
+        lifecycle (jobs/in-memory-system)
+        {:keys [system session]} (auth-fixture)
+        source-gateway
+        (reify drive/SourceGateway
+          (source-metadata! [_ _ file-id]
+            {:id file-id
+             :name "crafted.video"
+             :mimeType "video/x-unsupported"
+             :size 1024
+             :trashed false})
+          (stream-source! [_ _ _ _]
+            (throw (AssertionError. "Rejected source must not stream"))))
+        auth-system (assoc system :drive source-gateway)
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        server (start-api! port {:auth-system auth-system
+                                 :job-service (:service lifecycle)})]
+    (try
+      (let [response (post! port "/v1/jobs"
+                            (assoc (fixture/render-request)
+                                   :sourceVideo {:fileId "crafted-file-id"})
+                            {"Content-Type" "application/json"
+                             "Idempotency-Key" "crafted-source"
+                             "Cookie" (str "agg_session=" session)
+                             "X-CSRF-Token" csrf})]
+        (is (= 400 (.statusCode response)))
+        (is (= {"error" "invalid_source_video"}
+               (json/read-str (.body response))))
+        (is (empty? (:jobs @(:state lifecycle)))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

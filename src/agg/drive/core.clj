@@ -2,6 +2,21 @@
   (:require [agg.errors :as errors])
   (:import (java.nio.file Files Path)))
 
+(def supported-source-video-mime-types
+  ["video/mp4"
+   "video/quicktime"
+   "video/webm"
+   "video/mpeg"
+   "video/ogg"
+   "video/x-msvideo"
+   "video/x-matroska"])
+
+(def ^:private supported-source-video-mime-type-set
+  (set supported-source-video-mime-types))
+
+(defn supported-source-video-mime-type? [mime-type]
+  (contains? supported-source-video-mime-type-set mime-type))
+
 (defprotocol DeliveryStore
   (load-delivery [store job-id])
   (reserve-output! [store job-id candidate])

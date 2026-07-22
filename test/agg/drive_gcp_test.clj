@@ -3,9 +3,11 @@
             [agg.drive.core :as drive]
             [agg.drive.gcp :as gcp]
             [clojure.data.json :as json]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]])
   (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
            (com.google.cloud.firestore FirestoreOptions)
+           (java.io ByteArrayInputStream ByteArrayOutputStream)
            (java.net InetSocketAddress)
            (java.nio.charset StandardCharsets)
            (java.nio.file Files OpenOption)))
@@ -47,18 +49,38 @@
     (is (= :get (:method (first @requests))))
     (is (.contains ^String (:url (first @requests)) "/files/folder-1"))))
 
-(deftest source-metadata-normalizes-drive-int64-size
-  (let [gateway (gcp/->RestDriveGateway
-                 (fn [_]
+(deftest source-metadata-and-media-support-shared-drives
+  (let [requests (atom [])
+        stream-requests (atom [])
+        gateway (assoc
+                 (gcp/->RestDriveGateway
+                  (fn [request]
+                    (swap! requests conj request)
+                    {:status 200
+                     :body (json/write-str {:id "video-1"
+                                            :name "source.mp4"
+                                            :mimeType "video/mp4"
+                                            :size "2147483648"
+                                            :trashed false})})
+                  (* 8 1024 1024))
+                 :stream-source-request!
+                 (fn [request]
+                   (swap! stream-requests conj request)
                    {:status 200
-                    :body (json/write-str {:id "video-1"
-                                           :name "source.mp4"
-                                           :mimeType "video/mp4"
-                                           :size "2147483648"
-                                           :trashed false})})
-                 (* 8 1024 1024))]
+                    :body (ByteArrayInputStream.
+                           (.getBytes "video-bytes"
+                                      StandardCharsets/UTF_8))}))
+        output (ByteArrayOutputStream.)]
     (is (= 2147483648
-           (:size (drive/source-metadata! gateway "access" "video-1"))))))
+           (:size (drive/source-metadata! gateway "access" "video-1"))))
+    (drive/stream-source! gateway "access" "video-1" output)
+    (is (= "video-bytes" (.toString output StandardCharsets/UTF_8)))
+    (is (str/includes? (:url (first @requests))
+                       "supportsAllDrives=true"))
+    (is (str/includes? (:url (first @stream-requests))
+                       "alt=media&supportsAllDrives=true"))
+    (is (= "Bearer access"
+           (get-in (first @stream-requests) [:headers "Authorization"])))))
 
 (deftest picker-diagnostics-probe-account-and-video-index-without-returning-files
   (let [requests (atom [])
@@ -81,7 +103,16 @@
     (is (every? #(= "Bearer picker-access-token"
                     (get-in % [:headers "Authorization"]))
                 @requests))
-    (is (.contains ^String (:url (second @requests)) "mimeType+contains+%27video%2F%27"))
+    (is (not (.contains ^String (:url (second @requests))
+                        "mimeType+contains+%27video%2F%27")))
+    (is (.contains ^String (:url (second @requests)) "supportsAllDrives=true"))
+    (is (.contains ^String (:url (second @requests))
+                   "includeItemsFromAllDrives=true"))
+    (doseq [mime-type drive/supported-source-video-mime-types]
+      (is (.contains ^String (:url (second @requests))
+                     (java.net.URLEncoder/encode
+                      (str "mimeType = '" mime-type "'")
+                      StandardCharsets/UTF_8))))
     (is (not (.contains ^String (:url (second @requests)) "video-1")))))
 
 (deftest missing-output-folder-is-discovered-before-it-is-created

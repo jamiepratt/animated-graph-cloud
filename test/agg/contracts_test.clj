@@ -1,5 +1,6 @@
 (ns agg.contracts-test
   (:require [agg.contracts.render :as contract]
+            [agg.drive.core :as drive]
             [agg.telemetry.garmin :as garmin]
             [agg.telemetry.polar :as polar]
             [agg.telemetry.timeline :as timeline]
@@ -399,3 +400,31 @@
              nil
              (catch clojure.lang.ExceptionInfo error
                (:type (ex-data error))))))))
+
+(deftest shared-source-video-mime-policy-is-server-authoritative
+  (let [prepared (contract/prepare
+                  (assoc (valid-request)
+                         :sourceVideo {:fileId "drive-video-1"}))
+        metadata (fn [mime-type]
+                   {:id "drive-video-1"
+                    :name "server-name"
+                    :mimeType mime-type
+                    :size 1024
+                    :trashed false})]
+    (doseq [mime-type drive/supported-source-video-mime-types]
+      (is (= mime-type
+             (get-in (contract/attach-source-metadata
+                      prepared (metadata mime-type))
+                     [:source-video :metadata :mimeType]))
+          mime-type))
+    (doseq [mime-type ["video/x-unsupported"
+                       "application/vnd.google-apps.folder"
+                       "application/vnd.google-apps.shortcut"
+                       "application/vnd.google-apps.document"]]
+      (is (= ::contract/invalid-source-metadata
+             (try
+               (contract/attach-source-metadata prepared (metadata mime-type))
+               nil
+               (catch clojure.lang.ExceptionInfo error
+                 (:type (ex-data error)))))
+          mime-type))))

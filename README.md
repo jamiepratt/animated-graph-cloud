@@ -242,9 +242,14 @@ To composite one Drive video, send only its server-verified file ID:
 }
 ```
 
-The API ignores client-supplied source names and MIME types, verifies Drive
-metadata with `drive.file`, rejects sources above 2 GiB or shorter than the
-requested section, and streams source bytes through a non-seekable FFmpeg pipe.
+The API ignores client-supplied source names and MIME types and verifies Drive
+metadata authoritatively with `drive.file`. The shared Picker and server policy
+accepts `video/mp4`, `video/quicktime`, `video/webm`, `video/mpeg`, `video/ogg`,
+`video/x-msvideo`, and `video/x-matroska`. The server rejects other MIME types,
+folders, shortcuts, Google Workspace documents, trashed files, inaccessible or
+download-restricted files, and sources above 2 GiB. A supported source must be
+downloadable, FFmpeg-decodable, and long enough for the requested section.
+Source bytes stream through a non-seekable FFmpeg pipe and are not persisted.
 Supported outputs are H.264 MP4 (default) and ProRes 422 MOV. Fit defaults to
 letterbox/pillarbox; audio defaults to source plus bounded heartbeat mix, with
 source-only and heartbeat-only modes also available.
@@ -374,10 +379,16 @@ signed-out homepage. `GET /v1/drive/picker` opens a no-store
 Google Picker compatibility page for the same restricted grant. The
 authenticated `/` entrypoint initializes the Picker in the page, keeps it
 hidden until “Pick one video” is pressed, and shows the selected source after
-the Picker closes. The Drive view shows selectable video files and the Picker's
-Upload tab provides a supported path for adding a source video under
-`drive.file`; the page does not broaden the server grant, open a wrapper
-window, or silently download selected files. If the Drive view is empty, the
+the Picker closes. Picker results are filtered to the shared supported-video
+MIME policy. The normal list view includes My Drive and files shared with the
+user; folders remain visible only for navigation into nested content and cannot
+be selected. A separate list view enables supported Shared Drives. The Upload
+tab remains available for supported source videos. Selection grants Alpha
+Compose per-file access under `drive.file`; it does not broaden the OAuth scope,
+open a wrapper window, or silently download selected files. Shared Drive source
+metadata and media streaming use the all-drives Drive API parameters, while
+completed outputs continue to the user's Alpha Compose folder in My Drive. If
+the Drive view is empty, the
 Picker offers a privacy-safe diagnostic report that records only bounded status
 categories (token refresh, account binding, MIME selection, and Drive
 indexing probe), never tokens, account values, or filenames.
