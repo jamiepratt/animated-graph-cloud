@@ -103,6 +103,7 @@ jobs:
             --update-env-vars "AGG_OWNER_EMAIL=$OWNER_EMAIL" \
             --update-secrets "AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
             --no-allow-unauthenticated \
+            --no-traffic \
             --quiet
 
       - name: Verify API and durable renderer image parity
@@ -119,6 +120,14 @@ jobs:
             --format='value(spec.template.spec.template.spec.containers[0].image)')"
           test "$service_image" = "$durable_image"
           test "$service_image" = "$IMAGE_DIGEST"
+
+      - name: Activate verified API revision
+        run: |
+          gcloud run services update-traffic "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --to-latest \
+            --quiet
 
       - name: Deploy and execute renderer smoke job
         env:
