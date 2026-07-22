@@ -566,6 +566,12 @@
         (is (= "text/html; charset=utf-8"
                (some-> response .headers (.firstValue "content-type")
                        (.orElse nil))))
+        (is (str/includes? body "data-theme=\"telemetry\""))
+        (is (str/includes? body "--color-background:#031225"))
+        (is (str/includes? body "url('/telemetry-background.webp')"))
+        (is (str/includes? body ":focus-visible"))
+        (is (str/includes? body
+                           "<meta name=\"color-scheme\" content=\"dark\">"))
         (is (re-find #"Alpha Compose" body))
         (is (re-find #"Google Drive access could not be established" body))
         (is (re-find #"drive\.file" body))
@@ -1000,6 +1006,13 @@
         (is (= "text/html; charset=utf-8"
                (some-> response .headers (.firstValue "content-type")
                        (.orElse nil))))
+        (is (str/includes? (.body response) "data-theme=\"telemetry\""))
+        (is (str/includes? (.body response) "--color-background:#031225"))
+        (is (str/includes? (.body response)
+                           "url('/telemetry-background.webp')"))
+        (is (str/includes? (.body response) ":focus-visible"))
+        (is (str/includes? (.body response)
+                           "<meta name=\"color-scheme\" content=\"dark\">"))
         (is (re-find #"google\.picker\.PickerBuilder" (.body response)))
         (is (re-find #"picker-access-token" (.body response)))
         (is (re-find #"picker-key" (.body response)))
