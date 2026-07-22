@@ -30,6 +30,7 @@ locals {
   secret_ids = toset([
     "oauth-client-secret",
     "picker-api-key",
+    "resend-api-key",
     "session-key",
     "token-hash-pepper",
   ])
@@ -1076,6 +1077,20 @@ resource "google_secret_manager_secret_iam_member" "api_token_hash_access" {
   secret_id = google_secret_manager_secret.application["token-hash-pepper"].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "api_resend_access" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.application["resend-api-key"].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "deployer_resend_metadata" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.application["resend-api-key"].secret_id
+  role      = "roles/secretmanager.viewer"
+  member    = "serviceAccount:${google_service_account.deployer.email}"
 }
 
 resource "google_project_iam_member" "api_tasks_enqueuer" {

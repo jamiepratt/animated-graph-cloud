@@ -11,12 +11,17 @@
     :requestId :category :status :phase :view :listState :tokenStatus
     :accountStatus :mimeFilter :indexStatus :stage :elapsedMs :timeoutMs
     :progressPercent :retryable :attempt :requestedMomentCount
-    :generatedMomentCount :omittedMomentCount :requestedDurationSeconds})
+    :generatedMomentCount :omittedMomentCount :requestedDurationSeconds
+    :upstreamStatus :sourceFile :sourceLine :sourceColumn})
 
 (def ^:private safe-value-keys
   #{:severity :component :event :message :reason :failureCode :errorType
     :requestId :category :phase :view :listState :tokenStatus :accountStatus
-    :mimeFilter :indexStatus :stage})
+    :mimeFilter :indexStatus :stage :sourceFile})
+
+(def ^:private early-access-delivery-event-keys
+  #{:severity :component :event :requestId :category :upstreamStatus
+    :retryable :sourceFile :sourceLine :sourceColumn})
 
 (def ^:private safe-stages
   #{"source_metadata" "frame_compose"
@@ -70,7 +75,11 @@
                       (when (and (contains? safe-event-keys key)
                                  (safe-event-value? key value))
                         [key value])))
-              fields)]
+              fields)
+        safe-fields
+        (if (= "early_access_notification_failed" (:event safe-fields))
+          (select-keys safe-fields early-access-delivery-event-keys)
+          safe-fields)]
     (if (and (some #(contains? safe-fields %) preview-count-keys)
              (not (valid-preview-counts? safe-fields)))
       (apply dissoc safe-fields preview-count-keys)

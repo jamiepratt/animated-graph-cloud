@@ -4,6 +4,7 @@
             [agg.contracts.render :as contract]
             [agg.auth.core :as auth]
             [agg.drive.core :as drive]
+            [agg.early-access.core :as early-access]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
             [agg.logs.core :as logs]
@@ -15,7 +16,8 @@
             [agg.tokens.core :as tokens]
             [agg.ui.core :as ui]
             [clojure.data.json :as json]
-            [clojure.java.io :as io])
+            [clojure.java.io :as io]
+            [clojure.string :as str])
   (:gen-class)
   (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
            (java.net InetSocketAddress URLDecoder)
@@ -921,16 +923,143 @@
     (respond-redirect! exchange (:authorizationUrl started)
                        [(browser-cookie-header cookie)])))
 
-(defn- finish-login! [exchange auth-system]
+(defn- finish-login!
+  [exchange auth-system early-access-system dependencies request-id]
   (let [params (query-params exchange)
         result (auth/finish-login! auth-system
                                    {:code (get params "code")
                                     :state (get params "state")
                                     :state-cookie (oauth-state-token
                                                    exchange auth-system)})]
-    (respond-redirect! exchange "/"
-                       [(session-cookie (:session result))
-                        (clear-legacy-oauth-cookie)])))
+    (if (= :not-allowlisted (:outcome result))
+      (let [failure (oauth-callback-failure ::auth/not-allowlisted)]
+        (clear-browser-session! exchange)
+        (log-oauth-callback-failure! dependencies request-id failure)
+        (if (and (browser-html-request? exchange) early-access-system)
+          (respond! exchange 403 "text/html; charset=utf-8"
+                    (ui/early-access-page
+                     {:email (:verified-email result)
+                      :proof (early-access/issue-proof
+                              early-access-system
+                              (:verified-email result))
+                      :request-id request-id}))
+          (respond-oauth-callback-failure! exchange failure request-id)))
+      (respond-redirect! exchange "/"
+                         [(session-cookie (:session result))
+                          (clear-legacy-oauth-cookie)]))))
+
+(defn- bounded-form-value [value limit]
+  (let [value (str/trim (or value ""))]
+    (subs value 0 (min limit (count value)))))
+
+(defn- retry-contact-fields [early-access-system form]
+  (try
+    (let [{:keys [email]} (early-access/verify-proof!
+                           early-access-system (get form "proof"))]
+      {:email email
+       :proof (get form "proof")
+       :instagram (bounded-form-value (get form "instagram") 64)
+       :message (bounded-form-value (get form "message") 2000)})
+    (catch clojure.lang.ExceptionInfo _ nil)))
+
+(defn- safe-upstream-status [error]
+  (let [status (:status (ex-data error))]
+    (when (and (integer? status) (<= 400 status 599))
+      status)))
+
+(defn- safe-error-source [error]
+  (let [{:keys [file line column]} (:source (ex-data error))]
+    (cond-> {}
+      (and (string? file)
+           (<= (count file) 128)
+           (re-matches #"[A-Za-z0-9_./-]+" file))
+      (assoc :sourceFile file)
+      (and (integer? line) (<= 1 line 1000000000000))
+      (assoc :sourceLine line)
+      (and (integer? column) (<= 1 column 1000000000000))
+      (assoc :sourceColumn column))))
+
+(defn- safe-early-access-boundary-error [cause]
+  (try
+    (errors/raise! "Early-access delivery failed unexpectedly"
+                   {:type ::early-access-delivery-failed
+                    :retryable true}
+                   cause)
+    (catch clojure.lang.ExceptionInfo error
+      error)))
+
+(defn- respond-early-access-delivery-failure!
+  [exchange early-access-system dependencies request-id form error]
+  (let [upstream-status (safe-upstream-status error)
+        response-status (if (= 503 upstream-status) 503 502)]
+    (emit-event!
+     dependencies "early_access_notification_failed"
+     (merge {:severity "ERROR"
+             :requestId request-id
+             :category "early_access_delivery"
+             :retryable (not= false (:retryable (ex-data error)))}
+            (when upstream-status
+              {:upstreamStatus upstream-status})
+            (safe-error-source error)))
+    (respond! exchange response-status "text/html; charset=utf-8"
+              (ui/early-access-page
+               (merge
+                (retry-contact-fields early-access-system form)
+                {:feedback
+                 {:kind :failure
+                  :title "Request not sent"
+                  :message (str "Alpha Compose could not send your request. "
+                                "Retry below or email me@jamiep.org directly.")}})))))
+
+(defn- early-access-request!
+  [exchange early-access-system dependencies request-id]
+  (let [form (request-form exchange)]
+    (try
+      (early-access/submit!
+       early-access-system
+       {:proof (get form "proof")
+        :email (get form "email")
+        :instagram (get form "instagram")
+        :message (get form "message")})
+      (respond! exchange 200 "text/html; charset=utf-8"
+                (ui/early-access-page
+                 {:feedback {:kind :success
+                             :title "Request sent"
+                             :message (str "Your request was sent. Alpha Compose "
+                                           "did not create a session, membership, "
+                                           "Drive grant, or render.")}}))
+      (catch clojure.lang.ExceptionInfo error
+        (let [type (:type (ex-data error))]
+          (cond
+            (contains? #{::early-access/invalid-proof
+                         ::early-access/expired-proof}
+                       type)
+            (respond! exchange 400 "text/html; charset=utf-8"
+                      (ui/early-access-page
+                       {:feedback
+                        {:kind :failure
+                         :title "Request not verified"
+                         :message (str "Alpha Compose could not verify this request. "
+                                       "The proof may be missing, changed, or expired.")}}))
+
+            (= ::early-access/invalid-submission type)
+            (respond! exchange 400 "text/html; charset=utf-8"
+                      (ui/early-access-page
+                       (merge
+                        (retry-contact-fields early-access-system form)
+                        {:feedback
+                         {:kind :failure
+                          :title "Check your details"
+                          :message (str "Instagram handles may contain at most 64 "
+                                        "characters and messages at most 2,000.")}})))
+
+            :else
+            (respond-early-access-delivery-failure!
+             exchange early-access-system dependencies request-id form error))))
+      (catch Throwable error
+        (respond-early-access-delivery-failure!
+         exchange early-access-system dependencies request-id form
+         (safe-early-access-boundary-error error))))))
 
 (defn- logout! [exchange auth-system]
   (let [user (require-session-user! exchange auth-system)]
@@ -1272,7 +1401,7 @@
                               preview-job-service preview-asset-store
                               upload-signer auth-system picker-api-key
                               picker-app-id token-service admin-service log-store
-                              service-profile clock]
+                              early-access-system service-profile clock]
                        :as dependencies}]
   (reify HttpHandler
     (handle [_ exchange]
@@ -1318,7 +1447,14 @@
 
                                   (and auth-system (= "GET" method)
                                        (= "/v1/auth/login/callback" path))
-                                  (finish-login! exchange auth-system)
+                                  (finish-login! exchange auth-system
+                                                 early-access-system dependencies
+                                                 request-id)
+
+                                  (and early-access-system (= "POST" method)
+                                       (= "/v1/early-access/request" path))
+                                  (early-access-request! exchange early-access-system
+                                                         dependencies request-id)
 
                                   (and auth-system (= "POST" method)
                                        (= "/v1/auth/logout" path))

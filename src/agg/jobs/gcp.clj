@@ -1178,7 +1178,13 @@
               :scheduler-service-account scheduler-service-account
               :picker-api-key (env "AGG_PICKER_API_KEY" nil)
               :picker-app-id (env "AGG_PICKER_APP_ID" nil)
-              :token-hash-secret (env "AGG_TOKEN_HASH_PEPPER" nil)}))
+              :token-hash-secret (env "AGG_TOKEN_HASH_PEPPER" nil)
+              :resend-api-key (env "AGG_RESEND_API_KEY" nil)
+              :early-access-sender
+              (env "AGG_EARLY_ACCESS_SENDER"
+                   "Alpha Compose <early-access@alphacompose.com>")
+              :early-access-recipient
+              (env "AGG_EARLY_ACCESS_RECIPIENT" "me@jamiep.org")}))
           service
           (job-service
            {:firestore firestore

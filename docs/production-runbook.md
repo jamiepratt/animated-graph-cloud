@@ -21,6 +21,9 @@ Stop for explicit owner approval before each item:
 4. Publish the external Google OAuth app and approve the public legal, domain,
    and OAuth configuration.
 5. Approve every costed production acceptance render and load test.
+6. Complete Resend account creation, verify the `alphacompose.com` sender domain,
+   and add the first production `resend-api-key` version. These are manual
+   release prerequisites. Do not push or merge until all three are complete.
 
 ### Preview plus Submit approval template
 
@@ -269,7 +272,45 @@ printf %s "$PICKER_API_KEY" | gcloud secrets versions add picker-api-key \
 unset PICKER_API_KEY
 ```
 
-Confirm all four enabled versions and IAM bindings without printing payloads.
+Resend account creation and alphacompose.com sender-domain DNS verification
+are external manual checkpoints. Create the account, add `alphacompose.com` in
+Resend, copy only the exact DNS records Resend supplies into the authoritative
+DNS provider, and wait for Resend to report the domain verified. Do not infer or
+invent DNS values. The sender configured by the workflows is
+`Alpha Compose <early-access@alphacompose.com>`.
+
+Add the first production `resend-api-key` version without a trailing newline:
+
+```sh
+read -rs RESEND_API_KEY
+printf %s "$RESEND_API_KEY" | gcloud secrets versions add resend-api-key \
+  --project=animated-graph-cloud-prod-jp --data-file=-
+unset RESEND_API_KEY
+```
+
+Rotate the value by adding and verifying the new enabled version before
+disabling the prior version. Replace `PREVIOUS_VERSION_NUMBER` only with the
+numeric version selected from the metadata-only list command:
+
+```sh
+gcloud secrets versions list resend-api-key \
+  --project=animated-graph-cloud-prod-jp \
+  --filter='state=ENABLED' --format='table(name,state,createTime)'
+read -rs RESEND_API_KEY
+printf %s "$RESEND_API_KEY" | gcloud secrets versions add resend-api-key \
+  --project=animated-graph-cloud-prod-jp --data-file=-
+unset RESEND_API_KEY
+gcloud secrets versions describe latest \
+  --project=animated-graph-cloud-prod-jp --secret=resend-api-key \
+  --format='value(state)'
+gcloud secrets versions disable PREVIOUS_VERSION_NUMBER \
+  --project=animated-graph-cloud-prod-jp --secret=resend-api-key
+```
+
+Confirm all five enabled versions and IAM bindings without printing payloads.
+The production workflow checks only that the latest Resend secret version is
+enabled. It cannot prove Resend account creation or sender-domain verification,
+so stop the release if either external checkpoint is not complete.
 
 ## Automatic production deployment
 

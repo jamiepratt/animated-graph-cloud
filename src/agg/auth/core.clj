@@ -471,65 +471,73 @@
     (when (str/blank? access-token)
       (throw (errors/raise! "Drive grant did not return an access token"
                             {:type ::missing-access-token})))
-    (let [user (if member-directory
-                 (dynamic-member system {:subject subject :email email} true)
-                 (require-allowlisted! system
-                                       {:subject subject :email email}))
-          subject (:subject user)
-          existing (load-existing-grant! grant-store subject)
-          {:keys [refresh-token-ciphertext folder-access-token]}
-          (if (str/blank? refresh-token)
-            (let [ciphertext (:refresh-token-ciphertext existing)]
-              (when (or (:revoked? existing) (str/blank? ciphertext))
-                (throw (errors/raise! "Drive grant did not return offline access"
-                                      {:type ::missing-refresh-token})))
-              {:refresh-token-ciphertext ciphertext
-               :folder-access-token
-               (refresh-existing-grant! system subject ciphertext)})
-            {:refresh-token-ciphertext
-             (try
-               (encrypt-token! cipher refresh-token)
-               (catch Throwable error
-                 (external-failure
-                  ::kms-unavailable
-                  "Drive grant could not be encrypted"
-                  error)))
-             :folder-access-token access-token})]
-      (when (str/blank? refresh-token-ciphertext)
-        (throw (errors/raise! "Drive grant did not return offline access"
-                              {:type ::missing-refresh-token})))
-      (let [folder-id (try
-                        (ensure-output-folder! drive folder-access-token
-                                               (:folder-id existing))
-                        (catch Throwable error
-                          (external-failure
-                           ::drive-unavailable
-                           "Drive output folder is unavailable"
-                           error)))
-            grant {:refresh-token-ciphertext refresh-token-ciphertext
-                   :folder-id folder-id
-                   :revoked? false}]
-        (try
-          (if (satisfies? MemberGrantStore grant-store)
-            (save-member-grant! grant-store user grant)
-            (save-grant! grant-store subject grant))
-          (catch clojure.lang.ExceptionInfo error
-            (if (= ::not-allowlisted (:type (ex-data error)))
-              (throw error)
-              (external-failure
-               ::grant-persistence-failed
-               "Drive grant could not be saved"
-               error)))
-          (catch Throwable error
-            (external-failure
-             ::grant-persistence-failed
-             "Drive grant could not be saved"
-             error)))
-        {:user (select-keys user [:subject :email :role :membership-version])
-         :identity (select-keys identity
-                                [:subject :email :email-verified?])
-         :folderId folder-id
-         :session (issue-session system user)}))))
+    (let [user (try
+                 (if member-directory
+                   (dynamic-member system {:subject subject :email email} true)
+                   (require-allowlisted! system
+                                         {:subject subject :email email}))
+                 (catch clojure.lang.ExceptionInfo error
+                   (if (= ::not-allowlisted (:type (ex-data error)))
+                     nil
+                     (throw error))))]
+      (if-not user
+        {:outcome :not-allowlisted
+         :verified-email email}
+        (let [subject (:subject user)
+              existing (load-existing-grant! grant-store subject)
+              {:keys [refresh-token-ciphertext folder-access-token]}
+              (if (str/blank? refresh-token)
+                (let [ciphertext (:refresh-token-ciphertext existing)]
+                  (when (or (:revoked? existing) (str/blank? ciphertext))
+                    (throw (errors/raise! "Drive grant did not return offline access"
+                                          {:type ::missing-refresh-token})))
+                  {:refresh-token-ciphertext ciphertext
+                   :folder-access-token
+                   (refresh-existing-grant! system subject ciphertext)})
+                {:refresh-token-ciphertext
+                 (try
+                   (encrypt-token! cipher refresh-token)
+                   (catch Throwable error
+                     (external-failure
+                      ::kms-unavailable
+                      "Drive grant could not be encrypted"
+                      error)))
+                 :folder-access-token access-token})]
+          (when (str/blank? refresh-token-ciphertext)
+            (throw (errors/raise! "Drive grant did not return offline access"
+                                  {:type ::missing-refresh-token})))
+          (let [folder-id (try
+                            (ensure-output-folder! drive folder-access-token
+                                                   (:folder-id existing))
+                            (catch Throwable error
+                              (external-failure
+                               ::drive-unavailable
+                               "Drive output folder is unavailable"
+                               error)))
+                grant {:refresh-token-ciphertext refresh-token-ciphertext
+                       :folder-id folder-id
+                       :revoked? false}]
+            (try
+              (if (satisfies? MemberGrantStore grant-store)
+                (save-member-grant! grant-store user grant)
+                (save-grant! grant-store subject grant))
+              (catch clojure.lang.ExceptionInfo error
+                (if (= ::not-allowlisted (:type (ex-data error)))
+                  (throw error)
+                  (external-failure
+                   ::grant-persistence-failed
+                   "Drive grant could not be saved"
+                   error)))
+              (catch Throwable error
+                (external-failure
+                 ::grant-persistence-failed
+                 "Drive grant could not be saved"
+                 error)))
+            {:user (select-keys user [:subject :email :role :membership-version])
+             :identity (select-keys identity
+                                    [:subject :email :email-verified?])
+             :folderId folder-id
+             :session (issue-session system user)}))))))
 
 (defn drive-access!
   [{:keys [cipher grant-store drive-token-client]} subject]

@@ -38,6 +38,8 @@ env:
   RENDERER_SERVICE_ACCOUNT: agg-renderer@animated-graph-cloud-prod-jp.iam.gserviceaccount.com
   OWNER_EMAIL: me@jamiep.org
   ADMIN_EMAILS: me@jamiep.org;bartoszjakubowiak@gmail.com
+  EARLY_ACCESS_SENDER: Alpha Compose <early-access@alphacompose.com>
+  EARLY_ACCESS_RECIPIENT: me@jamiep.org
   PUBLIC_BASE_URL: https://alphacompose.com
   DAILY_SUBMISSION_LIMIT: "100"
   MONTHLY_BUDGET_MINOR_UNITS: "40000"
@@ -215,6 +217,15 @@ jobs:
             (.restrictions.apiTargets[0].service == "picker.googleapis.com")
           ' <<<"$api_targets" >/dev/null
 
+      - name: Verify enabled Resend secret version
+        run: |
+          set -euo pipefail
+          resend_secret_state="$(gcloud secrets versions describe latest \
+            --project="$PROJECT_ID" \
+            --secret=resend-api-key \
+            --format='value(state)')"
+          test "$resend_secret_state" = "ENABLED"
+
       - id: image
         name: Push and resolve immutable image digest
         env:
@@ -316,8 +327,8 @@ jobs:
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --remove-env-vars "AGG_MONTHLY_BUDGET_CENTS,AGG_PREVIEW_RESERVATION_CENTS,AGG_RENDER_RESERVATION_CENTS" \
-            --update-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGG_SERVICE_PROFILE=api,AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=$DURABLE_JOB,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
-            --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
+            --update-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGG_SERVICE_PROFILE=api,AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=$DURABLE_JOB,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_EARLY_ACCESS_SENDER=$EARLY_ACCESS_SENDER,AGG_EARLY_ACCESS_RECIPIENT=$EARLY_ACCESS_RECIPIENT,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
+            --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest,AGG_RESEND_API_KEY=resend-api-key:latest" \
             --quiet
           gcloud run services update "$OVERLAY_SERVICE" \
             --project "$PROJECT_ID" \
