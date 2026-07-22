@@ -139,7 +139,14 @@ paths:
       operationId: showGoogleDrivePicker
       tags: [Browser authorization]
       summary: Open Google Drive Picker for the signed-in user.
-      description: Refreshes the Drive grant required by the browser session and returns a no-store HTML Picker page for supported input files.
+      description: |
+        Refreshes the browser session's restricted `drive.file` grant and
+        returns a no-store HTML Picker page. The normal list view includes My
+        Drive and files shared with the user; a separate list view enables
+        Shared Drives. Results contain only supported video MIME types, while
+        non-selectable folders remain visible for navigation. The Upload tab
+        accepts supported source videos. Selecting a file grants per-file
+        access and does not broaden the OAuth scope.
       security:
         - sessionCookie: []
       responses:
@@ -778,7 +785,15 @@ components:
             fileId: {type: string, minLength: 1}
             name: {type: string, description: Ignored client metadata.}
             mimeType: {type: string, description: Ignored client metadata.}
-          description: One Drive video selected by ID; server metadata is authoritative.
+          description: |
+            One Drive video selected by ID from My Drive, a file shared with
+            the user, or a supported Shared Drive. Server metadata is
+            authoritative. Supported MIME types are video/mp4,
+            video/quicktime, video/webm, video/mpeg, video/ogg,
+            video/x-msvideo, and video/x-matroska. The source must be at most
+            2 GiB, downloadable, decodable, not trashed, and long enough for
+            the requested section. Folders, shortcuts, and Google Workspace
+            documents are rejected.
         outputFormat:
           type: string
           enum: [h264-mp4, prores-422-mov]

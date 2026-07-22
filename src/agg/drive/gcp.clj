@@ -43,6 +43,16 @@
                     (.map (.headers response)))
      :body (.body response)}))
 
+(defn- http-stream-send! [{:keys [url headers]}]
+  (let [builder (HttpRequest/newBuilder (URI/create url))
+        _ (doseq [[name value] headers]
+            (.header builder name value))
+        response (.send (HttpClient/newHttpClient)
+                        (-> builder .GET .build)
+                        (HttpResponse$BodyHandlers/ofInputStream))]
+    {:status (.statusCode response)
+     :body (.body response)}))
+
 (defn- authorized [request access-token]
   (update request :headers assoc "Authorization" (str "Bearer " access-token)))
 
@@ -258,7 +268,8 @@
           (send! (authorized
                   {:method :get
                    :url (str (source-url file-id)
-                             "?fields=id,name,mimeType,size,trashed")
+                             "?fields=id,name,mimeType,size,trashed"
+                             "&supportsAllDrives=true")
                    :headers {}}
                   access-token))]
       (if (<= 200 status 299)
@@ -266,23 +277,25 @@
           (assoc metadata :size (some-> (:size metadata) str parse-long)))
         (throw (errors/raise! "Google Drive source metadata request failed"
                               {:type ::source-metadata-failed :status status})))))
-  (stream-source! [_ access-token file-id output]
-    (let [request (-> (HttpRequest/newBuilder
-                       (URI/create (str (source-url file-id) "?alt=media")))
-                      (.header "Authorization" (str "Bearer " access-token))
-                      (.GET)
-                      (.build))
-          response (.send (HttpClient/newHttpClient)
-                          request
-                          (HttpResponse$BodyHandlers/ofInputStream))]
-      (if (<= 200 (.statusCode response) 299)
-        (with-open [input (.body response)]
+  (stream-source! [gateway access-token file-id output]
+    (let [send-stream! (or (:stream-source-request! gateway)
+                           http-stream-send!)
+          {:keys [status body]}
+          (send-stream!
+           (authorized
+            {:method :get
+             :url (str (source-url file-id)
+                       "?alt=media&supportsAllDrives=true")
+             :headers {}}
+            access-token))]
+      (if (<= 200 status 299)
+        (with-open [input body]
           (.transferTo ^java.io.InputStream input output))
         (do
-          (.close ^java.io.InputStream (.body response))
+          (.close ^java.io.InputStream body)
           (throw (errors/raise! "Google Drive source download failed"
                                 {:type ::source-download-failed
-                                 :status (.statusCode response)}))))))
+                                 :status status}))))))
   drive/PickerDiagnostics
   (picker-diagnostics! [_ access-token]
     (let [about (send! (authorized
@@ -297,9 +310,17 @@
                                          (str "pageSize=1"
                                               "&spaces=drive"
                                               "&fields=files(mimeType)"
+                                              "&supportsAllDrives=true"
+                                              "&includeItemsFromAllDrives=true"
                                               "&q="
                                               (urlencode
-                                               "trashed = false and mimeType contains 'video/'")))
+                                               (str
+                                                "trashed = false and ("
+                                                (str/join
+                                                 " or "
+                                                 (map #(str "mimeType = '" % "'")
+                                                      drive/supported-source-video-mime-types))
+                                                ")"))))
                          :headers {}}
                         access-token))
           account-status (cond

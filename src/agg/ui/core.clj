@@ -1,5 +1,6 @@
 (ns agg.ui.core
   (:require [agg.admin.core :as admin]
+            [agg.drive.core :as drive]
             [agg.jobs.lifecycle :as jobs]
             [clojure.data.json :as json]
             [clojure.string :as str])
@@ -107,6 +108,23 @@
       (str/replace ">" "\\u003e")
       (str/replace "&" "\\u0026")))
 
+(defn picker-policy-script []
+  (let [mime-types (str/join "," drive/supported-source-video-mime-types)]
+    (str "const pickerMimeTypes=" (json-script mime-types) ";"
+         "const pickerMimeTypeSet=new Set(pickerMimeTypes.split(','));")))
+
+(defn picker-views-script []
+  (str
+   "function configureVideoDriveView(view){return view"
+   ".setMimeTypes(pickerMimeTypes)"
+   ".setIncludeFolders(true)"
+   ".setSelectFolderEnabled(false)"
+   ".setMode(google.picker.DocsViewMode.LIST);}"
+   "const driveView=configureVideoDriveView(new google.picker.DocsView());"
+   "const sharedDrivesView=configureVideoDriveView(new google.picker.DocsView())"
+   ".setEnableDrives(true);"
+   "const upload=new google.picker.DocsUploadView().setIncludeFolders(false);"))
+
 (defn- picker-script [picker-config]
   (let [config (when picker-config
                  {"accessToken" (:access-token picker-config)
@@ -115,6 +133,7 @@
     (str
      "(function(){"
      "const pickerConfig=" (json-script config) ";"
+     (picker-policy-script)
      "const selection=document.getElementById('picker-selection');"
      "function reportDiagnostic(phase,view='unknown',listState='unknown'){"
      "fetch('/v1/drive/picker/diagnostic',{method:'POST',credentials:'same-origin',keepalive:true,"
@@ -126,7 +145,7 @@
      "if(data.action===google.picker.Action.PICKED){"
      "const d=data.docs&&data.docs[0];"
      "const file=d?{id:d.id,name:d.name,mimeType:d.mimeType}:null;"
-     "if(!file||typeof file.id!=='string'||!file.id||typeof file.mimeType!=='string'||!file.mimeType.startsWith('video/')){"
+     "if(!file||typeof file.id!=='string'||!file.id||typeof file.mimeType!=='string'||!pickerMimeTypeSet.has(file.mimeType)){"
      "selection.textContent='Choose a video file';reportDiagnostic('error','drive','unknown');return;}"
      "document.getElementById('source-video-file-id').value=file.id;"
      "selection.textContent=file.name||'Selected video';"
@@ -152,11 +171,10 @@
      "pickerLoadTimer=setTimeout(failed,10000);"
      "try{gapi.load('picker',{callback:()=>{"
      "if(!pickerLoading||attempt!==pickerLoadAttempt)return;"
-     "try{const view=new google.picker.DocsView().setIncludeFolders(false)"
-     ".setSelectFolderEnabled(false);"
-     "const upload=new google.picker.DocsUploadView().setIncludeFolders(false);"
-     "picker=new google.picker.PickerBuilder().addView(view).addView(upload)"
-     ".setSelectableMimeTypes('video/mp4,video/quicktime,video/webm,video/mpeg,video/ogg,video/x-msvideo,video/x-matroska')"
+     "try{" (picker-views-script)
+     "picker=new google.picker.PickerBuilder()"
+     ".addView(driveView).addView(sharedDrivesView).addView(upload)"
+     ".setSelectableMimeTypes(pickerMimeTypes)"
      ".setOAuthToken(pickerConfig.accessToken).setDeveloperKey(pickerConfig.apiKey)"
      ".setAppId(pickerConfig.appId).setOrigin(location.origin)"
      ".setCallback(pickerCallback).build();"
@@ -510,8 +528,8 @@
      "</p><form method=\"post\" action=\"/v1/auth/logout\"><input type=\"hidden\" name=\"csrf\" value=\""
      (escape-html csrf)
      "\"><button type=\"submit\">Log out</button></form></div></header>"
-     "<section class=\"card drive-card\"><div><h2>Google Drive</h2><p class=\"muted\">Select one video to compose telemetry over it, or leave it empty for a transparent overlay. The Picker also includes an Upload tab for source videos. Every finished render is delivered to your Alpha Compose Drive folder.</p></div><div class=\"drive-actions\"><button id=\"open-picker\" type=\"button\">Pick one video</button><span>Selected: <output id=\"picker-selection\">None</output></span></div></section>"
-     "<section class=\"card\"><div class=\"section-head\"><div><h2>Optional source video</h2><p class=\"muted\">The server verifies the selected Drive file. The browser sends only its ID.</p></div></div><input id=\"source-video-file-id\" type=\"hidden\"><div class=\"field-grid\"><label>Output<select id=\"output-format\"><option value=\"h264-mp4\">H.264 MP4</option><option value=\"prores-422-mov\">ProRes 422 MOV</option></select></label><label>Fit<select id=\"fit-mode\"><option value=\"letterbox\">Letterbox / pillarbox</option><option value=\"crop\">Crop to fill</option></select></label><label>Audio<select id=\"audio-mode\"><option value=\"source+heartbeat\">Source + heartbeat</option><option value=\"source-only\">Source only</option><option value=\"heartbeat-only\">Heartbeat only</option></select></label></div></section>"
+     "<section class=\"card drive-card\"><div><h2>Google Drive</h2><p class=\"muted\">Pick a supported video from My Drive, files shared with you, or a Shared Drive. Video results are filtered; folders are only for navigation. You can also upload a source video. Selection grants Alpha Compose access to that file only. Every finished render still goes to your Alpha Compose folder in My Drive.</p></div><div class=\"drive-actions\"><button id=\"open-picker\" type=\"button\">Pick one video</button><span>Selected: <output id=\"picker-selection\">None</output></span></div></section>"
+     "<section class=\"card\"><div class=\"section-head\"><div><h2>Optional source video</h2><p class=\"muted\">The browser sends only the selected ID. The server verifies its MIME type, 2 GiB limit, download access, decodability, and duration.</p></div></div><input id=\"source-video-file-id\" type=\"hidden\"><div class=\"field-grid\"><label>Output<select id=\"output-format\"><option value=\"h264-mp4\">H.264 MP4</option><option value=\"prores-422-mov\">ProRes 422 MOV</option></select></label><label>Fit<select id=\"fit-mode\"><option value=\"letterbox\">Letterbox / pillarbox</option><option value=\"crop\">Crop to fill</option></select></label><label>Audio<select id=\"audio-mode\"><option value=\"source+heartbeat\">Source + heartbeat</option><option value=\"source-only\">Source only</option><option value=\"heartbeat-only\">Heartbeat only</option></select></label></div></section>"
      "<form id=\"render-form\" hx-post=\"/ui/jobs\" hx-target=\"#job-result\" hx-swap=\"innerHTML\">"
      "<input id=\"render-request\" type=\"hidden\" name=\"request\" value=\"{}\">"
      "<section class=\"card\"><div class=\"section-head\"><div><div class=\"step\">Step 1</div><h2>Choose your data</h2><p class=\"muted\">Select a supported telemetry format, then upload a file or paste its contents.</p></div></div>"

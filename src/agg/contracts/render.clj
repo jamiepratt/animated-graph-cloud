@@ -1,5 +1,6 @@
 (ns agg.contracts.render
-  (:require [agg.errors :as errors]
+  (:require [agg.drive.core :as drive]
+            [agg.errors :as errors]
             [agg.render.spec :as spec]
             [agg.render.watermark :as watermark]
             [agg.telemetry.garmin :as garmin]
@@ -383,7 +384,7 @@
                    (= file-id id)
                    (string? name)
                    (string? mimeType)
-                   (str/starts-with? mimeType "video/")
+                   (drive/supported-source-video-mime-type? mimeType)
                    (integer? size)
                    (not (neg? size))
                    (not trashed))

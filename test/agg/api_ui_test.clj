@@ -1,6 +1,7 @@
 (ns agg.api-ui-test
   (:require [agg.api.main :as api]
             [agg.auth.core :as auth]
+            [agg.drive.core :as drive]
             [agg.http-test-support :as test-http]
             [agg.jobs-test :as fixture]
             [agg.jobs.lifecycle :as jobs]
@@ -233,21 +234,29 @@
       (finally
         (.stop server 0)))))
 
-(defn- picker-browser-outcome [page]
+(defn- picker-browser-outcome [page window-size]
   (let [fixture
         (str
          "<script>"
-         "window.__pickerState={loads:[],visible:[],diagnostics:[],callback:null};"
+         "window.__pickerState={loads:[],visible:[],diagnostics:[],callback:null,views:[],addedViews:[],selectableMimeTypes:null};"
          "window.fetch=(_path,options)=>{window.__pickerState.diagnostics.push(JSON.parse(options.body));return Promise.resolve({ok:true});};"
-         "class PickerView{setIncludeFolders(){return this;}setSelectFolderEnabled(){return this;}}"
+         "class PickerView{constructor(kind='drive'){this.config={kind};window.__pickerState.views.push(this.config);}"
+         "setMimeTypes(value){this.config.mimeTypes=value;return this;}"
+         "setIncludeFolders(value){this.config.includeFolders=value;return this;}"
+         "setSelectFolderEnabled(value){this.config.selectFolderEnabled=value;return this;}"
+         "setMode(value){this.config.mode=value;return this;}"
+         "setEnableDrives(value){this.config.enableDrives=value;return this;}"
+         "setOwnedByMe(value){this.config.ownedByMe=value;return this;}}"
+         "class UploadView extends PickerView{constructor(){super('upload');}}"
          "class PickerBuilder{"
-         "addView(){return this;}setSelectableMimeTypes(){return this;}setOAuthToken(){return this;}"
+         "addView(view){window.__pickerState.addedViews.push(view.config);return this;}"
+         "setSelectableMimeTypes(value){window.__pickerState.selectableMimeTypes=value;return this;}setOAuthToken(){return this;}"
          "setDeveloperKey(){return this;}setAppId(){return this;}setOrigin(){return this;}"
          "setCallback(callback){window.__pickerState.callback=callback;return this;}"
          "build(){return {setVisible(visible){window.__pickerState.visible.push(visible);}};}"
          "}"
-         "window.google={picker:{DocsView:PickerView,DocsUploadView:PickerView,PickerBuilder,"
-         "Action:{LOADED:'loaded',PICKED:'picked',CANCEL:'cancel'}}};"
+         "window.google={picker:{DocsView:PickerView,DocsUploadView:UploadView,PickerBuilder,"
+         "DocsViewMode:{LIST:'list'},Action:{LOADED:'loaded',PICKED:'picked',CANCEL:'cancel'}}};"
          "window.gapi={load(_module,handlers){window.__pickerState.loads.push(handlers);}};"
          "</script>")
         scenario
@@ -265,9 +274,13 @@
          "const retryLoad=state.loads.at(-1);if(typeof retryLoad?.callback!=='function')throw new Error('Picker load is not retriable');"
          "retryLoad.callback();"
          "state.callback({action:google.picker.Action.LOADED});"
+         "state.callback({action:google.picker.Action.PICKED,docs:[{id:'crafted-file-id',name:'crafted.video',mimeType:'video/x-unsupported'}]});"
+         "const rejected={selection:selection.textContent,fileId:document.getElementById('source-video-file-id').value};"
+         "state.callback({action:google.picker.Action.PICKED,docs:[{id:'folder-id',name:'Nested folder',mimeType:'application/vnd.google-apps.folder'}]});"
+         "const folderRejected={selection:selection.textContent,fileId:document.getElementById('source-video-file-id').value};"
          "state.callback({action:google.picker.Action.PICKED,docs:[{id:'test-file-id',name:'video.mp4',mimeType:'video/mp4'}]});"
          "const selected=selection.textContent;button.click();state.callback({action:google.picker.Action.CANCEL});"
-         "outcome={initialLoading,failureMessage,failureRetryLoading,timeoutMessage,timeoutRetryLoading,selected,visible:state.visible,diagnostics:state.diagnostics};"
+         "outcome={initialLoading,failureMessage,failureRetryLoading,timeoutMessage,timeoutRetryLoading,rejected,folderRejected,selected,views:state.addedViews,selectableMimeTypes:state.selectableMimeTypes,visible:state.visible,diagnostics:state.diagnostics,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
          "}catch(error){outcome={error:error.message};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));"
          "document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
@@ -279,7 +292,7 @@
                  (str/replace "</body>" (str scenario "</body>")))]
     (browser-outcome "agg-picker-browser-"
                      "Browser-level Picker regression requires Chrome or Chromium"
-                     html)))
+                     html (str "--window-size=" window-size))))
 
 (defn- preview-status-browser-outcome [page]
   (let [terminal-fragment
@@ -847,32 +860,53 @@
     (is (not (str/includes? page "localStorage")))
     (is (not (str/includes? page "sessionStorage")))))
 
-(deftest picker-initialization-and-click-flow-recovers-in-a-browser
-  (let [outcome (picker-browser-outcome
-                 (ui/page {:user {:email "owner@example.com" :role :member}
-                           :csrf "csrf-test"
-                           :picker-config {:access-token "access-test"
-                                           :api-key "key-test"
-                                           :app-id "app-test"
-                                           :csrf "csrf-test"}
-                           :tokens []
-                           :members []
-                           :logs-enabled? false}))]
-    (is (nil? (:error outcome)) outcome)
-    (is (= "Loading Google Drive Picker…" (:initialLoading outcome)))
-    (is (= "Google Drive Picker failed to load. Try again."
-           (:failureMessage outcome)))
-    (is (= "Loading Google Drive Picker…" (:failureRetryLoading outcome)))
-    (is (= "Google Drive Picker failed to load. Try again."
-           (:timeoutMessage outcome)))
-    (is (= "Loading Google Drive Picker…" (:timeoutRetryLoading outcome)))
-    (is (= "video.mp4" (:selected outcome)))
-    (is (= [false true false true false] (:visible outcome)))
-    (is (= ["error" "error" "opened" "loaded" "selected" "opened"
-            "cancelled"]
-           (mapv :phase (:diagnostics outcome))))
-    (is (every? #(= #{:phase :view :listState} (set (keys %)))
-                (:diagnostics outcome)))))
+(deftest picker-supports-root-nested-shared-and-upload-video-flow-in-a-browser
+  (let [page (ui/page {:user {:email "owner@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :picker-config {:access-token "access-test"
+                                       :api-key "key-test"
+                                       :app-id "app-test"
+                                       :csrf "csrf-test"}
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})
+        outcomes [(picker-browser-outcome page "1280,900")
+                  (picker-browser-outcome page "390,844")]]
+    (doseq [outcome outcomes]
+      (is (nil? (:error outcome)) outcome)
+      (is (= "Loading Google Drive Picker…" (:initialLoading outcome)))
+      (is (= "Google Drive Picker failed to load. Try again."
+             (:failureMessage outcome)))
+      (is (= "Loading Google Drive Picker…" (:failureRetryLoading outcome)))
+      (is (= "Google Drive Picker failed to load. Try again."
+             (:timeoutMessage outcome)))
+      (is (= "Loading Google Drive Picker…" (:timeoutRetryLoading outcome)))
+      (is (= {:selection "Choose a video file" :fileId ""}
+             (:rejected outcome)))
+      (is (= {:selection "Choose a video file" :fileId ""}
+             (:folderRejected outcome)))
+      (is (= "video.mp4" (:selected outcome)))
+      (let [[normal-drive shared-drives upload] (:views outcome)
+            mime-types (str/join "," drive/supported-source-video-mime-types)]
+        (is (= {:kind "drive"
+                :mimeTypes mime-types
+                :includeFolders true
+                :selectFolderEnabled false
+                :mode "list"}
+               normal-drive))
+        (is (= (assoc normal-drive :enableDrives true) shared-drives))
+        (is (= {:kind "upload" :includeFolders false} upload))
+        (is (= mime-types (:selectableMimeTypes outcome)))
+        (is (not (contains? normal-drive :ownedByMe))))
+      (is (= [false true false true false] (:visible outcome)))
+      (is (= ["error" "error" "opened" "loaded" "error" "error"
+              "selected" "opened" "cancelled"]
+             (mapv :phase (:diagnostics outcome))))
+      (is (every? #(= #{:phase :view :listState} (set (keys %)))
+                  (:diagnostics outcome)))
+      (is (:noHorizontalOverflow outcome) outcome))
+    (is (<= 1200 (:viewportWidth (first outcomes))))
+    (is (<= (:viewportWidth (second outcomes)) 500))))
 
 (deftest preview-remains-stale-safe-and-retriable-without-gating-submit
   (let [outcome (preview-status-browser-outcome
@@ -1439,6 +1473,13 @@
                (.orElse (.firstValue (.headers response) "Cache-Control") nil)))
         (is (= (slurp "docs/openapi.yaml") body))
         (is (str/includes? body "openapi: 3.1.0"))
+        (doseq [contract ["files shared with the user"
+                          "Shared Drives"
+                          "folders remain visible for navigation"
+                          "video/x-matroska"
+                          "2 GiB"
+                          "downloadable, decodable"]]
+          (is (str/includes? body contract) contract))
         (is (not (str/includes? body "client_secret"))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
