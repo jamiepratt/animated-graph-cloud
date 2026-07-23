@@ -718,6 +718,28 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest anonymous-homepage-explains-why-activity-video-matters
+  (let [page ui/anonymous-page
+        lower-page (str/lower-case page)]
+    (doseq [claim ["Turn your activity into a video worth sharing."
+                   "See what was happening inside you"
+                   "Relive how it felt"
+                   "generated heartbeat paced to your recorded heart-rate data"
+                   "Share and notice change"
+                   "saved videos can help you notice changes for yourself"
+                   "Heart rate is the main supported graph"
+                   "optional SpO2"
+                   "More activity-data graphs may be supported later."]]
+      (is (str/includes? page claim) claim))
+    (doseq [misleading-claim ["recorded heart sounds"
+                              "detect emotion"
+                              "medical interpretation"
+                              "automated training analysis"
+                              "compares your activities"
+                              "freediv"]]
+      (is (not (str/includes? lower-page misleading-claim))
+          misleading-claim))))
+
 (deftest full-page-surfaces-share-the-telemetry-theme
   (let [pages
         {"anonymous" ui/anonymous-page
