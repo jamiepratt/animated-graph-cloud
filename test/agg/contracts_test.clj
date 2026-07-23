@@ -394,9 +394,9 @@
     (is (re-find #"(?s)synchronizationMode:\s+type: string\s+enum: \[shared-clock, manual-anchor\]"
                  openapi))
     (is (str/includes? openapi "          const: shared-clock"))
-    (is (str/includes?
-         openapi
-         "          not: {anyOf: [{required: [telemetrySyncAt]}, {required: [cameraSyncAt]}]}"))
+    (is (re-find
+         #"(?s)title: Shared clock.*not:\s+anyOf:\s+- properties:\s+telemetrySyncAt: \{\}\s+required: \[telemetrySyncAt\]\s+- properties:\s+cameraSyncAt: \{\}\s+required: \[cameraSyncAt\]\s+- title: Manual anchor"
+         openapi))
     (is (str/includes? openapi "          const: manual-anchor"))
     (is (str/includes?
          openapi
