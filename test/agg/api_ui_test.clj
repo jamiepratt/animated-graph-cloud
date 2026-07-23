@@ -692,8 +692,8 @@
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
          "const links=[...document.querySelectorAll('.contextual-help')],styles=[...document.querySelectorAll('style')].map(node=>node.textContent).join(''),declaredFocus=styles.includes(':focus,:focus-visible{outline:3px solid var(--color-warning)');"
-         "const presentations=links.map(link=>{link.focus({focusVisible:true});const rect=link.getBoundingClientRect(),style=getComputedStyle(link),wrapper=link.closest('.help-heading,.help-label,.toggle-help'),computedFocus=style.outlineStyle!=='none'&&parseFloat(style.outlineWidth)>=3;return {href:link.getAttribute('href'),name:link.getAttribute('aria-label'),target:link.getAttribute('target'),text:link.textContent.trim(),symbolHidden:link.querySelector('[aria-hidden=\"true\"]')?.textContent==='?',width:rect.width,height:rect.height,fits:rect.left>=-.5&&rect.right<=window.innerWidth+.5,visible:style.display!=='none'&&style.visibility!=='hidden',keyboardReachable:link.tabIndex>=0,focusVisible:computedFocus||declaredFocus,associated:!!wrapper,insideLabel:!!link.closest('label')};});"
-         "outcome={presentations,viewportWidth:window.innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth,hoverStyled:styles.includes('.contextual-help:hover{background:var(--color-accent);color:var(--color-accent-ink);border-color:var(--color-accent)}')};"
+         "const presentations=links.map(link=>{link.focus({focusVisible:true});const rect=link.getBoundingClientRect(),style=getComputedStyle(link),wrapper=link.closest('.help-heading,.help-label,.toggle-help'),associated=wrapper?.querySelector(':scope>h1,:scope>h2,:scope>h3,:scope>label,:scope>strong,:scope>.toggle'),associatedRect=associated?.getBoundingClientRect(),mark=link.querySelector('.contextual-help-mark'),markRect=mark?.getBoundingClientRect(),computedFocus=style.outlineStyle!=='none'&&parseFloat(style.outlineWidth)>=3,overlapsSibling=wrapper?[...wrapper.children].some(node=>{if(node===link)return false;const siblingRect=node.getBoundingClientRect();return rect.left<siblingRect.right&&rect.right>siblingRect.left&&rect.top<siblingRect.bottom&&rect.bottom>siblingRect.top;}):true;return {href:link.getAttribute('href'),name:link.getAttribute('aria-label'),target:link.getAttribute('target'),text:link.textContent.trim(),symbolHidden:link.querySelector('[aria-hidden=\"true\"]')?.textContent==='?',width:rect.width,height:rect.height,markWidth:markRect?.width??null,markHeight:markRect?.height??null,associatedFontSize:associated?parseFloat(getComputedStyle(associated).fontSize):null,aligned:!!markRect&&!!associatedRect&&Math.abs((markRect.top+markRect.bottom-associatedRect.top-associatedRect.bottom)/2)<=1,fits:rect.left>=-.5&&rect.right<=window.innerWidth+.5,visible:style.display!=='none'&&style.visibility!=='hidden',keyboardReachable:link.tabIndex>=0,focusVisible:computedFocus||declaredFocus,associated:!!associated,overlapsSibling,insideLabel:!!link.closest('label')};});"
+         "outcome={presentations,viewportWidth:window.innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth,hoverStyled:styles.includes('.contextual-help:hover .contextual-help-mark{background:var(--color-accent);border-color:var(--color-accent)}')};"
          "}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
          "</script>")
         html (-> page
@@ -1047,7 +1047,8 @@
         help-link (str "<a class=\"contextual-help\" "
                        "href=\"/faq#preview-admission-cost\" "
                        "aria-label=\"Learn about Preview admission cost\">"
-                       "<span aria-hidden=\"true\">?</span></a>")]
+                       "<span class=\"contextual-help-mark\" aria-hidden=\"true\">"
+                       "<span>?</span></span></a>")]
     (is (str/includes? ui/faq-page
                        (str "<details class=\"faq-question\" "
                             "id=\"preview-admission-cost\">")))
@@ -1097,7 +1098,8 @@
            page
            (str "<a class=\"contextual-help\" href=\"/faq#" fragment
                 "\" aria-label=\"" name
-                "\"><span aria-hidden=\"true\">?</span></a>"))
+                "\"><span class=\"contextual-help-mark\" aria-hidden=\"true\">"
+                "<span>?</span></span></a>"))
           fragment))
     (doseq [page [homepage compose]]
       (is (not (re-find #"class=\"contextual-help\"[^>]+href=\"/faq\""
@@ -1153,6 +1155,17 @@
         (is (every? #(and (<= 32 (:width %)) (<= 32 (:height %)))
                     (:presentations outcome)))
         (is (every? :associated (:presentations outcome)))
+        (is (every? #(and (number? (:markWidth %))
+                          (number? (:markHeight %))
+                          (< (:markWidth %) (:width %))
+                          (< (:markHeight %) (:height %)))
+                    (:presentations outcome)))
+        (is (every? #(<= 0.75
+                         (/ (:markHeight %) (:associatedFontSize %))
+                         0.85)
+                    (:presentations outcome)))
+        (is (every? :aligned (:presentations outcome)))
+        (is (not-any? :overlapsSibling (:presentations outcome)))
         (is (not-any? :insideLabel (:presentations outcome)))
         (is (every? :fits (:presentations outcome)))
         (is (:hoverStyled outcome))
