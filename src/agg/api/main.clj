@@ -1441,6 +1441,9 @@
                                   (landing! exchange auth-system token-service admin-service
                                             log-store picker-api-key picker-app-id)
 
+                                  (and (= "GET" method) (= "/faq" path))
+                                  (respond! exchange 200 "text/html; charset=utf-8" ui/faq-page)
+
                                   (and (= "GET" method) (= "/privacy" path))
                                   (respond! exchange 200 "text/html; charset=utf-8" ui/privacy-page)
 
