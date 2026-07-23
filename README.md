@@ -168,6 +168,12 @@ The browser's `My browser timezone` option resolves to its IANA identifier in
 the submitted JSON. Missing, blank, offset-only, and unknown display zones are
 rejected. Section end must follow section start by a whole number of 25 fps
 frames, so the duration advances in exact 40 ms steps.
+Without a source video, the workspace identifies the output as a transparent ProRes 4444 overlay.
+A compact prompt collects output start, output end, and the required IANA
+video/output timezone. A valid whole-frame output range reveals the same clock timeline
+without a player stage, including manual synchronization and optional timer
+markers. Incomplete, unordered, off-frame, or overlong ranges remain in the
+prompt with field-specific guidance.
 In `manual-anchor` mode, the browser's full-source marker sets `cameraSyncAt`
 on a 25 fps frame. The marker may be before, within, or after the selected
 output interval while remaining inside the available source timeline. The
