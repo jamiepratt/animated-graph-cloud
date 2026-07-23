@@ -152,7 +152,7 @@ The render JSON fields are:
 | `preset` | Yes | `1080p25` (1920×1080, 25 fps, up to 8 minutes) or `2.7k25` (2704×1520, 25 fps, up to 4 minutes) |
 | `displayTimeZone` | Yes | Known IANA timezone identifier such as `Europe/Warsaw` or `UTC`; no missing, blank, offset, unknown, or server-local fallback |
 | `synchronizationMode` | Yes | `shared-clock` when camera and activity devices used the same clock, or `manual-anchor` when their clocks differed |
-| `telemetrySyncAt`, `cameraSyncAt` | With `manual-anchor` only | Both required for `manual-anchor`; both forbidden for `shared-clock`; ISO-8601 instants with `Z` or an explicit UTC offset |
+| `telemetrySyncAt`, `cameraSyncAt` | With `manual-anchor` only | Both required for `manual-anchor`; both forbidden for `shared-clock`; ISO-8601 instants with `Z` or an explicit UTC offset. `cameraSyncAt` may be before, within, or after the selected output interval |
 | `sectionStartAt`, `sectionEndAt` | Yes | ISO-8601 instants with `Z` or an explicit UTC offset; output duration and source-relative boundaries must land on 25 fps frames (40 ms) |
 | `spo2` | No | `{ "format": "oxiwear-spo2-csv", "telemetry": "..." }`; CSV is limited to 10 MiB |
 | `timer` | No | `{ "startAt": "...", "endAt": "..." }`, within the requested section |
@@ -168,7 +168,9 @@ The browser's `My browser timezone` option resolves to its IANA identifier in
 the submitted JSON. Missing, blank, offset-only, and unknown display zones are
 rejected. Section end must follow section start by a whole number of 25 fps
 frames, so the duration advances in exact 40 ms steps.
-In `manual-anchor` mode, `cameraSyncAt` must not follow the section, and the
+In `manual-anchor` mode, the browser's full-source marker sets `cameraSyncAt`
+on a 25 fps frame. The marker may be before, within, or after the selected
+output interval while remaining inside the available source timeline. The
 anchor offset maps the camera section onto activity-data time.
 In `shared-clock` mode, activity timestamps align directly to `sectionStartAt`
 with no adjustment. Telemetry must cover both mapped boundaries. The selected
