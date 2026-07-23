@@ -22,6 +22,7 @@
   {:telemetryFormat "polar-csv"
    :telemetry (slurp (io/resource "fixtures/polar/valid.csv"))
    :preset "1080p25"
+   :synchronizationMode "manual-anchor"
    :telemetrySyncAt "2026-07-17T10:00:00Z"
    :cameraSyncAt "2026-07-17T09:00:00Z"
    :sectionStartAt "2026-07-17T09:00:00Z"
@@ -231,7 +232,9 @@
         (let [response (test-http/send-string!
                         :post
                         (str "http://127.0.0.1:" validation-port "/v1/jobs")
-                        "{}"
+                        (json/write-str
+                         (assoc (valid-render-request)
+                                :telemetryFormat "unknown"))
                         {"Content-Type" "application/json"
                          "Idempotency-Key" "validation-key"})
               request-id (some-> response .headers

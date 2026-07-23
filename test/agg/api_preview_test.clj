@@ -69,7 +69,12 @@
       (let [response
             (test-http/send-string!
              :post (str "http://127.0.0.1:" port "/v1/jobs")
-             (json/write-str (fixture/render-request))
+             (json/write-str
+              (-> (fixture/render-request)
+                  (assoc :synchronizationMode "shared-clock"
+                         :sectionStartAt "2026-07-17T10:00:00Z"
+                         :sectionEndAt "2026-07-17T10:00:02Z")
+                  (dissoc :telemetrySyncAt :cameraSyncAt)))
              {"Content-Type" "application/json"
               "Cookie" (str "agg_session=" owner-session)
               "X-CSRF-Token" owner-csrf
@@ -785,6 +790,47 @@
           (is (= "invalid_request" (:error body)) (pr-str invalid))
           (is (= "futureTraceOpacityPercent" (:field body))
               (pr-str invalid))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest preview-synchronization-validation-identifies-the-actionable-field
+  (let [port (available-port)
+        server (api/start! port {})
+        base (assoc (fixture/render-request)
+                    :synchronizationMode "manual-anchor")]
+    (try
+      (doseq [[request expected-field expected-guidance]
+              [[(dissoc base :synchronizationMode)
+                "synchronizationMode"
+                "Choose synchronizationMode as shared-clock or manual-anchor."]
+               [(assoc base :synchronizationMode "automatic")
+                "synchronizationMode"
+                "Choose synchronizationMode as shared-clock or manual-anchor."]
+               [(assoc base :synchronizationMode "shared-clock")
+                "telemetrySyncAt"
+                "Omit telemetrySyncAt and cameraSyncAt when synchronizationMode is shared-clock."]
+               [(dissoc base :telemetrySyncAt)
+                "telemetrySyncAt"
+                "Provide telemetrySyncAt and cameraSyncAt when synchronizationMode is manual-anchor."]
+               [(dissoc base :cameraSyncAt)
+                "cameraSyncAt"
+                "Provide telemetrySyncAt and cameraSyncAt when synchronizationMode is manual-anchor."]
+               [(assoc base :telemetrySyncAt "invalid")
+                "telemetrySyncAt"
+                "Provide telemetrySyncAt and cameraSyncAt as ISO-8601 instants with Z or an explicit UTC offset."]
+               [(assoc base :cameraSyncAt nil)
+                "cameraSyncAt"
+                "Provide telemetrySyncAt and cameraSyncAt as ISO-8601 instants with Z or an explicit UTC offset."]]]
+        (let [response (test-http/send-string!
+                        :post
+                        (str "http://127.0.0.1:" port "/v1/preview")
+                        (json/write-str request)
+                        {"Content-Type" "application/json"})
+              body (json/read-str (.body response) :key-fn keyword)]
+          (is (= 400 (.statusCode response)) expected-field)
+          (is (= "invalid_request" (:error body)) expected-field)
+          (is (= expected-field (:field body)) expected-field)
+          (is (= expected-guidance (:guidance body)) expected-field)))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

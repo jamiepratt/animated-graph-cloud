@@ -14,6 +14,7 @@
   {:telemetryFormat "polar-csv"
    :telemetry (slurp (io/resource "fixtures/polar/valid.csv"))
    :preset "1080p25"
+   :synchronizationMode "manual-anchor"
    :telemetrySyncAt "2026-07-17T10:00:00Z"
    :cameraSyncAt "2026-07-17T09:00:00Z"
    :sectionStartAt "2026-07-17T09:00:00Z"
@@ -41,6 +42,87 @@
            (:section-start-at prepared)))
     (is (= (ZoneId/of "Europe/Warsaw")
            (:display-time-zone prepared)))))
+
+(deftest synchronization-mode-is-an-explicit-required-choice
+  (doseq [[request expected-message]
+          [[(dissoc (valid-request) :synchronizationMode)
+            "synchronizationMode is required; choose shared-clock or manual-anchor"]
+           [(assoc (valid-request) :synchronizationMode "automatic")
+            "synchronizationMode must be shared-clock or manual-anchor"]]]
+    (try
+      (contract/prepare request)
+      (is false (str "accepted synchronization mode "
+                     (:synchronizationMode request)))
+      (catch clojure.lang.ExceptionInfo error
+        (is (= ::contract/invalid-synchronization-mode
+               (:type (ex-data error))))
+        (is (= "synchronizationMode" (:field (ex-data error))))
+        (is (= expected-message (.getMessage error)))))))
+
+(deftest synchronization-modes-enforce-their-anchor-shapes
+  (let [manual (valid-request)
+        shared (-> manual
+                   (assoc :synchronizationMode "shared-clock")
+                   (dissoc :telemetrySyncAt :cameraSyncAt))]
+    (doseq [[label request expected-type expected-field]
+            [["shared telemetry anchor"
+              (assoc shared :telemetrySyncAt "2026-07-17T10:00:00Z")
+              ::contract/synchronization-anchor-forbidden
+              "telemetrySyncAt"]
+             ["shared camera anchor"
+              (assoc shared :cameraSyncAt "2026-07-17T09:00:00Z")
+              ::contract/synchronization-anchor-forbidden
+              "cameraSyncAt"]
+             ["shared both anchors"
+              (assoc shared
+                     :telemetrySyncAt "2026-07-17T10:00:00Z"
+                     :cameraSyncAt "2026-07-17T09:00:00Z")
+              ::contract/synchronization-anchor-forbidden
+              "telemetrySyncAt"]
+             ["manual missing telemetry anchor"
+              (dissoc manual :telemetrySyncAt)
+              ::contract/synchronization-anchor-required
+              "telemetrySyncAt"]
+             ["manual missing camera anchor"
+              (dissoc manual :cameraSyncAt)
+              ::contract/synchronization-anchor-required
+              "cameraSyncAt"]
+             ["manual missing both anchors"
+              (dissoc manual :telemetrySyncAt :cameraSyncAt)
+              ::contract/synchronization-anchor-required
+              "telemetrySyncAt"]
+             ["manual invalid telemetry anchor"
+              (assoc manual :telemetrySyncAt "not-an-instant")
+              ::contract/invalid-timestamp
+              "telemetrySyncAt"]
+             ["manual invalid camera anchor"
+              (assoc manual :cameraSyncAt "not-an-instant")
+              ::contract/invalid-timestamp
+              "cameraSyncAt"]]]
+      (testing label
+        (try
+          (contract/prepare request)
+          (is false (str "accepted " label))
+          (catch clojure.lang.ExceptionInfo error
+            (is (= expected-type (:type (ex-data error))))
+            (is (= expected-field (:field (ex-data error))))))))))
+
+(deftest shared-clock-and-equivalent-manual-anchor-have-the-same-activity-mapping
+  (let [shared (-> (valid-request)
+                   (assoc :synchronizationMode "shared-clock"
+                          :sectionStartAt "2026-07-17T10:00:00Z"
+                          :sectionEndAt "2026-07-17T10:00:02Z")
+                   (dissoc :telemetrySyncAt :cameraSyncAt))
+        manual (assoc shared
+                      :synchronizationMode "manual-anchor"
+                      :telemetrySyncAt "2026-07-17T10:00:00Z"
+                      :cameraSyncAt "2026-07-17T10:00:00Z")
+        shared-prepared (contract/prepare shared)
+        manual-prepared (contract/prepare manual)]
+    (is (= "shared-clock" (:synchronization-mode shared-prepared)))
+    (is (= "manual-anchor" (:synchronization-mode manual-prepared)))
+    (is (= (:telemetry shared-prepared)
+           (:telemetry manual-prepared)))))
 
 (deftest omitted-future-trace-opacity-defaults-in-the-render-contract
   (is (= 25
@@ -88,8 +170,19 @@
                 :telemetry (slurp (io/resource
                                    "fixtures/oxiwear/hr-midnight.csv"))
                 :telemetrySyncAt "2026-07-17T21:59:59Z")]
-        prepared (mapv contract/prepare requests)]
-    (is (= 3 (count prepared)))
+        shared-requests
+        (mapv (fn [request]
+                (-> request
+                    (assoc :synchronizationMode "shared-clock"
+                           :sectionStartAt (:telemetrySyncAt request)
+                           :sectionEndAt
+                           (str (.plusSeconds
+                                 (Instant/parse (:telemetrySyncAt request))
+                                 2)))
+                    (dissoc :telemetrySyncAt :cameraSyncAt)))
+              requests)
+        prepared (mapv contract/prepare (concat requests shared-requests))]
+    (is (= 6 (count prepared)))
     (is (every? #(= {:id "1080p25"
                      :width 1920
                      :height 1080
@@ -99,6 +192,9 @@
                                     :duration-seconds]))
                 prepared))
     (is (= [[120.0 124.0 128.0]
+            [120.0 124.0 128.0]
+            [120.0 124.0 128.0]
+            [120.0 124.0 128.0]
             [120.0 124.0 128.0]
             [120.0 124.0 128.0]]
            (mapv (fn [{:keys [telemetry]}]
@@ -291,6 +387,20 @@
     (is (and zone-start next-field
              (not (str/includes? (subs openapi zone-start next-field)
                                  "default:"))))))
+
+(deftest openapi-documents-structurally-distinct-synchronization-modes
+  (let [openapi (slurp (io/resource "openapi.yaml"))]
+    (is (str/includes? openapi "        - synchronizationMode"))
+    (is (re-find #"(?s)synchronizationMode:\s+type: string\s+enum: \[shared-clock, manual-anchor\]"
+                 openapi))
+    (is (str/includes? openapi "          const: shared-clock"))
+    (is (str/includes?
+         openapi
+         "          not: {anyOf: [{required: [telemetrySyncAt]}, {required: [cameraSyncAt]}]}"))
+    (is (str/includes? openapi "          const: manual-anchor"))
+    (is (str/includes?
+         openapi
+         "          required: [telemetrySyncAt, cameraSyncAt]"))))
 
 (deftest specific-telemetry-causes-win-over-parser-wrappers
   (let [specific (ex-info "private telemetry value"

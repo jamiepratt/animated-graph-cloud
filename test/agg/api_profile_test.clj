@@ -40,6 +40,7 @@
   {:telemetryFormat "polar-csv"
    :telemetry (slurp (io/resource "fixtures/polar/valid.csv"))
    :preset "1080p25"
+   :synchronizationMode "manual-anchor"
    :telemetrySyncAt "2026-07-17T10:00:00Z"
    :cameraSyncAt "2026-07-17T09:00:00Z"
    :sectionStartAt "2026-07-17T09:00:00Z"

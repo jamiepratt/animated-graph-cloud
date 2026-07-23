@@ -1175,6 +1175,7 @@
                       :telemetry telemetry
                       :preset "1080p25"
                       :futureTraceOpacityPercent 50
+                      :synchronizationMode "manual-anchor"
                       :telemetrySyncAt "2026-07-17T10:00:00Z"
                       :cameraSyncAt "2026-07-17T09:00:00Z"
                       :sectionStartAt "2026-07-17T09:00:00Z"

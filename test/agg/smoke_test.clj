@@ -42,10 +42,9 @@
               {:telemetryFormat "polar-csv"
                :telemetry (slurp (io/resource "fixtures/polar/valid.csv"))
                :preset "1080p25"
-               :telemetrySyncAt "2026-07-17T10:00:00Z"
-               :cameraSyncAt "2026-07-17T09:00:00Z"
-               :sectionStartAt "2026-07-17T09:00:00Z"
-               :sectionEndAt "2026-07-17T09:00:02Z"
+               :synchronizationMode "shared-clock"
+               :sectionStartAt "2026-07-17T10:00:00Z"
+               :sectionEndAt "2026-07-17T10:00:02Z"
                :displayTimeZone "Europe/Warsaw"})]
     (try
       (let [response (test-http/send-string!
@@ -102,6 +101,7 @@
               {:telemetryFormat "polar-csv"
                :telemetry (slurp (io/resource "fixtures/polar/valid.csv"))
                :preset "1080p25"
+               :synchronizationMode "manual-anchor"
                :telemetrySyncAt "2026-07-17T10:00:00Z"
                :cameraSyncAt "2026-07-17T09:00:00Z"
                :sectionStartAt "2026-07-17T09:00:00Z"
