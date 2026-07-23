@@ -692,7 +692,7 @@
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
          "const links=[...document.querySelectorAll('.contextual-help')],styles=[...document.querySelectorAll('style')].map(node=>node.textContent).join(''),declaredFocus=styles.includes(':focus,:focus-visible{outline:3px solid var(--color-warning)');"
-         "const presentations=links.map(link=>{link.focus({focusVisible:true});const rect=link.getBoundingClientRect(),style=getComputedStyle(link),wrapper=link.closest('.help-heading,.help-label,.toggle-help'),associated=wrapper?.querySelector(':scope>h1,:scope>h2,:scope>h3,:scope>label,:scope>strong,:scope>.toggle'),associatedRect=associated?.getBoundingClientRect(),mark=link.querySelector('.contextual-help-mark'),markRect=mark?.getBoundingClientRect(),computedFocus=style.outlineStyle!=='none'&&parseFloat(style.outlineWidth)>=3,overlapsSibling=wrapper?[...wrapper.children].some(node=>{if(node===link)return false;const siblingRect=node.getBoundingClientRect();return rect.left<siblingRect.right&&rect.right>siblingRect.left&&rect.top<siblingRect.bottom&&rect.bottom>siblingRect.top;}):true;return {href:link.getAttribute('href'),name:link.getAttribute('aria-label'),target:link.getAttribute('target'),text:link.textContent.trim(),symbolHidden:link.querySelector('[aria-hidden=\"true\"]')?.textContent==='?',width:rect.width,height:rect.height,markWidth:markRect?.width??null,markHeight:markRect?.height??null,associatedFontSize:associated?parseFloat(getComputedStyle(associated).fontSize):null,aligned:!!markRect&&!!associatedRect&&Math.abs((markRect.top+markRect.bottom-associatedRect.top-associatedRect.bottom)/2)<=1,fits:rect.left>=-.5&&rect.right<=window.innerWidth+.5,visible:style.display!=='none'&&style.visibility!=='hidden',keyboardReachable:link.tabIndex>=0,focusVisible:computedFocus||declaredFocus,associated:!!associated,overlapsSibling,insideLabel:!!link.closest('label')};});"
+         "const presentations=links.map(link=>{link.focus({focusVisible:true});const rect=link.getBoundingClientRect(),style=getComputedStyle(link),wrapper=link.closest('.help-heading,.help-label,.toggle-help'),wrapperRect=wrapper?.getBoundingClientRect(),associated=wrapper?.querySelector(':scope>h1,:scope>h2,:scope>h3,:scope>label,:scope>strong,:scope>.toggle'),associatedRect=associated?.getBoundingClientRect(),mark=link.querySelector('.contextual-help-mark'),markRect=mark?.getBoundingClientRect(),centerDelta=markRect&&associatedRect?Math.abs((markRect.top+markRect.bottom-associatedRect.top-associatedRect.bottom)/2):null,computedFocus=style.outlineStyle!=='none'&&parseFloat(style.outlineWidth)>=3,overlapsSibling=wrapper?[...wrapper.children].some(node=>{if(node===link)return false;const siblingRect=node.getBoundingClientRect();return rect.left<siblingRect.right&&rect.right>siblingRect.left&&rect.top<siblingRect.bottom&&rect.bottom>siblingRect.top;}):true;return {href:link.getAttribute('href'),name:link.getAttribute('aria-label'),target:link.getAttribute('target'),text:link.textContent.trim(),symbolHidden:link.querySelector('[aria-hidden=\"true\"]')?.textContent==='?',width:rect.width,height:rect.height,markWidth:markRect?.width??null,markHeight:markRect?.height??null,associatedWidth:associatedRect?.width??null,associatedHeight:associatedRect?.height??null,wrapperWidth:wrapperRect?.width??null,wrapperContained:!!wrapper&&wrapper.scrollWidth<=wrapper.clientWidth+.5,associatedFontSize:associated?parseFloat(getComputedStyle(associated).fontSize):null,centerDelta,aligned:centerDelta!==null&&centerDelta<=1,fits:rect.left>=-.5&&rect.right<=window.innerWidth+.5,visible:style.display!=='none'&&style.visibility!=='hidden',keyboardReachable:link.tabIndex>=0,focusVisible:computedFocus||declaredFocus,associated:!!associated,overlapsSibling,insideLabel:!!link.closest('label')};});"
          "outcome={presentations,viewportWidth:window.innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth,hoverStyled:styles.includes('.contextual-help:hover .contextual-help-mark{background:var(--color-accent);border-color:var(--color-accent)}')};"
          "}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
          "</script>")
@@ -1113,6 +1113,11 @@
                           :tokens []
                           :members []
                           :logs-enabled? false})
+        wider-font-compose
+        (str/replace-first
+         compose
+         "</style>"
+         ".toggle-help>.toggle{letter-spacing:.02em}</style>")
         expected-homepage [["/faq#generated-heartbeat-sound"
                             "Learn about generated heartbeat audio"]]
         expected-compose [["/faq#google-drive-access"
@@ -1140,6 +1145,9 @@
                    expected-compose]
                   "compose mobile"
                   [(contextual-help-browser-outcome compose "390,844")
+                   expected-compose]
+                  "compose mobile with wider font metrics"
+                  [(contextual-help-browser-outcome wider-font-compose "390,844")
                    expected-compose]}]
     (doseq [[surface [outcome expected]] surfaces]
       (testing surface
@@ -1165,6 +1173,7 @@
                          0.85)
                     (:presentations outcome)))
         (is (every? :aligned (:presentations outcome)))
+        (is (every? :wrapperContained (:presentations outcome)))
         (is (not-any? :overlapsSibling (:presentations outcome)))
         (is (not-any? :insideLabel (:presentations outcome)))
         (is (every? :fits (:presentations outcome)))
