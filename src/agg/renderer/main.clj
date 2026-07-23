@@ -222,8 +222,8 @@
         preset (spec/preset preset-id)
         duration-option (get options "--duration-seconds")
         duration (when duration-option
-                   (or (parse-long duration-option)
-                       (throw (errors/raise! "Duration must be an integer"
+                   (or (parse-double duration-option)
+                       (throw (errors/raise! "Duration must be a number"
                                              {:type ::invalid-duration}))))
         output-option (get options "--output")
         output-path (or (path output-option)

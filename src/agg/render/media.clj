@@ -144,19 +144,29 @@
     (format "scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1"
             width height width height)))
 
+(defn- ffmpeg-seconds [seconds]
+  (Double/toString (double (or seconds 0))))
+
 (defn composite-command
   "Returns the bounded FFmpeg command shape used by the compositing path."
   [ffmpeg render-spec heartbeat-path overlay-pipe output-path]
   (let [{:keys [width height fps duration-seconds output-format audio-mode]} render-spec
-        video-filter (str "[0:v]" (fit-filter render-spec) "[base];"
+        trim-seconds
+        (ffmpeg-seconds
+         (get-in render-spec [:source-video :trim-offset-seconds]))
+        video-filter (str "[0:v]trim=start=" trim-seconds
+                          ",setpts=PTS-STARTPTS,"
+                          (fit-filter render-spec) "[base];"
                           "[1:v]format=rgba[overlay];"
                           "[base][overlay]overlay=0:0:format=auto:eof_action=endall[v]")
         audio-filter (case audio-mode
                        "heartbeat-only"
                        "[2:a]aformat=sample_rates=48000:channel_layouts=stereo,aresample=48000,alimiter=limit=0.95[a]"
                        "source-only"
-                       "[0:a]aformat=sample_rates=48000:channel_layouts=stereo,aresample=48000,alimiter=limit=0.95[a]"
-                       (str "[0:a]aformat=sample_rates=48000:channel_layouts=stereo,aresample=48000,volume=0.5[src];"
+                       (str "[0:a]atrim=start=" trim-seconds
+                            ",asetpts=PTS-STARTPTS,aformat=sample_rates=48000:channel_layouts=stereo,aresample=48000,alimiter=limit=0.95[a]")
+                       (str "[0:a]atrim=start=" trim-seconds
+                            ",asetpts=PTS-STARTPTS,aformat=sample_rates=48000:channel_layouts=stereo,aresample=48000,volume=0.5[src];"
                             "[2:a]aformat=sample_rates=48000:channel_layouts=stereo,aresample=48000,volume=1.0[beat];"
                             "[src][beat]amix=inputs=2:duration=longest:dropout_transition=0,alimiter=limit=0.95[a]"))
         video-args (case output-format
@@ -181,7 +191,7 @@
            "-filter_complex" (str video-filter ";" audio-filter)
            "-map" "[v]"
            "-map" "[a]"
-           "-t" (str duration-seconds)
+           "-t" (ffmpeg-seconds duration-seconds)
            "-r" (str fps)
            "-ar" "48000"
            "-ac" "2"
@@ -193,8 +203,11 @@
   "Returns one bounded source-decode command for all selected output frames."
   [ffmpeg render-spec frame-indexes overlay-path]
   (let [{:keys [width height fps]} render-spec
+        trim-frames
+        (get-in render-spec [:source-video :trim-offset-frames] 0)
+        source-frame-indexes (mapv #(+ trim-frames %) frame-indexes)
         selection (str/join "+" (map #(format "eq(n\\,%d)" %)
-                                     frame-indexes))
+                                     source-frame-indexes))
         video-filter
         (str "[0:v]" (fit-filter render-spec) ",fps=" fps
              ",select='" selection "',setpts=N/(" fps "*TB)[base];"

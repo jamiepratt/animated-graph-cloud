@@ -141,6 +141,13 @@
   (when-not condition
     (throw (errors/raise! message data))))
 
+(def ^:private nanos-per-second 1000000000)
+
+(defn- whole-frame-count [duration-nanos fps]
+  (let [scaled (* duration-nanos fps)]
+    (when (zero? (rem scaled nanos-per-second))
+      (quot scaled nanos-per-second))))
+
 (defn- iana-time-zone [value field]
   (require! (and (string? value)
                  (not (str/blank? value))
@@ -355,7 +362,16 @@
           timer-start (when timer (instant (:startAt timer) :timerStartAt))
           timer-end (when timer (instant (:endAt timer) :timerEndAt))
           duration-nanos (.toNanos (Duration/between section-start section-end))
-          duration-seconds (/ duration-nanos 1000000000)
+          duration-frames (whole-frame-count duration-nanos
+                                             (:fps render-preset))
+          source-trim-nanos
+          (when source-clock
+            (.toNanos
+             (Duration/between (:recording-start-at source-clock)
+                               section-start)))
+          source-trim-frames
+          (when (and source-trim-nanos (not (neg? source-trim-nanos)))
+            (whole-frame-count source-trim-nanos (:fps render-preset)))
           telemetry-start
           (if (= "shared-clock" synchronization-mode)
             section-start
@@ -383,12 +399,23 @@
                   "Timestamps must be ordered sectionStartAt < sectionEndAt"
                   "Timestamps must be ordered cameraSyncAt <= sectionStartAt < sectionEndAt")
                 {:type ::invalid-timestamp-order})
-      (require! (zero? (rem duration-nanos 1000000000))
-                "Section duration must be a whole number of seconds"
+      (require! duration-frames
+                "Section duration must be a whole number of 25 fps frames"
                 {:type ::fractional-duration})
-      (require! (<= duration-seconds (:duration-seconds render-preset))
+      (require! (<= duration-frames
+                    (* (:fps render-preset)
+                       (:duration-seconds render-preset)))
                 "Section duration exceeds the preset maximum"
                 {:type ::duration-too-long})
+      (when source-clock
+        (require! (not (neg? source-trim-nanos))
+                  "sectionStartAt cannot precede sourceVideo.recordingStartAt"
+                  {:type ::negative-source-trim
+                   :field "sectionStartAt"})
+        (require! source-trim-frames
+                  "sectionStartAt must select an exact 25 fps source frame"
+                  {:type ::fractional-source-trim
+                   :field "sectionStartAt"}))
       (when timer
         (require! (and (not (.isBefore timer-start section-start))
                        (.isBefore timer-start timer-end)
@@ -415,7 +442,7 @@
                   "SpO2 telemetry does not cover the requested section"
                   {:type ::insufficient-spo2-coverage
                    :field "spo2.telemetry"}))
-      (cond-> (assoc (spec/with-duration render-preset duration-seconds)
+      (cond-> (assoc (spec/with-frame-duration render-preset duration-frames)
                      :synchronization-mode synchronization-mode
                      :future-trace-opacity-percent
                      future-trace-opacity-percent
@@ -429,7 +456,11 @@
 
         sourceVideo
         (assoc :source-video
-               (assoc source-clock :file-id (:fileId sourceVideo)))
+               (assoc source-clock
+                      :file-id (:fileId sourceVideo)
+                      :trim-offset-frames source-trim-frames
+                      :trim-offset-seconds
+                      (/ source-trim-frames (:fps render-preset))))
 
         sourceVideoServerMetadata
         (attach-source-metadata sourceVideoServerMetadata)
@@ -452,7 +483,18 @@
 (defn attach-source-metadata
   "Attaches metadata fetched from Drive; request-supplied metadata is ignored."
   [render-spec {:keys [id name mimeType size trashed] :as metadata}]
-  (let [file-id (get-in render-spec [:source-video :file-id])]
+  (let [file-id (get-in render-spec [:source-video :file-id])
+        duration-millis
+        (try
+          (some-> (get-in metadata [:videoMediaMetadata :durationMillis])
+                  str
+                  parse-long)
+          (catch Throwable _ nil))
+        selected-end-millis
+        (when (number? (:duration-seconds render-spec))
+          (* 1000
+             (+ (get-in render-spec [:source-video :trim-offset-seconds] 0)
+                (:duration-seconds render-spec))))]
     (require! (and file-id
                    (= file-id id)
                    (string? name)
@@ -468,6 +510,13 @@
               {:type ::source-too-large
                :limit max-source-bytes
                :size size})
+    (when (and duration-millis selected-end-millis
+               (not (neg? duration-millis)))
+      (require! (<= selected-end-millis duration-millis)
+                "sectionEndAt exceeds the known source video duration"
+                {:type ::source-range-too-long
+                 :field "sectionEndAt"
+                 :limit duration-millis}))
     (update render-spec :source-video
             merge
             {:metadata

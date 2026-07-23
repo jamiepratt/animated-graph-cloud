@@ -140,7 +140,9 @@
                                "futureTraceOpacityPercent"
                                "synchronizationMode"
                                "telemetrySyncAt"
-                               "cameraSyncAt"} field)
+                               "cameraSyncAt"
+                               "sectionStartAt"
+                               "sectionEndAt"} field)
               field)))
         (error-data error)))
 
@@ -213,7 +215,8 @@
 
 (defn- preview-failure [error request-id]
   (let [types (error-types error)
-        contract? (contains? types ::invalid-request)
+        contract? (or (contains? types ::invalid-request)
+                      (contains? types ::contract/source-range-too-long))
         invalid-source? (contains? types ::contract/invalid-source-metadata)
         source-metadata? (or invalid-source?
                              (contains? types
@@ -2011,6 +2014,12 @@
                   ::contract/source-too-large
                   (respond-json! exchange 413 {:error "source_video_too_large"
                                                :limit contract/max-source-bytes})
+
+                  ::contract/source-range-too-long
+                  (if (preview-path? path)
+                    (respond-preview-failure! dependencies exchange request-id error)
+                    (respond-json! exchange 400 {:error "invalid_request"
+                                                 :field "sectionEndAt"}))
 
                   ::contract/invalid-source-metadata
                   (if (preview-path? path)

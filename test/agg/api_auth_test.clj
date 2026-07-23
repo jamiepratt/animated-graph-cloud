@@ -1264,7 +1264,7 @@
                                    :sourceVideo
                                    {:fileId "crafted-file-id"
                                     :recordingStartAt
-                                    "2026-07-23T12:30:15Z"
+                                    "2026-07-17T09:00:00Z"
                                     :timeZone "Europe/Warsaw"})
                             {"Content-Type" "application/json"
                              "Idempotency-Key" "crafted-source"
@@ -1272,6 +1272,47 @@
                              "X-CSRF-Token" csrf})]
         (is (= 400 (.statusCode response)))
         (is (= {"error" "invalid_source_video"}
+               (json/read-str (.body response))))
+        (is (empty? (:jobs @(:state lifecycle)))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest selected-source-range-must-fit-authoritative-duration
+  (let [port (available-port)
+        lifecycle (jobs/in-memory-system)
+        {:keys [system session]} (auth-fixture)
+        source-gateway
+        (reify drive/SourceGateway
+          (source-metadata! [_ _ file-id]
+            {:id file-id
+             :name "short.mp4"
+             :mimeType "video/mp4"
+             :size 1024
+             :trashed false
+             :videoMediaMetadata {:durationMillis "1000"}})
+          (stream-source! [_ _ _ _]
+            (throw (AssertionError. "Rejected source must not stream"))))
+        auth-system (assoc system :drive source-gateway)
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        server (start-api! port {:auth-system auth-system
+                                 :job-service (:service lifecycle)})]
+    (try
+      (let [response
+            (post! port "/v1/jobs"
+                   (assoc (fixture/render-request)
+                          :sectionEndAt "2026-07-17T09:00:01.040Z"
+                          :sourceVideo
+                          {:fileId "short-source"
+                           :recordingStartAt "2026-07-17T09:00:00Z"
+                           :timeZone "Europe/Warsaw"})
+                   {"Content-Type" "application/json"
+                    "Idempotency-Key" "short-source-range"
+                    "Cookie" (str "agg_session=" session)
+                    "X-CSRF-Token" csrf})]
+        (is (= 400 (.statusCode response)))
+        (is (= {"error" "invalid_request"
+                "field" "sectionEndAt"}
                (json/read-str (.body response))))
         (is (empty? (:jobs @(:state lifecycle)))))
       (finally

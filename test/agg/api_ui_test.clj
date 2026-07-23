@@ -316,7 +316,9 @@
          "(async()=>{let outcome;try{"
          "const state=window.__playerState;state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'private-mp4',name:'ride.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120\\n2026-07-17T10:00:02Z,124';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02']].forEach(([id,value])=>document.getElementById(id).value=value);document.getElementById('video-timezone').value='+02:00';document.getElementById('confirm-video-clock').click();const fixedOffsetRejected={confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,status:document.getElementById('video-clock-status').textContent};document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();"
          "const player=document.getElementById('video-player'),video=document.getElementById('source-video-player'),timeline=document.getElementById('video-timeline'),fit=document.getElementById('fit-mode'),play=document.getElementById('video-play-pause');video.__duration=125.5;video.dispatchEvent(new Event('loadedmetadata'));video.dispatchEvent(new Event('progress'));"
+         "const outputStart=document.getElementById('output-start-handle'),outputEnd=document.getElementById('output-end-handle'),initialRange={start:outputStart.getAttribute('aria-valuenow'),end:outputEnd.getAttribute('aria-valuenow'),startField:document.getElementById('section-start-at').value,endField:document.getElementById('section-end-at').value,unusedBefore:document.getElementById('video-unused-before').getBoundingClientRect().width,unusedAfter:document.getElementById('video-unused-after').getBoundingClientRect().width};"
          "const generatedRequest=JSON.parse(document.getElementById('render-request').value),initial={hidden:player.hidden,paused:video.paused,currentTime:video.currentTime,playCalls:state.playCalls,src:video.getAttribute('src'),selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,time:document.getElementById('video-time').textContent,timelineMax:timeline.getAttribute('aria-valuemax'),timelineValueText:timeline.getAttribute('aria-valuetext'),bufferedSegments:document.querySelectorAll('#video-buffered-ranges span').length,fit:getComputedStyle(video).objectFit,request:state.sessionRequests[0],inspectionRequest:state.inspectionRequests[0],clock:{start:document.getElementById('video-recording-start').value,zone:document.getElementById('video-timezone').value,confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,candidates:document.querySelectorAll('#video-clock-candidates input').length,summary:document.getElementById('video-source-summary').textContent,request:generatedRequest.sourceVideo}};"
+         "document.getElementById('timer-enabled').click();document.getElementById('timer-start-at').value='2026-07-23T21:59:50';document.getElementById('timer-end-at').value='2026-07-23T22:01:10';const rangeRect=timeline.getBoundingClientRect();outputStart.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:rangeRect.left+rangeRect.width*.5,pointerId:7}));outputStart.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:rangeRect.left+rangeRect.width*.5,pointerId:7}));const clampedStart=outputStart.getAttribute('aria-valuenow'),timerStartMessage=document.getElementById('video-range-status').textContent;outputStart.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'ArrowLeft'}));const keyboardStart={value:outputStart.getAttribute('aria-valuenow'),field:document.getElementById('section-start-at').value,highlighted:document.getElementById('section-start-at').classList.contains('range-receiver')};outputEnd.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:rangeRect.left+rangeRect.width*.5,pointerId:8}));outputEnd.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:rangeRect.left+rangeRect.width*.5,pointerId:8}));const timerRange={clampedStart,clampedEnd:outputEnd.getAttribute('aria-valuenow'),startMessage:timerStartMessage,endMessage:document.getElementById('video-range-status').textContent,keyboardStart};"
          "const shortcutHints=[...document.querySelectorAll('.video-control')].map(control=>{const button=control.querySelector('button'),hint=control.querySelector('.video-shortcut'),before=control.getBoundingClientRect();button.focus();const after=control.getBoundingClientRect(),style=hint&&getComputedStyle(hint);return {name:button.getAttribute('aria-label')||button.textContent.trim(),keys:button.getAttribute('aria-keyshortcuts'),hint:hint?.textContent||null,focusVisible:style?.visibility==='visible'&&style?.opacity==='1',stable:before.width===after.width&&before.height===after.height};});"
          "fit.value='crop';fit.dispatchEvent(new Event('input',{bubbles:true}));const cropped=getComputedStyle(video).objectFit;"
          "document.querySelector('[data-seek-seconds=\"10\"]').click();document.querySelector('[data-seek-seconds=\"60\"]').click();document.querySelector('[data-seek-seconds=\"-10\"]').click();const transportTime=video.currentTime;"
@@ -331,9 +333,11 @@
          "const fullscreenEntryPrevented=press(document.body,'f'),fullscreenEntry={prevented:fullscreenEntryPrevented,request:state.fullscreenRequests.at(-1),elementId:document.fullscreenElement?.id||null,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),hint:fullscreenHint.textContent,hintVisible:hintVisible(),auto:fullscreenControl.classList.contains('shortcut-auto'),focusUnchanged:document.activeElement===forwardButton,completeChrome:!!chrome&&chrome.contains(document.getElementById('video-stage'))&&chrome.contains(document.querySelector('.video-transport'))&&chrome.contains(timeline),dockInside:chrome?.lastElementChild===dock,fullscreenLayout:getComputedStyle(chrome).display==='grid',dockVisible:!!dock&&dock.getBoundingClientRect().height>0,timelineVisible:timeline.getBoundingClientRect().height>0,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,timerCount:state.fullscreenTimers.length};"
          "state.fullscreenTimers.at(-1).callback();const afterFourSeconds={auto:fullscreenControl.classList.contains('shortcut-auto'),hintVisible:hintVisible()};fullscreen.focus();const focusedFullscreenHint={hint:fullscreenHint.textContent,visible:hintVisible()};forwardButton.focus();const fullscreenExitPrevented=press(document.body,'f'),fullscreenExit={prevented:fullscreenExitPrevented,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),elementId:document.fullscreenElement?.id||null,auto:fullscreenControl.classList.contains('shortcut-auto')};"
          "press(document.body,'f');const restartedTimer=state.fullscreenTimers.at(-1),escapePrevented=press(document.body,'Escape');state.fullscreenElement=null;document.dispatchEvent(new Event('fullscreenchange'));const browserExit={escapePrevented,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),auto:fullscreenControl.classList.contains('shortcut-auto'),timerCleared:restartedTimer.cleared};fullscreen.click();const buttonEntry={request:state.fullscreenRequests.at(-1),label:fullscreen.textContent};fullscreen.click();const buttonExit={exitCount:state.fullscreenExits,label:fullscreen.textContent};"
-         "video.dispatchEvent(new Event('error'));const disabledStart=video.currentTime,disabledSeekPrevented=press(document.body,'ArrowRight'),requestsBeforeDisabledF=state.fullscreenRequests.length,disabledFullscreenPrevented=press(document.body,'f'),unsupported={selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,message:document.getElementById('video-player-status').textContent,disabledStart,disabledSeekPrevented,afterDisabledSeek:video.currentTime,disabledFullscreenPrevented,fullscreenRequestsUnchanged:state.fullscreenRequests.length===requestsBeforeDisabledF};"
-         "const rawRequest={...generatedRequest,sourceVideo:{fileId:'raw-video',recordingStartAt:'2026-10-25T00:30:00Z',timeZone:'Europe/Warsaw'}};document.getElementById('raw-json').value=JSON.stringify(rawRequest);document.getElementById('apply-json').click();const rawRestored={fileId:document.getElementById('source-video-file-id').value,start:document.getElementById('video-recording-start').value,zone:document.getElementById('video-timezone').value,confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,request:JSON.parse(document.getElementById('render-request').value).sourceVideo,status:document.getElementById('json-status').textContent};"
-         "outcome={initial,fixedOffsetRejected,shortcutHints,cropped,transportTime,scrubTime,keyboardTime,hover,playing,paused,shortcuts:{shortcutStart,rightPrevented,afterRight,shiftRightPrevented,afterShiftRight,leftPrevented,afterLeft,shiftLeftPrevented,afterShiftLeft,spacePrevented,afterSpacePaused,pausedAfterSecondSpace:video.paused},exclusions:{editableChecks,modifiedChecks,focusedButtonPrevented,afterFocusedButtonKey,afterFocusedButtonClick,hiddenStart,hiddenPrevented,afterHidden},fullscreen:{entry:fullscreenEntry,afterFourSeconds,focusedHint:focusedFullscreenHint,exit:fullscreenExit,browserExit,buttonEntry,buttonExit},unsupported,rawRestored,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+         "video.dispatchEvent(new Event('error'));const disabledStart=video.currentTime,disabledSeekPrevented=press(document.body,'ArrowRight'),requestsBeforeDisabledF=state.fullscreenRequests.length,disabledFullscreenPrevented=press(document.body,'f'),unsupported={selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,message:document.getElementById('video-player-status').textContent,disabledStart,disabledSeekPrevented,afterDisabledSeek:video.currentTime,disabledFullscreenPrevented,fullscreenRequestsUnchanged:state.fullscreenRequests.length===requestsBeforeDisabledF,range:[outputStart.getAttribute('aria-valuenow'),outputEnd.getAttribute('aria-valuenow')]};"
+         "const applyRawStatus=request=>{document.getElementById('raw-json').value=JSON.stringify(request);document.getElementById('apply-json').click();return document.getElementById('json-status').textContent;},invalidFrameStatus=applyRawStatus({...generatedRequest,sectionEndAt:new Date(Date.parse(generatedRequest.sectionStartAt)+1020).toISOString()}),negativeTrimStatus=applyRawStatus({...generatedRequest,sourceVideo:{...generatedRequest.sourceVideo,recordingStartAt:new Date(Date.parse(generatedRequest.sectionStartAt)+40).toISOString()}}),fractionalTrimStatus=applyRawStatus({...generatedRequest,sourceVideo:{...generatedRequest.sourceVideo,recordingStartAt:new Date(Date.parse(generatedRequest.sectionStartAt)-20).toISOString()}});"
+         "const rawRequest={...generatedRequest,telemetrySyncAt:'2026-10-24T00:20:00Z',cameraSyncAt:'2026-10-24T00:30:05Z',sectionStartAt:'2026-10-24T00:30:10Z',sectionEndAt:'2026-10-24T00:30:20Z',timer:{startAt:'2026-10-24T00:30:12Z',endAt:'2026-10-24T00:30:18Z'},sourceVideo:{fileId:'raw-video',recordingStartAt:'2026-10-24T00:30:00Z',timeZone:'Europe/Warsaw'}};document.getElementById('raw-json').value=JSON.stringify(rawRequest);document.getElementById('apply-json').click();const rawRestored={fileId:document.getElementById('source-video-file-id').value,start:document.getElementById('video-recording-start').value,zone:document.getElementById('video-timezone').value,confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,request:JSON.parse(document.getElementById('render-request').value).sourceVideo,status:document.getElementById('json-status').textContent,range:[outputStart.getAttribute('aria-valuenow'),outputEnd.getAttribute('aria-valuenow')]};"
+         "document.getElementById('video-recording-start').value='2026-10-24T02:31';document.getElementById('confirm-video-clock').click();const shiftedRequest=JSON.parse(document.getElementById('render-request').value),clockCorrection={recordingStartAt:shiftedRequest.sourceVideo.recordingStartAt,telemetrySyncAt:shiftedRequest.telemetrySyncAt,cameraSyncAt:shiftedRequest.cameraSyncAt,sectionStartAt:shiftedRequest.sectionStartAt,sectionEndAt:shiftedRequest.sectionEndAt,timer:shiftedRequest.timer};"
+         "outcome={initial,initialRange,timerRange,invalidFrameStatus,negativeTrimStatus,fractionalTrimStatus,fixedOffsetRejected,shortcutHints,cropped,transportTime,scrubTime,keyboardTime,hover,playing,paused,shortcuts:{shortcutStart,rightPrevented,afterRight,shiftRightPrevented,afterShiftRight,leftPrevented,afterLeft,shiftLeftPrevented,afterShiftLeft,spacePrevented,afterSpacePaused,pausedAfterSecondSpace:video.paused},exclusions:{editableChecks,modifiedChecks,focusedButtonPrevented,afterFocusedButtonKey,afterFocusedButtonClick,hiddenStart,hiddenPrevented,afterHidden},fullscreen:{entry:fullscreenEntry,afterFourSeconds,focusedHint:focusedFullscreenHint,exit:fullscreenExit,browserExit,buttonEntry,buttonExit},unsupported,rawRestored,clockCorrection,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
          "</script>")
         html (-> page
@@ -1792,6 +1796,14 @@
                       "aria-label=\"Video clock timeline\""
                       "id=\"video-buffered-ranges\""
                       "id=\"video-playhead\""
+                      "id=\"video-output-range\""
+                      "id=\"video-unused-before\""
+                      "id=\"video-unused-after\""
+                      "id=\"output-start-handle\""
+                      "id=\"output-end-handle\""
+                      "aria-label=\"Output start\""
+                      "aria-label=\"Output end\""
+                      "id=\"video-range-status\""
                       "id=\"video-timeline-tooltip\""
                       "aria-keyshortcuts=\"Shift+ArrowLeft\""
                       "aria-keyshortcuts=\"ArrowLeft\""
@@ -1826,6 +1838,30 @@
                   (video-player-browser-outcome page "390,844")]]
     (doseq [outcome outcomes]
       (is (nil? (:error outcome)) outcome)
+      (is (= {:start "0"
+              :end "125.48"
+              :startField "2026-07-23T21:59:30"
+              :endField "2026-07-23T22:01:35.48"
+              :unusedBefore 0}
+             (dissoc (:initialRange outcome) :unusedAfter)))
+      (is (pos? (get-in outcome [:initialRange :unusedAfter])))
+      (is (= {:clampedStart "20"
+              :clampedEnd "100"
+              :startMessage
+              "Move or disable the timer before excluding it from the output."
+              :endMessage
+              "Move or disable the timer before excluding it from the output."
+              :keyboardStart
+              {:value "19.96"
+               :field "2026-07-23T21:59:49.96"
+               :highlighted true}}
+             (:timerRange outcome)))
+      (is (str/includes? (:invalidFrameStatus outcome)
+                         "whole 25 fps frames"))
+      (is (str/includes? (:negativeTrimStatus outcome)
+                         "cannot precede sourceVideo.recordingStartAt"))
+      (is (str/includes? (:fractionalTrimStatus outcome)
+                         "whole 25 fps source frame"))
       (is (= {:hidden false
               :paused true
               :currentTime 0
@@ -1998,23 +2034,34 @@
               :disabledSeekPrevented false
               :afterDisabledSeek 65.5
               :disabledFullscreenPrevented false
-              :fullscreenRequestsUnchanged true}
+              :fullscreenRequestsUnchanged true
+              :range ["19.96" "100"]}
              (select-keys (:unsupported outcome)
                           [:disabledStart
                            :disabledSeekPrevented
                            :afterDisabledSeek
                            :disabledFullscreenPrevented
-                           :fullscreenRequestsUnchanged])))
+                           :fullscreenRequestsUnchanged
+                           :range])))
       (is (= {:fileId "raw-video"
-              :start "2026-10-25T02:30"
+              :start "2026-10-24T02:30"
               :zone "Europe/Warsaw"
               :confirmed "true"
               :request
               {:fileId "raw-video"
-               :recordingStartAt "2026-10-25T00:30:00Z"
+               :recordingStartAt "2026-10-24T00:30:00Z"
                :timeZone "Europe/Warsaw"}
-              :status "JSON applied to the form."}
+              :status "JSON applied to the form."
+              :range ["10" "20"]}
              (:rawRestored outcome)))
+      (is (= {:recordingStartAt "2026-10-24T00:31:00.000Z"
+              :telemetrySyncAt "2026-10-24T00:20:00.000Z"
+              :cameraSyncAt "2026-10-24T00:31:05.000Z"
+              :sectionStartAt "2026-10-24T00:31:10.000Z"
+              :sectionEndAt "2026-10-24T00:31:20.000Z"
+              :timer {:startAt "2026-10-24T00:31:12.000Z"
+                      :endAt "2026-10-24T00:31:18.000Z"}}
+             (:clockCorrection outcome)))
       (is (:noHorizontalOverflow outcome) outcome))
     (is (= 1280 (:viewportWidth (first outcomes))))
     (is (<= (:viewportWidth (second outcomes)) 500))))
@@ -2500,13 +2547,13 @@
                         :requestedMomentCount 4
                         :generatedMomentCount 3
                         :omittedMomentCount 1
-                        :requestedDurationSeconds 20
+                        :requestedDurationSeconds 26/25
                         :retryable false}]))
         fragment (ui/preview-operation-fragment operation "generation-1")]
     (is (str/includes?
          fragment
          (str "We generated 3 of 4 preview frames. The selected video ends "
-              "before the 20-second section, so 1 later preview frame is "
+              "before the 1.04-second section, so 1 later preview frame is "
               "unavailable. Shorten the section or choose a longer video.")))
     (is (= 3 (count (re-seq #"class=\"preview-moment\"" fragment))))
     (is (= 3 (count (re-seq #"class=\"preview-open\"" fragment))))

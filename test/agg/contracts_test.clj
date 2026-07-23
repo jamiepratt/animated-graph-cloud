@@ -1,6 +1,7 @@
 (ns agg.contracts-test
   (:require [agg.contracts.render :as contract]
             [agg.drive.core :as drive]
+            [agg.render.spec :as spec]
             [agg.telemetry.garmin :as garmin]
             [agg.telemetry.polar :as polar]
             [agg.telemetry.timeline :as timeline]
@@ -461,10 +462,10 @@
     (is (= ::contract/duration-too-long
            (error-type (assoc (valid-request)
                               :sectionEndAt "2026-07-17T09:08:01Z")))))
-  (testing "whole-second duration"
+  (testing "whole-frame duration"
     (is (= ::contract/fractional-duration
            (error-type (assoc (valid-request)
-                              :sectionEndAt "2026-07-17T09:00:01.500Z")))))
+                              :sectionEndAt "2026-07-17T09:00:01.020Z")))))
   (testing "telemetry byte limit"
     (let [oversized (String. (byte-array (inc contract/max-telemetry-bytes))
                              StandardCharsets/US_ASCII)]
@@ -481,6 +482,60 @@
                               :timer {:startAt "2026-07-17T09:00:01Z"
                                       :endAt "2026-07-17T09:00:03Z"}))))))
 
+(deftest frame-accurate-source-range-compiles-to-output-and-trim-frames
+  (let [prepared
+        (contract/prepare
+         (assoc (valid-request)
+                :sectionEndAt "2026-07-17T09:00:01.040Z"
+                :sourceVideo
+                {:fileId "drive-video-1"
+                 :recordingStartAt "2026-07-17T08:59:59.960Z"
+                 :timeZone "Europe/Warsaw"}))]
+    (is (= 26 (:duration-frames prepared)))
+    (is (= 26 (spec/frame-count prepared)))
+    (is (= 26/25 (:duration-seconds prepared)))
+    (is (= 1 (get-in prepared [:source-video :trim-offset-frames])))
+    (is (= 1/25
+           (get-in prepared [:source-video :trim-offset-seconds])))))
+
+(deftest source-range-cannot-start-before-or-end-after-known-media
+  (let [source {:fileId "drive-video-1"
+                :recordingStartAt "2026-07-17T09:00:00Z"
+                :timeZone "Europe/Warsaw"}
+        metadata {:id "drive-video-1"
+                  :name "server-name.mp4"
+                  :mimeType "video/mp4"
+                  :size 1024
+                  :trashed false
+                  :videoMediaMetadata {:durationMillis "1040"}}]
+    (is (= ::contract/negative-source-trim
+           (error-type
+            (assoc (valid-request)
+                   :telemetrySyncAt "2026-07-17T10:00:00Z"
+                   :cameraSyncAt "2026-07-17T08:59:59.960Z"
+                   :sectionStartAt "2026-07-17T08:59:59.960Z"
+                   :sectionEndAt "2026-07-17T09:00:01Z"
+                   :sourceVideo source))))
+    (is (= ::contract/fractional-source-trim
+           (error-type
+            (assoc (valid-request)
+                   :sourceVideo
+                   (assoc source
+                          :recordingStartAt
+                          "2026-07-17T08:59:59.980Z")))))
+    (is (= ::contract/source-range-too-long
+           (error-type
+            (assoc (valid-request)
+                   :sectionEndAt "2026-07-17T09:00:01.080Z"
+                   :sourceVideo source
+                   :sourceVideoServerMetadata metadata))))
+    (is (map?
+         (contract/prepare
+          (assoc (valid-request)
+                 :sectionEndAt "2026-07-17T09:00:01.040Z"
+                 :sourceVideo source
+                 :sourceVideoServerMetadata metadata))))))
+
 (deftest source-video-is-an-id-only-client-input
   (let [prepared (contract/prepare
                   (assoc (valid-request)
@@ -488,11 +543,13 @@
                                        :name "client-filename.mp4"
                                        :mimeType "video/mp4"
                                        :recordingStartAt
-                                       "2026-07-23T12:30:15Z"
+                                       "2026-07-17T09:00:00Z"
                                        :timeZone "Europe/Warsaw"}))]
     (is (= {:file-id "drive-video-1"
-            :recording-start-at (Instant/parse "2026-07-23T12:30:15Z")
-            :time-zone (ZoneId/of "Europe/Warsaw")}
+            :recording-start-at (Instant/parse "2026-07-17T09:00:00Z")
+            :time-zone (ZoneId/of "Europe/Warsaw")
+            :trim-offset-frames 0
+            :trim-offset-seconds 0}
            (:source-video prepared)))
     (is (= {:output-format "h264-mp4"
             :fit-mode "letterbox"
@@ -503,10 +560,10 @@
   (doseq [[source expected-field]
           [[{:fileId "drive-video-1"} "sourceVideo.recordingStartAt"]
            [{:fileId "drive-video-1"
-             :recordingStartAt "2026-07-23T12:30:15Z"}
+             :recordingStartAt "2026-07-17T09:00:00Z"}
             "sourceVideo.timeZone"]
            [{:fileId "drive-video-1"
-             :recordingStartAt "2026-07-23T12:30:15Z"
+             :recordingStartAt "2026-07-17T09:00:00Z"
              :timeZone "+02:00"}
             "sourceVideo.timeZone"]
            [{:fileId "drive-video-1"
@@ -523,7 +580,7 @@
   (let [prepared (contract/prepare
                   (assoc (valid-request)
                          :sourceVideo {:fileId "drive-video-1"
-                                       :recordingStartAt "2026-07-23T12:30:15Z"
+                                       :recordingStartAt "2026-07-17T09:00:00Z"
                                        :timeZone "Europe/Warsaw"}))]
     (is (= ::contract/source-too-large
            (try
@@ -542,7 +599,7 @@
   (let [prepared (contract/prepare
                   (assoc (valid-request)
                          :sourceVideo {:fileId "drive-video-1"
-                                       :recordingStartAt "2026-07-23T12:30:15Z"
+                                       :recordingStartAt "2026-07-17T09:00:00Z"
                                        :timeZone "Europe/Warsaw"}))
         metadata (fn [mime-type]
                    {:id "drive-video-1"
@@ -556,7 +613,7 @@
                       prepared (metadata mime-type))
                      [:source-video :metadata :mimeType]))
           mime-type))
-    (is (= (Instant/parse "2026-07-23T12:30:15Z")
+    (is (= (Instant/parse "2026-07-17T09:00:00Z")
            (get-in (contract/attach-source-metadata
                     prepared (metadata "video/mp4"))
                    [:source-video :recording-start-at])))

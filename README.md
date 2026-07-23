@@ -153,7 +153,7 @@ The render JSON fields are:
 | `displayTimeZone` | Yes | Known IANA timezone identifier such as `Europe/Warsaw` or `UTC`; no missing, blank, offset, unknown, or server-local fallback |
 | `synchronizationMode` | Yes | `shared-clock` when camera and activity devices used the same clock, or `manual-anchor` when their clocks differed |
 | `telemetrySyncAt`, `cameraSyncAt` | With `manual-anchor` only | Both required for `manual-anchor`; both forbidden for `shared-clock`; ISO-8601 instants with `Z` or an explicit UTC offset |
-| `sectionStartAt`, `sectionEndAt` | Yes | ISO-8601 instants with `Z` or an explicit UTC offset |
+| `sectionStartAt`, `sectionEndAt` | Yes | ISO-8601 instants with `Z` or an explicit UTC offset; output duration and source-relative boundaries must land on 25 fps frames (40 ms) |
 | `spo2` | No | `{ "format": "oxiwear-spo2-csv", "telemetry": "..." }`; CSV is limited to 10 MiB |
 | `timer` | No | `{ "startAt": "...", "endAt": "..." }`, within the requested section |
 | `watermark` | No | `{ "contentBase64": "..." }`, a valid PNG up to 2 MiB and 1024×1024 pixels |
@@ -166,7 +166,8 @@ Timestamps are ISO-8601 instants. `displayTimeZone` affects only the rendered
 camera clock and never reinterprets synchronization, section, or timer values.
 The browser's `My browser timezone` option resolves to its IANA identifier in
 the submitted JSON. Missing, blank, offset-only, and unknown display zones are
-rejected. Section end must follow section start by a whole number of seconds.
+rejected. Section end must follow section start by a whole number of 25 fps
+frames, so the duration advances in exact 40 ms steps.
 In `manual-anchor` mode, `cameraSyncAt` must not follow the section, and the
 anchor offset maps the camera section onto activity-data time.
 In `shared-clock` mode, activity timestamps align directly to `sectionStartAt`
@@ -266,7 +267,13 @@ requests or uses Drive `createdTime`. Explicit-offset container candidates are
 preferred, conflicts remain visible, and missing or untrustworthy metadata
 falls back to manual entry. The user must confirm both the editable start and a
 valid IANA video timezone. The confirmed instant controls only the full-source
-editor clock; rendered graph axes remain timer- or section-relative.
+editor clock; rendered graph axes remain timer- or section-relative. Output
+start and end handles select exact 25 fps frames while the complete source
+remains playable. The source trim is `sectionStartAt - recordingStartAt`, cannot
+be negative, and the selected end cannot exceed known source duration. FFmpeg
+decodes and discards preceding non-seekable source frames in memory; source
+bytes are never persisted. Video, source audio, heartbeat audio, and selected
+preview frames use the same output interval.
 Supported outputs are H.264 MP4 (default) and ProRes 422 MOV. Fit defaults to
 letterbox/pillarbox; audio defaults to source plus bounded heartbeat mix, with
 source-only and heartbeat-only modes also available.
