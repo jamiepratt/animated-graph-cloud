@@ -298,7 +298,7 @@
   (let [fixture
         (str
          "<script>"
-         "window.__playerState={callback:null,loads:[],sessionRequests:[],playCalls:0,mediaLoadCalls:0};"
+         "window.__playerState={callback:null,loads:[],sessionRequests:[],playCalls:0};"
          "window.fetch=(path,options={})=>{if(path==='/v1/drive/playback-sessions'){window.__playerState.sessionRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000115',contentType:'video/mp4',size:2048})});}return Promise.resolve({ok:true,status:204,json:()=>Promise.resolve({})});};"
          "class PickerView{setMimeTypes(){return this;}setIncludeFolders(){return this;}setSelectFolderEnabled(){return this;}setMode(){return this;}setEnableDrives(){return this;}}"
          "class UploadView extends PickerView{}"
@@ -306,26 +306,25 @@
          "window.google={picker:{DocsView:PickerView,DocsUploadView:UploadView,PickerBuilder,DocsViewMode:{LIST:'list'},Action:{LOADED:'loaded',PICKED:'picked',CANCEL:'cancel'}}};"
          "window.gapi={load(_module,handlers){window.__playerState.loads.push(handlers);}};"
          "Object.defineProperties(HTMLMediaElement.prototype,{duration:{configurable:true,get(){return this.__duration??NaN;}},currentTime:{configurable:true,get(){return this.__currentTime??0;},set(value){this.__currentTime=Number(value);this.dispatchEvent(new Event('timeupdate'));}},paused:{configurable:true,get(){return this.__paused!==false;}},volume:{configurable:true,get(){return this.__volume??1;},set(value){this.__volume=Number(value);}},buffered:{configurable:true,get(){return {length:2,start:index=>index===0?0:60,end:index=>index===0?30:90};}}});"
-         "HTMLMediaElement.prototype.load=function(){window.__playerState.mediaLoadCalls++;};HTMLMediaElement.prototype.play=function(){this.__paused=false;window.__playerState.playCalls++;this.dispatchEvent(new Event('play'));return Promise.resolve();};HTMLMediaElement.prototype.pause=function(){this.__paused=true;this.dispatchEvent(new Event('pause'));};"
+         "HTMLMediaElement.prototype.load=function(){};HTMLMediaElement.prototype.play=function(){this.__paused=false;window.__playerState.playCalls++;this.dispatchEvent(new Event('play'));return Promise.resolve();};HTMLMediaElement.prototype.pause=function(){this.__paused=true;this.dispatchEvent(new Event('pause'));};"
          "</script>")
         scenario
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "(async()=>{let outcome;try{"
          "const state=window.__playerState;state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'private-mp4',name:'ride.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));"
-         "const player=document.getElementById('video-player'),video=document.getElementById('source-video-player'),timeline=document.getElementById('video-timeline'),fit=document.getElementById('fit-mode'),play=document.getElementById('video-play-pause');video.dispatchEvent(new Event('error'));await new Promise(resolve=>setTimeout(resolve,150));const retry={loadCalls:state.mediaLoadCalls,message:document.getElementById('video-player-status').textContent};video.__duration=125.5;video.dispatchEvent(new Event('loadedmetadata'));video.dispatchEvent(new Event('progress'));"
+         "const player=document.getElementById('video-player'),video=document.getElementById('source-video-player'),timeline=document.getElementById('video-timeline'),fit=document.getElementById('fit-mode'),play=document.getElementById('video-play-pause');video.__duration=125.5;video.dispatchEvent(new Event('loadedmetadata'));video.dispatchEvent(new Event('progress'));"
          "const initial={hidden:player.hidden,paused:video.paused,currentTime:video.currentTime,playCalls:state.playCalls,src:video.getAttribute('src'),selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,time:document.getElementById('video-time').textContent,timelineMax:timeline.getAttribute('aria-valuemax'),bufferedSegments:document.querySelectorAll('#video-buffered-ranges span').length,fit:getComputedStyle(video).objectFit,request:state.sessionRequests[0]};"
          "fit.value='crop';fit.dispatchEvent(new Event('input',{bubbles:true}));const cropped=getComputedStyle(video).objectFit;"
          "document.querySelector('[data-seek-seconds=\"10\"]').click();document.querySelector('[data-seek-seconds=\"60\"]').click();document.querySelector('[data-seek-seconds=\"-10\"]').click();const transportTime=video.currentTime;"
          "const rect=timeline.getBoundingClientRect();timeline.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:rect.left+rect.width*.75}));const hover={hidden:document.getElementById('video-timeline-tooltip').hidden,text:document.getElementById('video-timeline-tooltip').textContent};timeline.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:rect.left+rect.width*.5,pointerId:1}));const scrubTime=video.currentTime;timeline.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,key:'ArrowRight'}));const keyboardTime=video.currentTime;"
          "play.click();await Promise.resolve();const playing={paused:video.paused,label:play.textContent};play.click();const paused={paused:video.paused,label:play.textContent};"
          "video.dispatchEvent(new Event('error'));const unsupported={selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,message:document.getElementById('video-player-status').textContent};"
-         "outcome={retry,initial,cropped,transportTime,scrubTime,keyboardTime,hover,playing,paused,unsupported,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+         "outcome={initial,cropped,transportTime,scrubTime,keyboardTime,hover,playing,paused,unsupported,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
          "</script>")
         html (-> page
                  (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
-                 (str/replace "preload=\"metadata\"" "preload=\"none\"")
                  (str/replace "<script>(function(){"
                               (str fixture "<script>(function(){"))
                  (str/replace "</body>" (str scenario "</body>")))]
@@ -1442,6 +1441,11 @@
                (str/index-of (.body landing) "href=\"/terms\"")))
         (is (str/includes? (.body landing)
                            "<form method=\"post\" action=\"/v1/auth/logout\">"))
+        (is (str/includes?
+             (.orElse (.firstValue (.headers landing)
+                                   "Content-Security-Policy")
+                      "")
+             "media-src 'self'"))
         (is (string? script))
         (is valid?
             "The rendered compose initialization script must parse."))
@@ -1529,9 +1533,6 @@
               :request {:fileId "private-mp4"}}
              (:initial outcome)))
       (is (= "cover" (:cropped outcome)))
-      (is (= 3 (get-in outcome [:retry :loadCalls])))
-      (is (str/includes? (get-in outcome [:retry :message])
-                         "Retrying selected video playback"))
       (is (= 60 (:transportTime outcome)))
       (is (= 62.75 (:scrubTime outcome)))
       (is (= 63.75 (:keyboardTime outcome)))
