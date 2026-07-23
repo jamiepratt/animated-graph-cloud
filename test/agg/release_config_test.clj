@@ -681,7 +681,8 @@
     (doseq [contract ["RenderRequest:" "Job:" "Error:" "bearerAuth:"
                       "sessionCookie:" "Idempotency-Key"]]
       (testing contract (is (str/includes? openapi contract))))
-    (doseq [field ["telemetryFormat" "telemetrySyncAt" "sectionStartAt"
+    (doseq [field ["telemetryFormat" "synchronizationMode"
+                   "telemetrySyncAt" "sectionStartAt"
                    "displayTimeZone"
                    "futureTraceOpacityPercent"
                    "spo2" "timer" "watermark" "sourceVideo"

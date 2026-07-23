@@ -137,14 +137,38 @@
   (some (fn [entry]
           (let [field (:field entry)]
             (when (contains? #{"displayTimeZone"
-                               "futureTraceOpacityPercent"} field)
+                               "futureTraceOpacityPercent"
+                               "synchronizationMode"
+                               "telemetrySyncAt"
+                               "cameraSyncAt"} field)
               field)))
         (error-data error)))
+
+(defn- public-request-guidance [error]
+  (let [types (error-types error)]
+    (cond
+      (contains? types ::contract/invalid-synchronization-mode)
+      "Choose synchronizationMode as shared-clock or manual-anchor."
+
+      (contains? types ::contract/synchronization-anchor-forbidden)
+      (str "Omit telemetrySyncAt and cameraSyncAt when synchronizationMode "
+           "is shared-clock.")
+
+      (contains? types ::contract/synchronization-anchor-required)
+      (str "Provide telemetrySyncAt and cameraSyncAt when synchronizationMode "
+           "is manual-anchor.")
+
+      (and (contains? types ::contract/invalid-timestamp)
+           (contains? #{"telemetrySyncAt" "cameraSyncAt"}
+                      (public-request-field error)))
+      (str "Provide telemetrySyncAt and cameraSyncAt as ISO-8601 instants "
+           "with Z or an explicit UTC offset."))))
 
 (defn- preview-diagnostics [error]
   (let [data (error-data error)
         telemetry-failure (contract/telemetry-failure error)
         field (public-request-field error)
+        guidance (public-request-guidance error)
         failure-code (some (fn [entry]
                              (let [value (:failure-code entry)]
                                (when (safe-failure-code? value) value)))
@@ -175,6 +199,7 @@
                          data)
         diagnostics (cond-> {}
                       field (assoc :field field)
+                      guidance (assoc :guidance guidance)
                       failure-code (assoc :failureCode failure-code)
                       line (assoc :line line)
                       stage (assoc :stage stage)
@@ -1904,8 +1929,12 @@
                                (contract/telemetry-failure error)))
                     (respond-preview-failure! dependencies exchange request-id error)
                     (if-let [field (public-request-field error)]
-                      (respond-json! exchange 400
-                                     {:error "invalid_request" :field field})
+                      (let [guidance (public-request-guidance error)]
+                        (respond-json! exchange 400
+                                       (cond-> {:error "invalid_request"
+                                                :field field}
+                                         guidance
+                                         (assoc :guidance guidance))))
                       (respond! exchange 400 "application/json; charset=utf-8"
                                 "{\"error\":\"invalid_request\"}")))
 

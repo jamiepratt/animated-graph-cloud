@@ -2,6 +2,7 @@
   "telemetryFormat": "polar-csv",
   "telemetry": "timestamp,heart_rate\n2026-07-17T10:00:00Z,120\n2026-07-17T10:00:01Z,124\n",
   "preset": "1080p25",
+  "synchronizationMode": "manual-anchor",
   "telemetrySyncAt": "2026-07-17T10:00:00Z",
   "cameraSyncAt": "2026-07-17T09:00:00Z",
   "sectionStartAt": "2026-07-17T09:00:00Z",

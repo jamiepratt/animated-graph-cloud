@@ -134,6 +134,7 @@ durable jobs.
   "telemetryFormat": "polar-csv",
   "telemetry": "timestamp,heart_rate\n2026-07-17T10:00:00Z,120\n...",
   "preset": "1080p25",
+  "synchronizationMode": "manual-anchor",
   "telemetrySyncAt": "2026-07-17T10:00:00Z",
   "cameraSyncAt": "2026-07-17T09:00:00Z",
   "sectionStartAt": "2026-07-17T09:00:00Z",
@@ -150,7 +151,9 @@ The render JSON fields are:
 | `telemetry` | Yes | CSV text, or base64 FIT content for `garmin-fit`; CSV is limited to 10 MiB and FIT base64 to 13,981,016 characters |
 | `preset` | Yes | `1080p25` (1920×1080, 25 fps, up to 8 minutes) or `2.7k25` (2704×1520, 25 fps, up to 4 minutes) |
 | `displayTimeZone` | Yes | Known IANA timezone identifier such as `Europe/Warsaw` or `UTC`; no missing, blank, offset, unknown, or server-local fallback |
-| `telemetrySyncAt`, `cameraSyncAt`, `sectionStartAt`, `sectionEndAt` | Yes | ISO-8601 instants with `Z` or an explicit UTC offset |
+| `synchronizationMode` | Yes | `shared-clock` when camera and activity devices used the same clock, or `manual-anchor` when their clocks differed |
+| `telemetrySyncAt`, `cameraSyncAt` | With `manual-anchor` only | Both required for `manual-anchor`; both forbidden for `shared-clock`; ISO-8601 instants with `Z` or an explicit UTC offset |
+| `sectionStartAt`, `sectionEndAt` | Yes | ISO-8601 instants with `Z` or an explicit UTC offset |
 | `spo2` | No | `{ "format": "oxiwear-spo2-csv", "telemetry": "..." }`; CSV is limited to 10 MiB |
 | `timer` | No | `{ "startAt": "...", "endAt": "..." }`, within the requested section |
 | `watermark` | No | `{ "contentBase64": "..." }`, a valid PNG up to 2 MiB and 1024×1024 pixels |
@@ -163,10 +166,12 @@ Timestamps are ISO-8601 instants. `displayTimeZone` affects only the rendered
 camera clock and never reinterprets synchronization, section, or timer values.
 The browser's `My browser timezone` option resolves to its IANA identifier in
 the submitted JSON. Missing, blank, offset-only, and unknown display zones are
-rejected. `cameraSyncAt` must not follow the section;
-section end must follow section start by a whole number of seconds. The anchor
-offset maps the camera section onto Polar time, and Polar telemetry must cover
-both mapped boundaries. The selected preset supplies size, 25 fps, and maximum
+rejected. Section end must follow section start by a whole number of seconds.
+In `manual-anchor` mode, `cameraSyncAt` must not follow the section, and the
+anchor offset maps the camera section onto activity-data time.
+In `shared-clock` mode, activity timestamps align directly to `sectionStartAt`
+with no adjustment. Telemetry must cover both mapped boundaries. The selected
+preset supplies size, 25 fps, and maximum
 duration. Telemetry is limited to 10 MiB and the JSON envelope to 10 MiB plus
 64 KiB. Accepted Polar CSV uses comma or semicolon delimiters, an absolute
 `timestamp`/`datetime` column, and `heart_rate`, `heart rate`, `HR`, or
