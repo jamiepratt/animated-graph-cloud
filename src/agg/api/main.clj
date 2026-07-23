@@ -484,7 +484,8 @@
          (ui/theme-style)
          ".brand{color:var(--color-text)}.authorization-error .eyebrow{color:var(--color-danger)}"
          "</style></head>"
-         "<body class=\"authorization-error\" data-theme=\"telemetry\"><div class=\"shell\"><a class=\"brand\" href=\"/\">Alpha Compose</a>"
+         "<body class=\"authorization-error\" data-theme=\"telemetry\"><div class=\"shell\">"
+         (ui/product-header)
          "<main class=\"card\" role=\"alert\"><div class=\"eyebrow\">Authorization incomplete</div>"
          "<h1>" title "</h1><p>" explanation "</p><p class=\"muted\">"
          next-step " " no-effects "</p>"
@@ -1390,6 +1391,7 @@
             "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'"))
     (respond! exchange 200 "text/html; charset=utf-8"
               (ui/logs-page {:user user
+                             :csrf (auth/issue-csrf-token auth-system user)
                              :logs entries
                              :view (:view options)
                              :severity (:severity options)

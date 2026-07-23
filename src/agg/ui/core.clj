@@ -38,6 +38,26 @@
        "<link rel=\"apple-touch-icon\" sizes=\"180x180\" href=\"/apple-touch-icon.png\">"
        "<meta name=\"theme-color\" content=\"#031225\">"))
 
+(def ^:private product-nav-items
+  [[:faq "/faq" "FAQ"]
+   [:privacy "/privacy" "Privacy"]
+   [:terms "/terms" "Terms"]])
+
+(defn product-header
+  ([]
+   (product-header nil))
+  ([active-nav]
+   (str
+    "<header class=\"product-header\"><a class=\"brand\" href=\"/\">Alpha Compose</a>"
+    "<nav aria-label=\"Product\">"
+    (apply str
+           (for [[nav-key path label] product-nav-items]
+             (str "<a href=\"" path "\""
+                  (when (= active-nav nav-key)
+                    " aria-current=\"page\"")
+                  ">" label "</a>")))
+    "</nav></header>")))
+
 (defn theme-style []
   (str
    ":root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;line-height:1.45;"
@@ -60,6 +80,10 @@
    ":focus,:focus-visible{outline:3px solid var(--color-warning);outline-offset:3px}"
    "::selection{color:var(--color-text);background:#be334f99}"
    ".shell,.shell>*{min-width:0}.shell>header{padding:clamp(.9rem,2vw,1.25rem);background:var(--color-surface);border:1px solid var(--color-border);border-radius:1rem;box-shadow:var(--shadow-surface)}.muted,.hint{color:var(--color-muted)}"
+   ".product-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin:1rem 0 2rem}"
+   ".product-header .brand{color:var(--color-text);font-weight:800;letter-spacing:-.03em;text-decoration:none}"
+   ".product-header nav{display:flex;gap:1rem;flex-wrap:wrap}.product-header nav a{color:var(--color-link)}"
+   ".product-header nav a[aria-current=\"page\"]{color:var(--color-text);font-weight:800;text-decoration-line:underline;text-decoration-thickness:.18rem;text-underline-offset:.28rem}"
    ".eyebrow{color:var(--color-accent)}.step{color:var(--color-subtle)}"
    ".card,.hero-card,.drive-card,.trace-preview,.preview-pending,.preview-error,.preview-stale,.preview-empty,.log-entry{"
    "background:var(--color-surface);border-color:var(--color-border);box-shadow:var(--shadow-surface)}"
@@ -85,7 +109,8 @@
    "#preview-dialog::backdrop{background:#010813e6}"
    ".notice{border-color:var(--color-warning);background:#2a230f}.notice code{color:var(--color-text)}"
    ".log-level{background:#173b5a;color:#d9f5ff}.log-entry time,.log-entry dt,.empty,footer{color:var(--color-muted)}"
-   "@media(max-width:680px){body{background-size:100% 100%,100vw auto;background-position:center top,center top}}"))
+   "@media(forced-colors:active){.product-header nav a[aria-current=\"page\"]{text-decoration-thickness:.18rem}}"
+   "@media(max-width:680px){body{background-size:100% 100%,100vw auto;background-position:center top,center top}.product-header{align-items:flex-start}.product-header nav{width:100%}}"))
 
 (defn- title-case [value]
   (-> value
@@ -260,7 +285,7 @@
 (defn- raw-log [{:keys [raw]}]
   (str "<article class=\"log-entry\"><pre>" (escape-html raw) "</pre></article>"))
 
-(defn logs-page [{:keys [user logs view severity component]}]
+(defn logs-page [{:keys [user csrf logs view severity component]}]
   (let [raw? (= "raw" view)
         toggle-view (if raw? "formatted" "raw")
         toggle-label (if raw? "Formatted view" "Raw JSON view")
@@ -273,16 +298,21 @@
      "<style>"
      ":root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;line-height:1.45}"
      "*{box-sizing:border-box}body{margin:0}.shell{max-width:78rem;margin:0 auto;padding:2rem 1.25rem 4rem}"
-     "header{display:flex;justify-content:space-between;gap:1rem;align-items:end;margin:1rem 0 2rem}"
+     ".task-header{display:flex;justify-content:space-between;gap:1rem;align-items:end;margin:1rem 0 2rem}"
      "h1,h2,p{margin-top:0}h1{font-size:clamp(2rem,4vw,3.4rem);letter-spacing:-.05em;margin-bottom:.35rem}"
-     ".muted{color:var(--color-muted)}.eyebrow{color:var(--color-accent);font-size:.75rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}"
+     ".muted{color:var(--color-muted)}.eyebrow{color:var(--color-accent);font-size:.75rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.session-controls{display:flex;align-items:flex-end;flex-direction:column;gap:.65rem}.session-controls p,.session-controls form{margin:0}"
      ".card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:1.1rem;box-shadow:var(--shadow-surface);padding:1.35rem;margin:1rem 0}"
      ".filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem;align-items:end}label{display:block;font-weight:700;font-size:.9rem}input,select{font:inherit;width:100%;border:1px solid #6b8ba5;border-radius:.65rem;background:#06182b;color:var(--color-text);padding:.68rem .75rem;margin-top:.4rem}"
      "button,.button{border:1px solid var(--color-border);border-radius:.65rem;padding:.7rem 1rem;font-weight:800;cursor:pointer;background:var(--color-surface-soft);color:var(--color-text);text-decoration:none;display:inline-block}.primary{background:var(--color-accent);color:var(--color-accent-ink);box-shadow:0 .35rem .8rem #0fc3ff2e}"
-     ".actions{display:flex;gap:.7rem;align-items:center;flex-wrap:wrap;margin-top:1rem}.log-entry{border-top:1px solid #e8edf4;padding:1rem 0}.log-entry:first-child{border-top:0;padding-top:0}.log-entry header{display:flex;justify-content:flex-start;align-items:center;gap:.65rem;margin:0 0 .5rem;flex-wrap:wrap}.log-entry time{color:#718097;font-size:.85rem}.log-level{border-radius:999px;background:#e8eef8;padding:.2rem .55rem;font-size:.75rem;font-weight:800}.log-entry code,pre,dt,dd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.log-message{font-weight:700}.log-entry dl{display:grid;grid-template-columns:max-content 1fr;gap:.25rem .9rem;margin:0}.log-entry dt{color:#718097}.log-entry dd{margin:0;overflow-wrap:anywhere}.log-entry pre{white-space:pre-wrap;overflow:auto;background:#f8fafc;border-radius:.65rem;padding:1rem;margin:0;font-size:.82rem}.empty{padding:2rem 0;text-align:center;color:#5c6b82}footer{margin-top:2rem;color:#6c7a90}footer a{color:#315b9d;margin-right:.75rem}@media(max-width:680px){.shell{padding:1rem .8rem 3rem}header{display:block}.filters{grid-template-columns:1fr}.log-entry dl{grid-template-columns:1fr}.log-entry dt{margin-top:.5rem}}"
+     ".actions{display:flex;gap:.7rem;align-items:center;flex-wrap:wrap;margin-top:1rem}.log-entry{border-top:1px solid #e8edf4;padding:1rem 0}.log-entry:first-child{border-top:0;padding-top:0}.log-entry header{display:flex;justify-content:flex-start;align-items:center;gap:.65rem;margin:0 0 .5rem;flex-wrap:wrap}.log-entry time{color:#718097;font-size:.85rem}.log-level{border-radius:999px;background:#e8eef8;padding:.2rem .55rem;font-size:.75rem;font-weight:800}.log-entry code,pre,dt,dd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.log-message{font-weight:700}.log-entry dl{display:grid;grid-template-columns:max-content 1fr;gap:.25rem .9rem;margin:0}.log-entry dt{color:#718097}.log-entry dd{margin:0;overflow-wrap:anywhere}.log-entry pre{white-space:pre-wrap;overflow:auto;background:#f8fafc;border-radius:.65rem;padding:1rem;margin:0;font-size:.82rem}.empty{padding:2rem 0;text-align:center;color:#5c6b82}@media(max-width:680px){.shell{padding:1rem .8rem 3rem}.task-header{display:block}.session-controls{align-items:flex-start;margin-top:1rem}.filters{grid-template-columns:1fr}.log-entry dl{grid-template-columns:1fr}.log-entry dt{margin-top:.5rem}}"
      (theme-style)
-     "</style></head><body data-theme=\"telemetry\"><div class=\"shell\"><header><div><div class=\"eyebrow\">Administration</div><h1>Operational logs</h1><p class=\"muted\">Safe structured events retained for 30 days. Showing up to 100 recent entries.</p></div><p class=\"muted\">Signed in as "
-     (escape-html (:email user)) "</p></header>"
+     "</style></head><body data-theme=\"telemetry\"><div class=\"shell\">"
+     (product-header)
+     "<header class=\"task-header\"><div><div class=\"eyebrow\">Administration</div><h1>Operational logs</h1><p class=\"muted\">Safe structured events retained for 30 days. Showing up to 100 recent entries.</p></div><div class=\"session-controls\"><p class=\"muted\">Signed in as "
+     (escape-html (:email user))
+     "</p><form method=\"post\" action=\"/v1/auth/logout\"><input type=\"hidden\" name=\"csrf\" value=\""
+     (escape-html csrf)
+     "\"><button type=\"submit\">Log out</button></form></div></header>"
      "<p><a href=\"/\">← Back to compose</a></p>"
      "<section class=\"card\"><form method=\"get\" action=\"/ui/admin/logs\"><div class=\"filters\">"
      "<label>Severity<select name=\"severity\"><option value=\"\">All severities</option>"
@@ -300,7 +330,7 @@
      (if (seq logs)
        (apply str (map #(if raw? (raw-log %) (formatted-log %)) logs))
        "<p class=\"empty\">No matching logs in the retention window.</p>")
-     "</section><footer><a href=\"/privacy\">Privacy</a> · <a href=\"/terms\">Terms</a></footer>"
+     "</section>"
      "</div></body></html>")))
 
 (defn job-fragment
@@ -547,7 +577,7 @@
      "<style>"
      ":root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;line-height:1.45}"
      "*{box-sizing:border-box}body{margin:0}.shell{max-width:78rem;margin:0 auto;padding:2rem 1.25rem 4rem}"
-     "header{display:flex;justify-content:space-between;gap:1rem;align-items:end;margin:1rem 0 2rem}"
+     ".task-header{display:flex;justify-content:space-between;gap:1rem;align-items:end;margin:1rem 0 2rem}"
      "h1,h2,h3,p{margin-top:0}h1{font-size:clamp(2rem,4vw,3.4rem);letter-spacing:-.05em;margin-bottom:.35rem}h2{font-size:1.25rem;margin-bottom:.35rem}"
      ".muted,.hint{color:var(--color-muted)}.eyebrow{color:var(--color-accent);font-size:.75rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.session-controls{display:flex;align-items:flex-end;flex-direction:column;gap:.65rem}.session-controls p,.session-controls form{margin:0}"
      ".card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:1.1rem;box-shadow:var(--shadow-surface);padding:1.35rem;margin:1rem 0}"
@@ -568,12 +598,13 @@
      "details summary{cursor:pointer;font-weight:800;color:var(--color-link)}.raw-panel textarea{min-height:18rem}.raw-actions{display:flex;gap:.65rem;flex-wrap:wrap;margin-top:.7rem}.json-errors{white-space:pre-line}.field-reference{margin:.75rem 0 0;padding-left:1.25rem}.field-reference li{margin:.35rem 0}.field-reference code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}"
      ".results{display:block;min-width:0}.results img{max-width:100%;border:1px solid #d9e1ed;border-radius:.75rem;background:#eef2f7}.preview-gallery{min-width:0}.preview-warning{background:#fff8e8;border:1px solid #e7c46b;border-radius:.8rem;color:#59400a;padding:.85rem 1rem;margin:1rem 0}.preview-warning h3,.preview-warning p{margin:0}.preview-warning p{margin-top:.35rem}.trace-preview{background:white;border:1px solid #e1e7f0;border-radius:1rem;padding:1rem;margin:1rem 0;min-width:0;max-width:100%}.preview-scroll{max-width:100%;min-width:0;overflow:visible}.preview-moments{display:flex;flex-wrap:wrap;justify-content:center;gap:.8rem;align-items:flex-start;min-width:0;max-width:100%}.preview-moment{display:flex;flex:0 0 8rem;width:8rem;flex-direction:column;gap:.65rem;min-width:0}.photo-title{font-size:.75rem;line-height:1.35;overflow-wrap:anywhere;margin:0 0 .35rem}.preview-cell{min-width:0;width:100%}.preview-cell .preview-open{display:block;width:100%;padding:0;background:#f8fafc}.preview-cell img{display:block;width:100%;height:auto}.frame-role{display:inline;font-weight:800;letter-spacing:.04em}.checkerboard{background-color:#fff;background-image:linear-gradient(45deg,#d9e1ed 25%,transparent 25%),linear-gradient(-45deg,#d9e1ed 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#d9e1ed 75%),linear-gradient(-45deg,transparent 75%,#d9e1ed 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}.preview-pending,.preview-error,.preview-stale,.preview-empty{background:white;border:1px solid #e1e7f0;border-radius:1rem;padding:1rem;margin:1rem 0}.preview-pending progress{width:min(24rem,100%)}#preview-dialog{width:calc(100dvw - 1rem);height:calc(100dvh - 1rem);max-width:none;max-height:none;border:0;border-radius:1rem;padding:1rem;overflow:hidden}#preview-dialog[open]{display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:.75rem}#preview-dialog::backdrop{background:#10213acc}.dialog-image-frame{display:flex;align-items:center;justify-content:center;min-width:0;min-height:0;overflow:hidden}#preview-dialog img{display:block;width:100%;height:100%;min-width:0;min-height:0;object-fit:contain;margin:0}.dialog-head{display:flex;justify-content:space-between;align-items:center;gap:1rem;min-width:0}.dialog-head h2{margin:0;min-width:0;overflow-wrap:anywhere}.dialog-nav{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:.75rem}.preview-counter{margin:0;text-align:center}"
      ".job{margin:0}.notice{border:2px solid #d8a94d;padding:1rem;overflow-wrap:anywhere}.notice code{display:block;margin-top:.6rem;white-space:pre-wrap}"
-     ".inline{display:inline}footer{margin-top:2rem;color:#6c7a90}footer a{color:#315b9d;margin-right:.75rem}"
-     "@media(max-width:680px){.shell{padding:1rem .8rem 3rem}header,.drive-card,.section-head{display:block}.session-controls{align-items:flex-start;margin-top:1rem}.field-grid{grid-template-columns:1fr}.drive-actions{margin-top:1rem}.preview-moment{flex:0 1 24rem;width:min(100%,24rem);border-top:1px solid #e1e7f0;padding:1rem 0}.preview-moment:first-child{border-top:0;padding-top:0}.preview-cell{width:100%;margin-top:.75rem}}"
+     ".inline{display:inline}"
+     "@media(max-width:680px){.shell{padding:1rem .8rem 3rem}.task-header,.drive-card,.section-head{display:block}.session-controls{align-items:flex-start;margin-top:1rem}.field-grid{grid-template-columns:1fr}.drive-actions{margin-top:1rem}.preview-moment{flex:0 1 24rem;width:min(100%,24rem);border-top:1px solid #e1e7f0;padding:1rem 0}.preview-moment:first-child{border-top:0;padding-top:0}.preview-cell{width:100%;margin-top:.75rem}}"
      (theme-style)
      "</style>"
      "</head><body data-theme=\"telemetry\" hx-headers=\"" csrf-headers "\">"
-     "<div class=\"shell\"><header><div><div class=\"eyebrow\">Telemetry overlays for video</div><h1>Compose your overlay</h1><p class=\"muted\">Configure a render, preview it, then send the finished overlay to Drive. Finished renders use durable jobs, including full-length sections.</p></div>"
+     "<div class=\"shell\">" (product-header)
+     "<header class=\"task-header\"><div><div class=\"eyebrow\">Telemetry overlays for video</div><h1>Compose your overlay</h1><p class=\"muted\">Configure a render, preview it, then send the finished overlay to Drive. Finished renders use durable jobs, including full-length sections.</p></div>"
      "<div class=\"session-controls\"><p class=\"muted\">Signed in as "
      (escape-html (:email user))
      "</p><form method=\"post\" action=\"/v1/auth/logout\"><input type=\"hidden\" name=\"csrf\" value=\""
@@ -606,7 +637,6 @@
      (token-panel tokens)
      (when (admin/administrator? (:role user))
        (member-panel members logs-enabled?))
-     "<footer><a href=\"/privacy\">Privacy</a> · <a href=\"/terms\">Terms</a></footer>"
      "<script>(function(){"
      "const form=document.getElementById('render-form'), hidden=document.getElementById('render-request'), raw=document.getElementById('raw-json');"
      "const status=document.getElementById('form-status'), jsonStatus=document.getElementById('json-status'),submitButton=document.getElementById('submit-button'),submitStatus=document.getElementById('preview-submit-status');"
@@ -647,15 +677,10 @@
      (picker-script picker-config)
      "})();</script></div></body></html>")))
 
-(defn- public-nav-link [active-path path label]
-  (str "<a href=\"" path "\""
-       (when (= active-path path) " aria-current=\"page\"")
-       ">" label "</a>"))
-
 (defn- public-page
   ([title body]
    (public-page title body nil))
-  ([title body active-path]
+  ([title body active-nav]
    (str "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
         (icon-links)
@@ -664,8 +689,7 @@
         "<style>"
         ":root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;line-height:1.45}"
         "*{box-sizing:border-box}body{margin:0}.shell{max-width:78rem;margin:0 auto;padding:2rem 1.25rem 4rem}"
-        ".public-header{display:flex;justify-content:space-between;gap:1rem;align-items:center;margin:1rem 0 2rem}.brand{color:var(--color-text);font-weight:800;letter-spacing:-.03em;text-decoration:none}"
-        "nav{display:flex;gap:1rem;flex-wrap:wrap}nav a,footer a{color:var(--color-link)}nav a[aria-current=\"page\"]{color:var(--color-text);font-weight:800;text-decoration-thickness:.18rem;text-underline-offset:.28rem}"
+        "footer a{color:var(--color-link)}"
         "h1,h2,p{margin-top:0}h1{font-size:clamp(2.5rem,6vw,5rem);line-height:1.02;letter-spacing:-.06em;max-width:11ch;margin-bottom:1rem}h2{font-size:1.25rem;margin-bottom:.35rem}"
         ".muted{color:var(--color-muted)}.eyebrow{color:var(--color-accent);font-size:.75rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}"
         ".hero{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(18rem,.8fr);gap:1rem;align-items:stretch;margin:2.5rem 0 1rem}.hero-copy{padding:2rem 0 1rem}"
@@ -677,16 +701,12 @@
         ".value-section{min-width:0;margin:1.75rem 0 1rem}.value-section>h2{font-size:clamp(1.5rem,3vw,2.25rem);max-width:22ch;margin:.3rem 0 1rem}.support-note{margin:1rem 0 0}.trust-card{margin-top:1rem}.trust-card p:last-child{margin-bottom:0}"
         ".faq-intro{max-width:46rem}.faq-sections{display:grid;gap:1.25rem;min-width:0;margin-top:2rem}.faq-category{min-width:0}.faq-category>h2{font-size:clamp(1.4rem,3vw,2rem);margin:0 0 .75rem}.faq-question{min-width:0;background:var(--color-surface);border:1px solid var(--color-border);border-radius:.8rem;box-shadow:var(--shadow-surface);margin:.65rem 0;scroll-margin-top:1rem;overflow-wrap:anywhere}.faq-question summary{cursor:pointer;padding:1rem 1.1rem;color:var(--color-link)}.faq-question summary h3{display:inline;font-size:1.05rem}.faq-answer{max-width:72ch;padding:0 1.1rem 1rem}.faq-answer p:last-child{margin-bottom:0}.faq-permalink{font-size:.9rem}.faq-question:target{outline:3px solid var(--color-warning);outline-offset:3px}"
         "footer{margin-top:2rem;color:var(--color-muted)}footer a{margin-right:.75rem}"
-        "@media(max-width:680px){.shell{padding:1rem .8rem 3rem}.public-header{display:block}.public-header nav{margin-top:1rem}.hero{grid-template-columns:1fr;margin-top:1.5rem}.hero-copy{padding:1rem 0}.feature-grid,.value-grid{grid-template-columns:1fr}.faq-question summary,.faq-answer{padding-left:.85rem;padding-right:.85rem}}"
+        "@media(max-width:680px){.shell{padding:1rem .8rem 3rem}.hero{grid-template-columns:1fr;margin-top:1.5rem}.hero-copy{padding:1rem 0}.feature-grid,.value-grid{grid-template-columns:1fr}.faq-question summary,.faq-answer{padding-left:.85rem;padding-right:.85rem}}"
         (theme-style)
-        ".public-header{padding:.75rem 1rem;border:1px solid var(--color-border);border-radius:1rem;background:#06182be8;box-shadow:var(--shadow-surface)}"
-        ".brand{color:var(--color-text)}.hero-copy{padding:clamp(1.25rem,3vw,2rem);background:var(--color-surface);border:1px solid var(--color-border);border-radius:1.1rem;box-shadow:var(--shadow-surface)}"
+        ".hero-copy{padding:clamp(1.25rem,3vw,2rem);background:var(--color-surface);border:1px solid var(--color-border);border-radius:1.1rem;box-shadow:var(--shadow-surface)}"
         "</style></head><body data-theme=\"telemetry\"><div class=\"shell\">"
-        "<header class=\"public-header\"><a class=\"brand\" href=\"/\">Alpha Compose</a><nav>"
-        (public-nav-link active-path "/faq" "FAQ")
-        (public-nav-link active-path "/privacy" "Privacy")
-        (public-nav-link active-path "/terms" "Terms")
-        "</nav></header><main>" body "</main>"
+        (product-header active-nav)
+        "<main>" body "</main>"
         "<footer><small>© 2026 Alpha Compose · <a href=\"mailto:me@jamiep.org\">Contact</a></small></footer>"
         "</div></body></html>")))
 
@@ -890,7 +910,7 @@
     "function openFaqTarget(){let fragment;try{fragment=decodeURIComponent(location.hash.slice(1));}catch(_){return;}const target=document.getElementById(fragment);if(!(target instanceof HTMLDetailsElement)||!target.classList.contains('faq-question'))return;target.open=true;requestAnimationFrame(()=>target.scrollIntoView({block:'start'}));}"
     "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',openFaqTarget,{once:true});else openFaqTarget();window.addEventListener('hashchange',openFaqTarget);"
     "})();</script>")
-   "/faq"))
+   :faq))
 
 (def drive-recovery-fragment
   (str "<section class=\"notice\" role=\"alert\"><h2>Google Drive access needs renewal</h2>"
@@ -989,7 +1009,8 @@
         "<h2>Your choices</h2><p>You may disconnect Alpha Compose in your Google Account, "
         "delete delivered files from Drive, or email me@jamiep.org with a contact or deletion request "
         "covering service records or an early-access notification. "
-        "Revoking Drive access may prevent pending renders from completing.</p>")))
+        "Revoking Drive access may prevent pending renders from completing.</p>")
+   :privacy))
 
 (def terms-page
   (public-page
@@ -1008,4 +1029,5 @@
         "not liable for indirect or consequential loss. Access may be suspended for misuse, "
         "security, maintenance, or cost control. You may stop using the service at any time.</p>"
         "<h2>Contact</h2><p>Questions may be sent to "
-        "<a href=\"mailto:me@jamiep.org\">me@jamiep.org</a>.</p>")))
+        "<a href=\"mailto:me@jamiep.org\">me@jamiep.org</a>.</p>")
+   :terms))

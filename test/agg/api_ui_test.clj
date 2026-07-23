@@ -649,7 +649,7 @@
          "const contrastNodes=[...document.querySelectorAll('.brand,h1,h2,.eyebrow,.step,.muted,.hint,label,input,select,textarea,button,.button,.cta,a,summary,footer')].filter(visible);"
          "const contrasts=contrastNodes.map(node=>({tag:node.tagName,id:node.id||null,className:node.className||null,text:(node.textContent||node.value||'').trim().slice(0,60),ratio:ratio(parse(getComputedStyle(node).color),background(node))}));"
          "const contrastOffenders=contrasts.filter(entry=>entry.ratio<4.5);"
-         "const layoutNodes=[...document.querySelectorAll('.shell,.public-header,.hero,.hero-copy,.hero-card,.feature-grid,.card,form,.field-grid,.actions,input,select,textarea,button,a')].filter(visible);"
+         "const layoutNodes=[...document.querySelectorAll('.shell,.product-header,.hero,.hero-copy,.hero-card,.feature-grid,.card,form,.field-grid,.actions,input,select,textarea,button,a')].filter(visible);"
          "const layoutOffenders=layoutNodes.map(node=>{const rect=node.getBoundingClientRect();return {tag:node.tagName,id:node.id||null,className:node.className||null,left:rect.left,right:rect.right};}).filter(rect=>rect.left<-.5||rect.right>window.innerWidth+.5);"
          "const focusTarget=document.querySelector('.cta,button.primary,button,a[href]');focusTarget?.focus({focusVisible:true});const focusStyle=focusTarget?getComputedStyle(focusTarget):null;"
          "const focusRule=[...document.styleSheets].flatMap(sheet=>[...sheet.cssRules]).find(rule=>rule.selectorText?.includes(':focus')&&parseFloat(rule.style.outlineWidth)>=3);"
@@ -664,6 +664,25 @@
     (browser-outcome
      "agg-telemetry-theme-browser-"
      "Telemetry theme regression requires Chrome or Chromium"
+     html
+     (str "--window-size=" window-size))))
+
+(defn- product-header-browser-outcome [page window-size]
+  (let [scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{"
+         "const header=document.querySelector('.product-header'),links=[...header.querySelectorAll('a[href]')],active=header.querySelector('a[aria-current=\"page\"]'),activeStyle=active?getComputedStyle(active):null,headerRect=header.getBoundingClientRect();"
+         "links[1].focus({focusVisible:true});const focusStyle=getComputedStyle(links[1]),declaredFocus=[...document.querySelectorAll('style')].some(style=>style.textContent.includes(':focus,:focus-visible{outline:3px solid var(--color-warning)'));"
+         "outcome={keyboardOrder:links.map(link=>link.getAttribute('href')),allVisible:links.every(link=>{const rect=link.getBoundingClientRect(),style=getComputedStyle(link);return rect.width>0&&rect.height>0&&style.display!=='none'&&style.visibility!=='hidden';}),activeNav:active?.getAttribute('href')||null,activeNavStyled:!active||parseInt(activeStyle.fontWeight,10)>=700&&activeStyle.textDecorationLine.includes('underline'),forcedColorSupport:[...document.querySelectorAll('style')].some(style=>style.textContent.includes('@media(forced-colors:active)')&&style.textContent.includes('a[aria-current=\"page\"]')),focusVisible:focusStyle.outlineStyle!=='none'&&parseFloat(focusStyle.outlineWidth)>=3||declaredFocus,viewportWidth:window.innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth,headerFits:headerRect.left>=-.5&&headerRect.right<=window.innerWidth+.5};"
+         "}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-product-header-browser-"
+     "Product header regression requires Chrome or Chromium"
      html
      (str "--window-size=" window-size))))
 
@@ -690,6 +709,98 @@
        [(str "--window-size=" window-size)])
       (finally
         (.delete temp)))))
+
+(deftest signed-in-compose-page-keeps-product-navigation-and-account-controls
+  (let [page (ui/page {:user {:email "owner@example.com" :role :owner}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? true})
+        faq-position (str/index-of page "href=\"/faq\"")
+        privacy-position (str/index-of page "href=\"/privacy\"")
+        terms-position (str/index-of page "href=\"/terms\"")]
+    (is (= 1 (count (re-seq #"class=\"product-header\"" page))))
+    (is (str/includes? page
+                       "<a class=\"brand\" href=\"/\">Alpha Compose</a>"))
+    (is (str/includes? page "<nav aria-label=\"Product\">"))
+    (is (every? some? [faq-position privacy-position terms-position]))
+    (when (every? some? [faq-position privacy-position terms-position])
+      (is (< faq-position privacy-position terms-position)))
+    (is (= 1 (count (re-seq #"href=\"/faq\"" page))))
+    (is (= 1 (count (re-seq #"href=\"/privacy\"" page))))
+    (is (= 1 (count (re-seq #"href=\"/terms\"" page))))
+    (is (not (re-find #"<a[^>]+aria-current=\"page\"" page)))
+    (is (str/includes? page "Signed in as owner@example.com"))
+    (is (str/includes? page
+                       "<form method=\"post\" action=\"/v1/auth/logout\">"))))
+
+(deftest operational-logs-page-keeps-product-navigation-and-account-controls
+  (let [page (ui/logs-page {:user {:email "owner@example.com"}
+                            :csrf "csrf-test"
+                            :logs []
+                            :view "formatted"})
+        faq-position (str/index-of page "href=\"/faq\"")
+        privacy-position (str/index-of page "href=\"/privacy\"")
+        terms-position (str/index-of page "href=\"/terms\"")]
+    (is (= 1 (count (re-seq #"class=\"product-header\"" page))))
+    (is (str/includes? page
+                       "<a class=\"brand\" href=\"/\">Alpha Compose</a>"))
+    (is (every? some? [faq-position privacy-position terms-position]))
+    (when (every? some? [faq-position privacy-position terms-position])
+      (is (< faq-position privacy-position terms-position)))
+    (is (= 1 (count (re-seq #"href=\"/faq\"" page))))
+    (is (= 1 (count (re-seq #"href=\"/privacy\"" page))))
+    (is (= 1 (count (re-seq #"href=\"/terms\"" page))))
+    (is (str/includes? page "Signed in as owner@example.com"))
+    (is (str/includes? page
+                       "<form method=\"post\" action=\"/v1/auth/logout\">"))
+    (is (str/includes? page
+                       "<input type=\"hidden\" name=\"csrf\" value=\"csrf-test\">"))))
+
+(deftest public-pages-use-one-product-navigation-with-the-current-page-marked
+  (let [pages
+        {"anonymous home" [ui/anonymous-page nil]
+         "FAQ" [ui/faq-page "/faq"]
+         "Privacy" [ui/privacy-page "/privacy"]
+         "Terms" [ui/terms-page "/terms"]
+         "Drive recovery" [ui/drive-recovery-page nil]
+         "early access" [(ui/early-access-page
+                          {:email "verified@example.com"
+                           :proof "signed-proof"})
+                         nil]}]
+    (doseq [[surface [page active-path]] pages]
+      (testing surface
+        (let [header (second
+                      (re-find
+                       #"(?s)(<header class=\"product-header\">.*?</header>)"
+                       page))
+              positions (mapv #(some-> header (str/index-of %))
+                              ["href=\"/faq\""
+                               "href=\"/privacy\""
+                               "href=\"/terms\""])
+              active-link (some->> header
+                                   (re-find
+                                    #"<a href=\"([^\"]+)\" aria-current=\"page\">")
+                                   second)]
+          (is (string? header))
+          (when header
+            (is (str/includes? header
+                               "<a class=\"brand\" href=\"/\">Alpha Compose</a>"))
+            (is (str/includes? header "<nav aria-label=\"Product\">"))
+            (is (every? some? positions))
+            (when (every? some? positions)
+              (is (apply < positions)))
+            (is (= active-path active-link))))))))
+
+(deftest partial-html-responses-do-not-receive-product-navigation
+  (doseq [[surface fragment]
+          {"token panel" (ui/token-panel [])
+           "member panel" (ui/member-panel [])
+           "Drive recovery fragment" ui/drive-recovery-fragment
+           "preview fragment" (ui/preview-stale-fragment "generation-1")}]
+    (testing surface
+      (is (not (str/includes? fragment
+                              "<header class=\"product-header\">"))))))
 
 (deftest public-product-and-legal-pages-identify-alpha-compose
   (let [port (available-port)
@@ -725,6 +836,8 @@
           (is (not (str/includes? (str/lower-case (.body homepage)) old-term))
               old-term))
         (is (= 200 (.statusCode privacy)))
+        (is (str/includes? (.body privacy)
+                           "<a href=\"/privacy\" aria-current=\"page\">Privacy</a>"))
         (is (str/includes? (.body privacy) "Privacy policy"))
         (is (str/includes? (.body privacy) "Google Drive"))
         (is (str/includes? (.body privacy) "Google API Services User Data Policy"))
@@ -737,6 +850,8 @@
                            "does not retain early-access requests"))
         (is (str/includes? (.body privacy) "contact or deletion request"))
         (is (= 200 (.statusCode terms)))
+        (is (str/includes? (.body terms)
+                           "<a href=\"/terms\" aria-current=\"page\">Terms</a>"))
         (is (str/includes? (.body terms) "Terms of service"))
         (is (str/includes? (.body terms) "me@jamiep.org")))
       (finally
@@ -937,6 +1052,39 @@
         (is (true? (:backgroundIncludesAsset outcome)))
         (is (false? (:backgroundAnimated outcome)))))))
 
+(deftest product-header-is-keyboard-visible-and-responsive-across-complete-pages
+  (let [compose (ui/page {:user {:email "owner@example.com" :role :owner}
+                          :csrf "csrf-test"
+                          :tokens []
+                          :members []
+                          :logs-enabled? true})
+        logs (ui/logs-page {:user {:email "owner@example.com"}
+                            :csrf "csrf-test"
+                            :logs []
+                            :view "formatted"})
+        pages
+        {"public desktop" [ui/privacy-page "/privacy" "1280,900"]
+         "public mobile" [ui/terms-page "/terms" "390,844"]
+         "signed-in desktop" [compose nil "1280,900"]
+         "signed-in mobile" [compose nil "390,844"]
+         "recovery desktop" [ui/drive-recovery-page nil "1280,900"]
+         "recovery mobile" [ui/drive-recovery-page nil "390,844"]
+         "admin desktop" [logs nil "1280,900"]
+         "admin mobile" [logs nil "390,844"]}]
+    (doseq [[surface [page active-path window-size]] pages]
+      (testing surface
+        (let [outcome (product-header-browser-outcome page window-size)]
+          (is (nil? (:error outcome)) (:error outcome))
+          (is (= ["/" "/faq" "/privacy" "/terms"]
+                 (:keyboardOrder outcome)))
+          (is (= active-path (:activeNav outcome)))
+          (is (true? (:activeNavStyled outcome)))
+          (is (true? (:forcedColorSupport outcome)))
+          (is (true? (:allVisible outcome)))
+          (is (true? (:focusVisible outcome)))
+          (is (true? (:noHorizontalOverflow outcome)))
+          (is (true? (:headerFits outcome))))))))
+
 (deftest early-access-feedback-and-form-are-keyboard-and-mobile-safe
   (let [initial-page
         (ui/early-access-page
@@ -1011,6 +1159,13 @@
                         (javascript-valid? script)
                         (javascript-valid? configured-script))]
         (is (= 200 (.statusCode landing)))
+        (is (str/includes? (.body landing)
+                           "<header class=\"product-header\">"))
+        (is (< (str/index-of (.body landing) "href=\"/faq\"")
+               (str/index-of (.body landing) "href=\"/privacy\"")
+               (str/index-of (.body landing) "href=\"/terms\"")))
+        (is (str/includes? (.body landing)
+                           "<form method=\"post\" action=\"/v1/auth/logout\">"))
         (is (string? script))
         (is valid?
             "The rendered compose initialization script must parse."))
