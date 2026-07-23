@@ -673,7 +673,9 @@
                   "/v1/admin/members/revoke:" "/v1/auth/login/start:"
                   "/v1/auth/login/callback:" "/v1/auth/logout:"
                   "/v1/drive/picker:"
-                  "/v1/drive/picker/diagnostic:"]]
+                  "/v1/drive/picker/diagnostic:"
+                  "/v1/drive/playback-sessions:"
+                  "/v1/drive/playback/{playbackId}:"]]
       (testing path (is (str/includes? openapi path))))
     (doseq [contract ["RenderRequest:" "Job:" "Error:" "bearerAuth:"
                       "sessionCookie:" "Idempotency-Key"]]
@@ -691,11 +693,34 @@
                       "operationId: finishGoogleLogin"
                       "operationId: logoutBrowserSession"
                       "operationId: showGoogleDrivePicker"
+                      "operationId: createDrivePlaybackSession"
+                      "operationId: streamDrivePlayback"
                       "name: code" "name: state" "security: []"
                       "description: Redirect to Google OAuth authorization."
                       "description: Redirect to the signed-in homepage."]]
       (testing behavior (is (str/includes? openapi behavior))))
     (is (not (str/includes? openapi "client_secret")))))
+
+(deftest owner-bound-drive-playback-contract-and-decision-are-documented
+  (let [openapi (slurp "docs/openapi.yaml")
+        context (slurp "CONTEXT.md")
+        adr (slurp "docs/adr/0016-stream-selected-drive-video-for-browser-playback.md")]
+    (doseq [contract ["browser_playback_not_supported"
+                      "Range"
+                      "Content-Range"
+                      "Accept-Ranges"
+                      "playback_range_not_satisfiable"
+                      "Firebase-compatible `__session`"
+                      "video/mp4"]]
+      (testing contract (is (str/includes? openapi contract))))
+    (doseq [decision ["owner-bound"
+                      "one hour"
+                      "8 MiB"
+                      "never persisted"
+                      "does not transcode"]]
+      (testing decision (is (str/includes? adr decision))))
+    (is (str/includes? context
+                       "short-lived owner-bound browser playback"))))
 
 (deftest release-acceptance-separates-automation-from-human-evidence
   (let [automation (slurp "script/release_acceptance.sh")
