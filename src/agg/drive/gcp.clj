@@ -51,6 +51,10 @@
                         (-> builder .GET .build)
                         (HttpResponse$BodyHandlers/ofInputStream))]
     {:status (.statusCode response)
+     :headers (into {}
+                    (map (fn [[key values]]
+                           [(str/lower-case key) (first values)]))
+                    (.map (.headers response)))
      :body (.body response)}))
 
 (defn- authorized [request access-token]
@@ -62,6 +66,23 @@
 (defn- source-url [file-id]
   (str "https://www.googleapis.com/drive/v3/files/"
        (urlencode file-id)))
+
+(defn- valid-playback-range-response?
+  [{:keys [status headers body]} start end]
+  (let [[_ returned-start returned-end total]
+        (when-let [content-range (get headers "content-range")]
+          (re-matches #"bytes (\d+)-(\d+)/(\d+)" content-range))
+        returned-start (some-> returned-start parse-long)
+        returned-end (some-> returned-end parse-long)
+        total (some-> total parse-long)
+        content-length (some-> (get headers "content-length") parse-long)]
+    (and (= 206 status)
+         (some? body)
+         (= start returned-start)
+         (= end returned-end)
+         total
+         (> total end)
+         (= (inc (- end start)) content-length))))
 
 (defn- drive-url [path query]
   (str "https://www.googleapis.com/drive/v3/" path "?" query))
@@ -296,6 +317,26 @@
           (throw (errors/raise! "Google Drive source download failed"
                                 {:type ::source-download-failed
                                  :status status}))))))
+  drive/PlaybackGateway
+  (open-source-range! [gateway access-token file-id {:keys [start end]}]
+    (let [send-stream! (or (:stream-source-request! gateway)
+                           http-stream-send!)
+          response
+          (send-stream!
+           (authorized
+            {:method :get
+             :url (str (source-url file-id)
+                       "?alt=media&supportsAllDrives=true")
+             :headers {"Range" (str "bytes=" start "-" end)}}
+            access-token))]
+      (if (valid-playback-range-response? response start end)
+        response
+        (do
+          (some-> ^java.io.InputStream (:body response) .close)
+          (throw (errors/raise! "Google Drive playback response was invalid"
+                                {:type ::drive/invalid-playback-response
+                                 :status (long (or (:status response) 0))
+                                 :size (inc (- end start))}))))))
   drive/PickerDiagnostics
   (picker-diagnostics! [_ access-token]
     (let [about (send! (authorized

@@ -239,7 +239,7 @@
         (str
          "<script>"
          "window.__pickerState={loads:[],visible:[],diagnostics:[],callback:null,views:[],addedViews:[],selectableMimeTypes:null};"
-         "window.fetch=(_path,options)=>{window.__pickerState.diagnostics.push(JSON.parse(options.body));return Promise.resolve({ok:true});};"
+         "window.fetch=(path,options)=>{if(path==='/v1/drive/picker/diagnostic'){window.__pickerState.diagnostics.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:204});}return Promise.resolve({ok:false,status:415,json:()=>Promise.resolve({error:'browser_playback_not_supported'})});};"
          "class PickerView{constructor(kind='drive'){this.config={kind};window.__pickerState.views.push(this.config);}"
          "setMimeTypes(value){this.config.mimeTypes=value;return this;}"
          "setIncludeFolders(value){this.config.includeFolders=value;return this;}"
@@ -293,6 +293,46 @@
     (browser-outcome "agg-picker-browser-"
                      "Browser-level Picker regression requires Chrome or Chromium"
                      html (str "--window-size=" window-size))))
+
+(defn- video-player-browser-outcome [page window-size]
+  (let [fixture
+        (str
+         "<script>"
+         "window.__playerState={callback:null,loads:[],sessionRequests:[],playCalls:0};"
+         "window.fetch=(path,options={})=>{if(path==='/v1/drive/playback-sessions'){window.__playerState.sessionRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000115',contentType:'video/mp4',size:2048})});}return Promise.resolve({ok:true,status:204,json:()=>Promise.resolve({})});};"
+         "class PickerView{setMimeTypes(){return this;}setIncludeFolders(){return this;}setSelectFolderEnabled(){return this;}setMode(){return this;}setEnableDrives(){return this;}}"
+         "class UploadView extends PickerView{}"
+         "class PickerBuilder{addView(){return this;}setSelectableMimeTypes(){return this;}setOAuthToken(){return this;}setDeveloperKey(){return this;}setAppId(){return this;}setOrigin(){return this;}setCallback(callback){window.__playerState.callback=callback;return this;}build(){return {setVisible(){}};}}"
+         "window.google={picker:{DocsView:PickerView,DocsUploadView:UploadView,PickerBuilder,DocsViewMode:{LIST:'list'},Action:{LOADED:'loaded',PICKED:'picked',CANCEL:'cancel'}}};"
+         "window.gapi={load(_module,handlers){window.__playerState.loads.push(handlers);}};"
+         "Object.defineProperties(HTMLMediaElement.prototype,{duration:{configurable:true,get(){return this.__duration??NaN;}},currentTime:{configurable:true,get(){return this.__currentTime??0;},set(value){this.__currentTime=Number(value);this.dispatchEvent(new Event('timeupdate'));}},paused:{configurable:true,get(){return this.__paused!==false;}},volume:{configurable:true,get(){return this.__volume??1;},set(value){this.__volume=Number(value);}},buffered:{configurable:true,get(){return {length:2,start:index=>index===0?0:60,end:index=>index===0?30:90};}}});"
+         "HTMLMediaElement.prototype.load=function(){};HTMLMediaElement.prototype.play=function(){this.__paused=false;window.__playerState.playCalls++;this.dispatchEvent(new Event('play'));return Promise.resolve();};HTMLMediaElement.prototype.pause=function(){this.__paused=true;this.dispatchEvent(new Event('pause'));};"
+         "</script>")
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "(async()=>{let outcome;try{"
+         "const state=window.__playerState;state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'private-mp4',name:'ride.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));"
+         "const player=document.getElementById('video-player'),video=document.getElementById('source-video-player'),timeline=document.getElementById('video-timeline'),fit=document.getElementById('fit-mode'),play=document.getElementById('video-play-pause');video.__duration=125.5;video.dispatchEvent(new Event('loadedmetadata'));video.dispatchEvent(new Event('progress'));"
+         "const initial={hidden:player.hidden,paused:video.paused,currentTime:video.currentTime,playCalls:state.playCalls,src:video.getAttribute('src'),selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,time:document.getElementById('video-time').textContent,timelineMax:timeline.getAttribute('aria-valuemax'),bufferedSegments:document.querySelectorAll('#video-buffered-ranges span').length,fit:getComputedStyle(video).objectFit,request:state.sessionRequests[0]};"
+         "fit.value='crop';fit.dispatchEvent(new Event('input',{bubbles:true}));const cropped=getComputedStyle(video).objectFit;"
+         "document.querySelector('[data-seek-seconds=\"10\"]').click();document.querySelector('[data-seek-seconds=\"60\"]').click();document.querySelector('[data-seek-seconds=\"-10\"]').click();const transportTime=video.currentTime;"
+         "const rect=timeline.getBoundingClientRect();timeline.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:rect.left+rect.width*.75}));const hover={hidden:document.getElementById('video-timeline-tooltip').hidden,text:document.getElementById('video-timeline-tooltip').textContent};timeline.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:rect.left+rect.width*.5,pointerId:1}));const scrubTime=video.currentTime;timeline.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,key:'ArrowRight'}));const keyboardTime=video.currentTime;"
+         "play.click();await Promise.resolve();const playing={paused:video.paused,label:play.textContent};play.click();const paused={paused:video.paused,label:play.textContent};"
+         "video.dispatchEvent(new Event('error'));const unsupported={selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,message:document.getElementById('video-player-status').textContent};"
+         "outcome={initial,cropped,transportTime,scrubTime,keyboardTime,hover,playing,paused,unsupported,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+         "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "<script>(function(){"
+                              (str fixture "<script>(function(){"))
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-video-player-browser-"
+     "Browser-level video player regression requires Chrome or Chromium"
+     html
+     (str "--window-size=" window-size))))
 
 (defn- preview-status-browser-outcome [page]
   (let [terminal-fragment
@@ -1426,6 +1466,81 @@
            (str/index-of page step-3)))
     (is (not (re-find #"<div class=\"step\">Step [^<]+</div><h2>Optional source video</h2>"
                       page)))))
+
+(deftest compose-page-includes-a-custom-output-framing-video-player
+  (let [page (ui/page {:user {:email "member@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :picker-config {:access-token "access-test"
+                                       :api-key "key-test"
+                                       :app-id "app-test"
+                                       :csrf "csrf-test"}
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})]
+    (doseq [fragment ["id=\"video-player\""
+                      "id=\"source-video-player\""
+                      "playsinline"
+                      "id=\"video-play-pause\""
+                      "data-seek-seconds=\"-60\""
+                      "data-seek-seconds=\"-10\""
+                      "data-seek-seconds=\"10\""
+                      "data-seek-seconds=\"60\""
+                      "id=\"video-volume\""
+                      "id=\"video-fullscreen\""
+                      "id=\"video-timeline\""
+                      "role=\"slider\""
+                      "aria-label=\"Video timeline\""
+                      "id=\"video-buffered-ranges\""
+                      "id=\"video-playhead\""
+                      "id=\"video-timeline-tooltip\""
+                      "Output framing preview"
+                      "Player audio is the original source"]]
+      (is (str/includes? page fragment) fragment))
+    (is (not (re-find #"<video[^>]+controls" page)))
+    (is (< (str/index-of page "id=\"video-player\"")
+           (str/index-of page "<h2>Optional source video</h2>")))))
+
+(deftest selected-video-player-seeks-frames-and-fails-without-clearing-render-selection
+  (let [page (ui/page {:user {:email "owner@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :picker-config {:access-token "access-test"
+                                       :api-key "key-test"
+                                       :app-id "app-test"
+                                       :csrf "csrf-test"}
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})
+        outcomes [(video-player-browser-outcome page "1280,900")
+                  (video-player-browser-outcome page "390,844")]]
+    (doseq [outcome outcomes]
+      (is (nil? (:error outcome)) outcome)
+      (is (= {:hidden false
+              :paused true
+              :currentTime 0
+              :playCalls 0
+              :src "/v1/drive/playback/00000000-0000-0000-0000-000000000115"
+              :selection "ride.mp4"
+              :fileId "private-mp4"
+              :time "00:00:00.000 / 00:02:05.500"
+              :timelineMax "125.5"
+              :bufferedSegments 2
+              :fit "contain"
+              :request {:fileId "private-mp4"}}
+             (:initial outcome)))
+      (is (= "cover" (:cropped outcome)))
+      (is (= 60 (:transportTime outcome)))
+      (is (= 62.75 (:scrubTime outcome)))
+      (is (= 63.75 (:keyboardTime outcome)))
+      (is (= {:hidden false :text "00:01:34.125"} (:hover outcome)))
+      (is (= {:paused false :label "Pause"} (:playing outcome)))
+      (is (= {:paused true :label "Play"} (:paused outcome)))
+      (is (= "ride.mp4" (get-in outcome [:unsupported :selection])))
+      (is (= "private-mp4" (get-in outcome [:unsupported :fileId])))
+      (is (str/includes? (get-in outcome [:unsupported :message])
+                         "remains selected for rendering"))
+      (is (:noHorizontalOverflow outcome) outcome))
+    (is (= 1280 (:viewportWidth (first outcomes))))
+    (is (<= (:viewportWidth (second outcomes)) 500))))
 
 (deftest compose-page-exposes-bounded-future-trace-opacity-control
   (let [page (ui/page {:user {:email "member@example.com" :role :member}

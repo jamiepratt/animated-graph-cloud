@@ -189,6 +189,148 @@ paths:
           description: Diagnostic payload is invalid.
         "401": {$ref: "#/components/responses/AuthenticationRequired"}
         "403": {$ref: "#/components/responses/CsrfRequired"}
+  /v1/drive/playback-sessions:
+    post:
+      operationId: createDrivePlaybackSession
+      tags: [Browser authorization]
+      summary: Prepare one selected Drive MP4 for private browser playback.
+      description: |
+        Revalidates authoritative Drive metadata, accepts only `video/mp4` for
+        this non-transcoding player, and returns an opaque same-origin URL.
+        The Drive file ID and access token never enter that URL. One-hour,
+        owner- and URL-bound playback authority is signed into the
+        Firebase-compatible `__session` HttpOnly cookie while preserving the
+        authenticated browser session.
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [fileId]
+              properties:
+                fileId: {type: string, minLength: 1, maxLength: 256}
+      responses:
+        "201":
+          description: Browser playback session created.
+          headers:
+            Set-Cookie:
+              description: Signed Firebase-compatible `__session` cookie containing the existing session and short-lived playback authority.
+              schema: {type: string}
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [playbackUrl, contentType, size]
+                properties:
+                  playbackUrl:
+                    type: string
+                    pattern: "^/v1/drive/playback/[0-9a-f-]{36}$"
+                  contentType: {const: video/mp4}
+                  size: {type: integer, minimum: 1, maximum: 2147483648}
+        "400":
+          description: Selected Drive metadata is invalid.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "403": {$ref: "#/components/responses/CsrfRequired"}
+        "415":
+          description: Source remains renderable but original browser playback is not supported.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      error: {const: browser_playback_not_supported}
+        "503":
+          description: Restricted Drive access or source metadata is temporarily unavailable.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+  /v1/drive/playback/{playbackId}:
+    get:
+      operationId: streamDrivePlayback
+      tags: [Browser authorization]
+      summary: Stream an owned selected Drive MP4 with browser Range semantics.
+      description: |
+        Rechecks the active member session and signed owner/path binding on
+        every request. One single `Range` is accepted. Open-ended and suffix
+        ranges are capped at 8 MiB, proxied directly from Drive, and never
+        persisted. Drive must return truthful 206 `Content-Range` and
+        `Content-Length` headers. The response is always private and no-store.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: playbackId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: Range
+          in: header
+          required: false
+          description: One byte range, including bounded, open-ended, or suffix form.
+          schema:
+            type: string
+            examples: ["bytes=0-1048575", "bytes=1048576-", "bytes=-1048576"]
+      responses:
+        "200":
+          description: Complete MP4 returned when Range is omitted.
+          headers:
+            Accept-Ranges:
+              schema: {const: bytes}
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            video/mp4:
+              schema: {type: string, contentEncoding: binary}
+        "206":
+          description: Requested single byte range.
+          headers:
+            Accept-Ranges:
+              schema: {const: bytes}
+            Content-Range:
+              schema: {type: string, example: "bytes 0-1048575/7340032"}
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            video/mp4:
+              schema: {type: string, contentEncoding: binary}
+        "401":
+          description: Authentication or owner-bound playback authority is invalid or expired.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "416":
+          description: Range is malformed, multiple, empty, or outside the selected source.
+          headers:
+            Accept-Ranges:
+              schema: {const: bytes}
+            Content-Range:
+              schema: {type: string, example: "bytes */7340032"}
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      error: {const: playback_range_not_satisfiable}
+        "502":
+          description: Drive returned an invalid or untruthful ranged response.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
   /v1/preview:
     post:
       operationId: createPreview
@@ -1130,6 +1272,11 @@ components:
             - kms_unavailable
             - grant_persistence_failed
             - picker_not_configured
+            - invalid_playback_source
+            - browser_playback_not_supported
+            - playback_session_invalid
+            - playback_range_not_satisfiable
+            - drive_playback_unavailable
             - compositing_requires_durable_job
             - synchronous_overlay_duration_exceeded
             - source_video_too_large

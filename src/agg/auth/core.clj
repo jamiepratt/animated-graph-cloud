@@ -222,11 +222,12 @@
 
 ;; Firebase Hosting forwards only the specially named __session cookie.
 (defn issue-browser-cookie
-  [{:keys [session-key]} {:keys [session oauth]}]
+  [{:keys [session-key]} {:keys [session oauth playback]}]
   (sign-json session-key
              (cond-> {}
                (not (str/blank? session)) (assoc :session session)
-               (not (str/blank? oauth)) (assoc :oauth oauth))))
+               (not (str/blank? oauth)) (assoc :oauth oauth)
+               (not (str/blank? playback)) (assoc :playback playback))))
 
 (defn browser-cookie
   [{:keys [session-key]} token]
@@ -238,7 +239,8 @@
         ;; the OAuth callback replaces the temporary browser cookie.
         (when (and (map? cookie)
                    (or (contains? cookie :session)
-                       (contains? cookie :oauth)))
+                       (contains? cookie :oauth)
+                       (contains? cookie :playback)))
           cookie))
       (catch Throwable _ nil))))
 
@@ -343,6 +345,49 @@
     (catch Throwable error
       (throw (errors/raise! "CSRF token is invalid"
                             {:type ::invalid-csrf}
+                            error)))))
+
+(def ^:private playback-seconds 3600)
+
+(defn issue-playback-token
+  [{:keys [session-key clock]}
+   {:keys [subject playback-id file-id mime-type size]}]
+  (sign-json session-key
+             {:purpose "drive-playback"
+              :sub subject
+              :playbackId playback-id
+              :fileId file-id
+              :mimeType mime-type
+              :size size
+              :exp (.getEpochSecond
+                    (.plusSeconds (Instant/now clock) playback-seconds))}))
+
+(defn playback-source
+  [{:keys [session-key clock]} subject playback-id token]
+  (try
+    (let [{:keys [purpose sub playbackId fileId mimeType size exp]}
+          (verify-json session-key token ::invalid-playback)]
+      (when-not (and (= "drive-playback" purpose)
+                     (= subject sub)
+                     (= playback-id playbackId)
+                     (not (str/blank? fileId))
+                     (string? mimeType)
+                     (integer? size)
+                     (pos? size)
+                     (number? exp)
+                     (> (long exp) (.getEpochSecond (Instant/now clock))))
+        (throw (errors/raise! "Playback session is invalid or expired"
+                              {:type ::invalid-playback})))
+      {:file-id fileId :mime-type mimeType :size size})
+    (catch clojure.lang.ExceptionInfo error
+      (if (= ::invalid-playback (:type (ex-data error)))
+        (throw error)
+        (throw (errors/raise! "Playback session is invalid"
+                              {:type ::invalid-playback}
+                              error))))
+    (catch Throwable error
+      (throw (errors/raise! "Playback session is invalid"
+                            {:type ::invalid-playback}
                             error)))))
 
 (defn begin-flow!

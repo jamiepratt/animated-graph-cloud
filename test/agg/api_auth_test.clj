@@ -1268,6 +1268,218 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest selected-drive-video-opens-ranged-browser-playback
+  (let [port (available-port)
+        {:keys [system session]} (auth-fixture)
+        source-bytes (.getBytes "0123456789abcdefghij"
+                                java.nio.charset.StandardCharsets/UTF_8)
+        source-gateway
+        (reify
+          drive/SourceGateway
+          (source-metadata! [_ access-token file-id]
+            (is (= "drive-access" access-token))
+            {:id file-id
+             :name "selected.mp4"
+             :mimeType "video/mp4"
+             :size (alength source-bytes)
+             :trashed false})
+          (stream-source! [_ _ _ _]
+            (throw (AssertionError. "Playback must use ranged streaming")))
+          drive/PlaybackGateway
+          (open-source-range! [_ access-token file-id byte-range]
+            (is (= "drive-access" access-token))
+            (is (= "private-drive-file" file-id))
+            (is (= {:start 6 :end 10} byte-range))
+            {:status 206
+             :headers {"content-range" "bytes 6-10/20"
+                       "content-length" "5"}
+             :body (java.io.ByteArrayInputStream.
+                    (java.util.Arrays/copyOfRange source-bytes 6 11))}))
+        auth-system (assoc system :drive source-gateway)
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        server (start-api! port {:auth-system auth-system})]
+    (try
+      (let [created
+            (post! port "/v1/drive/playback-sessions"
+                   {:fileId "private-drive-file"}
+                   {"Content-Type" "application/json"
+                    "Cookie" (str "agg_session=" session)
+                    "X-CSRF-Token" csrf})
+            created-body (json/read-str (.body created))
+            playback-url (get created-body "playbackUrl")
+            set-cookie (.orElse
+                        (.firstValue (.headers created) "Set-Cookie") "")
+            playback-cookie (first (.split set-cookie ";" 2))
+            streamed
+            (get! port playback-url
+                  {"Cookie" (str "agg_session=" session "; " playback-cookie)
+                   "Range" "bytes=6-10"})]
+        (is (= 201 (.statusCode created)))
+        (is (re-matches #"/v1/drive/playback/[0-9a-f-]{36}" playback-url))
+        (is (not (str/includes? playback-url "private-drive-file")))
+        (is (str/starts-with? set-cookie "__session="))
+        (is (str/includes? set-cookie "HttpOnly"))
+        (is (str/includes? set-cookie "Path=/"))
+        (is (= 206 (.statusCode streamed)))
+        (is (= "bytes 6-10/20"
+               (.orElse (.firstValue (.headers streamed) "Content-Range") "")))
+        (is (= "bytes"
+               (.orElse (.firstValue (.headers streamed) "Accept-Ranges") "")))
+        (is (= "video/mp4"
+               (.orElse (.firstValue (.headers streamed) "Content-Type") "")))
+        (is (= "6789a" (.body streamed))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest drive-playback-supports-browser-ranges-and-rejects-invalid-or-unowned-sessions
+  (let [port (available-port)
+        {:keys [system session]} (auth-fixture)
+        source-bytes (.getBytes "0123456789abcdefghij"
+                                java.nio.charset.StandardCharsets/UTF_8)
+        ranges (atom [])
+        source-gateway
+        (reify
+          drive/SourceGateway
+          (source-metadata! [_ _ file-id]
+            {:id file-id
+             :name "selected.mp4"
+             :mimeType "video/mp4"
+             :size (alength source-bytes)
+             :trashed false})
+          (stream-source! [_ _ _ _]
+            (throw (AssertionError. "Playback must use ranged streaming")))
+          drive/PlaybackGateway
+          (open-source-range! [_ _ _ {:keys [start end] :as byte-range}]
+            (swap! ranges conj byte-range)
+            {:status 206
+             :headers {"content-range"
+                       (str "bytes " start "-" end "/"
+                            (alength source-bytes))
+                       "content-length" (str (inc (- end start)))}
+             :body (java.io.ByteArrayInputStream.
+                    (java.util.Arrays/copyOfRange source-bytes start (inc end)))}))
+        auth-system (assoc system :drive source-gateway)
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        other-session
+        (auth/issue-session auth-system {:subject "google-subject-2"
+                                         :email "owner@example.com"})
+        server (start-api! port {:auth-system auth-system})]
+    (try
+      (let [created
+            (post! port "/v1/drive/playback-sessions"
+                   {:fileId "private-drive-file"}
+                   {"Content-Type" "application/json"
+                    "Cookie" (str "agg_session=" session)
+                    "X-CSRF-Token" csrf})
+            playback-url (get (json/read-str (.body created)) "playbackUrl")
+            playback-cookie
+            (-> (.firstValue (.headers created) "Set-Cookie")
+                (.orElse "")
+                (.split ";" 2)
+                first)
+            playback-browser-token
+            (second (.split playback-cookie "=" 2))
+            playback-token
+            (:playback (auth/browser-cookie auth-system
+                                            playback-browser-token))
+            unowned-browser-token
+            (auth/issue-browser-cookie auth-system
+                                       {:session other-session
+                                        :playback playback-token})
+            cookies (str "agg_session=" session "; " playback-cookie)
+            complete (get! port playback-url {"Cookie" cookies})
+            open-ended (get! port playback-url
+                             {"Cookie" cookies "Range" "bytes=15-"})
+            suffix (get! port playback-url
+                         {"Cookie" cookies "Range" "bytes=-4"})
+            invalid (get! port playback-url
+                          {"Cookie" cookies "Range" "bytes=20-"})
+            multiple (get! port playback-url
+                           {"Cookie" cookies
+                            "Range" "bytes=0-1,4-5"})
+            unowned (get! port playback-url
+                          {"Cookie" (str "__session=" unowned-browser-token)
+                           "Range" "bytes=0-1"})]
+        (is (= 200 (.statusCode complete)))
+        (is (= "0123456789abcdefghij" (.body complete)))
+        (is (= 206 (.statusCode open-ended)))
+        (is (= "bytes 15-19/20"
+               (.orElse (.firstValue (.headers open-ended) "Content-Range")
+                        "")))
+        (is (= "fghij" (.body open-ended)))
+        (is (= 206 (.statusCode suffix)))
+        (is (= "bytes 16-19/20"
+               (.orElse (.firstValue (.headers suffix) "Content-Range") "")))
+        (is (= "ghij" (.body suffix)))
+        (doseq [response [invalid multiple]]
+          (is (= 416 (.statusCode response)))
+          (is (= "bytes */20"
+                 (.orElse (.firstValue (.headers response) "Content-Range")
+                          ""))))
+        (is (= 401 (.statusCode unowned)))
+        (is (= [{:start 0 :end 19}
+                {:start 15 :end 19}
+                {:start 16 :end 19}]
+               @ranges)))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest renderable-non-mp4-source-is-kept-but-not-opened-for-browser-playback
+  (let [port (available-port)
+        {:keys [system session]} (auth-fixture)
+        gateway
+        (reify
+          drive/SourceGateway
+          (source-metadata! [_ _ file-id]
+            {:id file-id
+             :name "selected.mov"
+             :mimeType "video/quicktime"
+             :size 100
+             :trashed false})
+          (stream-source! [_ _ _ _] nil)
+          drive/PlaybackGateway
+          (open-source-range! [_ _ _ _]
+            (throw (AssertionError. "Unsupported playback must not stream"))))
+        auth-system (assoc system :drive gateway)
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        server (start-api! port {:auth-system auth-system})]
+    (try
+      (let [response
+            (post! port "/v1/drive/playback-sessions"
+                   {:fileId "renderable-private-mov"}
+                   {"Content-Type" "application/json"
+                    "Cookie" (str "agg_session=" session)
+                    "X-CSRF-Token" csrf})]
+        (is (= 415 (.statusCode response)))
+        (is (= {"error" "browser_playback_not_supported"}
+               (json/read-str (.body response))))
+        (is (.isEmpty (.firstValue (.headers response) "Set-Cookie"))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest playback-session-rejects-unbounded-or-ambiguous-source-payloads
+  (let [port (available-port)
+        {:keys [system session]} (auth-fixture)
+        csrf (auth/issue-csrf-token system {:subject "google-subject-1"})
+        server (start-api! port {:auth-system system})
+        headers {"Content-Type" "application/json"
+                 "Cookie" (str "agg_session=" session)
+                 "X-CSRF-Token" csrf}]
+    (try
+      (doseq [body [{} {:fileId ""}
+                    {:fileId (apply str (repeat 257 "x"))}
+                    {:fileId "video-1" :unexpected true}]]
+        (let [response (post! port "/v1/drive/playback-sessions"
+                              body headers)]
+          (is (= 400 (.statusCode response)))
+          (is (= {"error" "invalid_playback_source"}
+                 (json/read-str (.body response))))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest allowlisted-members-cannot-read-another-users-job
   (let [port (available-port)
         lifecycle (jobs/in-memory-system)

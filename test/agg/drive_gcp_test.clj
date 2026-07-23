@@ -82,6 +82,72 @@
     (is (= "Bearer access"
            (get-in (first @stream-requests) [:headers "Authorization"])))))
 
+(deftest playback-range-forwards-authentication-and-validates-drive-headers
+  (let [requests (atom [])
+        gateway
+        (assoc
+         (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+         :stream-source-request!
+         (fn [request]
+           (swap! requests conj request)
+           {:status 206
+            :headers {"content-range" "bytes 6-10/20"
+                      "content-length" "5"
+                      "content-type" "video/mp4"}
+            :body (ByteArrayInputStream.
+                   (.getBytes "6789a" StandardCharsets/UTF_8))}))
+        response (drive/open-source-range! gateway "drive-access" "video-1"
+                                           {:start 6 :end 10})]
+    (is (= 206 (:status response)))
+    (is (= {"content-range" "bytes 6-10/20"
+            "content-length" "5"
+            "content-type" "video/mp4"}
+           (:headers response)))
+    (is (= "6789a"
+           (with-open [body (:body response)]
+             (String. (.readAllBytes body) StandardCharsets/UTF_8))))
+    (is (= "Bearer drive-access"
+           (get-in (first @requests) [:headers "Authorization"])))
+    (is (= "bytes=6-10"
+           (get-in (first @requests) [:headers "Range"])))
+    (is (str/includes? (:url (first @requests))
+                       "alt=media&supportsAllDrives=true"))))
+
+(deftest playback-range-rejects-untruthful-drive-response-headers
+  (doseq [response [{:status 200
+                     :headers {"content-length" "5"}
+                     :body "6789a"}
+                    {:status 206
+                     :headers {"content-range" "bytes 5-9/20"
+                               "content-length" "5"}
+                     :body "6789a"}
+                    {:status 206
+                     :headers {"content-range" "bytes 6-10/20"
+                               "content-length" "4"}
+                     :body "6789a"}]]
+    (let [closed? (atom false)
+          gateway
+          (assoc
+           (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+           :stream-source-request!
+           (constantly
+            (assoc response
+                   :body
+                   (proxy [ByteArrayInputStream]
+                          [(.getBytes (:body response)
+                                      StandardCharsets/UTF_8)]
+                     (close []
+                       (reset! closed? true)
+                       (proxy-super close))))))]
+      (is (= ::drive/invalid-playback-response
+             (try
+               (drive/open-source-range! gateway "drive-access" "video-1"
+                                         {:start 6 :end 10})
+               nil
+               (catch clojure.lang.ExceptionInfo error
+                 (:type (ex-data error))))))
+      (is @closed?))))
+
 (deftest picker-diagnostics-probe-account-and-video-index-without-returning-files
   (let [requests (atom [])
         responses (atom [{:status 200

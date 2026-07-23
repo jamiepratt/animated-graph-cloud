@@ -33,6 +33,9 @@
   (source-metadata! [gateway access-token file-id])
   (stream-source! [gateway access-token file-id output]))
 
+(defprotocol PlaybackGateway
+  (open-source-range! [gateway access-token file-id byte-range]))
+
 (defprotocol PickerDiagnostics
   (picker-diagnostics! [gateway access-token]))
 

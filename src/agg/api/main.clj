@@ -59,6 +59,9 @@
 (def ^:private preview-ui-path-pattern
   (re-pattern (str "/ui/previews/" uuid-path-component)))
 
+(def ^:private drive-playback-path-pattern
+  (re-pattern (str "/v1/drive/playback/" uuid-path-component)))
+
 (def ^:private public-assets
   {"/openapi.yaml" ["openapi.yaml" "application/yaml; charset=utf-8"]
    "/alpha-compose-mark.svg" ["public/alpha-compose-mark.svg" "image/svg+xml; charset=utf-8"]
@@ -1232,6 +1235,142 @@
                     :indexStatus index-status})
       (respond-json! exchange 200 {:accepted true}))))
 
+(def ^:private max-playback-range-bytes (* 8 1024 1024))
+
+(defn- invalid-playback-range! [size]
+  (throw (errors/raise! "Playback range is not satisfiable"
+                        {:type ::invalid-playback-range :size size})))
+
+(defn- playback-range [header size]
+  (when-not (pos? size)
+    (invalid-playback-range! size))
+  (if (str/blank? header)
+    {:start 0 :end (dec size) :partial? false}
+    (let [[_ start-text end-text]
+          (re-matches #"(?i)bytes=(\d*)-(\d*)" header)]
+      (when-not (or (not (str/blank? start-text))
+                    (not (str/blank? end-text)))
+        (invalid-playback-range! size))
+      (if (str/blank? start-text)
+        (let [suffix-length (parse-long end-text)]
+          (when-not (and suffix-length (pos? suffix-length))
+            (invalid-playback-range! size))
+          (let [length (min size suffix-length max-playback-range-bytes)]
+            {:start (- size length)
+             :end (dec size)
+             :partial? true}))
+        (let [start (parse-long start-text)
+              requested-end (when-not (str/blank? end-text)
+                              (parse-long end-text))]
+          (when-not (and start
+                         (< start size)
+                         (or (nil? requested-end)
+                             (>= requested-end start)))
+            (invalid-playback-range! size))
+          {:start start
+           :end (min (dec size)
+                     (or requested-end (dec size))
+                     (dec (+ start max-playback-range-bytes)))
+           :partial? true})))))
+
+(defn- respond-invalid-playback-range! [^HttpExchange exchange size]
+  (doto (.getResponseHeaders exchange)
+    (.set "Accept-Ranges" "bytes")
+    (.set "Content-Range" (str "bytes */" (max 0 (long size))))
+    (.set "Cache-Control" "no-store"))
+  (respond-json! exchange 416 {:error "playback_range_not_satisfiable"}))
+
+(defn- valid-playback-response?
+  [{:keys [status headers body]} start end size]
+  (and (= 206 status)
+       (some? body)
+       (= (str "bytes " start "-" end "/" size)
+          (get headers "content-range"))
+       (= (str (inc (- end start)))
+          (get headers "content-length"))))
+
+(defn- create-playback-session!
+  [^HttpExchange exchange auth-system]
+  (let [user (require-session-user! exchange auth-system)
+        _ (require-csrf! exchange auth-system user)
+        request (request-json exchange)
+        file-id (:fileId request)
+        _ (when-not (and (= #{:fileId} (set (keys request)))
+                         (string? file-id)
+                         (<= 1 (count file-id) 256))
+            (throw (errors/raise! "Drive playback source is invalid"
+                                  {:type ::invalid-playback-source})))
+        {:keys [access-token]} (auth/drive-access! auth-system (:subject user))
+        gateway (:drive auth-system)
+        _ (when-not (and (satisfies? drive/SourceGateway gateway)
+                         (satisfies? drive/PlaybackGateway gateway))
+            (throw (errors/raise! "Drive playback dependencies are incomplete"
+                                  {:type ::drive/source-unavailable})))
+        metadata (drive/source-metadata! gateway access-token file-id)
+        prepared (contract/attach-source-metadata
+                  {:source-video {:file-id file-id}} metadata)
+        {:keys [mimeType size]} (get-in prepared [:source-video :metadata])
+        _ (when-not (= "video/mp4" mimeType)
+            (throw (errors/raise! "Source cannot be played by this browser player"
+                                  {:type ::browser-playback-not-supported})))
+        playback-id (str (UUID/randomUUID))
+        playback-path (str "/v1/drive/playback/" playback-id)
+        playback-token (auth/issue-playback-token
+                        auth-system
+                        {:subject (:subject user)
+                         :playback-id playback-id
+                         :file-id file-id
+                         :mime-type mimeType
+                         :size size})
+        browser-token
+        (auth/issue-browser-cookie
+         auth-system
+         (assoc (or (browser-cookie exchange auth-system) {})
+                :session (session-token exchange auth-system)
+                :playback playback-token))]
+    (.add (.getResponseHeaders exchange) "Set-Cookie"
+          (browser-cookie-header browser-token))
+    (respond-json! exchange 201
+                   {:playbackUrl playback-path
+                    :contentType mimeType
+                    :size size})))
+
+(defn- stream-playback!
+  [^HttpExchange exchange auth-system path]
+  (let [user (require-session-user! exchange auth-system)
+        playback-id (last (.split path "/"))
+        {:keys [file-id mime-type size]}
+        (auth/playback-source auth-system (:subject user) playback-id
+                              (:playback (browser-cookie exchange auth-system)))
+        {:keys [start end partial?] :as byte-range}
+        (playback-range (some-> exchange .getRequestHeaders (.getFirst "Range"))
+                        size)
+        {:keys [access-token]} (auth/drive-access! auth-system (:subject user))
+        gateway (:drive auth-system)
+        {:keys [body] :as source-response}
+        (drive/open-source-range! gateway access-token file-id
+                                  (select-keys byte-range [:start :end]))
+        response-status (if partial? 206 200)
+        content-length (inc (- end start))]
+    (when-not (valid-playback-response? source-response start end size)
+      (when body (.close ^java.io.InputStream body))
+      (throw (errors/raise! "Google Drive playback response was invalid"
+                            {:type ::drive/invalid-playback-response
+                             :status (long (or (:status source-response) 0))
+                             :size content-length})))
+    (doto (.getResponseHeaders exchange)
+      (.set "Content-Type" mime-type)
+      (.set "Cache-Control" "no-store")
+      (.set "X-Content-Type-Options" "nosniff")
+      (.set "Accept-Ranges" "bytes"))
+    (when partial?
+      (.set (.getResponseHeaders exchange) "Content-Range"
+            (str "bytes " start "-" end "/" size)))
+    (.sendResponseHeaders exchange response-status content-length)
+    (with-open [input ^java.io.InputStream body
+                output (.getResponseBody exchange)]
+      (.transferTo input output))))
+
 (defn- cancel-job! [exchange job-service job-id]
   (let [job (jobs/cancel-job! job-service job-id)]
     (respond-json! exchange
@@ -1478,6 +1617,14 @@
                                   (and auth-system (= "POST" method)
                                        (= "/v1/drive/picker/diagnostic" path))
                                   (picker-diagnostic! exchange auth-system dependencies)
+
+                                  (and auth-system (= "POST" method)
+                                       (= "/v1/drive/playback-sessions" path))
+                                  (create-playback-session! exchange auth-system)
+
+                                  (and auth-system (= "GET" method)
+                                       (re-matches drive-playback-path-pattern path))
+                                  (stream-playback! exchange auth-system path)
 
                                   (and auth-system (= "POST" method) (= "/ui/preview" path))
                                   (let [user (require-session-user! exchange auth-system)]
@@ -1743,6 +1890,10 @@
                   ::auth/invalid-csrf
                   (respond-json! exchange 403 {:error "csrf_required"})
 
+                  ::auth/invalid-playback
+                  (respond-json! exchange 401
+                                 {:error "playback_session_invalid"})
+
                   ::auth/drive-grant-required
                   (do
                     (when (session-token exchange auth-system)
@@ -1754,6 +1905,23 @@
 
                   ::invalid-picker-diagnostic
                   (respond-json! exchange 400 {:error "invalid_picker_diagnostic"})
+
+                  ::invalid-playback-source
+                  (respond-json! exchange 400
+                                 {:error "invalid_playback_source"})
+
+                  ::invalid-playback-range
+                  (respond-invalid-playback-range!
+                   exchange (or (:size (ex-data error)) 0))
+
+                  ::browser-playback-not-supported
+                  (respond-json! exchange 415
+                                 {:error "browser_playback_not_supported"})
+
+                  ::drive/invalid-playback-response
+                  (respond-json! exchange 502
+                                 {:error "drive_playback_unavailable"
+                                  :retryable true})
 
                   ::compositing-not-supported
                   (respond-json! exchange 400 {:error "compositing_requires_durable_job"})

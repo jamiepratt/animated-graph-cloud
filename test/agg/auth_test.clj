@@ -95,12 +95,53 @@
                                      :email "owner@example.com"})
         flow (auth/begin-flow! system :login nil)
         cookie (auth/issue-browser-cookie
-                system {:session session :oauth (:stateCookie flow)})]
+                system {:session session
+                        :oauth (:stateCookie flow)
+                        :playback "signed-playback"})]
     (is (= session (:session (auth/browser-cookie system cookie))))
     (is (= (:stateCookie flow)
            (:oauth (auth/browser-cookie system cookie))))
+    (is (= "signed-playback"
+           (:playback (auth/browser-cookie system cookie))))
     (is (nil? (auth/browser-cookie system session)))
     (is (nil? (auth/browser-cookie system (str cookie "tampered"))))))
+
+(deftest drive-playback-token-is-owner-path-and-expiry-bound
+  (let [{:keys [system]} (drive-fixture)
+        source {:subject "google-subject-1"
+                :playback-id "playback-1"
+                :file-id "private-file-1"
+                :mime-type "video/mp4"
+                :size 20}
+        token (auth/issue-playback-token system source)
+        invalid-type
+        (fn [candidate-system subject playback-id candidate-token]
+          (try
+            (auth/playback-source candidate-system subject playback-id
+                                  candidate-token)
+            nil
+            (catch clojure.lang.ExceptionInfo error
+              (:type (ex-data error)))))]
+    (is (= {:file-id "private-file-1"
+            :mime-type "video/mp4"
+            :size 20}
+           (auth/playback-source system "google-subject-1" "playback-1"
+                                 token)))
+    (is (= ::auth/invalid-playback
+           (invalid-type system "google-subject-2" "playback-1" token)))
+    (is (= ::auth/invalid-playback
+           (invalid-type system "google-subject-1" "playback-2" token)))
+    (is (= ::auth/invalid-playback
+           (invalid-type
+            (assoc system :clock
+                   (Clock/fixed (Instant/parse "2026-07-17T13:00:01Z")
+                                ZoneOffset/UTC))
+            "google-subject-1" "playback-1" token)))
+    (is (= ::auth/invalid-playback
+           (invalid-type
+            system "google-subject-1" "empty-source"
+            (auth/issue-playback-token
+             system (assoc source :playback-id "empty-source" :size 0)))))))
 
 (deftest login-callback-requires-matching-unexpired-state-and-allowlisted-email
   (let [exchanges (atom [])
