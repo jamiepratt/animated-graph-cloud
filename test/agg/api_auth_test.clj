@@ -1261,7 +1261,11 @@
     (try
       (let [response (post! port "/v1/jobs"
                             (assoc (fixture/render-request)
-                                   :sourceVideo {:fileId "crafted-file-id"})
+                                   :sourceVideo
+                                   {:fileId "crafted-file-id"
+                                    :recordingStartAt
+                                    "2026-07-23T12:30:15Z"
+                                    :timeZone "Europe/Warsaw"})
                             {"Content-Type" "application/json"
                              "Idempotency-Key" "crafted-source"
                              "Cookie" (str "agg_session=" session)
@@ -1334,6 +1338,74 @@
         (is (= "video/mp4"
                (.orElse (.firstValue (.headers streamed) "Content-Type") "")))
         (is (= "6789a" (.body streamed))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest selected-drive-video-clock-inspection-is-owner-bound-and-advisory
+  (let [port (available-port)
+        {:keys [system session]} (auth-fixture)
+        ranges (atom [])
+        source-bytes
+        (.getBytes
+         "movie mvhd 2026-07-23T14:30:15+02:00"
+         java.nio.charset.StandardCharsets/UTF_8)
+        source-gateway
+        (reify
+          drive/SourceGateway
+          (source-metadata! [_ access-token file-id]
+            (is (= "drive-access" access-token))
+            (is (= "private-drive-file" file-id))
+            {:id file-id
+             :name "authoritative-name.mp4"
+             :mimeType "video/mp4"
+             :size (alength source-bytes)
+             :trashed false
+             :videoMediaMetadata {:durationMillis "125500"
+                                  :width 1920
+                                  :height 1080}})
+          (stream-source! [_ _ _ _]
+            (throw (AssertionError. "Inspection must use bounded ranges")))
+          drive/PlaybackGateway
+          (open-source-range! [_ _ _ byte-range]
+            (swap! ranges conj byte-range)
+            {:status 206
+             :headers {}
+             :body (java.io.ByteArrayInputStream. source-bytes)}))
+        auth-system (assoc system :drive source-gateway)
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        server (start-api! port {:auth-system auth-system})
+        path "/v1/drive/recording-clock-inspections"
+        headers {"Content-Type" "application/json"
+                 "Cookie" (str "agg_session=" session)
+                 "X-CSRF-Token" csrf}]
+    (try
+      (let [response (post! port path {:fileId "private-drive-file"} headers)
+            body (json/read-str (.body response) :key-fn keyword)]
+        (is (= 200 (.statusCode response)))
+        (is (= "authoritative-name.mp4" (:fileName body)))
+        (is (= 125.5 (:durationSeconds body)))
+        (is (= "2026-07-23T14:30:15+02:00"
+               (get-in body [:candidates 0 :value])))
+        (is (= [{:start 0
+                 :end (dec (alength source-bytes))
+                 :timeout-ms 3000}]
+               @ranges))
+        (is (= 401
+               (.statusCode
+                (post! port path {:fileId "private-drive-file"}
+                       {"Content-Type" "application/json"}))))
+        (is (= 403
+               (.statusCode
+                (post! port path {:fileId "private-drive-file"}
+                       {"Content-Type" "application/json"
+                        "Cookie" (str "agg_session=" session)}))))
+        (is (= 400
+               (.statusCode
+                (post! port path
+                       {:fileId "private-drive-file"
+                        :createdTime "never-authoritative"}
+                       headers)))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

@@ -674,6 +674,7 @@
                   "/v1/auth/login/callback:" "/v1/auth/logout:"
                   "/v1/drive/picker:"
                   "/v1/drive/picker/diagnostic:"
+                  "/v1/drive/recording-clock-inspections:"
                   "/v1/drive/playback-sessions:"
                   "/v1/drive/playback/{playbackId}:"]]
       (testing path (is (str/includes? openapi path))))
@@ -693,6 +694,7 @@
                       "operationId: finishGoogleLogin"
                       "operationId: logoutBrowserSession"
                       "operationId: showGoogleDrivePicker"
+                      "operationId: inspectDriveRecordingClock"
                       "operationId: createDrivePlaybackSession"
                       "operationId: streamDrivePlayback"
                       "name: code" "name: state" "security: []"

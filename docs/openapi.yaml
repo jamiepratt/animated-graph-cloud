@@ -189,6 +189,68 @@ paths:
           description: Diagnostic payload is invalid.
         "401": {$ref: "#/components/responses/AuthenticationRequired"}
         "403": {$ref: "#/components/responses/CsrfRequired"}
+  /v1/drive/recording-clock-inspections:
+    post:
+      operationId: inspectDriveRecordingClock
+      tags: [Browser authorization]
+      summary: Inspect bounded source ranges for advisory recording-clock candidates.
+      description: |
+        Revalidates the selected source and reads at most two 256 KiB ranges,
+        each with a three-second Drive request timeout. Source bytes are not
+        persisted. Drive createdTime is neither requested nor used. Returned
+        movie, track, or container candidates are advisory; the browser still
+        requires an editable start and a confirmed IANA video timezone.
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [fileId]
+              properties:
+                fileId: {type: string, minLength: 1, maxLength: 256}
+      responses:
+        "200":
+          description: Bounded inspection completed or fell back to manual entry.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [fileName, status, candidates, ambiguous, limits]
+                properties:
+                  fileName: {type: string}
+                  status: {type: string, enum: [candidate, manual]}
+                  candidates:
+                    type: array
+                    items:
+                      type: object
+                      required: [source, kind, value]
+                      properties:
+                        source: {type: string, enum: [movie, track, container]}
+                        kind: {type: string, enum: [explicit-offset, local-date-time]}
+                        value: {type: string}
+                  recommendedIndex: {type: [integer, "null"], minimum: 0}
+                  ambiguous: {type: boolean}
+                  durationSeconds: {type: [number, "null"], minimum: 0}
+                  limits:
+                    type: object
+                    required: [maxBytes, maxRanges, timeoutMillis]
+                    properties:
+                      maxBytes: {type: integer, const: 524288}
+                      maxRanges: {type: integer, const: 2}
+                      timeoutMillis: {type: integer, const: 3000}
+        "400":
+          description: The selected source payload or authoritative metadata is invalid.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "403": {$ref: "#/components/responses/CsrfRequired"}
   /v1/drive/playback-sessions:
     post:
       operationId: createDrivePlaybackSession
@@ -922,9 +984,16 @@ components:
         sourceVideo:
           type: object
           additionalProperties: false
-          required: [fileId]
+          required: [fileId, recordingStartAt, timeZone]
           properties:
             fileId: {type: string, minLength: 1}
+            recordingStartAt:
+              type: string
+              format: date-time
+              description: User-confirmed source recording start instant.
+            timeZone:
+              type: string
+              description: User-confirmed IANA timezone for the source video clock. Fixed offsets are invalid.
             name: {type: string, description: Ignored client metadata.}
             mimeType: {type: string, description: Ignored client metadata.}
           description: |

@@ -141,14 +141,17 @@
   (when-not condition
     (throw (errors/raise! message data))))
 
-(defn- display-time-zone [value]
+(defn- iana-time-zone [value field]
   (require! (and (string? value)
                  (not (str/blank? value))
                  (contains? (ZoneId/getAvailableZoneIds) value))
-            "displayTimeZone must be a known IANA timezone identifier"
+            (str field " must be a known IANA timezone identifier")
             {:type ::invalid-display-time-zone
-             :field "displayTimeZone"})
+             :field field})
   (ZoneId/of value))
+
+(defn- display-time-zone [value]
+  (iana-time-zone value "displayTimeZone"))
 
 (def default-future-trace-opacity-percent 25)
 
@@ -210,6 +213,24 @@
        :fit-mode fit-mode
        :audio-mode audio-mode})))
 
+(defn- source-video-clock [source-video]
+  (when source-video
+    (require! (and (string? (:recordingStartAt source-video))
+                   (not (str/blank? (:recordingStartAt source-video))))
+              "sourceVideo.recordingStartAt is required"
+              {:type ::invalid-source-video-clock
+               :field "sourceVideo.recordingStartAt"})
+    (require! (and (string? (:timeZone source-video))
+                   (not (str/blank? (:timeZone source-video))))
+              "sourceVideo.timeZone is required"
+              {:type ::invalid-source-video-clock
+               :field "sourceVideo.timeZone"})
+    {:recording-start-at
+     (instant (:recordingStartAt source-video)
+              "sourceVideo.recordingStartAt")
+     :time-zone
+     (iana-time-zone (:timeZone source-video) "sourceVideo.timeZone")}))
+
 (defn- parse-heart-rate [format telemetry required-start required-end]
   (case format
     "polar-csv" (polar/parse-csv telemetry {:required-start required-start
@@ -246,7 +267,8 @@
         source (source-options sourceVideo
                                (or outputFormat format)
                                (or fitMode fit)
-                               (or audioMode audio))]
+                               (or audioMode audio))
+        source-clock (source-video-clock sourceVideo)]
     (require! (#{"polar-csv" "garmin-fit" "oxiwear-hr-csv"}
                telemetryFormat)
               "Unsupported telemetry format"
@@ -356,7 +378,8 @@
         (merge source)
 
         sourceVideo
-        (assoc :source-video {:file-id (:fileId sourceVideo)})
+        (assoc :source-video
+               (assoc source-clock :file-id (:fileId sourceVideo)))
 
         sourceVideoServerMetadata
         (attach-source-metadata sourceVideoServerMetadata)
@@ -395,6 +418,9 @@
               {:type ::source-too-large
                :limit max-source-bytes
                :size size})
-    (assoc render-spec :source-video
-           {:file-id file-id
-            :metadata (select-keys metadata [:id :name :mimeType :size :trashed])})))
+    (update render-spec :source-video
+            merge
+            {:metadata
+             (select-keys metadata
+                          [:id :name :mimeType :size :trashed
+                           :videoMediaMetadata])})))

@@ -6,16 +6,25 @@
             [clojure.string :as str])
   (:import (com.google.api.gax.rpc ApiException StatusCode$Code)
            (com.google.cloud.firestore Firestore)
+           (java.io InputStream)
            (java.net URI URLEncoder)
            (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
                           HttpResponse$BodyHandlers)
-           (java.nio ByteBuffer)
+           (java.nio ByteBuffer ByteOrder)
            (java.nio.channels FileChannel)
            (java.nio.charset StandardCharsets)
            (java.nio.file OpenOption Path StandardOpenOption)
+           (java.time Duration Instant LocalDateTime OffsetDateTime ZoneOffset)
            (java.util.concurrent ExecutionException Future)))
 
 (def ^:private folder-mime-type "application/vnd.google-apps.folder")
+(def ^:private recording-clock-range-bytes (* 256 1024))
+(def ^:private recording-clock-timeout-ms 3000)
+(def ^:private quicktime-to-unix-seconds 2082844800)
+(def ^:private recording-clock-limits
+  {:maxBytes (* 2 recording-clock-range-bytes)
+   :maxRanges 2
+   :timeoutMillis recording-clock-timeout-ms})
 
 (defn- urlencode [value]
   (URLEncoder/encode (str value) StandardCharsets/UTF_8))
@@ -43,10 +52,12 @@
                     (.map (.headers response)))
      :body (.body response)}))
 
-(defn- http-stream-send! [{:keys [url headers]}]
+(defn- http-stream-send! [{:keys [url headers timeout-ms]}]
   (let [builder (HttpRequest/newBuilder (URI/create url))
         _ (doseq [[name value] headers]
             (.header builder name value))
+        _ (when timeout-ms
+            (.timeout builder (Duration/ofMillis (long timeout-ms))))
         response (.send (HttpClient/newHttpClient)
                         (-> builder .GET .build)
                         (HttpResponse$BodyHandlers/ofInputStream))]
@@ -83,6 +94,215 @@
          total
          (> total end)
          (= (inc (- end start)) content-length))))
+
+(defn- plausible-recording-instant? [^Instant instant]
+  (and (not (.isBefore instant (Instant/parse "1970-01-01T00:00:00Z")))
+       (.isBefore instant (Instant/parse "2101-01-01T00:00:00Z"))))
+
+(defn- candidate-source [^String text match-start]
+  (let [context (.substring text (max 0 (- match-start 96)) match-start)
+        movie (max (.lastIndexOf context "mvhd")
+                   (.lastIndexOf context "©day")
+                   (.lastIndexOf context "creationdate"))
+        track (.lastIndexOf context "tkhd")]
+    (cond
+      (> track movie) "track"
+      (not= -1 movie) "movie"
+      :else "container")))
+
+(defn- explicit-offset-candidates [^bytes bytes]
+  (let [text (String. bytes StandardCharsets/ISO_8859_1)
+        matcher
+        (.matcher
+         (re-pattern
+          "(?<!\\d)(\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}:?\\d{2}))(?!\\d)")
+         text)]
+    (loop [candidates []]
+      (if-not (.find matcher)
+        candidates
+        (let [raw (.group matcher 1)
+              normalized (-> raw
+                             (str/replace " " "T")
+                             (str/replace #"([+-]\d{2})(\d{2})$" "$1:$2"))
+              candidate
+              (try
+                (let [parsed (OffsetDateTime/parse normalized)]
+                  (when (plausible-recording-instant? (.toInstant parsed))
+                    {:source (candidate-source text (.start matcher 1))
+                     :kind "explicit-offset"
+                     :value normalized}))
+                (catch Throwable _ nil))]
+          (recur (cond-> candidates candidate (conj candidate))))))))
+
+(defn- index-of-type [^bytes bytes ^bytes atom-type start]
+  (let [limit (- (alength bytes) (alength atom-type))]
+    (loop [index start]
+      (cond
+        (> index limit) -1
+        (every? true?
+                (map-indexed
+                 (fn [offset expected]
+                   (= expected (aget bytes (+ index offset))))
+                 atom-type))
+        index
+        :else (recur (inc index))))))
+
+(defn- unsigned-int [^ByteBuffer buffer]
+  (Integer/toUnsignedLong (.getInt buffer)))
+
+(defn- quicktime-creation-seconds [^bytes bytes type-index]
+  (let [payload-index (+ type-index 4)]
+    (when (< (+ payload-index 8) (alength bytes))
+      (let [version (Byte/toUnsignedInt (aget bytes payload-index))
+            buffer (doto (ByteBuffer/wrap bytes)
+                     (.order ByteOrder/BIG_ENDIAN)
+                     (.position (+ payload-index 4)))]
+        (case version
+          0 (unsigned-int buffer)
+          1 (when (<= (+ payload-index 12) (alength bytes))
+              (.getLong buffer))
+          nil)))))
+
+(defn- quicktime-local-candidates [^bytes bytes atom-type source]
+  (let [type-bytes (.getBytes ^String atom-type
+                              StandardCharsets/ISO_8859_1)]
+    (loop [start 0
+           candidates []]
+      (let [index (index-of-type bytes type-bytes start)]
+        (if (neg? index)
+          candidates
+          (let [candidate
+                (when-let [quicktime-seconds
+                           (quicktime-creation-seconds bytes index)]
+                  (try
+                    (let [instant
+                          (Instant/ofEpochSecond
+                           (- quicktime-seconds quicktime-to-unix-seconds))]
+                      (when (plausible-recording-instant? instant)
+                        {:source source
+                         :kind "local-date-time"
+                         :value
+                         (str (LocalDateTime/ofInstant instant
+                                                       ZoneOffset/UTC))}))
+                    (catch Throwable _ nil)))]
+            (recur (+ index 4)
+                   (cond-> candidates candidate (conj candidate)))))))))
+
+(defn- quicktime-duration-seconds [^bytes bytes type-index]
+  (let [payload-index (+ type-index 4)]
+    (when (< (+ payload-index 20) (alength bytes))
+      (try
+        (let [version (Byte/toUnsignedInt (aget bytes payload-index))
+              buffer (doto (ByteBuffer/wrap bytes)
+                       (.order ByteOrder/BIG_ENDIAN))
+              [timescale duration]
+              (case version
+                0 (do
+                    (.position buffer (+ payload-index 12))
+                    [(unsigned-int buffer) (unsigned-int buffer)])
+                1 (when (<= (+ payload-index 36) (alength bytes))
+                    (.position buffer (+ payload-index 24))
+                    [(unsigned-int buffer) (.getLong buffer)])
+                nil)]
+          (when (and timescale duration (pos? timescale) (not (neg? duration)))
+            (/ (double duration) (double timescale))))
+        (catch Throwable _ nil)))))
+
+(defn- container-duration-seconds [segments]
+  (some
+   (fn [bytes]
+     (let [atom-type (.getBytes "mvhd" StandardCharsets/ISO_8859_1)
+           index (index-of-type bytes atom-type 0)]
+       (when-not (neg? index)
+         (quicktime-duration-seconds bytes index))))
+   segments))
+
+(defn- recording-clock-candidates [segments]
+  (->> segments
+       (mapcat
+        (fn [bytes]
+          (concat (explicit-offset-candidates bytes)
+                  (quicktime-local-candidates bytes "mvhd" "movie")
+                  (quicktime-local-candidates bytes "tkhd" "track"))))
+       distinct
+       (sort-by (juxt #(if (= "explicit-offset" (:kind %)) 0 1)
+                      :source
+                      :value))
+       vec))
+
+(defn- inspection-ranges [size]
+  (let [size (long size)
+        head {:start 0
+              :end (dec (min size recording-clock-range-bytes))
+              :timeout-ms recording-clock-timeout-ms}
+        tail {:start (max 0 (- size recording-clock-range-bytes))
+              :end (dec size)
+              :timeout-ms recording-clock-timeout-ms}]
+    (if (= (select-keys head [:start :end])
+           (select-keys tail [:start :end]))
+      [head]
+      [head tail])))
+
+(defn- read-inspection-range!
+  [gateway access-token file-id {:keys [start end] :as byte-range}]
+  (let [limit (int (inc (- end start)))
+        {:keys [body]}
+        (drive/open-source-range! gateway access-token file-id byte-range)]
+    (with-open [input ^InputStream body]
+      (.readNBytes input limit))))
+
+(defn- metadata-duration-seconds [metadata]
+  (try
+    (when-let [duration-millis
+               (get-in metadata [:videoMediaMetadata :durationMillis])]
+      (/ (double (parse-long (str duration-millis))) 1000.0))
+    (catch Throwable _ nil)))
+
+(defn inspect-recording-clock!
+  "Reads at most two bounded source ranges and returns advisory clock candidates."
+  [gateway access-token file-id {:keys [size] :as metadata}]
+  (let [duration-seconds (metadata-duration-seconds metadata)
+        manual {:status "manual"
+                :candidates []
+                :recommendedIndex nil
+                :ambiguous false
+                :durationSeconds duration-seconds
+                :limits recording-clock-limits}]
+    (if-not (and (satisfies? drive/PlaybackGateway gateway)
+                 (integer? size)
+                 (pos? size))
+      manual
+      (try
+        (let [segments (mapv #(read-inspection-range!
+                               gateway access-token file-id %)
+                             (inspection-ranges size))
+              candidates (recording-clock-candidates segments)
+              duration-seconds
+              (or duration-seconds (container-duration-seconds segments))
+              preferred-kind (when (seq candidates)
+                               (if (some #(= "explicit-offset" (:kind %))
+                                         candidates)
+                                 "explicit-offset"
+                                 "local-date-time"))
+              preferred-indexes
+              (keep-indexed
+               (fn [index candidate]
+                 (when (= preferred-kind (:kind candidate)) index))
+               candidates)
+              preferred-values
+              (set (map #(get-in candidates [% :value]) preferred-indexes))
+              ambiguous (> (count preferred-values) 1)
+              recommended-index
+              (when (and (seq preferred-indexes) (not ambiguous))
+                (first preferred-indexes))]
+          (assoc manual
+                 :status (if (seq candidates) "candidate" "manual")
+                 :candidates candidates
+                 :recommendedIndex recommended-index
+                 :ambiguous ambiguous
+                 :durationSeconds duration-seconds))
+        (catch Throwable _
+          manual)))))
 
 (defn- drive-url [path query]
   (str "https://www.googleapis.com/drive/v3/" path "?" query))
@@ -289,7 +509,8 @@
           (send! (authorized
                   {:method :get
                    :url (str (source-url file-id)
-                             "?fields=id,name,mimeType,size,trashed"
+                             "?fields=id,name,mimeType,size,trashed,"
+                             "videoMediaMetadata(durationMillis,width,height)"
                              "&supportsAllDrives=true")
                    :headers {}}
                   access-token))]
@@ -318,7 +539,8 @@
                                 {:type ::source-download-failed
                                  :status status}))))))
   drive/PlaybackGateway
-  (open-source-range! [gateway access-token file-id {:keys [start end]}]
+  (open-source-range! [gateway access-token file-id
+                       {:keys [start end timeout-ms]}]
     (let [send-stream! (or (:stream-source-request! gateway)
                            http-stream-send!)
           response
@@ -327,7 +549,8 @@
             {:method :get
              :url (str (source-url file-id)
                        "?alt=media&supportsAllDrives=true")
-             :headers {"Range" (str "bytes=" start "-" end)}}
+             :headers {"Range" (str "bytes=" start "-" end)}
+             :timeout-ms timeout-ms}
             access-token))]
       (if (valid-playback-range-response? response start end)
         response

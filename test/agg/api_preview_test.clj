@@ -485,7 +485,10 @@
                                  :preview-job-service (:service system)
                                  :preview-asset-store asset-store})
         request (assoc (fixture/render-request)
-                       :sourceVideo {:fileId "drive-file-1"}
+                       :sourceVideo
+                       {:fileId "drive-file-1"
+                        :recordingStartAt "2026-07-23T12:30:15Z"
+                        :timeZone "Europe/Warsaw"}
                        :fitMode "letterbox"
                        :timer {:startAt "2026-07-17T09:00:00.500Z"
                                :endAt "2026-07-17T09:00:01.500Z"})]
@@ -575,7 +578,10 @@
                                  :preview-job-service (:service system)
                                  :preview-asset-store asset-store})
         request (assoc (fixture/render-request)
-                       :sourceVideo {:fileId "drive-file-1"}
+                       :sourceVideo
+                       {:fileId "drive-file-1"
+                        :recordingStartAt "2026-07-23T12:30:15Z"
+                        :timeZone "Europe/Warsaw"}
                        :fitMode "letterbox"
                        :timer {:startAt "2026-07-17T09:00:00.500Z"
                                :endAt "2026-07-17T09:00:01.500Z"})]

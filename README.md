@@ -154,7 +154,7 @@ The render JSON fields are:
 | `spo2` | No | `{ "format": "oxiwear-spo2-csv", "telemetry": "..." }`; CSV is limited to 10 MiB |
 | `timer` | No | `{ "startAt": "...", "endAt": "..." }`, within the requested section |
 | `watermark` | No | `{ "contentBase64": "..." }`, a valid PNG up to 2 MiB and 1024×1024 pixels |
-| `sourceVideo` | No | `{ "fileId": "..." }`; optional client `name` and `mimeType` are ignored |
+| `sourceVideo` | No | `{ "fileId": "...", "recordingStartAt": "...", "timeZone": "Europe/Warsaw" }`; the confirmed start is an ISO-8601 instant and the video zone must be IANA; optional client `name` and `mimeType` are ignored |
 | `outputFormat` | No | With `sourceVideo`: `h264-mp4` or `prores-422-mov` |
 | `fitMode` | No | With `sourceVideo`: `letterbox`, `pillarbox`, or `crop` |
 | `audioMode` | No | With `sourceVideo`: `source+heartbeat`, `source-only`, or `heartbeat-only` |
@@ -231,11 +231,16 @@ See ADR 0006.
 
 ## Durable render jobs
 
-To composite one Drive video, send only its server-verified file ID:
+To composite one Drive video, send its server-verified file ID and confirmed
+recording clock:
 
 ```json
 {
-  "sourceVideo": {"fileId": "drive-file-id"},
+  "sourceVideo": {
+    "fileId": "drive-file-id",
+    "recordingStartAt": "2026-07-23T12:30:15Z",
+    "timeZone": "Europe/Warsaw"
+  },
   "outputFormat": "h264-mp4",
   "fitMode": "letterbox",
   "audioMode": "source+heartbeat"
@@ -250,6 +255,13 @@ folders, shortcuts, Google Workspace documents, trashed files, inaccessible or
 download-restricted files, and sources above 2 GiB. A supported source must be
 downloadable, FFmpeg-decodable, and long enough for the requested section.
 Source bytes stream through a non-seekable FFmpeg pipe and are not persisted.
+After selection, the browser starts an advisory inspection that reads at most
+two 256 KiB source ranges with a three-second limit per Drive request. It never
+requests or uses Drive `createdTime`. Explicit-offset container candidates are
+preferred, conflicts remain visible, and missing or untrustworthy metadata
+falls back to manual entry. The user must confirm both the editable start and a
+valid IANA video timezone. The confirmed instant controls only the full-source
+editor clock; rendered graph axes remain timer- or section-relative.
 Supported outputs are H.264 MP4 (default) and ProRes 422 MOV. Fit defaults to
 letterbox/pillarbox; audio defaults to source plus bounded heartbeat mix, with
 source-only and heartbeat-only modes also available.
