@@ -1030,7 +1030,14 @@ components:
                 synchronizationMode:
                   const: shared-clock
               required: [synchronizationMode]
-              not: {anyOf: [{required: [telemetrySyncAt]}, {required: [cameraSyncAt]}]}
+              not:
+                anyOf:
+                  - properties:
+                      telemetrySyncAt: {}
+                    required: [telemetrySyncAt]
+                  - properties:
+                      cameraSyncAt: {}
+                    required: [cameraSyncAt]
             - title: Manual anchor
               properties:
                 synchronizationMode:
