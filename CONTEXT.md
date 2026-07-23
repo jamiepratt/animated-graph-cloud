@@ -12,7 +12,7 @@ Alpha Compose is the public product. The `animated-graph-cloud` service accepts 
 - The configured owner controls Firestore-backed memberships; revocation invalidates every access path and active job.
 - Runtime and CI identities use ambient credentials or Workload Identity Federation. Service-account key files are forbidden.
 - Temporary cloud objects expire after 24 hours. Job metadata expires after 90 days.
-- Source video is streamed directly from Google Drive into FFmpeg only for durable compositing jobs; it is never persisted by the service.
+- Source video is streamed directly from Google Drive into FFmpeg for durable compositing jobs or through short-lived owner-bound browser playback; it is never persisted by the service.
 - Every durable submission preflights its Drive delivery grant before job creation, including transparent overlay jobs without a source video.
 - Rendering emits a standard seekable MOV with ProRes 4444 alpha, 25 fps, and heartbeat audio.
 - Logs exclude email addresses, Google subjects, filenames, tokens, telemetry values, Drive credentials, and signed URLs.
