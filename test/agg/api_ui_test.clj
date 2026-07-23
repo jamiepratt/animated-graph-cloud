@@ -686,6 +686,25 @@
      html
      (str "--window-size=" window-size))))
 
+(defn- contextual-help-browser-outcome [page window-size]
+  (let [scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{"
+         "const links=[...document.querySelectorAll('.contextual-help')],styles=[...document.querySelectorAll('style')].map(node=>node.textContent).join(''),declaredFocus=styles.includes(':focus,:focus-visible{outline:3px solid var(--color-warning)');"
+         "const presentations=links.map(link=>{link.focus({focusVisible:true});const rect=link.getBoundingClientRect(),style=getComputedStyle(link),wrapper=link.closest('.help-heading,.help-label,.toggle-help'),computedFocus=style.outlineStyle!=='none'&&parseFloat(style.outlineWidth)>=3;return {href:link.getAttribute('href'),name:link.getAttribute('aria-label'),target:link.getAttribute('target'),text:link.textContent.trim(),symbolHidden:link.querySelector('[aria-hidden=\"true\"]')?.textContent==='?',width:rect.width,height:rect.height,fits:rect.left>=-.5&&rect.right<=window.innerWidth+.5,visible:style.display!=='none'&&style.visibility!=='hidden',keyboardReachable:link.tabIndex>=0,focusVisible:computedFocus||declaredFocus,associated:!!wrapper,insideLabel:!!link.closest('label')};});"
+         "outcome={presentations,viewportWidth:window.innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth,hoverStyled:styles.includes('.contextual-help:hover{background:var(--color-accent);color:var(--color-accent-ink);border-color:var(--color-accent)}')};"
+         "}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-contextual-help-browser-"
+     "Contextual help regression requires Chrome or Chromium"
+     html
+     (str "--window-size=" window-size))))
+
 (defn- faq-browser-outcome [page initial-fragment window-size]
   (let [scenario
         (str
@@ -958,6 +977,7 @@
             questions [["what-alpha-compose-does" "What does Alpha Compose do?"]
                        ["beyond-freediving" "Is Alpha Compose only for freediving?"]
                        ["progress-over-time" "Can Alpha Compose compare my progress over time?"]
+                       ["preview-admission-cost" "Why does Preview have an admission cost?"]
                        ["why-show-heart-rate" "Why put heart rate on a workout video?"]
                        ["generated-heartbeat-sound" "Is the heartbeat sound a recording of my heart?"]
                        ["audio-options" "Can I keep the source audio, use only the heartbeat, or combine them?"]
@@ -1018,6 +1038,126 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest preview-admission-cost-links-to-an-exact-faq-answer
+  (let [compose (ui/page {:user {:email "member@example.com" :role :member}
+                          :csrf "csrf-test"
+                          :tokens []
+                          :members []
+                          :logs-enabled? false})
+        help-link (str "<a class=\"contextual-help\" "
+                       "href=\"/faq#preview-admission-cost\" "
+                       "aria-label=\"Learn about Preview admission cost\">"
+                       "<span aria-hidden=\"true\">?</span></a>")]
+    (is (str/includes? ui/faq-page
+                       (str "<details class=\"faq-question\" "
+                            "id=\"preview-admission-cost\">")))
+    (is (str/includes? ui/faq-page
+                       (str "<summary><h3>Why does Preview have an "
+                            "admission cost?</h3></summary>")))
+    (doseq [claim ["Each Preview attempt reserves up to PLN 1.25"
+                   "Preview plus one Submit reserves up to PLN 2.50"
+                   "success, failure, cancellation, or expiry"
+                   "Retrying Preview makes a new reservation"]]
+      (is (str/includes? ui/faq-page claim) claim))
+    (is (str/includes? compose help-link))
+    (is (not (str/includes? help-link "target=")))))
+
+(deftest contextual-help-links-target-the-narrowest-faq-answers
+  (let [homepage ui/anonymous-page
+        compose (ui/page {:user {:email "member@example.com" :role :member}
+                          :csrf "csrf-test"
+                          :tokens []
+                          :members []
+                          :logs-enabled? false})
+        links [{:page homepage
+                :fragment "generated-heartbeat-sound"
+                :name "Learn about generated heartbeat audio"}
+               {:page compose
+                :fragment "google-drive-access"
+                :name "Learn about Google Drive access"}
+               {:page compose
+                :fragment "supported-activity-data"
+                :name "Learn about supported activity-data formats"}
+               {:page compose
+                :fragment "synchronizing-data-and-camera"
+                :name "Learn about activity-data synchronization"}
+               {:page compose
+                :fragment "audio-options"
+                :name "Learn about heartbeat audio options"}
+               {:page compose
+                :fragment "oxygen-saturation-support"
+                :name "Learn about optional SpO2 data"}
+               {:page compose
+                :fragment "preview-admission-cost"
+                :name "Learn about Preview admission cost"}]]
+    (is (= 1 (count (re-seq #"class=\"contextual-help\"" homepage))))
+    (is (= 6 (count (re-seq #"class=\"contextual-help\"" compose))))
+    (doseq [{:keys [page fragment name]} links]
+      (is (str/includes?
+           page
+           (str "<a class=\"contextual-help\" href=\"/faq#" fragment
+                "\" aria-label=\"" name
+                "\"><span aria-hidden=\"true\">?</span></a>"))
+          fragment))
+    (doseq [page [homepage compose]]
+      (is (not (re-find #"class=\"contextual-help\"[^>]+href=\"/faq\""
+                        page)))
+      (is (not (re-find #"class=\"contextual-help\"[^>]+target="
+                        page))))))
+
+(deftest contextual-help-remains-visible-focusable-and-contained-in-a-browser
+  (let [compose (ui/page {:user {:email "member@example.com" :role :member}
+                          :csrf "csrf-test"
+                          :tokens []
+                          :members []
+                          :logs-enabled? false})
+        expected-homepage [["/faq#generated-heartbeat-sound"
+                            "Learn about generated heartbeat audio"]]
+        expected-compose [["/faq#google-drive-access"
+                           "Learn about Google Drive access"]
+                          ["/faq#audio-options"
+                           "Learn about heartbeat audio options"]
+                          ["/faq#supported-activity-data"
+                           "Learn about supported activity-data formats"]
+                          ["/faq#synchronizing-data-and-camera"
+                           "Learn about activity-data synchronization"]
+                          ["/faq#oxygen-saturation-support"
+                           "Learn about optional SpO2 data"]
+                          ["/faq#preview-admission-cost"
+                           "Learn about Preview admission cost"]]
+        surfaces {"homepage desktop"
+                  [(contextual-help-browser-outcome
+                    ui/anonymous-page "1280,900")
+                   expected-homepage]
+                  "homepage mobile"
+                  [(contextual-help-browser-outcome
+                    ui/anonymous-page "390,844")
+                   expected-homepage]
+                  "compose desktop"
+                  [(contextual-help-browser-outcome compose "1280,900")
+                   expected-compose]
+                  "compose mobile"
+                  [(contextual-help-browser-outcome compose "390,844")
+                   expected-compose]}]
+    (doseq [[surface [outcome expected]] surfaces]
+      (testing surface
+        (is (nil? (:error outcome)) outcome)
+        (is (= expected
+               (mapv (juxt :href :name) (:presentations outcome))))
+        (is (every? #(nil? (:target %)) (:presentations outcome)))
+        (is (every? #(= "?" (:text %)) (:presentations outcome)))
+        (is (every? :symbolHidden (:presentations outcome)))
+        (is (every? :visible (:presentations outcome)))
+        (is (every? :keyboardReachable (:presentations outcome)))
+        (is (every? :focusVisible (:presentations outcome)))
+        (is (every? #(and (<= 32 (:width %)) (<= 32 (:height %)))
+                    (:presentations outcome)))
+        (is (every? :associated (:presentations outcome)))
+        (is (not-any? :insideLabel (:presentations outcome)))
+        (is (every? :fits (:presentations outcome)))
+        (is (:hoverStyled outcome))
+        (is (:noHorizontalOverflow outcome))))))
+
 (deftest faq-fragments-open-scroll-and-preserve-browser-navigation
   (let [outcomes {"desktop" (faq-browser-outcome ui/faq-page
                                                  "generated-heartbeat-sound"
@@ -1042,7 +1182,7 @@
         (is (true? (get-in outcome [:back :open])))
         (is (true? (get-in outcome [:back :inView])))
         (is (true? (:changedStillOpen outcome)))
-        (is (= 17 (:summaryCount outcome)))
+        (is (= 18 (:summaryCount outcome)))
         (is (true? (:summariesKeyboardReachable outcome)))
         (is (true? (:permalinksAccessible outcome)))
         (is (zero? (:nestedDetails outcome)))
@@ -1050,6 +1190,17 @@
         (is (true? (:activeNavStyled outcome)))
         (is (true? (:noHorizontalOverflow outcome)))
         (is (true? (:detailsFit outcome)))))))
+
+(deftest preview-admission-cost-deep-link-opens-the-new-faq-answer
+  (let [outcome (faq-browser-outcome ui/faq-page
+                                     "preview-admission-cost"
+                                     "390,844")]
+    (is (nil? (:error outcome)) outcome)
+    (is (= "#preview-admission-cost" (get-in outcome [:initial :hash])))
+    (is (true? (get-in outcome [:initial :open])))
+    (is (true? (get-in outcome [:initial :inView])))
+    (is (true? (:noHorizontalOverflow outcome)))
+    (is (true? (:detailsFit outcome)))))
 
 (deftest anonymous-homepage-explains-why-activity-video-matters
   (let [page ui/anonymous-page
