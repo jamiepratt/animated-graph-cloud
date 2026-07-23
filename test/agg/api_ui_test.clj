@@ -766,7 +766,7 @@
          "const record=outcome=>{if(document.getElementById('browser-result').dataset.outcome)return;const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));};"
          "setTimeout(()=>{const initial=snapshot('" initial-fragment "'),changedFragment='source-and-activity-data-retention';location.hash='#'+changedFragment;"
          "setTimeout(()=>{const changed=snapshot(changedFragment),initialStillOpen=document.getElementById('" initial-fragment "').open,summaryNodes=[...document.querySelectorAll('.faq-question>summary')],details=[...document.querySelectorAll('.faq-question')],permalinks=[...document.querySelectorAll('.faq-permalink a')],activeNavNode=document.querySelector('nav a[aria-current=\"page\"]'),activeNavStyle=activeNavNode?getComputedStyle(activeNavNode):null,base={initial,changed,initialStillOpen,summaryCount:summaryNodes.length,summariesKeyboardReachable:summaryNodes.every(node=>node.tabIndex>=0&&node.textContent.trim()),permalinksAccessible:permalinks.length===summaryNodes.length&&permalinks.every(link=>link.getAttribute('aria-label')?.includes(link.closest('details').querySelector('summary').textContent.trim())&&link.getAttribute('href')==='#'+link.closest('details').id),nestedDetails:document.querySelectorAll('details details').length,activeNav:activeNavNode?.getAttribute('href')||null,activeNavStyled:!!activeNavStyle&&parseInt(activeNavStyle.fontWeight,10)>=700&&activeNavStyle.textDecorationLine.includes('underline'),viewportWidth:window.innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth,detailsFit:details.every(node=>{const rect=node.getBoundingClientRect();return rect.left>=-.5&&rect.right<=window.innerWidth+.5;})};"
-         "let recorded=false;const finish=()=>{if(recorded)return;recorded=true;record({...base,back:snapshot('" initial-fragment "'),changedStillOpen:document.getElementById(changedFragment).open});};window.addEventListener('hashchange',()=>setTimeout(finish,50),{once:true});history.back();setTimeout(finish,250);},80);},80);"
+         "let recorded=false,attempts=0;const finish=()=>{if(recorded)return;const back=snapshot('" initial-fragment "');if(!back.inView&&attempts++<10){requestAnimationFrame(finish);return;}recorded=true;record({...base,back,changedStillOpen:document.getElementById(changedFragment).open});};window.addEventListener('hashchange',()=>requestAnimationFrame(finish),{once:true});history.back();setTimeout(finish,250);},80);},80);"
          "},{once:true});"
          "</script>")
         html (str/replace page "</body>" (str scenario "</body>"))
@@ -781,6 +781,63 @@
       (finally
         (.delete temp)))))
 
+(defn- contextual-help-dialog-browser-outcome
+  [page window-size exercise-history?]
+  (let [fixture
+        (str
+         "<script>"
+         "window.__helpMedia={playCalls:0,pauseCalls:0};"
+         "Object.defineProperties(HTMLMediaElement.prototype,{"
+         "currentTime:{configurable:true,get(){return this.__currentTime??0;},set(value){this.__currentTime=Number(value);}},"
+         "paused:{configurable:true,get(){return this.__paused!==false;}}});"
+         "HTMLMediaElement.prototype.play=function(){this.__paused=false;window.__helpMedia.playCalls++;this.dispatchEvent(new Event('play'));return Promise.resolve();};"
+         "HTMLMediaElement.prototype.pause=function(){this.__paused=true;window.__helpMedia.pauseCalls++;this.dispatchEvent(new Event('pause'));};"
+         "</script>")
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "document.addEventListener('DOMContentLoaded',async()=>{let outcome;try{"
+         "const dialog=document.getElementById('contextual-help-dialog'),title=document.getElementById('contextual-help-title'),answer=document.getElementById('contextual-help-answer'),full=document.getElementById('contextual-help-full'),close=document.querySelector('.contextual-help-close'),links=[...document.querySelectorAll('.contextual-help')],video=document.getElementById('source-video-player'),baseUrl=location.href;"
+         "if(!dialog||!title||!answer||!full||!close)throw new Error('Contextual help dialog is unavailable');"
+         "const tick=()=>new Promise(resolve=>setTimeout(resolve,0)),waitPop=(action,expectedFragment)=>new Promise(resolve=>{const onPop=event=>{if((event.state?.contextualHelp||null)!==expectedFragment)return;window.removeEventListener('popstate',onPop);setTimeout(()=>resolve(true),0);};window.addEventListener('popstate',onPop);action();}),safeClick=link=>{link.addEventListener('click',event=>event.preventDefault(),{once:true});link.click();if(!dialog.open)throw new Error('Contextual help link did not open the dialog');};"
+         "const fragment=link=>new URL(link.href).hash.slice(1),templateFor=link=>[...dialog.querySelectorAll('template[data-contextual-help-fragment]')].find(template=>template.dataset.contextualHelpFragment===fragment(link));"
+         "const inspect=link=>{const template=templateFor(link),rect=dialog.getBoundingClientRect();return {fragment:fragment(link),open:dialog.open,modal:dialog.matches(':modal'),focusContained:dialog.contains(document.activeElement),title:title.textContent,expectedTitle:template?.dataset.contextualHelpQuestion||null,answer:answer.innerHTML,expectedAnswer:template?.content.firstElementChild?.innerHTML||null,fullHref:full.getAttribute('href'),fullTarget:full.getAttribute('target'),fullRel:full.getAttribute('rel'),urlUnchanged:location.href===baseUrl,historyFragment:history.state?.contextualHelp||null,fits:rect.left>=-.5&&rect.right<=innerWidth+.5&&rect.top>=-.5&&rect.bottom<=innerHeight+.5,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};};"
+         "const telemetryContent='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120\\n2026-07-17T10:00:02Z,124',telemetryFile=document.getElementById('telemetry-file'),transfer=new DataTransfer(),selectedFile=new File([telemetryContent],'activity.csv',{type:'text/csv'});transfer.items.add(selectedFile);telemetryFile.files=transfer.files;document.getElementById('source-video-file-id').value='private-drive-video';document.getElementById('picker-selection').textContent='training.mp4';document.getElementById('output-format').value='prores-422-mov';document.getElementById('fit-mode').value='crop';document.getElementById('audio-mode').value='source-only';document.getElementById('preset').value='2.7k25';document.getElementById('timezone').value='UTC';document.getElementById('future-trace-opacity-percent').value='37';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02'],['timer-start-at','2026-07-17T10:00:00'],['timer-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);document.getElementById('spo2-enabled').checked=true;document.getElementById('spo2-telemetry').value='reading_time,spo2\\n2026-07-17T10:00:00Z,97';document.getElementById('timer-enabled').checked=true;telemetryFile.dispatchEvent(new Event('change',{bubbles:true}));await new Promise((resolve,reject)=>{const deadline=Date.now()+1000,check=()=>{if(document.getElementById('telemetry-status').classList.contains('success'))resolve();else if(Date.now()>deadline)reject(new Error('Telemetry file was not loaded'));else setTimeout(check,5);};check();});"
+         "const previewResult=document.getElementById('preview-result'),jobResult=document.getElementById('job-result'),renderForm=document.getElementById('render-form'),raw=document.getElementById('raw-json');previewResult.innerHTML='<article class=\"preview-gallery\" data-preview-operation=\"preview-live\"><h2>Preview ready</h2></article>';jobResult.innerHTML='<article class=\"job\" id=\"job-live\" data-job-state=\"running\"><h2>Creating finished video</h2></article>';document.getElementById('video-player').hidden=false;video.setAttribute('src','/v1/drive/playback/live-compose-state');video.currentTime=42.25;"
+         "const snapshotState=async()=>({drive:{fileId:document.getElementById('source-video-file-id').value,selection:document.getElementById('picker-selection').textContent,playerSrc:video.getAttribute('src'),playhead:video.currentTime},form:{outputFormat:document.getElementById('output-format').value,fitMode:document.getElementById('fit-mode').value,audioMode:document.getElementById('audio-mode').value,preset:document.getElementById('preset').value,timeZone:document.getElementById('timezone').value,opacity:document.getElementById('future-trace-opacity-percent').value,spo2Enabled:document.getElementById('spo2-enabled').checked,timerEnabled:document.getElementById('timer-enabled').checked},file:{count:telemetryFile.files.length,name:telemetryFile.files[0]?.name||null,text:telemetryFile.files[0]?await telemetryFile.files[0].text():null,loadedValue:document.getElementById('telemetry').value},raw:raw.value,hidden:document.getElementById('render-request').value,preview:previewResult.innerHTML,job:jobResult.innerHTML});const stateBefore=await snapshotState(),liveNodes={form:renderForm,file:telemetryFile,preview:previewResult,job:jobResult};"
+         "const exerciseHistory=" exercise-history? ";await video.play();const first=links[0];first.focus();safeClick(first);await tick();const opened=inspect(first),pausedOnOpen={paused:video.paused,currentTime:video.currentTime,playCalls:window.__helpMedia.playCalls,pauseCalls:window.__helpMedia.pauseCalls},presentations=[opened];let back=null,forward=null,closed=null;"
+         "if(exerciseHistory){const backPopped=await waitPop(()=>history.back(),null);back={popped:backPopped,open:dialog.open,focusReturned:document.activeElement===first,currentTime:video.currentTime,paused:video.paused};const forwardPopped=await waitPop(()=>history.forward(),fragment(first));forward={popped:forwardPopped,...inspect(first)};const closePopped=await waitPop(()=>close.click(),null);closed={popped:closePopped,open:dialog.open,focusReturned:document.activeElement===first,currentTime:video.currentTime,paused:video.paused};}else{history.replaceState(null,'',location.href);dialog.close();opened.closed=!dialog.open&&document.activeElement===first;}"
+         "for(const link of links.slice(1)){link.focus();safeClick(link);await tick();const presentation=inspect(link);presentations.push(presentation);if(exerciseHistory&&link===links[1]){const popPromise=waitPop(()=>{},null),cancelEvent=new Event('cancel',{cancelable:true}),cancelPrevented=!dialog.dispatchEvent(cancelEvent),popped=await popPromise;presentation.escape={cancelPrevented,popped,open:dialog.open,focusReturned:document.activeElement===link};}else{history.replaceState(null,'',location.href);dialog.close();presentation.closePopped=true;presentation.closed=!dialog.open&&document.activeElement===link;}}"
+         "document.getElementById('copy-json').click();await tick();const stateAfter=await snapshotState(),statePreserved=JSON.stringify(stateBefore)===JSON.stringify(stateAfter)&&liveNodes.form===document.getElementById('render-form')&&liveNodes.file===document.getElementById('telemetry-file')&&liveNodes.preview===document.getElementById('preview-result')&&liveNodes.job===document.getElementById('job-result')&&selectedFile===document.getElementById('telemetry-file').files[0];outcome={exerciseHistory,linkCount:links.length,presentations,pausedOnOpen,back,forward,closed,stateBefore,stateAfter,statePreserved,finalPlayback:{paused:video.paused,currentTime:video.currentTime,playCalls:window.__helpMedia.playCalls},viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+         "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));},{once:true});"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "<script>(function(){"
+                              (str fixture "<script>(function(){"))
+                 (str/replace "</body>" (str scenario "</body>")))
+        port (available-port)
+        server (HttpServer/create (InetSocketAddress. "127.0.0.1" port) 0)]
+    (.createContext
+     server "/"
+     (reify HttpHandler
+       (handle [_ exchange]
+         (if (= "/" (.getPath (.getRequestURI exchange)))
+           (respond-browser-fixture!
+            exchange 200 "text/html; charset=utf-8" html nil)
+           (respond-browser-fixture!
+            exchange 404 "text/plain; charset=utf-8" "not found" nil)))))
+    (.setExecutor server nil)
+    (.start server)
+    (try
+      (browser-location-outcome
+       "Contextual help behavior requires Chrome or Chromium"
+       (str "http://127.0.0.1:" port "/")
+       2500
+       [(str "--window-size=" window-size)])
+      (finally
+        (.stop server 0)))))
+
 (deftest signed-in-compose-page-keeps-product-navigation-and-account-controls
   (let [page (ui/page {:user {:email "owner@example.com" :role :owner}
                        :csrf "csrf-test"
@@ -789,7 +846,11 @@
                        :logs-enabled? true})
         faq-position (str/index-of page "href=\"/faq\"")
         privacy-position (str/index-of page "href=\"/privacy\"")
-        terms-position (str/index-of page "href=\"/terms\"")]
+        terms-position (str/index-of page "href=\"/terms\"")
+        product-header (second
+                        (re-find
+                         #"(?s)(<header class=\"product-header\">.*?</header>)"
+                         page))]
     (is (= 1 (count (re-seq #"class=\"product-header\"" page))))
     (is (str/includes? page
                        "<a class=\"brand\" href=\"/\">Alpha Compose</a>"))
@@ -797,7 +858,7 @@
     (is (every? some? [faq-position privacy-position terms-position]))
     (when (every? some? [faq-position privacy-position terms-position])
       (is (< faq-position privacy-position terms-position)))
-    (is (= 1 (count (re-seq #"href=\"/faq\"" page))))
+    (is (= 1 (count (re-seq #"href=\"/faq\"" product-header))))
     (is (= 1 (count (re-seq #"href=\"/privacy\"" page))))
     (is (= 1 (count (re-seq #"href=\"/terms\"" page))))
     (is (not (re-find #"<a[^>]+aria-current=\"page\"" page)))
@@ -1158,6 +1219,163 @@
                         page)))
       (is (not (re-find #"class=\"contextual-help\"[^>]+target="
                         page))))))
+
+(deftest signed-in-compose-renders-one-contextual-help-dialog-from-faq-copy
+  (let [compose (ui/page {:user {:email "member@example.com" :role :member}
+                          :csrf "csrf-test"
+                          :tokens []
+                          :members []
+                          :logs-enabled? false})
+        fragments ["google-drive-access"
+                   "audio-options"
+                   "supported-activity-data"
+                   "synchronizing-data-and-camera"
+                   "oxygen-saturation-support"
+                   "preview-admission-cost"]]
+    (is (= 1 (count (re-seq #"id=\"contextual-help-dialog\"" compose))))
+    (is (str/includes?
+         compose
+         (str "<dialog id=\"contextual-help-dialog\" "
+              "aria-labelledby=\"contextual-help-title\">")))
+    (is (str/includes? compose
+                       "<button type=\"button\" class=\"contextual-help-close\">Close help</button>"))
+    (is (str/includes?
+         compose
+         (str "<a id=\"contextual-help-full\" href=\"/faq\" target=\"_blank\" "
+              "rel=\"noopener\">Open full FAQ in a new tab</a>")))
+    (is (= (count fragments)
+           (count (re-seq #"data-contextual-help-fragment=" compose))))
+    (doseq [persistence-api ["localStorage"
+                             "sessionStorage"
+                             "indexedDB"]]
+      (is (not (str/includes? compose persistence-api))
+          persistence-api))
+    (doseq [fragment fragments]
+      (let [quoted (java.util.regex.Pattern/quote fragment)
+            [_ faq-question faq-answer]
+            (re-find
+             (re-pattern
+              (str "(?s)<details class=\"faq-question\" id=\"" quoted
+                   "\"><summary><h3>(.*?)</h3></summary>"
+                   "<div class=\"faq-answer\">(.*?)"
+                   "<p class=\"faq-permalink\">"))
+             ui/faq-page)
+            [_ template-question template-answer]
+            (re-find
+             (re-pattern
+              (str "(?s)<template data-contextual-help-fragment=\"" quoted
+                   "\" data-contextual-help-question=\"(.*?)\">"
+                   "<div class=\"contextual-help-copy\">(.*?)</div></template>"))
+             compose)]
+        (is (some? faq-question) fragment)
+        (is (= faq-question template-question) fragment)
+        (is (= faq-answer template-answer) fragment)))))
+
+(deftest compose-contextual-help-is-modal-history-aware-and-pauses-playback
+  (let [page (ui/page {:user {:email "member@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})
+        outcomes [(contextual-help-dialog-browser-outcome
+                   page "1280,900" true)
+                  (contextual-help-dialog-browser-outcome
+                   page "390,844" false)]]
+    (doseq [outcome outcomes]
+      (is (nil? (:error outcome)) outcome)
+      (is (= 6 (:linkCount outcome)))
+      (is (= {:paused true
+              :currentTime 42.25
+              :playCalls 1
+              :pauseCalls 1}
+             (:pausedOnOpen outcome)))
+      (doseq [presentation (:presentations outcome)]
+        (is (:open presentation) presentation)
+        (is (:modal presentation) presentation)
+        (is (:focusContained presentation) presentation)
+        (is (= (:expectedTitle presentation) (:title presentation))
+            presentation)
+        (is (= (:expectedAnswer presentation) (:answer presentation))
+            presentation)
+        (is (= (str "/faq#" (:fragment presentation))
+               (:fullHref presentation)))
+        (is (= "_blank" (:fullTarget presentation)))
+        (is (= "noopener" (:fullRel presentation)))
+        (is (= (:fragment presentation) (:historyFragment presentation)))
+        (is (:urlUnchanged presentation) presentation)
+        (is (:fits presentation) presentation)
+        (is (:noHorizontalOverflow presentation) presentation))
+      (if (:exerciseHistory outcome)
+        (do
+          (is (= {:popped true
+                  :open false
+                  :focusReturned true
+                  :currentTime 42.25
+                  :paused true}
+                 (:back outcome)))
+          (is (true? (get-in outcome [:forward :popped])))
+          (is (true? (get-in outcome [:forward :open])))
+          (is (true? (get-in outcome [:forward :modal])))
+          (is (true? (get-in outcome [:forward :focusContained])))
+          (is (= {:popped true
+                  :open false
+                  :focusReturned true
+                  :currentTime 42.25
+                  :paused true}
+                 (:closed outcome)))
+          (is (= {:cancelPrevented true
+                  :popped true
+                  :open false
+                  :focusReturned true}
+                 (get-in outcome [:presentations 1 :escape]))))
+        (is (true? (get-in outcome [:presentations 0 :closed]))))
+      (is (every? true?
+                  (keep :closePopped (:presentations outcome))))
+      (is (every? true?
+                  (keep :closed (:presentations outcome))))
+      (is (= {:paused true :currentTime 42.25 :playCalls 1}
+             (:finalPlayback outcome)))
+      (is (:statePreserved outcome) outcome)
+      (is (= (:stateBefore outcome) (:stateAfter outcome)))
+      (is (= {:fileId "private-drive-video"
+              :selection "training.mp4"
+              :playerSrc "/v1/drive/playback/live-compose-state"
+              :playhead 42.25}
+             (get-in outcome [:stateAfter :drive])))
+      (is (= {:outputFormat "prores-422-mov"
+              :fitMode "crop"
+              :audioMode "source-only"
+              :preset "2.7k25"
+              :timeZone "UTC"
+              :opacity "37"
+              :spo2Enabled true
+              :timerEnabled true}
+             (get-in outcome [:stateAfter :form])))
+      (is (= {:count 1
+              :name "activity.csv"
+              :text (str "timestamp,heart_rate\n"
+                         "2026-07-17T10:00:00Z,120\n"
+                         "2026-07-17T10:00:02Z,124")
+              :loadedValue (str "timestamp,heart_rate\n"
+                                "2026-07-17T10:00:00Z,120\n"
+                                "2026-07-17T10:00:02Z,124")}
+             (get-in outcome [:stateAfter :file])))
+      (let [request (json/read-str (get-in outcome [:stateAfter :raw])
+                                   :key-fn keyword)]
+        (is (= "private-drive-video"
+               (get-in request [:sourceVideo :fileId])))
+        (is (= (get-in outcome [:stateAfter :file :text])
+               (:telemetry request)))
+        (is (= 37 (:futureTraceOpacityPercent request)))
+        (is (= "reading_time,spo2\n2026-07-17T10:00:00Z,97"
+               (get-in request [:spo2 :telemetry]))))
+      (is (str/includes? (get-in outcome [:stateAfter :preview])
+                         "Preview ready"))
+      (is (str/includes? (get-in outcome [:stateAfter :job])
+                         "Creating finished video"))
+      (is (:noHorizontalOverflow outcome)))
+    (is (= 1280 (:viewportWidth (first outcomes))))
+    (is (<= (:viewportWidth (second outcomes)) 500))))
 
 (deftest contextual-help-remains-visible-focusable-and-contained-in-a-browser
   (let [compose (ui/page {:user {:email "member@example.com" :role :member}

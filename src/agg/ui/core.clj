@@ -53,6 +53,181 @@
          "Reservations remain counted after success, failure, cancellation, or expiry. "
          "Retrying Preview makes a new reservation of up to PLN " preview ".</p>")))
 
+(def ^:private faq-categories
+  [{:fragment "category-what-alpha-compose-makes"
+    :title "What Alpha Compose makes"
+    :questions
+    [{:fragment "what-alpha-compose-does"
+      :question "What does Alpha Compose do?"
+      :answer
+      (str "<p>Alpha Compose combines a compatible activity video with supported activity "
+           "data. It adds a heart-rate graph, time readouts, and a generated heartbeat "
+           "soundtrack, lets you preview key moments, and creates a finished video.</p>")}
+     {:fragment "beyond-freediving"
+      :question "Is Alpha Compose only for freediving?"
+      :answer
+      (str "<p>No. Alpha Compose grew from freediving, but it is not limited to freediving. "
+           "You can use any compatible activity video and supported activity data that "
+           "line up on a shared timeline.</p>")}
+     {:fragment "progress-over-time"
+      :question "Can Alpha Compose compare my progress over time?"
+      :answer
+      (str "<p>Saved videos can help you notice changes over time for yourself. "
+           "Alpha Compose does not store sessions, analyze trends, or compare activities. "
+           "Any comparison is one you make from the finished videos you keep.</p>")}
+     {:fragment "preview-admission-cost"
+      :question "Why does Preview have an admission cost?"
+      :answer (preview-admission-faq-answer)}]}
+   {:fragment "category-heart-rate-and-heartbeat"
+    :title "Heart rate and the heartbeat sound"
+    :questions
+    [{:fragment "why-show-heart-rate"
+      :question "Why put heart rate on a workout video?"
+      :answer
+      (str "<p>Heart rate can show your physiological response during a memorable moment. "
+           "Seeing that response alongside the action, and hearing its pace, can make "
+           "reliving the activity feel more immediate.</p>")}
+     {:fragment "generated-heartbeat-sound"
+      :question "Is the heartbeat sound a recording of my heart?"
+      :answer
+      (str "<p>No. The heartbeat sound is generated from your recorded heart-rate data "
+           "and paced from those samples. It is not a recording of your heart or other "
+           "audio captured by a medical device.</p>")}
+     {:fragment "audio-options"
+      :question "Can I keep the source audio, use only the heartbeat, or combine them?"
+      :answer
+      (str "<p>Yes. When you make a finished video, you can keep only the source audio, "
+           "use only the generated heartbeat, or combine the source audio and heartbeat.</p>")}]}
+   {:fragment "category-supported-activity-data"
+    :title "Supported activity data"
+    :questions
+    [{:fragment "supported-activity-data"
+      :question "What activity data is supported today?"
+      :answer
+      (str "<p>Heart rate is the primary supported graph. Current heart-rate inputs are "
+           "Polar CSV, Garmin FIT, and OxiWear heart-rate CSV. Each input must include "
+           "timestamps so it can be synchronized with the video.</p>")}
+     {:fragment "oxygen-saturation-support"
+      :question "Does Alpha Compose support oxygen saturation?"
+      :answer
+      (str "<p>Yes, as an optional addition. Compatible heart-rate renders can include "
+           "optional OxiWear SpO2 activity data and display oxygen saturation alongside "
+           "the primary heart-rate graph.</p>")}
+     {:fragment "future-graphs"
+      :question "Will other graphs be supported?"
+      :answer
+      (str "<p>Other activity-data graphs are a possible future direction, but there "
+           "are no announced data types, dates, or delivery promises.</p>")}]}
+   {:fragment "category-files-and-synchronization"
+    :title "Files and synchronization"
+    :questions
+    [{:fragment "file-sources"
+      :question "Where are my video and activity-data files read from?"
+      :answer
+      (str "<p>You choose a source video from Google Drive. Your browser reads the "
+           "activity-data file you choose and sends the required data for your render. "
+           "Alpha Compose does not search your device or the rest of your Drive.</p>")}
+     {:fragment "synchronizing-data-and-camera"
+      :question "Why do I need to synchronize the activity data and camera time?"
+      :answer
+      (str "<p>The sensor and camera may have started at different times. Synchronization "
+           "identifies one matching moment so Alpha Compose can place each heart-rate or "
+           "SpO2 value at the correct point in the video.</p>")}
+     {:fragment "output-file"
+      :question "What output does Alpha Compose create?"
+      :answer
+      (str "<p>With a source video, Alpha Compose creates a finished H.264 MP4 or "
+           "ProRes 422 MOV. It can also create a transparent ProRes 4444 MOV overlay "
+           "for a separate editing workflow. See the <a href=\"/openapi.yaml\">technical "
+           "API documentation</a> for file-format details.</p>")}]}
+   {:fragment "category-google-drive-and-privacy"
+    :title "Google Drive and privacy"
+    :questions
+    [{:fragment "google-drive-access"
+      :question "What can Alpha Compose access in Google Drive?"
+      :answer
+      (str "<p>Alpha Compose uses the restricted <code>drive.file</code> permission. "
+           "It can access files you explicitly choose and files it creates for you. "
+           "It cannot browse or read the rest of your Google Drive.</p>")}
+     {:fragment "finished-video-location"
+      :question "Where is my finished video saved?"
+      :answer
+      (str "<p>The finished video is saved in your Alpha Compose folder in My Drive, "
+           "including when the source video came from a Shared Drive or was shared with "
+           "you. It remains in your Drive until you delete it.</p>")}
+     {:fragment "source-and-activity-data-retention"
+      :question "Does Alpha Compose retain my source video or log my activity data?"
+      :answer
+      (str "<p>No source-video copy is retained: the source video is streamed from "
+           "Google Drive into the renderer and is never persisted by Alpha Compose. "
+           "Activity data may be held in encrypted temporary request objects while the "
+           "render is processed; those objects are deleted after 24 hours. The service "
+           "does not log activity-data values. Read the <a href=\"/privacy\">complete "
+           "privacy policy</a> for retention details.</p>")}]}
+   {:fragment "category-safety-and-medical-limitations"
+    :title "Safety and medical limitations"
+    :questions
+    [{:fragment "medical-or-training-advice"
+      :question "Is Alpha Compose medical or training advice?"
+      :answer
+      (str "<p>No. Alpha Compose output is not medical advice or training advice. "
+           "Do not use it to diagnose a condition, decide whether an activity is safe, "
+           "or replace qualified professional guidance.</p>")}
+     {:fragment "displayed-value-accuracy"
+      :question "How accurate are the displayed values?"
+      :answer
+      (str "<p>The output reflects the sensor data you supply and the synchronization "
+           "you choose. It does not infer emotions, health, or training readiness, "
+           "and it does not validate the sensor. Check the source data and timing before "
+           "relying on a displayed value.</p>")}]}])
+
+(def ^:private faq-by-fragment
+  (into {}
+        (map (juxt :fragment identity))
+        (mapcat :questions faq-categories)))
+
+(def ^:private compose-contextual-help-fragments
+  ["google-drive-access"
+   "audio-options"
+   "supported-activity-data"
+   "synchronizing-data-and-camera"
+   "oxygen-saturation-support"
+   "preview-admission-cost"])
+
+(defn- faq-question [{:keys [fragment question answer]}]
+  (str "<details class=\"faq-question\" id=\"" fragment "\">"
+       "<summary><h3>" question "</h3></summary>"
+       "<div class=\"faq-answer\">" answer
+       "<p class=\"faq-permalink\"><a href=\"#" fragment
+       "\" aria-label=\"Link to: " question "\">Link to this question</a></p>"
+       "</div></details>"))
+
+(defn- faq-category [{:keys [fragment title questions]}]
+  (str "<section class=\"faq-category\" aria-labelledby=\"" fragment "\">"
+       "<h2 id=\"" fragment "\">" title "</h2>"
+       (apply str (map faq-question questions))
+       "</section>"))
+
+(defn- contextual-help-dialog []
+  (str
+   "<dialog id=\"contextual-help-dialog\" aria-labelledby=\"contextual-help-title\">"
+   "<div class=\"contextual-help-head\"><h2 id=\"contextual-help-title\"></h2>"
+   "<button type=\"button\" class=\"contextual-help-close\">Close help</button></div>"
+   "<div id=\"contextual-help-answer\" class=\"contextual-help-answer\"></div>"
+   "<p class=\"contextual-help-actions\"><a id=\"contextual-help-full\" href=\"/faq\" "
+   "target=\"_blank\" rel=\"noopener\">Open full FAQ in a new tab</a></p>"
+   (apply str
+          (for [fragment compose-contextual-help-fragments
+                :let [{:keys [question answer]} (get faq-by-fragment fragment)]]
+            (str "<template data-contextual-help-fragment=\""
+                 (escape-html fragment)
+                 "\" data-contextual-help-question=\""
+                 (escape-html question)
+                 "\"><div class=\"contextual-help-copy\">"
+                 answer
+                 "</div></template>")))
+   "</dialog>"))
+
 (defn- icon-links []
   (str "<link rel=\"icon\" href=\"/favicon.svg\" type=\"image/svg+xml\">"
        "<link rel=\"icon\" href=\"/favicon-32.png\" type=\"image/png\" sizes=\"32x32\">"
@@ -629,6 +804,7 @@
      ".status{min-height:1.4rem;color:var(--color-muted);font-size:.9rem}.status.error{color:var(--color-danger)}.status.success{color:var(--color-success)}"
      "details summary{cursor:pointer;font-weight:800;color:var(--color-link)}.raw-panel textarea{min-height:18rem}.raw-actions{display:flex;gap:.65rem;flex-wrap:wrap;margin-top:.7rem}.json-errors{white-space:pre-line}.field-reference{margin:.75rem 0 0;padding-left:1.25rem}.field-reference li{margin:.35rem 0}.field-reference code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}"
      ".results{display:block;min-width:0}.results img{max-width:100%;border:1px solid #d9e1ed;border-radius:.75rem;background:#eef2f7}.preview-gallery{min-width:0}.preview-warning{background:#fff8e8;border:1px solid #e7c46b;border-radius:.8rem;color:#59400a;padding:.85rem 1rem;margin:1rem 0}.preview-warning h3,.preview-warning p{margin:0}.preview-warning p{margin-top:.35rem}.trace-preview{background:white;border:1px solid #e1e7f0;border-radius:1rem;padding:1rem;margin:1rem 0;min-width:0;max-width:100%}.preview-scroll{max-width:100%;min-width:0;overflow:visible}.preview-moments{display:flex;flex-wrap:wrap;justify-content:center;gap:.8rem;align-items:flex-start;min-width:0;max-width:100%}.preview-moment{display:flex;flex:0 0 8rem;width:8rem;flex-direction:column;gap:.65rem;min-width:0}.photo-title{font-size:.75rem;line-height:1.35;overflow-wrap:anywhere;margin:0 0 .35rem}.preview-cell{min-width:0;width:100%}.preview-cell .preview-open{display:block;width:100%;padding:0;background:#f8fafc}.preview-cell img{display:block;width:100%;height:auto}.frame-role{display:inline;font-weight:800;letter-spacing:.04em}.checkerboard{background-color:#fff;background-image:linear-gradient(45deg,#d9e1ed 25%,transparent 25%),linear-gradient(-45deg,#d9e1ed 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#d9e1ed 75%),linear-gradient(-45deg,transparent 75%,#d9e1ed 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}.preview-pending,.preview-error,.preview-stale,.preview-empty{background:white;border:1px solid #e1e7f0;border-radius:1rem;padding:1rem;margin:1rem 0}.preview-pending progress{width:min(24rem,100%)}#preview-dialog{width:calc(100dvw - 1rem);height:calc(100dvh - 1rem);max-width:none;max-height:none;border:0;border-radius:1rem;padding:1rem;overflow:hidden}#preview-dialog[open]{display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:.75rem}#preview-dialog::backdrop{background:#10213acc}.dialog-image-frame{display:flex;align-items:center;justify-content:center;min-width:0;min-height:0;overflow:hidden}#preview-dialog img{display:block;width:100%;height:100%;min-width:0;min-height:0;object-fit:contain;margin:0}.dialog-head{display:flex;justify-content:space-between;align-items:center;gap:1rem;min-width:0}.dialog-head h2{margin:0;min-width:0;overflow-wrap:anywhere}.dialog-nav{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:.75rem}.preview-counter{margin:0;text-align:center}"
+     "#contextual-help-dialog{width:min(42rem,calc(100dvw - 1rem));max-width:none;max-height:calc(100dvh - 1rem);min-width:0;padding:1.25rem;overflow:auto;color:var(--color-text);background:var(--color-surface-strong);border:1px solid var(--color-border-strong);border-radius:1rem;box-shadow:var(--shadow-surface)}#contextual-help-dialog::backdrop{background:#010813e6}.contextual-help-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;min-width:0}.contextual-help-head h2{min-width:0;margin:.5rem 0;overflow-wrap:anywhere}.contextual-help-close{flex:0 0 auto}.contextual-help-answer{min-width:0;overflow-wrap:anywhere}.contextual-help-actions{margin:1.25rem 0 0}"
      ".job{margin:0}.notice{border:2px solid #d8a94d;padding:1rem;overflow-wrap:anywhere}.notice code{display:block;margin-top:.6rem;white-space:pre-wrap}"
      ".inline{display:inline}"
      "@media(max-width:680px){.shell{padding:1rem .8rem 3rem}.task-header,.drive-card,.section-head{display:block}.session-controls{align-items:flex-start;margin-top:1rem}.field-grid{grid-template-columns:1fr}.drive-actions{margin-top:1rem}.video-transport{justify-content:flex-start}.video-time{width:100%;min-width:0;text-align:left}.video-volume{flex:1 1 10rem}.video-volume input{min-width:0;width:100%}.preview-moment{flex:0 1 24rem;width:min(100%,24rem);border-top:1px solid #e1e7f0;padding:1rem 0}.preview-moment:first-child{border-top:0;padding-top:0}.preview-cell{width:100%;margin-top:.75rem}}"
@@ -688,12 +864,13 @@
      (token-panel tokens)
      (when (admin/administrator? (:role user))
        (member-panel members logs-enabled?))
+     (contextual-help-dialog)
      "<script>(function(){"
      "const form=document.getElementById('render-form'), hidden=document.getElementById('render-request'), raw=document.getElementById('raw-json');"
      "const status=document.getElementById('form-status'), jsonStatus=document.getElementById('json-status'),submitButton=document.getElementById('submit-button'),submitStatus=document.getElementById('preview-submit-status');"
      "const byId=id=>document.getElementById(id), value=id=>byId(id).value.trim();"
      "function show(node,message,kind){node.textContent=message;node.className='status'+(kind?' '+kind:'');}"
-     "const playbackCsrf=" (json-script csrf) ",videoPlayer=byId('video-player'),videoChrome=byId('video-chrome'),sourceVideo=byId('source-video-player'),videoPlayPause=byId('video-play-pause'),videoTime=byId('video-time'),videoTimeline=byId('video-timeline'),videoPlayhead=byId('video-playhead'),videoTooltip=byId('video-timeline-tooltip'),videoTicks=byId('video-ticks'),videoBuffered=byId('video-buffered-ranges'),videoStatus=byId('video-player-status'),videoVolume=byId('video-volume'),videoFullscreen=byId('video-fullscreen'),videoFullscreenControl=byId('video-fullscreen-control'),videoFullscreenShortcut=byId('video-fullscreen-shortcut');let playbackGeneration=0,videoDuration=0,videoScrubbing=false,fullscreenHintTimer=null;"
+     "const playbackCsrf=" (json-script csrf) ",videoPlayer=byId('video-player'),videoChrome=byId('video-chrome'),sourceVideo=byId('source-video-player'),videoPlayPause=byId('video-play-pause'),videoTime=byId('video-time'),videoTimeline=byId('video-timeline'),videoPlayhead=byId('video-playhead'),videoTooltip=byId('video-timeline-tooltip'),videoTicks=byId('video-ticks'),videoBuffered=byId('video-buffered-ranges'),videoStatus=byId('video-player-status'),videoVolume=byId('video-volume'),videoFullscreen=byId('video-fullscreen'),videoFullscreenControl=byId('video-fullscreen-control'),videoFullscreenShortcut=byId('video-fullscreen-shortcut'),contextualHelpDialog=byId('contextual-help-dialog'),contextualHelpTitle=byId('contextual-help-title'),contextualHelpAnswer=byId('contextual-help-answer'),contextualHelpFull=byId('contextual-help-full'),contextualHelpClose=contextualHelpDialog.querySelector('.contextual-help-close');let playbackGeneration=0,videoDuration=0,videoScrubbing=false,fullscreenHintTimer=null,contextualHelpOpener=null;"
      "function playbackTime(seconds){const total=Math.max(0,Math.round((Number.isFinite(seconds)?seconds:0)*1000)),hours=Math.floor(total/3600000),minutes=Math.floor(total%3600000/60000),wholeSeconds=Math.floor(total%60000/1000),milliseconds=total%1000;return [hours,minutes,wholeSeconds].map(value=>String(value).padStart(2,'0')).join(':')+'.'+String(milliseconds).padStart(3,'0');}"
      "function playableDuration(){return Number.isFinite(videoDuration)&&videoDuration>0;}function clampVideoTime(seconds){return playableDuration()?Math.min(videoDuration,Math.max(0,Number(seconds)||0)):0;}"
      "function updateVideoTransport(){const current=clampVideoTime(sourceVideo.currentTime),ratio=playableDuration()?current/videoDuration:0;videoTime.textContent=playbackTime(current)+' / '+playbackTime(videoDuration);videoPlayhead.style.left=(ratio*100)+'%';videoTimeline.setAttribute('aria-valuenow',String(current));videoTimeline.setAttribute('aria-valuetext',playbackTime(current));videoPlayPause.textContent=sourceVideo.paused?'Play':'Pause';}"
@@ -704,7 +881,7 @@
      "function seekVideo(seconds){if(!playableDuration())return;sourceVideo.currentTime=clampVideoTime(seconds);updateVideoTransport();}"
      "function toggleVideoPlayback(){if(sourceVideo.paused)sourceVideo.play().catch(()=>show(videoStatus,'Playback could not start. Try again.','error'));else sourceVideo.pause();}"
      "function clearFullscreenHint(){if(fullscreenHintTimer!==null){clearTimeout(fullscreenHintTimer);fullscreenHintTimer=null;}videoFullscreenControl.classList.remove('shortcut-auto');}function showFullscreenHint(){clearFullscreenHint();videoFullscreenControl.classList.add('shortcut-auto');fullscreenHintTimer=setTimeout(()=>{videoFullscreenControl.classList.remove('shortcut-auto');fullscreenHintTimer=null;},4000);}function syncVideoFullscreen(){const active=document.fullscreenElement===videoChrome;videoChrome.classList.toggle('is-fullscreen',active);videoFullscreen.textContent=active?'Exit fullscreen':'Fullscreen';videoFullscreen.setAttribute('aria-pressed',String(active));videoFullscreenShortcut.textContent=active?'F or Esc':'F';if(active)showFullscreenHint();else clearFullscreenHint();}function toggleVideoFullscreen(){if(document.fullscreenElement)document.exitFullscreen?.();else videoChrome.requestFullscreen?.();}"
-     "function editableShortcutTarget(target){return target instanceof Element&&(target.isContentEditable||!!target.closest('input,select,textarea,[contenteditable]:not([contenteditable=false]),[role=textbox]'));}function handleVideoShortcut(event){if(event.defaultPrevented||event.ctrlKey||event.metaKey||event.altKey||videoPlayer.hidden||videoPlayPause.disabled||!playableDuration()||editableShortcutTarget(event.target))return;let handled=true;if(event.key==='ArrowLeft')seekVideo(sourceVideo.currentTime-(event.shiftKey?60:10));else if(event.key==='ArrowRight')seekVideo(sourceVideo.currentTime+(event.shiftKey?60:10));else if((event.key===' '||event.code==='Space')&&!event.shiftKey){if(event.target instanceof Element&&event.target.closest('button,[role=button]'))return;toggleVideoPlayback();}else if((event.key==='f'||event.key==='F')&&!event.shiftKey)toggleVideoFullscreen();else handled=false;if(handled)event.preventDefault();}"
+     "function editableShortcutTarget(target){return target instanceof Element&&(target.isContentEditable||!!target.closest('input,select,textarea,[contenteditable]:not([contenteditable=false]),[role=textbox]'));}function handleVideoShortcut(event){if(event.defaultPrevented||event.ctrlKey||event.metaKey||event.altKey||contextualHelpDialog.open||videoPlayer.hidden||videoPlayPause.disabled||!playableDuration()||editableShortcutTarget(event.target))return;let handled=true;if(event.key==='ArrowLeft')seekVideo(sourceVideo.currentTime-(event.shiftKey?60:10));else if(event.key==='ArrowRight')seekVideo(sourceVideo.currentTime+(event.shiftKey?60:10));else if((event.key===' '||event.code==='Space')&&!event.shiftKey){if(event.target instanceof Element&&event.target.closest('button,[role=button]'))return;toggleVideoPlayback();}else if((event.key==='f'||event.key==='F')&&!event.shiftKey)toggleVideoFullscreen();else handled=false;if(handled)event.preventDefault();}"
      "function timelineSeconds(clientX){const rect=videoTimeline.getBoundingClientRect();return clampVideoTime((clientX-rect.left)/Math.max(1,rect.width)*videoDuration);}function showTimelineHover(clientX){if(!playableDuration())return;const rect=videoTimeline.getBoundingClientRect(),left=Math.min(rect.width,Math.max(0,clientX-rect.left)),seconds=timelineSeconds(clientX);videoTooltip.hidden=false;videoTooltip.style.left=left+'px';videoTooltip.textContent=playbackTime(seconds);}"
      "function resetVideoPlayback(){sourceVideo.pause();sourceVideo.removeAttribute('src');sourceVideo.load();videoDuration=0;sourceVideo.currentTime=0;videoTimeline.setAttribute('aria-valuemax','0');videoTicks.replaceChildren();videoBuffered.replaceChildren();videoTooltip.hidden=true;setVideoControls(false);updateVideoTransport();}"
      "async function loadDrivePlayback(file){const generation=++playbackGeneration;resetVideoPlayback();videoPlayer.hidden=false;updateOutputFraming();show(videoStatus,'Loading selected video…');try{const response=await fetch('/v1/drive/playback-sessions',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':playbackCsrf},body:JSON.stringify({fileId:file.id})});if(generation!==playbackGeneration)return;if(!response.ok){if(response.status===415)show(videoStatus,'This video remains selected for rendering, but its original format cannot play in this browser. Choose another video for playback.','error');else show(videoStatus,'The selected video remains selected for rendering, but playback could not be prepared. Try again or choose another video.','error');return;}const session=await response.json();if(generation!==playbackGeneration)return;if(!session||typeof session.playbackUrl!=='string'||!session.playbackUrl.startsWith('/v1/drive/playback/'))throw new Error('Invalid playback session');sourceVideo.src=session.playbackUrl;sourceVideo.load();}catch(_error){if(generation===playbackGeneration)show(videoStatus,'The selected video remains selected for rendering, but playback could not be prepared. Try again or choose another video.','error');}}"
@@ -712,6 +889,7 @@
      "videoPlayPause.addEventListener('click',toggleVideoPlayback);document.querySelectorAll('[data-seek-seconds]').forEach(button=>button.addEventListener('click',()=>seekVideo(sourceVideo.currentTime+Number(button.dataset.seekSeconds))));videoVolume.addEventListener('input',()=>{sourceVideo.volume=Number(videoVolume.value);});videoFullscreen.addEventListener('click',toggleVideoFullscreen);document.addEventListener('fullscreenchange',syncVideoFullscreen);"
      "videoTimeline.addEventListener('pointerdown',event=>{if(!playableDuration())return;videoScrubbing=true;try{videoTimeline.setPointerCapture(event.pointerId);}catch(_error){}seekVideo(timelineSeconds(event.clientX));showTimelineHover(event.clientX);});videoTimeline.addEventListener('pointermove',event=>{showTimelineHover(event.clientX);if(videoScrubbing)seekVideo(timelineSeconds(event.clientX));});videoTimeline.addEventListener('pointerup',event=>{videoScrubbing=false;try{videoTimeline.releasePointerCapture(event.pointerId);}catch(_error){}});videoTimeline.addEventListener('pointercancel',()=>{videoScrubbing=false;});videoTimeline.addEventListener('pointerleave',()=>{if(!videoScrubbing)videoTooltip.hidden=true;});videoTimeline.addEventListener('keydown',event=>{const amount=event.shiftKey?10:1;if(event.key==='ArrowLeft'){event.preventDefault();seekVideo(sourceVideo.currentTime-amount);}else if(event.key==='ArrowRight'){event.preventDefault();seekVideo(sourceVideo.currentTime+amount);}else if(event.key==='Home'){event.preventDefault();seekVideo(0);}else if(event.key==='End'){event.preventDefault();seekVideo(videoDuration);}});"
      "document.addEventListener('keydown',handleVideoShortcut);"
+     "function contextualHelpTemplate(fragment){return [...contextualHelpDialog.querySelectorAll('template[data-contextual-help-fragment]')].find(template=>template.dataset.contextualHelpFragment===fragment);}function contextualHelpLink(fragment){return [...document.querySelectorAll('a.contextual-help')].find(link=>{try{return new URL(link.href,location.href).hash.slice(1)===fragment;}catch(_error){return false;}});}function openContextualHelp(fragment,opener,pushHistory){const template=contextualHelpTemplate(fragment),copy=template?.content.firstElementChild?.cloneNode(true);if(!template||!copy)return false;contextualHelpTitle.textContent=template.dataset.contextualHelpQuestion;contextualHelpAnswer.replaceChildren(...copy.childNodes);contextualHelpFull.setAttribute('href','/faq#'+fragment);contextualHelpOpener=opener||contextualHelpLink(fragment);if(!sourceVideo.paused)sourceVideo.pause();if(!contextualHelpDialog.open)contextualHelpDialog.showModal();contextualHelpClose.focus();if(pushHistory){const current=history.state&&typeof history.state==='object'?history.state:{};history.pushState({...current,contextualHelp:fragment},'',location.href);}return true;}function closeContextualHelp(){if(contextualHelpDialog.open)contextualHelpDialog.close();}function unwindContextualHelp(){if(history.state?.contextualHelp)history.back();else closeContextualHelp();}document.body.addEventListener('click',event=>{const link=event.target.closest?.('a.contextual-help');if(!link)return;let fragment;try{fragment=new URL(link.href,location.href).hash.slice(1);}catch(_error){return;}if(!contextualHelpTemplate(fragment))return;event.preventDefault();openContextualHelp(fragment,link,true);});contextualHelpClose.addEventListener('click',unwindContextualHelp);contextualHelpDialog.addEventListener('cancel',event=>{event.preventDefault();unwindContextualHelp();});contextualHelpDialog.addEventListener('close',()=>{const opener=contextualHelpOpener;contextualHelpOpener=null;if(opener?.isConnected)opener.focus();});window.addEventListener('popstate',event=>{const fragment=event.state?.contextualHelp;if(fragment)openContextualHelp(fragment,contextualHelpLink(fragment),false);else closeContextualHelp();});"
      "['output-format','fit-mode','audio-mode'].forEach(id=>byId(id).addEventListener('input',()=>{if(id==='fit-mode')updateOutputFraming();invalidatePreview();syncRequest(false);}));updateOutputFraming();setVideoControls(false);syncVideoFullscreen();"
      "function activeZone(){const selected=value('timezone');return selected==='local'?Intl.DateTimeFormat().resolvedOptions().timeZone:selected;}function validTimeZone(zone){if(typeof zone!=='string'||!zone.trim()||/^(?:Z|[+-]\\d{2}(?::?\\d{2})?)$/.test(zone))return false;try{new Intl.DateTimeFormat('en-US',{timeZone:zone}).format(0);return true;}catch(_error){return false;}}function setDisplayTimeZone(zone){const selector=byId('timezone'),custom=[...selector.options].find(option=>option.dataset.customTimeZone==='true');if(custom&&custom.value!==zone)custom.remove();const exact=[...selector.options].find(option=>option.value===zone);if(exact){selector.value=zone;return;}if(zone===Intl.DateTimeFormat().resolvedOptions().timeZone){selector.value='local';return;}const option=document.createElement('option');option.value=zone;option.textContent=zone;option.dataset.customTimeZone='true';selector.append(option);selector.value=zone;}"
      "function dateParts(instant,zone){const parts=new Intl.DateTimeFormat('en-US',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(new Date(instant));return Object.fromEntries(parts.filter(part=>part.type!=='literal').map(part=>[part.type,Number(part.value)]));}"
@@ -833,20 +1011,6 @@
         "<p class=\"muted\">Alpha Compose can only use files you choose and the finished "
         "videos it creates. It cannot access the rest of your Google Drive.</p></section>")))
 
-(defn- faq-question [fragment question answer]
-  (str "<details class=\"faq-question\" id=\"" fragment "\">"
-       "<summary><h3>" question "</h3></summary>"
-       "<div class=\"faq-answer\">" answer
-       "<p class=\"faq-permalink\"><a href=\"#" fragment
-       "\" aria-label=\"Link to: " question "\">Link to this question</a></p>"
-       "</div></details>"))
-
-(defn- faq-category [fragment title questions]
-  (str "<section class=\"faq-category\" aria-labelledby=\"" fragment "\">"
-       "<h2 id=\"" fragment "\">" title "</h2>"
-       (apply str questions)
-       "</section>"))
-
 (def faq-page
   (public-page
    "FAQ"
@@ -856,133 +1020,7 @@
     "<p class=\"muted\">Learn what Alpha Compose makes, which activity data it supports, "
     "how files move through the service, and where its limits are.</p></header>"
     "<div class=\"faq-sections\">"
-    (faq-category
-     "category-what-alpha-compose-makes"
-     "What Alpha Compose makes"
-     [(faq-question
-       "what-alpha-compose-does"
-       "What does Alpha Compose do?"
-       (str "<p>Alpha Compose combines a compatible activity video with supported activity "
-            "data. It adds a heart-rate graph, time readouts, and a generated heartbeat "
-            "soundtrack, lets you preview key moments, and creates a finished video.</p>"))
-      (faq-question
-       "beyond-freediving"
-       "Is Alpha Compose only for freediving?"
-       (str "<p>No. Alpha Compose grew from freediving, but it is not limited to freediving. "
-            "You can use any compatible activity video and supported activity data that "
-            "line up on a shared timeline.</p>"))
-      (faq-question
-       "progress-over-time"
-       "Can Alpha Compose compare my progress over time?"
-       (str "<p>Saved videos can help you notice changes over time for yourself. "
-            "Alpha Compose does not store sessions, analyze trends, or compare activities. "
-            "Any comparison is one you make from the finished videos you keep.</p>"))
-      (faq-question
-       "preview-admission-cost"
-       "Why does Preview have an admission cost?"
-       (preview-admission-faq-answer))])
-    (faq-category
-     "category-heart-rate-and-heartbeat"
-     "Heart rate and the heartbeat sound"
-     [(faq-question
-       "why-show-heart-rate"
-       "Why put heart rate on a workout video?"
-       (str "<p>Heart rate can show your physiological response during a memorable moment. "
-            "Seeing that response alongside the action, and hearing its pace, can make "
-            "reliving the activity feel more immediate.</p>"))
-      (faq-question
-       "generated-heartbeat-sound"
-       "Is the heartbeat sound a recording of my heart?"
-       (str "<p>No. The heartbeat sound is generated from your recorded heart-rate data "
-            "and paced from those samples. It is not a recording of your heart or other "
-            "audio captured by a medical device.</p>"))
-      (faq-question
-       "audio-options"
-       "Can I keep the source audio, use only the heartbeat, or combine them?"
-       (str "<p>Yes. When you make a finished video, you can keep only the source audio, "
-            "use only the generated heartbeat, or combine the source audio and heartbeat.</p>"))])
-    (faq-category
-     "category-supported-activity-data"
-     "Supported activity data"
-     [(faq-question
-       "supported-activity-data"
-       "What activity data is supported today?"
-       (str "<p>Heart rate is the primary supported graph. Current heart-rate inputs are "
-            "Polar CSV, Garmin FIT, and OxiWear heart-rate CSV. Each input must include "
-            "timestamps so it can be synchronized with the video.</p>"))
-      (faq-question
-       "oxygen-saturation-support"
-       "Does Alpha Compose support oxygen saturation?"
-       (str "<p>Yes, as an optional addition. Compatible heart-rate renders can include "
-            "optional OxiWear SpO2 activity data and display oxygen saturation alongside "
-            "the primary heart-rate graph.</p>"))
-      (faq-question
-       "future-graphs"
-       "Will other graphs be supported?"
-       (str "<p>Other activity-data graphs are a possible future direction, but there "
-            "are no announced data types, dates, or delivery promises.</p>"))])
-    (faq-category
-     "category-files-and-synchronization"
-     "Files and synchronization"
-     [(faq-question
-       "file-sources"
-       "Where are my video and activity-data files read from?"
-       (str "<p>You choose a source video from Google Drive. Your browser reads the "
-            "activity-data file you choose and sends the required data for your render. "
-            "Alpha Compose does not search your device or the rest of your Drive.</p>"))
-      (faq-question
-       "synchronizing-data-and-camera"
-       "Why do I need to synchronize the activity data and camera time?"
-       (str "<p>The sensor and camera may have started at different times. Synchronization "
-            "identifies one matching moment so Alpha Compose can place each heart-rate or "
-            "SpO2 value at the correct point in the video.</p>"))
-      (faq-question
-       "output-file"
-       "What output does Alpha Compose create?"
-       (str "<p>With a source video, Alpha Compose creates a finished H.264 MP4 or "
-            "ProRes 422 MOV. It can also create a transparent ProRes 4444 MOV overlay "
-            "for a separate editing workflow. See the <a href=\"/openapi.yaml\">technical "
-            "API documentation</a> for file-format details.</p>"))])
-    (faq-category
-     "category-google-drive-and-privacy"
-     "Google Drive and privacy"
-     [(faq-question
-       "google-drive-access"
-       "What can Alpha Compose access in Google Drive?"
-       (str "<p>Alpha Compose uses the restricted <code>drive.file</code> permission. "
-            "It can access files you explicitly choose and files it creates for you. "
-            "It cannot browse or read the rest of your Google Drive.</p>"))
-      (faq-question
-       "finished-video-location"
-       "Where is my finished video saved?"
-       (str "<p>The finished video is saved in your Alpha Compose folder in My Drive, "
-            "including when the source video came from a Shared Drive or was shared with "
-            "you. It remains in your Drive until you delete it.</p>"))
-      (faq-question
-       "source-and-activity-data-retention"
-       "Does Alpha Compose retain my source video or log my activity data?"
-       (str "<p>No source-video copy is retained: the source video is streamed from "
-            "Google Drive into the renderer and is never persisted by Alpha Compose. "
-            "Activity data may be held in encrypted temporary request objects while the "
-            "render is processed; those objects are deleted after 24 hours. The service "
-            "does not log activity-data values. Read the <a href=\"/privacy\">complete "
-            "privacy policy</a> for retention details.</p>"))])
-    (faq-category
-     "category-safety-and-medical-limitations"
-     "Safety and medical limitations"
-     [(faq-question
-       "medical-or-training-advice"
-       "Is Alpha Compose medical or training advice?"
-       (str "<p>No. Alpha Compose output is not medical advice or training advice. "
-            "Do not use it to diagnose a condition, decide whether an activity is safe, "
-            "or replace qualified professional guidance.</p>"))
-      (faq-question
-       "displayed-value-accuracy"
-       "How accurate are the displayed values?"
-       (str "<p>The output reflects the sensor data you supply and the synchronization "
-            "you choose. It does not infer emotions, health, or training readiness, "
-            "and it does not validate the sensor. Check the source data and timing before "
-            "relying on a displayed value.</p>"))])
+    (apply str (map faq-category faq-categories))
     "</div>"
     "<script>(function(){"
     "function openFaqTarget(){let fragment;try{fragment=decodeURIComponent(location.hash.slice(1));}catch(_){return;}const target=document.getElementById(fragment);if(!(target instanceof HTMLDetailsElement)||!target.classList.contains('faq-question'))return;target.open=true;requestAnimationFrame(()=>target.scrollIntoView({block:'start'}));}"
