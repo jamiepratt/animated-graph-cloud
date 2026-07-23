@@ -20,16 +20,37 @@
         minor (mod minor-units 100)]
     (str major "." (when (< minor 10) "0") minor)))
 
+(defn- contextual-help-link [fragment accessible-name]
+  (str "<a class=\"contextual-help\" href=\"/faq#" fragment
+       "\" aria-label=\"" (escape-html accessible-name)
+       "\"><span aria-hidden=\"true\">?</span></a>"))
+
+(defn- preview-admission-costs []
+  {:preview (minor-units->pln
+             jobs/default-preview-reservation-minor-units)
+   :total (minor-units->pln
+           jobs/default-preview-plus-render-exposure-minor-units)})
+
 (defn- preview-admission-disclosure []
-  (let [preview (minor-units->pln
-                 jobs/default-preview-reservation-minor-units)
-        total (minor-units->pln
-               jobs/default-preview-plus-render-exposure-minor-units)]
-    (str "<p class=\"hint preview-admission-cost\"><strong>Admission cost:</strong> "
+  (let [{:keys [preview total]} (preview-admission-costs)]
+    (str "<p class=\"hint preview-admission-cost\"><span class=\"help-label\">"
+         "<strong>Admission cost:</strong>"
+         (contextual-help-link "preview-admission-cost"
+                               "Learn about Preview admission cost")
+         "</span> "
          "Each Preview attempt reserves up to PLN " preview ". "
          "Preview plus one Submit reserves up to PLN " total ". "
          "Reservations remain counted after success, failure, cancellation, or expiry. "
          "Retrying Preview reserves another PLN " preview ".</p>")))
+
+(defn- preview-admission-faq-answer []
+  (let [{:keys [preview total]} (preview-admission-costs)]
+    (str "<p>Preview uses cloud rendering capacity, so Alpha Compose reserves a "
+         "bounded amount against its monthly admission budget before starting. "
+         "Each Preview attempt reserves up to PLN " preview ". "
+         "Preview plus one Submit reserves up to PLN " total ". "
+         "Reservations remain counted after success, failure, cancellation, or expiry. "
+         "Retrying Preview makes a new reservation of up to PLN " preview ".</p>")))
 
 (defn- icon-links []
   (str "<link rel=\"icon\" href=\"/favicon.svg\" type=\"image/svg+xml\">"
@@ -80,10 +101,15 @@
    ":focus,:focus-visible{outline:3px solid var(--color-warning);outline-offset:3px}"
    "::selection{color:var(--color-text);background:#be334f99}"
    ".shell,.shell>*{min-width:0}.shell>header{padding:clamp(.9rem,2vw,1.25rem);background:var(--color-surface);border:1px solid var(--color-border);border-radius:1rem;box-shadow:var(--shadow-surface)}.muted,.hint{color:var(--color-muted)}"
+   ".field-hint{display:block;color:var(--color-muted);font-weight:400;margin-top:.2rem}"
    ".product-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin:1rem 0 2rem}"
    ".product-header .brand{color:var(--color-text);font-weight:800;letter-spacing:-.03em;text-decoration:none}"
    ".product-header nav{display:flex;gap:1rem;flex-wrap:wrap}.product-header nav a{color:var(--color-link)}"
    ".product-header nav a[aria-current=\"page\"]{color:var(--color-text);font-weight:800;text-decoration-line:underline;text-decoration-thickness:.18rem;text-underline-offset:.28rem}"
+   ".help-heading,.toggle-help{display:flex}.help-label{display:inline-flex}.help-heading,.help-label,.toggle-help{align-items:center;gap:.4rem;max-width:100%;min-width:0}"
+   ".help-heading{margin-bottom:.35rem}.help-heading h2{margin:0}.help-label>label,.help-label>strong{min-width:0}.toggle-help{flex-wrap:wrap}"
+   ".contextual-help{display:inline-flex;align-items:center;justify-content:center;flex:0 0 2rem;width:2rem;height:2rem;border:2px solid currentColor;border-radius:50%;background:#06182b;color:var(--color-link);font-weight:900;line-height:1;text-decoration:none;vertical-align:middle}"
+   ".contextual-help:hover{background:var(--color-accent);color:var(--color-accent-ink);border-color:var(--color-accent)}"
    ".eyebrow{color:var(--color-accent)}.step{color:var(--color-subtle)}"
    ".card,.hero-card,.drive-card,.trace-preview,.preview-pending,.preview-error,.preview-stale,.preview-empty,.log-entry{"
    "background:var(--color-surface);border-color:var(--color-border);box-shadow:var(--shadow-surface)}"
@@ -610,23 +636,38 @@
      "</p><form method=\"post\" action=\"/v1/auth/logout\"><input type=\"hidden\" name=\"csrf\" value=\""
      (escape-html csrf)
      "\"><button type=\"submit\">Log out</button></form></div></header>"
-     "<section class=\"card drive-card\"><div><h2>Google Drive</h2><p class=\"muted\">Pick a supported video from My Drive, files shared with you, or a Shared Drive. Video results are filtered; folders are only for navigation. You can also upload a source video. Selection grants Alpha Compose access to that file only. Every finished render still goes to your Alpha Compose folder in My Drive.</p></div><div class=\"drive-actions\"><button id=\"open-picker\" type=\"button\">Pick one video</button><span>Selected: <output id=\"picker-selection\">None</output></span></div></section>"
-     "<section class=\"card\"><div class=\"section-head\"><div><h2>Optional source video</h2><p class=\"muted\">The browser sends only the selected ID. The server verifies its MIME type, 2 GiB limit, download access, decodability, and duration.</p></div></div><input id=\"source-video-file-id\" type=\"hidden\"><div class=\"field-grid\"><label>Output<select id=\"output-format\"><option value=\"h264-mp4\">H.264 MP4</option><option value=\"prores-422-mov\">ProRes 422 MOV</option></select></label><label>Fit<select id=\"fit-mode\"><option value=\"letterbox\">Letterbox / pillarbox</option><option value=\"crop\">Crop to fill</option></select></label><label>Audio<select id=\"audio-mode\"><option value=\"source+heartbeat\">Source + heartbeat</option><option value=\"source-only\">Source only</option><option value=\"heartbeat-only\">Heartbeat only</option></select></label></div></section>"
+     "<section class=\"card drive-card\"><div><div class=\"help-heading\"><h2>Google Drive</h2>"
+     (contextual-help-link "google-drive-access"
+                           "Learn about Google Drive access")
+     "</div><p class=\"muted\">Pick a supported video from My Drive, files shared with you, or a Shared Drive. Video results are filtered; folders are only for navigation. You can also upload a source video. Selection grants Alpha Compose access to that file only. Every finished render still goes to your Alpha Compose folder in My Drive.</p></div><div class=\"drive-actions\"><button id=\"open-picker\" type=\"button\">Pick one video</button><span>Selected: <output id=\"picker-selection\">None</output></span></div></section>"
+     "<section class=\"card\"><div class=\"section-head\"><div><h2>Optional source video</h2><p class=\"muted\">The browser sends only the selected ID. The server verifies its MIME type, 2 GiB limit, download access, decodability, and duration.</p></div></div><input id=\"source-video-file-id\" type=\"hidden\"><div class=\"field-grid\"><label>Output<select id=\"output-format\"><option value=\"h264-mp4\">H.264 MP4</option><option value=\"prores-422-mov\">ProRes 422 MOV</option></select></label><label>Fit<select id=\"fit-mode\"><option value=\"letterbox\">Letterbox / pillarbox</option><option value=\"crop\">Crop to fill</option></select></label><div><div class=\"help-label\"><label for=\"audio-mode\">Audio</label>"
+     (contextual-help-link "audio-options"
+                           "Learn about heartbeat audio options")
+     "</div><select id=\"audio-mode\"><option value=\"source+heartbeat\">Source + heartbeat</option><option value=\"source-only\">Source only</option><option value=\"heartbeat-only\">Heartbeat only</option></select></div></div></section>"
      "<form id=\"render-form\" hx-post=\"/ui/jobs\" hx-target=\"#job-result\" hx-swap=\"innerHTML\">"
      "<input id=\"render-request\" type=\"hidden\" name=\"request\" value=\"{}\">"
      "<section class=\"card\"><div class=\"section-head\"><div><div class=\"step\">Step 1</div><h2>Choose your activity data</h2><p class=\"muted\">Heart rate is the main supported graph. Select a supported heart-rate data format, then upload a file or paste its contents. Compatible data can add optional OxiWear SpO2 (oxygen saturation).</p></div></div>"
-     "<div class=\"field-grid\"><label>Heart-rate data format<select id=\"telemetry-format\" required><option value=\"polar-csv\">Polar CSV</option><option value=\"garmin-fit\">Garmin FIT</option><option value=\"oxiwear-hr-csv\">OxiWear heart-rate CSV</option></select></label>"
+     "<div class=\"field-grid\"><div><div class=\"help-label\"><label for=\"telemetry-format\">Heart-rate data format</label>"
+     (contextual-help-link "supported-activity-data"
+                           "Learn about supported activity-data formats")
+     "</div><select id=\"telemetry-format\" required><option value=\"polar-csv\">Polar CSV</option><option value=\"garmin-fit\">Garmin FIT</option><option value=\"oxiwear-hr-csv\">OxiWear heart-rate CSV</option></select></div>"
      "<label>Render preset<select id=\"preset\" required><option value=\"1080p25\">1080p · 25 fps · up to 8 minutes</option><option value=\"2.7k25\">2.7K · 25 fps · up to 4 minutes</option></select></label>"
      "<div class=\"source-box full\"><label for=\"telemetry-file\">Heart-rate data file <small>CSV or FIT files are read locally in your browser.</small></label><input id=\"telemetry-file\" type=\"file\" accept=\".csv,text/csv\"><label for=\"telemetry\" style=\"margin-top:1rem\">Or paste heart-rate data</label><textarea id=\"telemetry\" placeholder=\"Paste CSV text, or base64-encoded FIT content\" required></textarea><p id=\"telemetry-status\" class=\"status\" role=\"status\"></p></div></div></section>"
      "<section class=\"card\"><div class=\"section-head\"><div><div class=\"step\">Step 2</div><h2>Line up the timeline</h2><p class=\"muted\">Use the same timezone for camera, section, and timer entry. Heart-rate data timestamps stay as provided by the file. The selected IANA zone also controls the finished video's local clock.</p></div></div>"
      "<div class=\"field-grid\"><label>Timezone<select id=\"timezone\"><option value=\"local\">My browser timezone</option><option value=\"UTC\">UTC</option><option value=\"Europe/Warsaw\">Europe/Warsaw</option><option value=\"Europe/London\">Europe/London</option><option value=\"America/New_York\">America/New_York</option><option value=\"America/Los_Angeles\">America/Los_Angeles</option><option value=\"Asia/Tokyo\">Asia/Tokyo</option><option value=\"Australia/Sydney\">Australia/Sydney</option></select><small>Submitted as required <code>displayTimeZone</code>; local timestamps are converted to absolute instants.</small></label>"
-     "<label>Heart-rate sync time<input id=\"telemetry-sync-at\" type=\"datetime-local\" step=\"1\" required><small>Timestamp in the heart-rate data file at the camera sync moment.</small></label>"
+     "<div><div class=\"help-label\"><label for=\"telemetry-sync-at\">Heart-rate sync time</label>"
+     (contextual-help-link "synchronizing-data-and-camera"
+                           "Learn about activity-data synchronization")
+     "</div><input id=\"telemetry-sync-at\" type=\"datetime-local\" step=\"1\" required><small class=\"field-hint\">Timestamp in the heart-rate data file at the camera sync moment.</small></div>"
      "<label>Camera sync time<input id=\"camera-sync-at\" type=\"datetime-local\" step=\"1\" required></label>"
      "<label>Section start<input id=\"section-start-at\" type=\"datetime-local\" step=\"1\" required></label>"
      "<label>Section end<input id=\"section-end-at\" type=\"datetime-local\" step=\"1\" required></label></div></section>"
      "<section class=\"card\"><div class=\"section-head\"><div><div class=\"step\">Step 3</div><h2>Optional overlays</h2><p class=\"muted\">Add supporting data only when it is present in this render.</p></div></div>"
      "<div class=\"field-grid\"><label>Future trace opacity (%)<input id=\"future-trace-opacity-percent\" type=\"number\" min=\"0\" max=\"100\" step=\"any\" value=\"25\" required><small>Opacity of the not-yet-reached heart-rate trace. Default: 25%.</small></label></div>"
-     "<div class=\"optional\"><label class=\"toggle\"><input id=\"spo2-enabled\" type=\"checkbox\"> Include optional OxiWear SpO2 (oxygen saturation)</label><div id=\"spo2-fields\" hidden class=\"source-box\"><label for=\"spo2-file\">Oxygen-saturation CSV file</label><input id=\"spo2-file\" type=\"file\" accept=\".csv,text/csv\"><label for=\"spo2-telemetry\" style=\"margin-top:1rem\">Or paste oxygen-saturation CSV</label><textarea id=\"spo2-telemetry\" placeholder=\"reading_time,spo2\n2026-07-17T10:00:00Z,97\"></textarea><p id=\"spo2-status\" class=\"status\" role=\"status\"></p></div></div>"
+     "<div class=\"optional\"><div class=\"toggle-help\"><label class=\"toggle\"><input id=\"spo2-enabled\" type=\"checkbox\"> Include optional OxiWear SpO2 (oxygen saturation)</label>"
+     (contextual-help-link "oxygen-saturation-support"
+                           "Learn about optional SpO2 data")
+     "</div><div id=\"spo2-fields\" hidden class=\"source-box\"><label for=\"spo2-file\">Oxygen-saturation CSV file</label><input id=\"spo2-file\" type=\"file\" accept=\".csv,text/csv\"><label for=\"spo2-telemetry\" style=\"margin-top:1rem\">Or paste oxygen-saturation CSV</label><textarea id=\"spo2-telemetry\" placeholder=\"reading_time,spo2\n2026-07-17T10:00:00Z,97\"></textarea><p id=\"spo2-status\" class=\"status\" role=\"status\"></p></div></div>"
      "<div class=\"optional\"><label class=\"toggle\"><input id=\"timer-enabled\" type=\"checkbox\"> Show elapsed timer</label><div id=\"timer-fields\" hidden class=\"field-grid\"><label>Timer start<input id=\"timer-start-at\" type=\"datetime-local\" step=\".001\"></label><label>Timer end<input id=\"timer-end-at\" type=\"datetime-local\" step=\".001\"></label></div></div>"
      "<div class=\"optional\"><label class=\"toggle\"><input id=\"watermark-enabled\" type=\"checkbox\"> Add a PNG watermark</label><div id=\"watermark-fields\" hidden class=\"source-box\"><label for=\"watermark-file\">PNG file <small>It is converted to base64 locally and sent with this request.</small></label><input id=\"watermark-file\" type=\"file\" accept=\"image/png,.png\"><p id=\"watermark-status\" class=\"status\" role=\"status\"></p></div></div></section>"
      "<section class=\"card raw-panel\"><details><summary>Advanced: paste or inspect raw JSON</summary><p class=\"hint\">Paste a request and choose “Apply to form”. The JSON is checked for structural errors first; form edits are reflected here before preview or submission.</p><p class=\"hint\">Alpha Compose calls these inputs activity data. The API contract uses the exact field names below.</p><p class=\"hint\"><strong>Accepted fields</strong></p><ul class=\"field-reference\"><li><code>telemetryFormat</code> and <code>telemetry</code> are required. Formats: <code>polar-csv</code>, <code>garmin-fit</code> (base64 FIT), or <code>oxiwear-hr-csv</code>.</li><li><code>preset</code> is required: <code>1080p25</code> (1920×1080, 25 fps, up to 8 minutes) or <code>2.7k25</code> (2704×1520, 25 fps, up to 4 minutes).</li><li><code>displayTimeZone</code> is required: a known IANA timezone such as <code>Europe/Warsaw</code> or <code>UTC</code>; it controls only the rendered local clock.</li><li><code>telemetrySyncAt</code>, <code>cameraSyncAt</code>, <code>sectionStartAt</code>, and <code>sectionEndAt</code> are required ISO-8601 instants with <code>Z</code> or an explicit UTC offset.</li><li><code>futureTraceOpacityPercent</code> is optional: a number from <code>0</code> through <code>100</code>, in percent; default <code>25</code>.</li><li><code>spo2</code> is optional: <code>{format:\"oxiwear-spo2-csv\", telemetry}</code>.</li><li><code>timer</code> is optional: <code>{startAt, endAt}</code>, within the requested section.</li><li><code>watermark</code> is optional: <code>{contentBase64}</code>, a bounded PNG encoded as base64.</li><li><code>sourceVideo</code> is optional: <code>{fileId}</code>; when present, <code>outputFormat</code> (<code>h264-mp4</code> or <code>prores-422-mov</code>), <code>fitMode</code> (<code>letterbox</code>, <code>pillarbox</code>, or <code>crop</code>), and <code>audioMode</code> (<code>source+heartbeat</code>, <code>source-only</code>, or <code>heartbeat-only</code>) configure compositing.</li></ul><textarea id=\"raw-json\" spellcheck=\"false\">{}</textarea><div class=\"raw-actions\"><button id=\"apply-json\" type=\"button\">Apply JSON to form</button><button id=\"copy-json\" type=\"button\">Copy generated JSON</button></div><p id=\"json-status\" class=\"status json-errors\" role=\"status\"></p></details></section>"
@@ -736,7 +777,10 @@
         "<p class=\"muted\">Heart-rate data gives you a visible window into exertion "
         "and your body's response as the recorded moment unfolds.</p>"
         "</article><article class=\"card\">"
-        "<h2>Relive how it felt</h2>"
+        "<div class=\"help-heading\"><h2>Relive how it felt</h2>"
+        (contextual-help-link "generated-heartbeat-sound"
+                              "Learn about generated heartbeat audio")
+        "</div>"
         "<p class=\"muted\">A generated heartbeat paced to your recorded heart-rate data "
         "can make a remembered effort feel more immediate.</p>"
         "</article><article class=\"card\">"
@@ -802,7 +846,11 @@
        "Can Alpha Compose compare my progress over time?"
        (str "<p>Saved videos can help you notice changes over time for yourself. "
             "Alpha Compose does not store sessions, analyze trends, or compare activities. "
-            "Any comparison is one you make from the finished videos you keep.</p>"))])
+            "Any comparison is one you make from the finished videos you keep.</p>"))
+      (faq-question
+       "preview-admission-cost"
+       "Why does Preview have an admission cost?"
+       (preview-admission-faq-answer))])
     (faq-category
      "category-heart-rate-and-heartbeat"
      "Heart rate and the heartbeat sound"
