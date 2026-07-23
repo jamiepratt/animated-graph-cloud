@@ -4,6 +4,7 @@
             [agg.contracts.render :as contract]
             [agg.auth.core :as auth]
             [agg.drive.core :as drive]
+            [agg.drive.gcp :as drive-gcp]
             [agg.early-access.core :as early-access]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
@@ -1335,6 +1336,34 @@
                     :contentType mimeType
                     :size size})))
 
+(defn- inspect-recording-clock!
+  [^HttpExchange exchange auth-system]
+  (let [user (require-session-user! exchange auth-system)
+        _ (require-csrf! exchange auth-system user)
+        request (request-json exchange)
+        file-id (:fileId request)
+        _ (when-not (and (= #{:fileId} (set (keys request)))
+                         (string? file-id)
+                         (<= 1 (count file-id) 256))
+            (throw (errors/raise! "Drive recording-clock source is invalid"
+                                  {:type ::invalid-recording-clock-source})))
+        {:keys [access-token]}
+        (auth/drive-access! auth-system (:subject user))
+        gateway (:drive auth-system)
+        _ (when-not (and (satisfies? drive/SourceGateway gateway)
+                         (satisfies? drive/PlaybackGateway gateway))
+            (throw (errors/raise!
+                    "Drive recording-clock inspection dependencies are incomplete"
+                    {:type ::drive/source-unavailable})))
+        metadata (drive/source-metadata! gateway access-token file-id)
+        _ (contract/attach-source-metadata
+           {:source-video {:file-id file-id}} metadata)
+        inspection
+        (drive-gcp/inspect-recording-clock!
+         gateway access-token file-id metadata)]
+    (respond-json! exchange 200
+                   (assoc inspection :fileName (:name metadata)))))
+
 (defn- stream-playback!
   [^HttpExchange exchange auth-system path]
   (let [user (require-session-user! exchange auth-system)
@@ -1621,6 +1650,11 @@
                                   (and auth-system (= "POST" method)
                                        (= "/v1/drive/playback-sessions" path))
                                   (create-playback-session! exchange auth-system)
+
+                                  (and auth-system (= "POST" method)
+                                       (= "/v1/drive/recording-clock-inspections"
+                                          path))
+                                  (inspect-recording-clock! exchange auth-system)
 
                                   (and auth-system (= "GET" method)
                                        (re-matches drive-playback-path-pattern path))
@@ -1909,6 +1943,10 @@
                   ::invalid-playback-source
                   (respond-json! exchange 400
                                  {:error "invalid_playback_source"})
+
+                  ::invalid-recording-clock-source
+                  (respond-json! exchange 400
+                                 {:error "invalid_recording_clock_source"})
 
                   ::invalid-playback-range
                   (respond-invalid-playback-range!

@@ -298,10 +298,10 @@
   (let [fixture
         (str
          "<script>"
-         "window.__playerState={callback:null,loads:[],sessionRequests:[],playCalls:0,fullscreenElement:null,fullscreenRequests:[],fullscreenExits:0,fullscreenTimers:[],clearedTimers:[]};"
+         "window.__playerState={callback:null,loads:[],sessionRequests:[],inspectionRequests:[],playCalls:0,fullscreenElement:null,fullscreenRequests:[],fullscreenExits:0,fullscreenTimers:[],clearedTimers:[]};"
          "const nativeSetTimeout=window.setTimeout.bind(window),nativeClearTimeout=window.clearTimeout.bind(window);window.setTimeout=(callback,delay,...args)=>{if(delay===4000){const timer={id:'fullscreen-'+(window.__playerState.fullscreenTimers.length+1),callback,cleared:false};window.__playerState.fullscreenTimers.push(timer);return timer.id;}return nativeSetTimeout(callback,delay,...args);};window.clearTimeout=id=>{const timer=window.__playerState.fullscreenTimers.find(candidate=>candidate.id===id);if(timer){timer.cleared=true;window.__playerState.clearedTimers.push(id);return;}nativeClearTimeout(id);};"
          "Object.defineProperty(document,'fullscreenElement',{configurable:true,get(){return window.__playerState.fullscreenElement;}});Element.prototype.requestFullscreen=function(){window.__playerState.fullscreenElement=this;window.__playerState.fullscreenRequests.push(this.id);document.dispatchEvent(new Event('fullscreenchange'));return Promise.resolve();};document.exitFullscreen=function(){window.__playerState.fullscreenElement=null;window.__playerState.fullscreenExits++;document.dispatchEvent(new Event('fullscreenchange'));return Promise.resolve();};"
-         "window.fetch=(path,options={})=>{if(path==='/v1/drive/playback-sessions'){window.__playerState.sessionRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000115',contentType:'video/mp4',size:2048})});}return Promise.resolve({ok:true,status:204,json:()=>Promise.resolve({})});};"
+         "window.fetch=(path,options={})=>{if(path==='/v1/drive/playback-sessions'){window.__playerState.sessionRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000115',contentType:'video/mp4',size:2048})});}if(path==='/v1/drive/recording-clock-inspections'){window.__playerState.inspectionRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:'authoritative-ride.mp4',status:'candidate',candidates:[{source:'movie',kind:'explicit-offset',value:'2026-07-23T23:59:30+02:00'}],recommendedIndex:0,ambiguous:false,durationSeconds:125.5,limits:{maxBytes:524288,maxRanges:2,timeoutMillis:3000}})});}return Promise.resolve({ok:true,status:204,json:()=>Promise.resolve({})});};"
          "class PickerView{setMimeTypes(){return this;}setIncludeFolders(){return this;}setSelectFolderEnabled(){return this;}setMode(){return this;}setEnableDrives(){return this;}}"
          "class UploadView extends PickerView{}"
          "class PickerBuilder{addView(){return this;}setSelectableMimeTypes(){return this;}setOAuthToken(){return this;}setDeveloperKey(){return this;}setAppId(){return this;}setOrigin(){return this;}setCallback(callback){window.__playerState.callback=callback;return this;}build(){return {setVisible(){}};}}"
@@ -314,9 +314,9 @@
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "(async()=>{let outcome;try{"
-         "const state=window.__playerState;state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'private-mp4',name:'ride.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));"
+         "const state=window.__playerState;state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'private-mp4',name:'ride.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120\\n2026-07-17T10:00:02Z,124';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02']].forEach(([id,value])=>document.getElementById(id).value=value);document.getElementById('video-timezone').value='+02:00';document.getElementById('confirm-video-clock').click();const fixedOffsetRejected={confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,status:document.getElementById('video-clock-status').textContent};document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();"
          "const player=document.getElementById('video-player'),video=document.getElementById('source-video-player'),timeline=document.getElementById('video-timeline'),fit=document.getElementById('fit-mode'),play=document.getElementById('video-play-pause');video.__duration=125.5;video.dispatchEvent(new Event('loadedmetadata'));video.dispatchEvent(new Event('progress'));"
-         "const initial={hidden:player.hidden,paused:video.paused,currentTime:video.currentTime,playCalls:state.playCalls,src:video.getAttribute('src'),selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,time:document.getElementById('video-time').textContent,timelineMax:timeline.getAttribute('aria-valuemax'),bufferedSegments:document.querySelectorAll('#video-buffered-ranges span').length,fit:getComputedStyle(video).objectFit,request:state.sessionRequests[0]};"
+         "const generatedRequest=JSON.parse(document.getElementById('render-request').value),initial={hidden:player.hidden,paused:video.paused,currentTime:video.currentTime,playCalls:state.playCalls,src:video.getAttribute('src'),selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,time:document.getElementById('video-time').textContent,timelineMax:timeline.getAttribute('aria-valuemax'),timelineValueText:timeline.getAttribute('aria-valuetext'),bufferedSegments:document.querySelectorAll('#video-buffered-ranges span').length,fit:getComputedStyle(video).objectFit,request:state.sessionRequests[0],inspectionRequest:state.inspectionRequests[0],clock:{start:document.getElementById('video-recording-start').value,zone:document.getElementById('video-timezone').value,confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,candidates:document.querySelectorAll('#video-clock-candidates input').length,summary:document.getElementById('video-source-summary').textContent,request:generatedRequest.sourceVideo}};"
          "const shortcutHints=[...document.querySelectorAll('.video-control')].map(control=>{const button=control.querySelector('button'),hint=control.querySelector('.video-shortcut'),before=control.getBoundingClientRect();button.focus();const after=control.getBoundingClientRect(),style=hint&&getComputedStyle(hint);return {name:button.getAttribute('aria-label')||button.textContent.trim(),keys:button.getAttribute('aria-keyshortcuts'),hint:hint?.textContent||null,focusVisible:style?.visibility==='visible'&&style?.opacity==='1',stable:before.width===after.width&&before.height===after.height};});"
          "fit.value='crop';fit.dispatchEvent(new Event('input',{bubbles:true}));const cropped=getComputedStyle(video).objectFit;"
          "document.querySelector('[data-seek-seconds=\"10\"]').click();document.querySelector('[data-seek-seconds=\"60\"]').click();document.querySelector('[data-seek-seconds=\"-10\"]').click();const transportTime=video.currentTime;"
@@ -332,7 +332,8 @@
          "state.fullscreenTimers.at(-1).callback();const afterFourSeconds={auto:fullscreenControl.classList.contains('shortcut-auto'),hintVisible:hintVisible()};fullscreen.focus();const focusedFullscreenHint={hint:fullscreenHint.textContent,visible:hintVisible()};forwardButton.focus();const fullscreenExitPrevented=press(document.body,'f'),fullscreenExit={prevented:fullscreenExitPrevented,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),elementId:document.fullscreenElement?.id||null,auto:fullscreenControl.classList.contains('shortcut-auto')};"
          "press(document.body,'f');const restartedTimer=state.fullscreenTimers.at(-1),escapePrevented=press(document.body,'Escape');state.fullscreenElement=null;document.dispatchEvent(new Event('fullscreenchange'));const browserExit={escapePrevented,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),auto:fullscreenControl.classList.contains('shortcut-auto'),timerCleared:restartedTimer.cleared};fullscreen.click();const buttonEntry={request:state.fullscreenRequests.at(-1),label:fullscreen.textContent};fullscreen.click();const buttonExit={exitCount:state.fullscreenExits,label:fullscreen.textContent};"
          "video.dispatchEvent(new Event('error'));const disabledStart=video.currentTime,disabledSeekPrevented=press(document.body,'ArrowRight'),requestsBeforeDisabledF=state.fullscreenRequests.length,disabledFullscreenPrevented=press(document.body,'f'),unsupported={selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,message:document.getElementById('video-player-status').textContent,disabledStart,disabledSeekPrevented,afterDisabledSeek:video.currentTime,disabledFullscreenPrevented,fullscreenRequestsUnchanged:state.fullscreenRequests.length===requestsBeforeDisabledF};"
-         "outcome={initial,shortcutHints,cropped,transportTime,scrubTime,keyboardTime,hover,playing,paused,shortcuts:{shortcutStart,rightPrevented,afterRight,shiftRightPrevented,afterShiftRight,leftPrevented,afterLeft,shiftLeftPrevented,afterShiftLeft,spacePrevented,afterSpacePaused,pausedAfterSecondSpace:video.paused},exclusions:{editableChecks,modifiedChecks,focusedButtonPrevented,afterFocusedButtonKey,afterFocusedButtonClick,hiddenStart,hiddenPrevented,afterHidden},fullscreen:{entry:fullscreenEntry,afterFourSeconds,focusedHint:focusedFullscreenHint,exit:fullscreenExit,browserExit,buttonEntry,buttonExit},unsupported,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+         "const rawRequest={...generatedRequest,sourceVideo:{fileId:'raw-video',recordingStartAt:'2026-10-25T00:30:00Z',timeZone:'Europe/Warsaw'}};document.getElementById('raw-json').value=JSON.stringify(rawRequest);document.getElementById('apply-json').click();const rawRestored={fileId:document.getElementById('source-video-file-id').value,start:document.getElementById('video-recording-start').value,zone:document.getElementById('video-timezone').value,confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,request:JSON.parse(document.getElementById('render-request').value).sourceVideo,status:document.getElementById('json-status').textContent};"
+         "outcome={initial,fixedOffsetRejected,shortcutHints,cropped,transportTime,scrubTime,keyboardTime,hover,playing,paused,shortcuts:{shortcutStart,rightPrevented,afterRight,shiftRightPrevented,afterShiftRight,leftPrevented,afterLeft,shiftLeftPrevented,afterShiftLeft,spacePrevented,afterSpacePaused,pausedAfterSecondSpace:video.paused},exclusions:{editableChecks,modifiedChecks,focusedButtonPrevented,afterFocusedButtonKey,afterFocusedButtonClick,hiddenStart,hiddenPrevented,afterHidden},fullscreen:{entry:fullscreenEntry,afterFourSeconds,focusedHint:focusedFullscreenHint,exit:fullscreenExit,browserExit,buttonEntry,buttonExit},unsupported,rawRestored,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
          "</script>")
         html (-> page
@@ -802,7 +803,7 @@
          "const tick=()=>new Promise(resolve=>setTimeout(resolve,0)),waitPop=(action,expectedFragment)=>new Promise(resolve=>{const onPop=event=>{if((event.state?.contextualHelp||null)!==expectedFragment)return;window.removeEventListener('popstate',onPop);setTimeout(()=>resolve(true),0);};window.addEventListener('popstate',onPop);action();}),safeClick=link=>{link.addEventListener('click',event=>event.preventDefault(),{once:true});link.click();if(!dialog.open)throw new Error('Contextual help link did not open the dialog');};"
          "const fragment=link=>new URL(link.href).hash.slice(1),templateFor=link=>[...dialog.querySelectorAll('template[data-contextual-help-fragment]')].find(template=>template.dataset.contextualHelpFragment===fragment(link));"
          "const inspect=link=>{const template=templateFor(link),rect=dialog.getBoundingClientRect();return {fragment:fragment(link),open:dialog.open,modal:dialog.matches(':modal'),focusContained:dialog.contains(document.activeElement),title:title.textContent,expectedTitle:template?.dataset.contextualHelpQuestion||null,answer:answer.innerHTML,expectedAnswer:template?.content.firstElementChild?.innerHTML||null,fullHref:full.getAttribute('href'),fullTarget:full.getAttribute('target'),fullRel:full.getAttribute('rel'),urlUnchanged:location.href===baseUrl,historyFragment:history.state?.contextualHelp||null,fits:rect.left>=-.5&&rect.right<=innerWidth+.5&&rect.top>=-.5&&rect.bottom<=innerHeight+.5,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};};"
-         "const telemetryContent='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120\\n2026-07-17T10:00:02Z,124',telemetryFile=document.getElementById('telemetry-file'),transfer=new DataTransfer(),selectedFile=new File([telemetryContent],'activity.csv',{type:'text/csv'});transfer.items.add(selectedFile);telemetryFile.files=transfer.files;document.getElementById('source-video-file-id').value='private-drive-video';document.getElementById('picker-selection').textContent='training.mp4';document.getElementById('output-format').value='prores-422-mov';document.getElementById('fit-mode').value='crop';document.getElementById('audio-mode').value='source-only';document.getElementById('preset').value='2.7k25';document.getElementById('timezone').value='UTC';document.getElementById('future-trace-opacity-percent').value='37';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02'],['timer-start-at','2026-07-17T10:00:00'],['timer-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);document.getElementById('spo2-enabled').checked=true;document.getElementById('spo2-telemetry').value='reading_time,spo2\\n2026-07-17T10:00:00Z,97';document.getElementById('timer-enabled').checked=true;telemetryFile.dispatchEvent(new Event('change',{bubbles:true}));await new Promise((resolve,reject)=>{const deadline=Date.now()+1000,check=()=>{if(document.getElementById('telemetry-status').classList.contains('success'))resolve();else if(Date.now()>deadline)reject(new Error('Telemetry file was not loaded'));else setTimeout(check,5);};check();});"
+         "const telemetryContent='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120\\n2026-07-17T10:00:02Z,124',telemetryFile=document.getElementById('telemetry-file'),transfer=new DataTransfer(),selectedFile=new File([telemetryContent],'activity.csv',{type:'text/csv'});transfer.items.add(selectedFile);telemetryFile.files=transfer.files;document.getElementById('source-video-file-id').value='private-drive-video';document.getElementById('picker-selection').textContent='training.mp4';document.getElementById('output-format').value='prores-422-mov';document.getElementById('fit-mode').value='crop';document.getElementById('audio-mode').value='source-only';document.getElementById('preset').value='2.7k25';document.getElementById('timezone').value='UTC';document.getElementById('future-trace-opacity-percent').value='37';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02'],['timer-start-at','2026-07-17T10:00:00'],['timer-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);document.getElementById('spo2-enabled').checked=true;document.getElementById('spo2-telemetry').value='reading_time,spo2\\n2026-07-17T10:00:00Z,97';document.getElementById('timer-enabled').checked=true;telemetryFile.dispatchEvent(new Event('change',{bubbles:true}));await new Promise((resolve,reject)=>{const deadline=Date.now()+1000,check=()=>{if(document.getElementById('telemetry-status').classList.contains('success'))resolve();else if(Date.now()>deadline)reject(new Error('Telemetry file was not loaded'));else setTimeout(check,5);};check();});document.getElementById('video-recording-start').value='2026-07-17T10:00:00';document.getElementById('video-timezone').value='UTC';document.getElementById('confirm-video-clock').click();"
          "const previewResult=document.getElementById('preview-result'),jobResult=document.getElementById('job-result'),renderForm=document.getElementById('render-form'),raw=document.getElementById('raw-json');previewResult.innerHTML='<article class=\"preview-gallery\" data-preview-operation=\"preview-live\"><h2>Preview ready</h2></article>';jobResult.innerHTML='<article class=\"job\" id=\"job-live\" data-job-state=\"running\"><h2>Creating finished video</h2></article>';document.getElementById('video-player').hidden=false;video.setAttribute('src','/v1/drive/playback/live-compose-state');video.currentTime=42.25;"
          "const snapshotState=async()=>({drive:{fileId:document.getElementById('source-video-file-id').value,selection:document.getElementById('picker-selection').textContent,playerSrc:video.getAttribute('src'),playhead:video.currentTime},form:{outputFormat:document.getElementById('output-format').value,fitMode:document.getElementById('fit-mode').value,audioMode:document.getElementById('audio-mode').value,preset:document.getElementById('preset').value,timeZone:document.getElementById('timezone').value,opacity:document.getElementById('future-trace-opacity-percent').value,spo2Enabled:document.getElementById('spo2-enabled').checked,timerEnabled:document.getElementById('timer-enabled').checked},file:{count:telemetryFile.files.length,name:telemetryFile.files[0]?.name||null,text:telemetryFile.files[0]?await telemetryFile.files[0].text():null,loadedValue:document.getElementById('telemetry').value},raw:raw.value,hidden:document.getElementById('render-request').value,preview:previewResult.innerHTML,job:jobResult.innerHTML});const stateBefore=await snapshotState(),liveNodes={form:renderForm,file:telemetryFile,preview:previewResult,job:jobResult};"
          "const exerciseHistory=" exercise-history? ";await video.play();const first=links[0];first.focus();safeClick(first);await tick();const opened=inspect(first),pausedOnOpen={paused:video.paused,currentTime:video.currentTime,playCalls:window.__helpMedia.playCalls,pauseCalls:window.__helpMedia.pauseCalls},presentations=[opened];let back=null,forward=null,closed=null;"
@@ -1747,8 +1748,15 @@
                       "id=\"video-volume\""
                       "id=\"video-fullscreen\""
                       "id=\"video-timeline\""
+                      "id=\"video-clock-confirmation\""
+                      "id=\"video-recording-start\""
+                      "id=\"video-timezone\""
+                      "id=\"confirm-video-clock\""
+                      "id=\"video-clock-candidates\""
+                      "id=\"video-source-summary\""
+                      "Video timezone"
                       "role=\"slider\""
-                      "aria-label=\"Video timeline\""
+                      "aria-label=\"Video clock timeline\""
                       "id=\"video-buffered-ranges\""
                       "id=\"video-playhead\""
                       "id=\"video-timeline-tooltip\""
@@ -1792,12 +1800,34 @@
               :src "/v1/drive/playback/00000000-0000-0000-0000-000000000115"
               :selection "ride.mp4"
               :fileId "private-mp4"
-              :time "00:00:00.000 / 00:02:05.500"
+              :time (str "2026-07-23 23:59:30.000 Europe/Warsaw / "
+                         "2026-07-24 00:01:35.500 Europe/Warsaw")
               :timelineMax "125.5"
+              :timelineValueText
+              "2026-07-23 23:59:30.000 Europe/Warsaw"
               :bufferedSegments 2
               :fit "contain"
-              :request {:fileId "private-mp4"}}
+              :request {:fileId "private-mp4"}
+              :inspectionRequest {:fileId "private-mp4"}
+              :clock
+              {:start "2026-07-23T23:59:30"
+               :zone "Europe/Warsaw"
+               :confirmed "true"
+               :candidates 1
+               :summary
+               (str "Filename authoritative-ride.mp4 Confirmed date "
+                    "2026-07-23 23:59:30.000 Video timezone Europe/Warsaw "
+                    "Source begin 2026-07-23 23:59:30.000 Europe/Warsaw "
+                    "Source end 2026-07-24 00:01:35.500 Europe/Warsaw")
+               :request
+               {:fileId "private-mp4"
+                :recordingStartAt "2026-07-23T21:59:30.000Z"
+                :timeZone "Europe/Warsaw"}}}
              (:initial outcome)))
+      (is (= {:confirmed "false"
+              :status
+              "Video timezone must be a valid IANA timezone identifier."}
+             (:fixedOffsetRejected outcome)))
       (is (= [{:name "Jump back 60 seconds"
                :keys "Shift+ArrowLeft"
                :hint "Shift+Left"
@@ -1833,7 +1863,9 @@
       (is (= 60 (:transportTime outcome)))
       (is (= 62.75 (:scrubTime outcome)))
       (is (= 63.75 (:keyboardTime outcome)))
-      (is (= {:hidden false :text "00:01:34.125"} (:hover outcome)))
+      (is (= {:hidden false
+              :text "2026-07-24 00:01:04.125 Europe/Warsaw"}
+             (:hover outcome)))
       (is (= {:paused false :label "Pause"} (:playing outcome)))
       (is (= {:paused true :label "Play"} (:paused outcome)))
       (is (= {:shortcutStart 63.75
@@ -1940,6 +1972,16 @@
                            :afterDisabledSeek
                            :disabledFullscreenPrevented
                            :fullscreenRequestsUnchanged])))
+      (is (= {:fileId "raw-video"
+              :start "2026-10-25T02:30"
+              :zone "Europe/Warsaw"
+              :confirmed "true"
+              :request
+              {:fileId "raw-video"
+               :recordingStartAt "2026-10-25T00:30:00Z"
+               :timeZone "Europe/Warsaw"}
+              :status "JSON applied to the form."}
+             (:rawRestored outcome)))
       (is (:noHorizontalOverflow outcome) outcome))
     (is (= 1280 (:viewportWidth (first outcomes))))
     (is (<= (:viewportWidth (second outcomes)) 500))))

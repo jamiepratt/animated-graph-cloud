@@ -376,18 +376,45 @@
                   (assoc (valid-request)
                          :sourceVideo {:fileId "drive-video-1"
                                        :name "client-filename.mp4"
-                                       :mimeType "video/mp4"}))]
-    (is (= {:file-id "drive-video-1"}
+                                       :mimeType "video/mp4"
+                                       :recordingStartAt
+                                       "2026-07-23T12:30:15Z"
+                                       :timeZone "Europe/Warsaw"}))]
+    (is (= {:file-id "drive-video-1"
+            :recording-start-at (Instant/parse "2026-07-23T12:30:15Z")
+            :time-zone (ZoneId/of "Europe/Warsaw")}
            (:source-video prepared)))
     (is (= {:output-format "h264-mp4"
             :fit-mode "letterbox"
             :audio-mode "source+heartbeat"}
            (select-keys prepared [:output-format :fit-mode :audio-mode])))))
 
+(deftest source-video-requires-a-confirmed-start-and-iana-time-zone
+  (doseq [[source expected-field]
+          [[{:fileId "drive-video-1"} "sourceVideo.recordingStartAt"]
+           [{:fileId "drive-video-1"
+             :recordingStartAt "2026-07-23T12:30:15Z"}
+            "sourceVideo.timeZone"]
+           [{:fileId "drive-video-1"
+             :recordingStartAt "2026-07-23T12:30:15Z"
+             :timeZone "+02:00"}
+            "sourceVideo.timeZone"]
+           [{:fileId "drive-video-1"
+             :recordingStartAt "2026-07-23 12:30:15"
+             :timeZone "Europe/Warsaw"}
+            "sourceVideo.recordingStartAt"]]]
+    (try
+      (contract/prepare (assoc (valid-request) :sourceVideo source))
+      (is false (str "accepted " source))
+      (catch clojure.lang.ExceptionInfo error
+        (is (= expected-field (:field (ex-data error))))))))
+
 (deftest server-source-metadata-enforces-the-two-gibibyte-admission-limit
   (let [prepared (contract/prepare
                   (assoc (valid-request)
-                         :sourceVideo {:fileId "drive-video-1"}))]
+                         :sourceVideo {:fileId "drive-video-1"
+                                       :recordingStartAt "2026-07-23T12:30:15Z"
+                                       :timeZone "Europe/Warsaw"}))]
     (is (= ::contract/source-too-large
            (try
              (contract/attach-source-metadata
@@ -404,7 +431,9 @@
 (deftest shared-source-video-mime-policy-is-server-authoritative
   (let [prepared (contract/prepare
                   (assoc (valid-request)
-                         :sourceVideo {:fileId "drive-video-1"}))
+                         :sourceVideo {:fileId "drive-video-1"
+                                       :recordingStartAt "2026-07-23T12:30:15Z"
+                                       :timeZone "Europe/Warsaw"}))
         metadata (fn [mime-type]
                    {:id "drive-video-1"
                     :name "server-name"
@@ -417,6 +446,10 @@
                       prepared (metadata mime-type))
                      [:source-video :metadata :mimeType]))
           mime-type))
+    (is (= (Instant/parse "2026-07-23T12:30:15Z")
+           (get-in (contract/attach-source-metadata
+                    prepared (metadata "video/mp4"))
+                   [:source-video :recording-start-at])))
     (doseq [mime-type ["video/x-unsupported"
                        "application/vnd.google-apps.folder"
                        "application/vnd.google-apps.shortcut"
