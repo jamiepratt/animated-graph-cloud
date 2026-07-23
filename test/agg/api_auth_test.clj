@@ -497,6 +497,12 @@
           (is (= 401 (.statusCode missing-refresh)))
           (is (re-find #"Google Drive authorization needs to be renewed" body))
           (is (re-find #"no stored reusable grant" body))
+          (is (str/includes? body "<header class=\"product-header\">"))
+          (is (str/includes? body
+                             "<a class=\"brand\" href=\"/\">Alpha Compose</a>"))
+          (is (< (str/index-of body "href=\"/faq\"")
+                 (str/index-of body "href=\"/privacy\"")
+                 (str/index-of body "href=\"/terms\"")))
           (is (re-find #"href=\"/v1/auth/login/start\?recovery=true\"" body))
           (is (re-find #">Continue with Google<" body))
           (is (nil? (:session recovery-browser-cookie)))
@@ -561,11 +567,29 @@
             cookie-value (some-> set-cookie
                                  (.split "=" 2) second
                                  (.split ";" 2) first)
-            retry-cookie (auth/browser-cookie system cookie-value)]
+            retry-cookie (auth/browser-cookie system cookie-value)
+            faq-position (str/index-of body "href=\"/faq\"")
+            privacy-position (str/index-of body "href=\"/privacy\"")
+            terms-position (str/index-of body "href=\"/terms\"")]
         (is (= 400 (.statusCode response)))
         (is (= "text/html; charset=utf-8"
                (some-> response .headers (.firstValue "content-type")
                        (.orElse nil))))
+        (is (= "no-store"
+               (some-> response .headers (.firstValue "cache-control")
+                       (.orElse nil))))
+        (is (= "nosniff"
+               (some-> response .headers
+                       (.firstValue "x-content-type-options")
+                       (.orElse nil))))
+        (is (str/includes? body "<header class=\"product-header\">"))
+        (is (str/includes? body
+                           "<a class=\"brand\" href=\"/\">Alpha Compose</a>"))
+        (is (str/includes? body "<nav aria-label=\"Product\">"))
+        (is (every? some? [faq-position privacy-position terms-position]))
+        (when (every? some? [faq-position privacy-position terms-position])
+          (is (< faq-position privacy-position terms-position)))
+        (is (not (re-find #"<a[^>]+aria-current=\"page\"" body)))
         (is (str/includes? body "data-theme=\"telemetry\""))
         (is (str/includes? body "--color-background:#031225"))
         (is (str/includes? body "url('/telemetry-background.webp')"))
@@ -651,6 +675,12 @@
             set-cookie (first (.allValues (.headers response) "Set-Cookie"))]
         (is (= 403 (.statusCode response)))
         (is (re-find #"Alpha Compose is in early access" body))
+        (is (str/includes? body "<header class=\"product-header\">"))
+        (is (str/includes? body
+                           "<a class=\"brand\" href=\"/\">Alpha Compose</a>"))
+        (is (< (str/index-of body "href=\"/faq\"")
+               (str/index-of body "href=\"/privacy\"")
+               (str/index-of body "href=\"/terms\"")))
         (is (re-find #"limited to approved testers" body))
         (is (re-find #"leave your details" body))
         (is (re-find #"action=\"/v1/early-access/request\"" body))
@@ -1013,6 +1043,8 @@
         (is (str/includes? (.body response) ":focus-visible"))
         (is (str/includes? (.body response)
                            "<meta name=\"color-scheme\" content=\"dark\">"))
+        (is (not (str/includes? (.body response)
+                                "<header class=\"product-header\">")))
         (is (re-find #"google\.picker\.PickerBuilder" (.body response)))
         (is (re-find #"picker-access-token" (.body response)))
         (is (re-find #"picker-key" (.body response)))
