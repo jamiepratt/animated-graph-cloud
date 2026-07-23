@@ -889,7 +889,7 @@ components:
     RenderRequest:
       type: object
       additionalProperties: false
-      description: Common render configuration accepted by preview, overlay, and durable-job endpoints. Source-video composition options require sourceVideo.
+      description: Common render configuration accepted by preview, overlay, and durable-job endpoints. Source-video composition options require sourceVideo. Without sourceVideo, the output is a transparent ProRes 4444 overlay.
       required:
         - telemetryFormat
         - telemetry

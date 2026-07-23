@@ -725,6 +725,41 @@
     (is (str/includes? context
                        "short-lived owner-bound browser playback"))))
 
+(deftest compose-clock-authority-and-no-video-workspace-are-documented
+  (let [readme (slurp "README.md")
+        openapi (slurp "docs/openapi.yaml")
+        context (slurp "CONTEXT.md")
+        context-map (slurp "CONTEXT-MAP.md")
+        clock-adr
+        (str/replace
+         (slurp "docs/adr/0017-confirm-source-video-recording-clock.md")
+         #"\s+" " ")
+        trim-adr
+        (str/replace
+         (slurp "docs/adr/0018-trim-non-seekable-source-on-frame-boundaries.md")
+         #"\s+" " ")]
+    (doseq [guidance
+            ["Without a source video, the workspace identifies the output as a transparent ProRes 4444 overlay"
+             "A valid whole-frame output range reveals the same clock timeline"]]
+      (testing guidance (is (str/includes? readme guidance))))
+    (is (str/includes?
+         openapi
+         "Without sourceVideo, the output is a transparent ProRes 4444 overlay."))
+    (doseq [fact
+            ["Google Drive upload time is never recording-clock authority."
+             "Source recording-clock inspection and browser playback state are never persisted."]]
+      (testing fact (is (str/includes? context fact))))
+    (is (str/includes? context-map
+                       "Recording-clock authority | `docs/adr/0017-confirm-source-video-recording-clock.md`"))
+    (is (str/includes? context-map
+                       "Frame-accurate source trimming | `docs/adr/0018-trim-non-seekable-source-on-frame-boundaries.md`"))
+    (doseq [[decision adr]
+            [["Drive `createdTime` is never requested or used" clock-adr]
+             ["A fixed offset does not satisfy the timezone requirement" clock-adr]
+             ["nonnegative whole-frame trim offset" trim-adr]
+             ["cannot be randomly sought or persisted" trim-adr]]]
+      (testing decision (is (str/includes? adr decision))))))
+
 (deftest release-acceptance-separates-automation-from-human-evidence
   (let [automation (slurp "script/release_acceptance.sh")
         load-test (slurp "script/production_load_test.sh")
