@@ -44,6 +44,17 @@
     (is (= (ZoneId/of "Europe/Warsaw")
            (:display-time-zone prepared)))))
 
+(deftest manual-anchor-may-follow-output-start
+  (let [prepared
+        (contract/prepare
+         (assoc (valid-request)
+                :telemetrySyncAt "2026-07-17T10:00:01Z"
+                :cameraSyncAt "2026-07-17T09:00:01Z"))]
+    (is (= [{:seconds 0.0 :heart-rate 120.0}
+            {:seconds 1.0 :heart-rate 124.0}
+            {:seconds 2.0 :heart-rate 128.0}]
+           (:telemetry prepared)))))
+
 (deftest synchronization-mode-is-an-explicit-required-choice
   (doseq [[request expected-message]
           [[(dissoc (valid-request) :synchronizationMode)
@@ -257,6 +268,13 @@
     (catch clojure.lang.ExceptionInfo error
       (:type (ex-data error)))))
 
+(deftest manual-anchor-after-output-start-still-requires-activity-coverage
+  (is (= ::contract/insufficient-coverage
+         (error-type
+          (assoc (valid-request)
+                 :telemetrySyncAt "2026-07-17T10:00:02Z"
+                 :cameraSyncAt "2026-07-17T09:00:01Z")))))
+
 (deftest display-time-zone-is-required-valid-iana-and-privacy-safe
   (doseq [[label request]
           [["missing" (dissoc (valid-request) :displayTimeZone)]
@@ -401,7 +419,11 @@
     (is (str/includes? openapi "          const: manual-anchor"))
     (is (str/includes?
          openapi
-         "          required: [telemetrySyncAt, cameraSyncAt]"))))
+         "          required: [telemetrySyncAt, cameraSyncAt]"))
+    (is (str/includes?
+         openapi
+         "may be before, within, or after the selected output interval"))
+    (is (not (str/includes? openapi "must not follow sectionStartAt")))))
 
 (deftest specific-telemetry-causes-win-over-parser-wrappers
   (let [specific (ex-info "private telemetry value"
@@ -450,10 +472,10 @@
     (is (= ::contract/unsupported-format
            (error-type (assoc (valid-request)
                               :telemetryFormat "unknown")))))
-  (testing "camera timestamp ordering"
+  (testing "section timestamp ordering"
     (is (= ::contract/invalid-timestamp-order
            (error-type (assoc (valid-request)
-                              :cameraSyncAt "2026-07-17T09:00:01Z")))))
+                              :sectionStartAt "2026-07-17T09:00:02Z")))))
   (testing "telemetry coverage"
     (is (= ::contract/insufficient-coverage
            (error-type (assoc (valid-request)

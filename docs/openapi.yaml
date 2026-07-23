@@ -923,7 +923,7 @@ components:
         synchronizationMode:
           type: string
           enum: [shared-clock, manual-anchor]
-          description: Required explicit clock relationship. shared-clock aligns activity timestamps directly to sectionStartAt and forbids synchronization anchors. manual-anchor requires both synchronization anchors.
+          description: Required explicit clock relationship. shared-clock aligns activity timestamps directly to sectionStartAt and forbids synchronization anchors. manual-anchor requires both synchronization anchors and maps the selected output through their offset.
         futureTraceOpacityPercent:
           type: number
           minimum: 0
@@ -935,7 +935,7 @@ components:
           description: Timestamp in telemetry at the camera synchronization moment.
         cameraSyncAt:
           allOf: [{$ref: "#/components/schemas/Instant"}]
-          description: Camera timestamp corresponding to telemetrySyncAt; must not follow sectionStartAt.
+          description: Camera timestamp corresponding to telemetrySyncAt. It may be before, within, or after the selected output interval.
         sectionStartAt:
           allOf: [{$ref: "#/components/schemas/Instant"}]
           description: Start of the rendered camera section. With sourceVideo, the offset from recordingStartAt must be a nonnegative whole 25 fps frame count.
