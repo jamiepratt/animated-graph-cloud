@@ -318,8 +318,10 @@
          "const state=window.__playerState;state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'private-mp4',name:'ride.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120\\n2026-07-17T10:00:02Z,124';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02']].forEach(([id,value])=>document.getElementById(id).value=value);document.getElementById('video-timezone').value='+02:00';document.getElementById('confirm-video-clock').click();const fixedOffsetRejected={confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,status:document.getElementById('video-clock-status').textContent};document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();"
          "const player=document.getElementById('video-player'),video=document.getElementById('source-video-player'),timeline=document.getElementById('video-timeline'),fit=document.getElementById('fit-mode'),play=document.getElementById('video-play-pause');video.__duration=125.5;video.dispatchEvent(new Event('loadedmetadata'));video.dispatchEvent(new Event('progress'));"
          "const outputStart=document.getElementById('output-start-handle'),outputEnd=document.getElementById('output-end-handle'),syncMarker=document.getElementById('manual-sync-marker'),cameraSync=document.getElementById('camera-sync-at'),cameraSyncField=document.getElementById('camera-sync-field'),telemetrySyncField=document.getElementById('telemetry-sync-field'),markerReady={hidden:syncMarker.hidden,disabled:syncMarker.disabled,value:syncMarker.getAttribute('aria-valuenow')};cameraSync.value=document.getElementById('section-start-at').value;cameraSync.dispatchEvent(new Event('input',{bubbles:true}));const initialRange={start:outputStart.getAttribute('aria-valuenow'),end:outputEnd.getAttribute('aria-valuenow'),startField:document.getElementById('section-start-at').value,endField:document.getElementById('section-end-at').value,unusedBefore:document.getElementById('video-unused-before').getBoundingClientRect().width,unusedAfter:document.getElementById('video-unused-after').getBoundingClientRect().width};"
-         "const generatedRequest=JSON.parse(document.getElementById('render-request').value),initial={hidden:player.hidden,paused:video.paused,currentTime:video.currentTime,playCalls:state.playCalls,src:video.getAttribute('src'),selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,time:document.getElementById('video-time').textContent,timelineMax:timeline.getAttribute('aria-valuemax'),timelineValueText:timeline.getAttribute('aria-valuetext'),bufferedSegments:document.querySelectorAll('#video-buffered-ranges span').length,fit:getComputedStyle(video).objectFit,request:state.sessionRequests[0],inspectionRequest:state.inspectionRequests[0],clock:{start:document.getElementById('video-recording-start').value,zone:document.getElementById('video-timezone').value,confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,candidates:document.querySelectorAll('#video-clock-candidates input').length,summary:document.getElementById('video-source-summary').textContent,request:generatedRequest.sourceVideo}};"
+         "const generatedRequest=JSON.parse(document.getElementById('render-request').value),initial={hidden:player.hidden,paused:video.paused,currentTime:video.currentTime,playCalls:state.playCalls,src:video.getAttribute('src'),selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,time:document.getElementById('video-time').textContent,timelineMax:timeline.getAttribute('aria-valuemax'),timelineValueText:timeline.getAttribute('aria-valuetext'),bufferedSegments:document.querySelectorAll('#video-buffered-ranges span').length,fit:getComputedStyle(video).objectFit,request:state.sessionRequests[0],inspectionRequest:state.inspectionRequests[0],clock:{start:document.getElementById('video-recording-start').value,zone:document.getElementById('video-timezone').value,confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,candidates:document.querySelectorAll('#video-clock-candidates input').length,summary:document.getElementById('video-source-summary').textContent,request:generatedRequest.sourceVideo}};const timerToggle=document.getElementById('timer-enabled'),timerStartMarker=document.getElementById('timer-start-marker'),timerEndMarker=document.getElementById('timer-end-marker'),overlaps=(first,second)=>{const a=first.getBoundingClientRect(),b=second.getBoundingClientRect();return a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top;};function timerAt(seconds){video.currentTime=seconds;timerToggle.click();const snapshot={current:video.currentTime,fields:[document.getElementById('timer-start-at').value,document.getElementById('timer-end-at').value],request:JSON.parse(document.getElementById('render-request').value).timer||null,markers:[timerStartMarker.hidden,timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.hidden,timerEndMarker.getAttribute('aria-valuenow')],fieldsHidden:document.getElementById('timer-fields').hidden,markersSeparated:!overlaps(timerStartMarker,timerEndMarker),handlesSeparated:!overlaps(timerStartMarker,outputStart)&&!overlaps(timerEndMarker,outputEnd)};timerToggle.click();return snapshot;}const timerDefaults={start:timerAt(0),middle:timerAt(62.75),end:timerAt(125.48),outside:timerAt(125.5),disabled:{request:JSON.parse(document.getElementById('render-request').value).timer||null,markers:[timerStartMarker.hidden,timerEndMarker.hidden]}};video.currentTime=0;"
          "document.getElementById('timer-enabled').click();document.getElementById('timer-start-at').value='2026-07-23T21:59:50';document.getElementById('timer-end-at').value='2026-07-23T22:01:10';const rangeRect=timeline.getBoundingClientRect();outputStart.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:rangeRect.left+rangeRect.width*.5,pointerId:7}));outputStart.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:rangeRect.left+rangeRect.width*.5,pointerId:7}));const clampedStart=outputStart.getAttribute('aria-valuenow'),timerStartMessage=document.getElementById('video-range-status').textContent;outputStart.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'ArrowLeft'}));const keyboardStart={value:outputStart.getAttribute('aria-valuenow'),field:document.getElementById('section-start-at').value,highlighted:document.getElementById('section-start-at').classList.contains('range-receiver')};outputEnd.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:rangeRect.left+rangeRect.width*.5,pointerId:8}));outputEnd.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:rangeRect.left+rangeRect.width*.5,pointerId:8}));const timerRange={clampedStart,clampedEnd:outputEnd.getAttribute('aria-valuenow'),startMessage:timerStartMessage,endMessage:document.getElementById('video-range-status').textContent,keyboardStart};"
+         "const timerMarkerVideoTime=video.currentTime;timerStartMarker.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX:rangeRect.left+rangeRect.width*.95,pointerId:10}));const timerStartCrossing={values:[timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.getAttribute('aria-valuenow')],fields:[document.getElementById('timer-start-at').value,document.getElementById('timer-end-at').value],request:JSON.parse(document.getElementById('render-request').value).timer,startHighlighted:document.getElementById('timer-start-field').classList.contains('timer-field-active'),endHighlighted:document.getElementById('timer-end-field').classList.contains('timer-field-active')};timerStartMarker.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,clientX:rangeRect.left+rangeRect.width*.95,pointerId:10}));timerEndMarker.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX:rangeRect.left+rangeRect.width*.05,pointerId:11}));const timerEndCrossing={values:[timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.getAttribute('aria-valuenow')],startHighlighted:document.getElementById('timer-start-field').classList.contains('timer-field-active'),endHighlighted:document.getElementById('timer-end-field').classList.contains('timer-field-active')};timerEndMarker.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,clientX:rangeRect.left+rangeRect.width*.05,pointerId:11}));const timerMarkerPointer={start:timerStartCrossing,end:timerEndCrossing,captures:state.pointerCaptures.slice(-2),releases:state.pointerReleases.slice(-2),released:[document.getElementById('timer-start-field').classList.contains('timer-field-active'),document.getElementById('timer-end-field').classList.contains('timer-field-active')],videoUnchanged:video.currentTime===timerMarkerVideoTime};"
+         "const timerKey=(marker,key,options={})=>{const event=new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key,...options});marker.dispatchEvent(event);return event.defaultPrevented;};timerStartMarker.focus();const timerStartFocus=[document.getElementById('timer-start-field').classList.contains('timer-field-active'),document.getElementById('timer-end-field').classList.contains('timer-field-active')],timerStartLeftPrevented=timerKey(timerStartMarker,'ArrowLeft'),timerStartAfterLeft=timerStartMarker.getAttribute('aria-valuenow'),timerStartShiftLeftPrevented=timerKey(timerStartMarker,'ArrowLeft',{shiftKey:true}),timerStartAfterShiftLeft=timerStartMarker.getAttribute('aria-valuenow'),timerStartHomePrevented=timerKey(timerStartMarker,'Home'),timerStartAfterHome=timerStartMarker.getAttribute('aria-valuenow'),timerStartEndPrevented=timerKey(timerStartMarker,'End'),timerStartAfterEnd=timerStartMarker.getAttribute('aria-valuenow');timerKey(timerStartMarker,'Home');timerEndMarker.focus();const timerEndFocus=[document.getElementById('timer-start-field').classList.contains('timer-field-active'),document.getElementById('timer-end-field').classList.contains('timer-field-active')],timerEndLeftPrevented=timerKey(timerEndMarker,'ArrowLeft'),timerEndAfterLeft=timerEndMarker.getAttribute('aria-valuenow'),timerEndShiftLeftPrevented=timerKey(timerEndMarker,'ArrowLeft',{shiftKey:true}),timerEndAfterShiftLeft=timerEndMarker.getAttribute('aria-valuenow'),timerEndHomePrevented=timerKey(timerEndMarker,'Home'),timerEndAfterHome=timerEndMarker.getAttribute('aria-valuenow'),timerEndEndPrevented=timerKey(timerEndMarker,'End'),timerEndAfterEnd=timerEndMarker.getAttribute('aria-valuenow'),timerMarkerKeyboard={startFocus:timerStartFocus,startLeftPrevented:timerStartLeftPrevented,startAfterLeft:timerStartAfterLeft,startShiftLeftPrevented:timerStartShiftLeftPrevented,startAfterShiftLeft:timerStartAfterShiftLeft,startHomePrevented:timerStartHomePrevented,startAfterHome:timerStartAfterHome,startEndPrevented:timerStartEndPrevented,startAfterEnd:timerStartAfterEnd,endFocus:timerEndFocus,endLeftPrevented:timerEndLeftPrevented,endAfterLeft:timerEndAfterLeft,endShiftLeftPrevented:timerEndShiftLeftPrevented,endAfterShiftLeft:timerEndAfterShiftLeft,endHomePrevented:timerEndHomePrevented,endAfterHome:timerEndAfterHome,endEndPrevented:timerEndEndPrevented,endAfterEnd:timerEndAfterEnd,request:JSON.parse(document.getElementById('render-request').value).timer,videoUnchanged:video.currentTime===timerMarkerVideoTime};timerEndMarker.blur();"
          "const manualVisibility={markerHidden:syncMarker.hidden,helpHidden:document.getElementById('manual-sync-marker-help').hidden,fieldsHidden:document.getElementById('manual-synchronization-fields').hidden};document.querySelector('input[name=\"synchronization-mode\"][value=\"shared-clock\"]').click();const sharedVisibility={markerHidden:syncMarker.hidden,helpHidden:document.getElementById('manual-sync-marker-help').hidden,fieldsHidden:document.getElementById('manual-synchronization-fields').hidden};document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();"
          "const markerStartVideoTime=video.currentTime;syncMarker.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX:rangeRect.left+rangeRect.width*.05,pointerId:9}));const markerBefore={value:syncMarker.getAttribute('aria-valuenow'),cameraSyncAt:JSON.parse(document.getElementById('render-request').value).cameraSyncAt,receiver:cameraSyncField.classList.contains('sync-field-active'),related:telemetrySyncField.classList.contains('sync-field-related')};syncMarker.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,cancelable:true,clientX:rangeRect.left+rangeRect.width*.5,pointerId:9}));const markerWithin={value:syncMarker.getAttribute('aria-valuenow'),cameraSyncAt:JSON.parse(document.getElementById('render-request').value).cameraSyncAt};syncMarker.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,cancelable:true,clientX:rangeRect.left+rangeRect.width*.95,pointerId:9}));const markerAfter={value:syncMarker.getAttribute('aria-valuenow'),cameraSyncAt:JSON.parse(document.getElementById('render-request').value).cameraSyncAt};syncMarker.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,clientX:rangeRect.left+rangeRect.width*.95,pointerId:9}));const markerPointer={manualVisibility,sharedVisibility,before:markerBefore,within:markerWithin,after:markerAfter,capture:state.pointerCaptures.at(-1),release:state.pointerReleases.at(-1),released:{receiver:cameraSyncField.classList.contains('sync-field-active'),related:telemetrySyncField.classList.contains('sync-field-related')},videoUnchanged:video.currentTime===markerStartVideoTime};"
          "const markerKey=(key,options={})=>{const event=new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key,...options});syncMarker.dispatchEvent(event);return event.defaultPrevented;};syncMarker.focus();const markerFocus={receiver:cameraSyncField.classList.contains('sync-field-active'),related:telemetrySyncField.classList.contains('sync-field-related')},markerKeyboardVideoTime=video.currentTime,markerLeftPrevented=markerKey('ArrowLeft'),markerAfterLeft=syncMarker.getAttribute('aria-valuenow'),markerShiftRightPrevented=markerKey('ArrowRight',{shiftKey:true}),markerAfterShiftRight=syncMarker.getAttribute('aria-valuenow'),markerHomePrevented=markerKey('Home'),markerAfterHome=syncMarker.getAttribute('aria-valuenow'),markerEndPrevented=markerKey('End'),markerAfterEnd=syncMarker.getAttribute('aria-valuenow'),markerKeyboard={focus:markerFocus,leftPrevented:markerLeftPrevented,afterLeft:markerAfterLeft,shiftRightPrevented:markerShiftRightPrevented,afterShiftRight:markerAfterShiftRight,homePrevented:markerHomePrevented,afterHome:markerAfterHome,endPrevented:markerEndPrevented,afterEnd:markerAfterEnd,videoUnchanged:video.currentTime===markerKeyboardVideoTime,cameraSyncAt:JSON.parse(document.getElementById('render-request').value).cameraSyncAt};syncMarker.blur();cameraSync.value='2026-07-23T21:59:33';cameraSync.dispatchEvent(new Event('input',{bubbles:true}));const typedCamera={marker:syncMarker.getAttribute('aria-valuenow'),cameraSyncAt:JSON.parse(document.getElementById('render-request').value).cameraSyncAt};document.getElementById('telemetry-sync-at').value='2026-07-17T10:00:01';document.getElementById('telemetry-sync-at').dispatchEvent(new Event('input',{bubbles:true}));const typedManual={camera:typedCamera,afterActivityEdit:syncMarker.getAttribute('aria-valuenow'),telemetrySyncAt:JSON.parse(document.getElementById('render-request').value).telemetrySyncAt,focusReleased:{receiver:cameraSyncField.classList.contains('sync-field-active'),related:telemetrySyncField.classList.contains('sync-field-related')}};"
@@ -334,14 +336,14 @@
          "const modifiedChecks=[['ctrl','ArrowRight',{ctrlKey:true}],['meta',' ',{metaKey:true}],['alt','f',{altKey:true}]].map(([kind,key,options])=>{const before=video.currentTime,prevented=press(document.body,key,options);return {kind,prevented,before,after:video.currentTime};});"
          "const forwardButton=document.querySelector('[data-seek-seconds=\"10\"]');forwardButton.focus();const focusedButtonPrevented=press(forwardButton,' '),afterFocusedButtonKey=video.currentTime;forwardButton.click();const afterFocusedButtonClick=video.currentTime;player.hidden=true;const hiddenStart=video.currentTime,hiddenPrevented=press(document.body,'ArrowRight'),afterHidden=video.currentTime;player.hidden=false;"
          "const chrome=document.getElementById('video-chrome'),dock=document.getElementById('video-controls-dock'),fullscreen=document.getElementById('video-fullscreen'),fullscreenControl=document.getElementById('video-fullscreen-control'),fullscreenHint=document.getElementById('video-fullscreen-shortcut');function hintVisible(){const style=getComputedStyle(fullscreenHint);return style.visibility==='visible'&&style.opacity==='1';}"
-         "const fullscreenEntryPrevented=press(document.body,'f'),fullscreenEntry={prevented:fullscreenEntryPrevented,request:state.fullscreenRequests.at(-1),elementId:document.fullscreenElement?.id||null,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),hint:fullscreenHint.textContent,hintVisible:hintVisible(),auto:fullscreenControl.classList.contains('shortcut-auto'),focusUnchanged:document.activeElement===forwardButton,completeChrome:!!chrome&&chrome.contains(document.getElementById('video-stage'))&&chrome.contains(document.querySelector('.video-transport'))&&chrome.contains(timeline),dockInside:chrome?.lastElementChild===dock,fullscreenLayout:getComputedStyle(chrome).display==='grid',dockVisible:!!dock&&dock.getBoundingClientRect().height>0,timelineVisible:timeline.getBoundingClientRect().height>0,markerInside:chrome.contains(syncMarker),markerVisible:syncMarker.getBoundingClientRect().height>0,markerValueText:syncMarker.getAttribute('aria-valuetext'),markerControls:syncMarker.getAttribute('aria-controls'),helpVisible:document.getElementById('manual-sync-marker-help').getBoundingClientRect().height>0,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,timerCount:state.fullscreenTimers.length};"
+         "const fullscreenEntryPrevented=press(document.body,'f'),fullscreenEntry={prevented:fullscreenEntryPrevented,request:state.fullscreenRequests.at(-1),elementId:document.fullscreenElement?.id||null,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),hint:fullscreenHint.textContent,hintVisible:hintVisible(),auto:fullscreenControl.classList.contains('shortcut-auto'),focusUnchanged:document.activeElement===forwardButton,completeChrome:!!chrome&&chrome.contains(document.getElementById('video-stage'))&&chrome.contains(document.querySelector('.video-transport'))&&chrome.contains(timeline),dockInside:chrome?.lastElementChild===dock,fullscreenLayout:getComputedStyle(chrome).display==='grid',dockVisible:!!dock&&dock.getBoundingClientRect().height>0,timelineVisible:timeline.getBoundingClientRect().height>0,markerInside:chrome.contains(syncMarker),markerVisible:syncMarker.getBoundingClientRect().height>0,markerValueText:syncMarker.getAttribute('aria-valuetext'),markerControls:syncMarker.getAttribute('aria-controls'),helpVisible:document.getElementById('manual-sync-marker-help').getBoundingClientRect().height>0,timerMarkersInside:chrome.contains(timerStartMarker)&&chrome.contains(timerEndMarker),timerMarkersVisible:timerStartMarker.getBoundingClientRect().height>0&&timerEndMarker.getBoundingClientRect().height>0,timerMarkerValues:[timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.getAttribute('aria-valuenow')],timerMarkerControls:[timerStartMarker.getAttribute('aria-controls'),timerEndMarker.getAttribute('aria-controls')],timerHelpVisible:document.getElementById('timer-marker-help').getBoundingClientRect().height>0,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,timerCount:state.fullscreenTimers.length};"
          "state.fullscreenTimers.at(-1).callback();const afterFourSeconds={auto:fullscreenControl.classList.contains('shortcut-auto'),hintVisible:hintVisible()};fullscreen.focus();const focusedFullscreenHint={hint:fullscreenHint.textContent,visible:hintVisible()};forwardButton.focus();const fullscreenExitPrevented=press(document.body,'f'),fullscreenExit={prevented:fullscreenExitPrevented,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),elementId:document.fullscreenElement?.id||null,auto:fullscreenControl.classList.contains('shortcut-auto')};"
          "press(document.body,'f');const restartedTimer=state.fullscreenTimers.at(-1),escapePrevented=press(document.body,'Escape');state.fullscreenElement=null;document.dispatchEvent(new Event('fullscreenchange'));const browserExit={escapePrevented,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),auto:fullscreenControl.classList.contains('shortcut-auto'),timerCleared:restartedTimer.cleared};fullscreen.click();const buttonEntry={request:state.fullscreenRequests.at(-1),label:fullscreen.textContent};fullscreen.click();const buttonExit={exitCount:state.fullscreenExits,label:fullscreen.textContent};"
-         "video.dispatchEvent(new Event('error'));const disabledStart=video.currentTime,disabledSeekPrevented=press(document.body,'ArrowRight'),requestsBeforeDisabledF=state.fullscreenRequests.length,disabledFullscreenPrevented=press(document.body,'f'),unsupported={selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,message:document.getElementById('video-player-status').textContent,disabledStart,disabledSeekPrevented,afterDisabledSeek:video.currentTime,disabledFullscreenPrevented,fullscreenRequestsUnchanged:state.fullscreenRequests.length===requestsBeforeDisabledF,range:[outputStart.getAttribute('aria-valuenow'),outputEnd.getAttribute('aria-valuenow')],marker:{hidden:syncMarker.hidden,disabled:syncMarker.disabled,value:syncMarker.getAttribute('aria-valuenow')}};"
-         "const applyRawStatus=request=>{document.getElementById('raw-json').value=JSON.stringify(request);document.getElementById('apply-json').click();return document.getElementById('json-status').textContent;},invalidFrameStatus=applyRawStatus({...generatedRequest,sectionEndAt:new Date(Date.parse(generatedRequest.sectionStartAt)+1020).toISOString()}),negativeTrimStatus=applyRawStatus({...generatedRequest,sourceVideo:{...generatedRequest.sourceVideo,recordingStartAt:new Date(Date.parse(generatedRequest.sectionStartAt)+40).toISOString()}}),fractionalTrimStatus=applyRawStatus({...generatedRequest,sourceVideo:{...generatedRequest.sourceVideo,recordingStartAt:new Date(Date.parse(generatedRequest.sectionStartAt)-20).toISOString()}});"
-         "const rawRequest={...generatedRequest,telemetrySyncAt:'2026-10-24T00:20:00Z',cameraSyncAt:'2026-10-24T00:30:15Z',sectionStartAt:'2026-10-24T00:30:10Z',sectionEndAt:'2026-10-24T00:30:20Z',timer:{startAt:'2026-10-24T00:30:12Z',endAt:'2026-10-24T00:30:18Z'},sourceVideo:{fileId:'raw-video',recordingStartAt:'2026-10-24T00:30:00Z',timeZone:'Europe/Warsaw'}};document.getElementById('raw-json').value=JSON.stringify(rawRequest);document.getElementById('apply-json').click();const rawRestored={fileId:document.getElementById('source-video-file-id').value,start:document.getElementById('video-recording-start').value,zone:document.getElementById('video-timezone').value,confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,request:JSON.parse(document.getElementById('render-request').value).sourceVideo,status:document.getElementById('json-status').textContent,range:[outputStart.getAttribute('aria-valuenow'),outputEnd.getAttribute('aria-valuenow')],marker:syncMarker.getAttribute('aria-valuenow')};"
-         "document.getElementById('video-recording-start').value='2026-10-24T02:31';document.getElementById('confirm-video-clock').click();const shiftedRequest=JSON.parse(document.getElementById('render-request').value),clockCorrection={recordingStartAt:shiftedRequest.sourceVideo.recordingStartAt,telemetrySyncAt:shiftedRequest.telemetrySyncAt,cameraSyncAt:shiftedRequest.cameraSyncAt,sectionStartAt:shiftedRequest.sectionStartAt,sectionEndAt:shiftedRequest.sectionEndAt,timer:shiftedRequest.timer,marker:syncMarker.getAttribute('aria-valuenow')};"
-         "outcome={initial,initialRange,markerReady,timerRange,markerPointer,markerKeyboard,typedManual,invalidFrameStatus,negativeTrimStatus,fractionalTrimStatus,fixedOffsetRejected,shortcutHints,cropped,transportTime,scrubTime,keyboardTime,hover,playing,paused,shortcuts:{shortcutStart,rightPrevented,afterRight,shiftRightPrevented,afterShiftRight,leftPrevented,afterLeft,shiftLeftPrevented,afterShiftLeft,spacePrevented,afterSpacePaused,pausedAfterSecondSpace:video.paused},exclusions:{editableChecks,modifiedChecks,focusedButtonPrevented,afterFocusedButtonKey,afterFocusedButtonClick,hiddenStart,hiddenPrevented,afterHidden},fullscreen:{entry:fullscreenEntry,afterFourSeconds,focusedHint:focusedFullscreenHint,exit:fullscreenExit,browserExit,buttonEntry,buttonExit},unsupported,rawRestored,clockCorrection,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+         "video.dispatchEvent(new Event('error'));const disabledStart=video.currentTime,disabledSeekPrevented=press(document.body,'ArrowRight'),requestsBeforeDisabledF=state.fullscreenRequests.length,disabledFullscreenPrevented=press(document.body,'f'),unsupported={selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,message:document.getElementById('video-player-status').textContent,disabledStart,disabledSeekPrevented,afterDisabledSeek:video.currentTime,disabledFullscreenPrevented,fullscreenRequestsUnchanged:state.fullscreenRequests.length===requestsBeforeDisabledF,range:[outputStart.getAttribute('aria-valuenow'),outputEnd.getAttribute('aria-valuenow')],marker:{hidden:syncMarker.hidden,disabled:syncMarker.disabled,value:syncMarker.getAttribute('aria-valuenow')},timerMarkers:[timerStartMarker.hidden,timerStartMarker.disabled,timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.hidden,timerEndMarker.disabled,timerEndMarker.getAttribute('aria-valuenow')]};"
+         "const applyRawStatus=request=>{document.getElementById('raw-json').value=JSON.stringify(request);document.getElementById('apply-json').click();return document.getElementById('json-status').textContent;},invalidFrameStatus=applyRawStatus({...generatedRequest,sectionEndAt:new Date(Date.parse(generatedRequest.sectionStartAt)+1020).toISOString()}),shortTimerStatus=applyRawStatus({...generatedRequest,timer:{startAt:generatedRequest.sectionStartAt,endAt:new Date(Date.parse(generatedRequest.sectionStartAt)+20).toISOString()}}),negativeTrimStatus=applyRawStatus({...generatedRequest,sourceVideo:{...generatedRequest.sourceVideo,recordingStartAt:new Date(Date.parse(generatedRequest.sectionStartAt)+40).toISOString()}}),fractionalTrimStatus=applyRawStatus({...generatedRequest,sourceVideo:{...generatedRequest.sourceVideo,recordingStartAt:new Date(Date.parse(generatedRequest.sectionStartAt)-20).toISOString()}});"
+         "const rawRequest={...generatedRequest,telemetrySyncAt:'2026-10-24T00:20:00Z',cameraSyncAt:'2026-10-24T00:30:15Z',sectionStartAt:'2026-10-24T00:30:10Z',sectionEndAt:'2026-10-24T00:30:20Z',timer:{startAt:'2026-10-24T00:30:12Z',endAt:'2026-10-24T00:30:18Z'},sourceVideo:{fileId:'raw-video',recordingStartAt:'2026-10-24T00:30:00Z',timeZone:'Europe/Warsaw'}};document.getElementById('raw-json').value=JSON.stringify(rawRequest);document.getElementById('apply-json').click();const rawRestored={fileId:document.getElementById('source-video-file-id').value,start:document.getElementById('video-recording-start').value,zone:document.getElementById('video-timezone').value,confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,request:JSON.parse(document.getElementById('render-request').value).sourceVideo,status:document.getElementById('json-status').textContent,range:[outputStart.getAttribute('aria-valuenow'),outputEnd.getAttribute('aria-valuenow')],marker:syncMarker.getAttribute('aria-valuenow'),timer:{enabled:timerToggle.checked,fields:[document.getElementById('timer-start-at').value,document.getElementById('timer-end-at').value],markers:[timerStartMarker.hidden,timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.hidden,timerEndMarker.getAttribute('aria-valuenow')]}};"
+         "document.getElementById('video-recording-start').value='2026-10-24T02:31';document.getElementById('confirm-video-clock').click();const shiftedRequest=JSON.parse(document.getElementById('render-request').value),clockCorrection={recordingStartAt:shiftedRequest.sourceVideo.recordingStartAt,telemetrySyncAt:shiftedRequest.telemetrySyncAt,cameraSyncAt:shiftedRequest.cameraSyncAt,sectionStartAt:shiftedRequest.sectionStartAt,sectionEndAt:shiftedRequest.sectionEndAt,timer:shiftedRequest.timer,marker:syncMarker.getAttribute('aria-valuenow'),timerMarkers:[timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.getAttribute('aria-valuenow')]};"
+         "outcome={initial,initialRange,markerReady,timerDefaults,timerRange,timerMarkerPointer,timerMarkerKeyboard,markerPointer,markerKeyboard,typedManual,invalidFrameStatus,shortTimerStatus,negativeTrimStatus,fractionalTrimStatus,fixedOffsetRejected,shortcutHints,cropped,transportTime,scrubTime,keyboardTime,hover,playing,paused,shortcuts:{shortcutStart,rightPrevented,afterRight,shiftRightPrevented,afterShiftRight,leftPrevented,afterLeft,shiftLeftPrevented,afterShiftLeft,spacePrevented,afterSpacePaused,pausedAfterSecondSpace:video.paused},exclusions:{editableChecks,modifiedChecks,focusedButtonPrevented,afterFocusedButtonKey,afterFocusedButtonClick,hiddenStart,hiddenPrevented,afterHidden},fullscreen:{entry:fullscreenEntry,afterFourSeconds,focusedHint:focusedFullscreenHint,exit:fullscreenExit,browserExit,buttonEntry,buttonExit},unsupported,rawRestored,clockCorrection,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
          "</script>")
         html (-> page
@@ -708,6 +710,35 @@
     (browser-outcome
      "agg-synchronization-mode-browser-"
      "Synchronization mode form regression requires Chrome or Chromium"
+     html)))
+
+(defn- no-source-timer-browser-outcome [page]
+  (let [base (-> (fixture/render-request)
+                 (assoc :displayTimeZone "UTC"
+                        :synchronizationMode "shared-clock")
+                 (dissoc :telemetrySyncAt :cameraSyncAt))
+        restored (assoc base :timer {:startAt "2026-07-17T09:00:00.400Z"
+                                     :endAt "2026-07-17T09:00:01.600Z"})
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{const base=" (json/write-str base)
+         ",restoredRequest=" (json/write-str restored)
+         ",raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),toggle=document.getElementById('timer-enabled'),start=document.getElementById('timer-start-at'),end=document.getElementById('timer-end-at'),startMarker=document.getElementById('timer-start-marker'),endMarker=document.getElementById('timer-end-marker'),generated=()=>JSON.parse(document.getElementById('render-request').value);"
+         "raw.value=JSON.stringify(base);apply.click();const initial={enabled:toggle.checked,fields:[start.value,end.value],request:generated().timer||null,markers:[startMarker.hidden,endMarker.hidden]};"
+         "toggle.click();const enabled={enabled:toggle.checked,fields:[start.value,end.value],request:generated().timer||null,markers:[startMarker.hidden,endMarker.hidden],fieldsHidden:document.getElementById('timer-fields').hidden};"
+         "toggle.click();const disabled={enabled:toggle.checked,request:generated().timer||null,markers:[startMarker.hidden,endMarker.hidden]};"
+         "raw.value=JSON.stringify(restoredRequest);apply.click();const restored={enabled:toggle.checked,fields:[start.value,end.value],request:generated().timer||null,markers:[startMarker.hidden,endMarker.hidden],status:document.getElementById('json-status').textContent};"
+         "outcome={initial,enabled,disabled,restored,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+         "}catch(error){outcome={error:error.message,stack:error.stack};}"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-no-source-timer-browser-"
+     "No-source timer form regression requires Chrome or Chromium"
      html)))
 
 (defn- early-access-browser-outcome [page window-size]
@@ -1816,6 +1847,16 @@
                       "aria-keyshortcuts=\"ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Home End\""
                       "id=\"manual-sync-marker-help\""
                       "Shift+Left or Shift+Right moves 10 frames"
+                      "id=\"timer-start-marker\""
+                      "aria-label=\"Timer start\""
+                      "aria-controls=\"timer-start-at\""
+                      "id=\"timer-end-marker\""
+                      "aria-label=\"Timer end\""
+                      "aria-controls=\"timer-end-at\""
+                      "id=\"timer-marker-help\""
+                      "Timer markers. Left or Right moves 1 frame."
+                      "id=\"timer-start-at\" type=\"datetime-local\" step=\".04\""
+                      "id=\"timer-end-at\" type=\"datetime-local\" step=\".04\""
                       "aria-label=\"Output start\""
                       "aria-label=\"Output end\""
                       "id=\"video-range-status\""
@@ -1864,6 +1905,48 @@
       (is (pos? (get-in outcome [:initialRange :unusedAfter])))
       (is (= {:hidden false :disabled false :value "0"}
              (:markerReady outcome)))
+      (is (= {:start
+              {:current 0
+               :fields ["2026-07-23T21:59:30"
+                        "2026-07-23T22:01:35.48"]
+               :request {:startAt "2026-07-23T21:59:30.000Z"
+                         :endAt "2026-07-23T22:01:35.480Z"}
+               :markers [false "0" false "125.48"]
+               :fieldsHidden false
+               :markersSeparated true
+               :handlesSeparated true}
+              :middle
+              {:current 62.75
+               :fields ["2026-07-23T22:00:32.76"
+                        "2026-07-23T22:01:35.48"]
+               :request {:startAt "2026-07-23T22:00:32.760Z"
+                         :endAt "2026-07-23T22:01:35.480Z"}
+               :markers [false "62.76" false "125.48"]
+               :fieldsHidden false
+               :markersSeparated true
+               :handlesSeparated true}
+              :end
+              {:current 125.48
+               :fields ["2026-07-23T22:01:35.44"
+                        "2026-07-23T22:01:35.48"]
+               :request {:startAt "2026-07-23T22:01:35.440Z"
+                         :endAt "2026-07-23T22:01:35.480Z"}
+               :markers [false "125.44" false "125.48"]
+               :fieldsHidden false
+               :markersSeparated true
+               :handlesSeparated true}
+              :outside
+              {:current 125.5
+               :fields ["2026-07-23T21:59:30"
+                        "2026-07-23T22:01:35.48"]
+               :request {:startAt "2026-07-23T21:59:30.000Z"
+                         :endAt "2026-07-23T22:01:35.480Z"}
+               :markers [false "0" false "125.48"]
+               :fieldsHidden false
+               :markersSeparated true
+               :handlesSeparated true}
+              :disabled {:request nil :markers [true true]}}
+             (:timerDefaults outcome)))
       (is (= {:clampedStart "20"
               :clampedEnd "100"
               :startMessage
@@ -1875,6 +1958,46 @@
                :field "2026-07-23T21:59:49.96"
                :highlighted true}}
              (:timerRange outcome)))
+      (is (= {:start
+              {:values ["99.96" "100"]
+               :fields ["2026-07-23T22:01:09.96"
+                        "2026-07-23T22:01:10"]
+               :request {:startAt "2026-07-23T22:01:09.960Z"
+                         :endAt "2026-07-23T22:01:10.000Z"}
+               :startHighlighted true
+               :endHighlighted false}
+              :end {:values ["99.96" "100"]
+                    :startHighlighted false
+                    :endHighlighted true}
+              :captures [{:element "timer-start-marker" :pointerId 10}
+                         {:element "timer-end-marker" :pointerId 11}]
+              :releases [{:element "timer-start-marker" :pointerId 10}
+                         {:element "timer-end-marker" :pointerId 11}]
+              :released [false false]
+              :videoUnchanged true}
+             (:timerMarkerPointer outcome)))
+      (is (= {:startFocus [true false]
+              :startLeftPrevented true
+              :startAfterLeft "99.92"
+              :startShiftLeftPrevented true
+              :startAfterShiftLeft "99.52"
+              :startHomePrevented true
+              :startAfterHome "19.96"
+              :startEndPrevented true
+              :startAfterEnd "99.96"
+              :endFocus [false true]
+              :endLeftPrevented true
+              :endAfterLeft "99.96"
+              :endShiftLeftPrevented true
+              :endAfterShiftLeft "99.56"
+              :endHomePrevented true
+              :endAfterHome "20"
+              :endEndPrevented true
+              :endAfterEnd "100"
+              :request {:startAt "2026-07-23T21:59:49.960Z"
+                        :endAt "2026-07-23T22:01:10.000Z"}
+              :videoUnchanged true}
+             (:timerMarkerKeyboard outcome)))
       (is (= {:manualVisibility {:markerHidden false
                                  :helpHidden false
                                  :fieldsHidden false}
@@ -1914,6 +2037,8 @@
              (:typedManual outcome)))
       (is (str/includes? (:invalidFrameStatus outcome)
                          "whole 25 fps frames"))
+      (is (str/includes? (:shortTimerStatus outcome)
+                         "at least one 25 fps frame"))
       (is (str/includes? (:negativeTrimStatus outcome)
                          "cannot precede sourceVideo.recordingStartAt"))
       (is (str/includes? (:fractionalTrimStatus outcome)
@@ -2065,6 +2190,11 @@
               "2026-07-23 23:59:33.000 Europe/Warsaw"
               :markerControls "camera-sync-at telemetry-sync-at"
               :helpVisible true
+              :timerMarkersInside true
+              :timerMarkersVisible true
+              :timerMarkerValues ["19.96" "100"]
+              :timerMarkerControls ["timer-start-at" "timer-end-at"]
+              :timerHelpVisible true
               :noHorizontalOverflow true
               :timerCount 1}
              (get-in outcome [:fullscreen :entry])))
@@ -2098,7 +2228,9 @@
               :disabledFullscreenPrevented false
               :fullscreenRequestsUnchanged true
               :range ["19.96" "100"]
-              :marker {:hidden false :disabled false :value "3"}}
+              :marker {:hidden false :disabled false :value "3"}
+              :timerMarkers [false false "19.96"
+                             false false "100"]}
              (select-keys (:unsupported outcome)
                           [:disabledStart
                            :disabledSeekPrevented
@@ -2106,7 +2238,8 @@
                            :disabledFullscreenPrevented
                            :fullscreenRequestsUnchanged
                            :range
-                           :marker])))
+                           :marker
+                           :timerMarkers])))
       (is (= {:fileId "raw-video"
               :start "2026-10-24T02:30"
               :zone "Europe/Warsaw"
@@ -2117,7 +2250,11 @@
                :timeZone "Europe/Warsaw"}
               :status "JSON applied to the form."
               :range ["10" "20"]
-              :marker "15"}
+              :marker "15"
+              :timer {:enabled true
+                      :fields ["2026-10-24T00:30:12"
+                               "2026-10-24T00:30:18"]
+                      :markers [false "12" false "18"]}}
              (:rawRestored outcome)))
       (is (= {:recordingStartAt "2026-10-24T00:31:00.000Z"
               :telemetrySyncAt "2026-10-24T00:20:00.000Z"
@@ -2126,11 +2263,47 @@
               :sectionEndAt "2026-10-24T00:31:20.000Z"
               :timer {:startAt "2026-10-24T00:31:12.000Z"
                       :endAt "2026-10-24T00:31:18.000Z"}
-              :marker "15"}
+              :marker "15"
+              :timerMarkers ["12" "18"]}
              (:clockCorrection outcome)))
       (is (:noHorizontalOverflow outcome) outcome))
     (is (= 1280 (:viewportWidth (first outcomes))))
     (is (<= (:viewportWidth (second outcomes)) 500))))
+
+(deftest no-source-timer-uses-the-same-default-and-json-model
+  (let [page (ui/page {:user {:email "member@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})
+        outcome (no-source-timer-browser-outcome page)]
+    (is (nil? (:error outcome)) outcome)
+    (is (= {:enabled false
+            :fields ["" ""]
+            :request nil
+            :markers [true true]}
+           (:initial outcome)))
+    (is (= {:enabled true
+            :fields ["2026-07-17T09:00"
+                     "2026-07-17T09:00:02"]
+            :request {:startAt "2026-07-17T09:00:00.000Z"
+                      :endAt "2026-07-17T09:00:02.000Z"}
+            :markers [true true]
+            :fieldsHidden false}
+           (:enabled outcome)))
+    (is (= {:enabled false
+            :request nil
+            :markers [true true]}
+           (:disabled outcome)))
+    (is (= {:enabled true
+            :fields ["2026-07-17T09:00:00.4"
+                     "2026-07-17T09:00:01.6"]
+            :request {:startAt "2026-07-17T09:00:00.400Z"
+                      :endAt "2026-07-17T09:00:01.600Z"}
+            :markers [true true]
+            :status "JSON applied to the form."}
+           (:restored outcome)))
+    (is (:noHorizontalOverflow outcome))))
 
 (deftest compose-page-exposes-bounded-future-trace-opacity-control
   (let [page (ui/page {:user {:email "member@example.com" :role :member}
