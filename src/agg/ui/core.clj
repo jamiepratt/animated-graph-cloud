@@ -108,7 +108,7 @@
    ".product-header nav{display:flex;gap:1rem;flex-wrap:wrap}.product-header nav a{color:var(--color-link)}"
    ".product-header nav a[aria-current=\"page\"]{color:var(--color-text);font-weight:800;text-decoration-line:underline;text-decoration-thickness:.18rem;text-underline-offset:.28rem}"
    ".help-heading,.toggle-help{display:flex}.help-label{display:inline-flex}.help-heading,.help-label,.toggle-help{align-items:center;gap:.4rem;max-width:100%;min-width:0}"
-   ".help-heading{margin-bottom:.35rem}.help-heading h2{margin:0}.help-label>label,.help-label>strong{min-width:0}.toggle-help{flex-wrap:wrap}"
+   ".help-heading{margin-bottom:.35rem}.help-heading h2{margin:0}.help-label>label,.help-label>strong,.toggle-help>.toggle{min-width:0}.toggle-help{flex-wrap:nowrap}"
    ".contextual-help{display:inline-flex;align-items:center;justify-content:flex-start;flex:0 0 2rem;width:2rem;height:2rem;color:var(--color-link);font-weight:900;line-height:1;text-decoration:none;vertical-align:middle}"
    ".help-heading>.contextual-help{font-size:1.25em}.help-label>label~.contextual-help,.toggle-help>.contextual-help{font-size:.9em}"
    ".contextual-help-mark{display:inline-flex;align-items:center;justify-content:center;flex:0 0 .8em;width:.8em;height:.8em;border:.08em solid currentColor;border-radius:50%;background:#06182b}"
