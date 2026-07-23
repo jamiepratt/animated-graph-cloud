@@ -153,7 +153,7 @@
          "document.addEventListener('DOMContentLoaded',()=>{try{"
          "const events=[];['htmx:beforeSwap','htmx:afterSwap','htmx:afterSettle','htmx:swapError'].forEach(type=>document.body.addEventListener(type,event=>events.push({type,eventTarget:event.target?.id||event.target?.tagName,detailElt:event.detail?.elt?.id||null,detailTarget:event.detail?.target?.id||null,className:event.detail?.elt?.className||'',connected:event.detail?.elt?.isConnected??null,xhrGeneration:event.detail?.xhr?.aggPreviewGeneration||null,elementGeneration:event.detail?.elt?.dataset?.previewGeneration||null})));"
          "const button=document.getElementById('preview-button'),spinner=button.querySelector('.button-spinner'),submit=document.getElementById('submit-button');"
-         "document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
+         "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
          "button.click();const deadline=Date.now()+3500;function inspect(){const result=document.getElementById('preview-result'),finished=result?.classList.contains('preview-error')&&!button.disabled;if(finished||Date.now()>=deadline){recordOutcome({htmxVersion:window.htmx?.version||null,className:result?.className||'',text:result?.textContent||'',previewDisabled:button.disabled,spinnerHidden:spinner.hidden,submitDisabled:submit.disabled,submitStatus:document.getElementById('preview-submit-status').textContent,status:document.getElementById('form-status').textContent,events});return;}setTimeout(inspect,25);}setTimeout(inspect,25);"
          "}catch(error){recordOutcome({error:error.message});}},{once:true});"
          "</script>")
@@ -314,7 +314,7 @@
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "(async()=>{let outcome;try{"
-         "const state=window.__playerState;state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'private-mp4',name:'ride.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120\\n2026-07-17T10:00:02Z,124';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02']].forEach(([id,value])=>document.getElementById(id).value=value);document.getElementById('video-timezone').value='+02:00';document.getElementById('confirm-video-clock').click();const fixedOffsetRejected={confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,status:document.getElementById('video-clock-status').textContent};document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();"
+         "const state=window.__playerState;state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'private-mp4',name:'ride.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120\\n2026-07-17T10:00:02Z,124';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02']].forEach(([id,value])=>document.getElementById(id).value=value);document.getElementById('video-timezone').value='+02:00';document.getElementById('confirm-video-clock').click();const fixedOffsetRejected={confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,status:document.getElementById('video-clock-status').textContent};document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();"
          "const player=document.getElementById('video-player'),video=document.getElementById('source-video-player'),timeline=document.getElementById('video-timeline'),fit=document.getElementById('fit-mode'),play=document.getElementById('video-play-pause');video.__duration=125.5;video.dispatchEvent(new Event('loadedmetadata'));video.dispatchEvent(new Event('progress'));"
          "const generatedRequest=JSON.parse(document.getElementById('render-request').value),initial={hidden:player.hidden,paused:video.paused,currentTime:video.currentTime,playCalls:state.playCalls,src:video.getAttribute('src'),selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,time:document.getElementById('video-time').textContent,timelineMax:timeline.getAttribute('aria-valuemax'),timelineValueText:timeline.getAttribute('aria-valuetext'),bufferedSegments:document.querySelectorAll('#video-buffered-ranges span').length,fit:getComputedStyle(video).objectFit,request:state.sessionRequests[0],inspectionRequest:state.inspectionRequests[0],clock:{start:document.getElementById('video-recording-start').value,zone:document.getElementById('video-timezone').value,confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,candidates:document.querySelectorAll('#video-clock-candidates input').length,summary:document.getElementById('video-source-summary').textContent,request:generatedRequest.sourceVideo}};"
          "const shortcutHints=[...document.querySelectorAll('.video-control')].map(control=>{const button=control.querySelector('button'),hint=control.querySelector('.video-shortcut'),before=control.getBoundingClientRect();button.focus();const after=control.getBoundingClientRect(),style=hint&&getComputedStyle(hint);return {name:button.getAttribute('aria-label')||button.textContent.trim(),keys:button.getAttribute('aria-keyshortcuts'),hint:hint?.textContent||null,focusVisible:style?.visibility==='visible'&&style?.opacity==='1',stable:before.width===after.width&&before.height===after.height};});"
@@ -366,7 +366,7 @@
          "let outcome;try{"
          "const terminalFragment=" (json/write-str terminal-fragment) ";"
          "const button=document.querySelector('[hx-post=\"/ui/preview\"]'),submit=document.getElementById('submit-button'),spinner=button.querySelector('.button-spinner');function buttonPresentation(){const previewStyle=getComputedStyle(button),submitStyle=getComputedStyle(submit);return {spinnerHidden:spinner?.hidden??null,spinnerInside:!!spinner&&button.contains(spinner),previewBackground:previewStyle.backgroundColor,submitBackground:submitStyle.backgroundColor,previewCursor:previewStyle.cursor,submitCursor:submitStyle.cursor,previewShadow:previewStyle.boxShadow,submitShadow:submitStyle.boxShadow};}const initial={submitDisabled:submit.disabled,status:document.getElementById('preview-submit-status').textContent,presentation:buttonPresentation()};"
-         "document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
+         "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
          "function configure(){const detail={elt:button,parameters:{},headers:{}};const event=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail});button.dispatchEvent(event);return {event,detail};}"
          "function transport(name,status=0){const target=document.getElementById('preview-result');target.dispatchEvent(new CustomEvent(name,{bubbles:true,detail:{elt:button,target,xhr:{status,getResponseHeader:()=>null}}}));return target;}"
          "const first=configure(),firstGeneration=first.detail.headers['X-Preview-Generation'],firstResult=document.getElementById('preview-result');"
@@ -428,7 +428,7 @@
          "let outcome;try{"
          "const acceptedFragment=" (json/write-str accepted-fragment) ",succeededFragment=" (json/write-str succeeded-fragment) ",failedFragment=" (json/write-str failed-fragment) ",nextAcceptedFragment=" (json/write-str next-accepted-fragment) ";"
          "const form=document.getElementById('render-form'),submit=document.getElementById('submit-button'),jobResult=document.getElementById('job-result');"
-         "document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
+         "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
          "function configure(){const detail={elt:submit,parameters:{},headers:{}};const event=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail});submit.dispatchEvent(event);return {event,detail};}"
          "function swap(fragment){jobResult.innerHTML=fragment;jobResult.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{elt:form,target:jobResult}}));return {disabled:submit.disabled,ariaDisabled:submit.getAttribute('aria-disabled'),submitStatus:document.getElementById('preview-submit-status').textContent,formStatus:document.getElementById('form-status').textContent};}"
          "function pollSwap(fragment){jobResult.innerHTML=fragment;const job=jobResult.firstElementChild;job.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{elt:job,target:job}}));return {disabled:submit.disabled,ariaDisabled:submit.getAttribute('aria-disabled'),submitStatus:document.getElementById('preview-submit-status').textContent,formStatus:document.getElementById('form-status').textContent};}"
@@ -608,7 +608,7 @@
          "<pre id=\"browser-result\">pending</pre><script>"
          "(async()=>{let outcome;try{"
          "const format=document.getElementById('telemetry-format'),input=document.getElementById('telemetry-file'),telemetry=document.getElementById('telemetry'),raw=document.getElementById('raw-json'),status=document.getElementById('telemetry-status');"
-         "document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02']].forEach(([id,value])=>document.getElementById(id).value=value);"
+         "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02']].forEach(([id,value])=>document.getElementById(id).value=value);"
          "const upload=async file=>{const transfer=new DataTransfer();transfer.items.add(file);input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));const cleared=telemetry.value==='';await new Promise((resolve,reject)=>{const deadline=Date.now()+1000;const check=()=>{if(status.classList.contains('success'))resolve();else if(status.classList.contains('error')||Date.now()>deadline)reject(new Error('file read failed'));else setTimeout(check,5);};check();});return {request:JSON.parse(raw.value),cleared};};"
          "const selectFile=async(value,file)=>{format.value=value;format.dispatchEvent(new Event('change',{bubbles:true}));return upload(file);};"
          "const fitBytes=Uint8Array.from(atob(" (json/write-str fit-base64) "),character=>character.charCodeAt(0));"
@@ -671,6 +671,35 @@
     (browser-outcome
      "agg-display-time-zone-browser-"
      "Browser-level display timezone regression requires Chrome or Chromium"
+     html)))
+
+(defn- synchronization-mode-browser-outcome [page]
+  (let [manual (assoc (fixture/render-request)
+                      :synchronizationMode "manual-anchor")
+        shared (-> manual
+                   (assoc :synchronizationMode "shared-clock")
+                   (dissoc :telemetrySyncAt :cameraSyncAt))
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{"
+         "const raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),manualFields=document.getElementById('manual-synchronization-fields'),preview=document.getElementById('preview-button'),submit=document.getElementById('submit-button'),jsonStatus=document.getElementById('json-status'),selected=()=>document.querySelector('input[name=\"synchronization-mode\"]:checked')?.value||null,generated=()=>JSON.parse(document.getElementById('render-request').value),snapshot=()=>({selected:selected(),manualHidden:manualFields.hidden,previewDisabled:preview.disabled,submitDisabled:submit.disabled,request:generated()});"
+         "const manualRequest=" (json/write-str manual) ",sharedRequest=" (json/write-str shared) ",without=(request,...keys)=>Object.fromEntries(Object.entries(request).filter(([key])=>!keys.includes(key))),validate=request=>{raw.value=JSON.stringify(request);apply.click();return jsonStatus.textContent;};"
+         "const initial=snapshot();"
+         "raw.value=JSON.stringify(manualRequest);apply.click();const manual=snapshot();"
+         "raw.value=JSON.stringify(sharedRequest);apply.click();document.getElementById('section-start-at').dispatchEvent(new Event('input',{bubbles:true}));const shared=snapshot();"
+         "const missing=validate(without(manualRequest,'synchronizationMode')),unknown=validate({...manualRequest,synchronizationMode:'automatic'}),validation={manualMissingTelemetry:validate(without(manualRequest,'telemetrySyncAt')),manualMissingCamera:validate(without(manualRequest,'cameraSyncAt')),manualMissingBoth:validate(without(manualRequest,'telemetrySyncAt','cameraSyncAt')),manualInvalidTelemetry:validate({...manualRequest,telemetrySyncAt:'invalid'}),manualInvalidCamera:validate({...manualRequest,cameraSyncAt:'invalid'}),manualBlankTelemetry:validate({...manualRequest,telemetrySyncAt:''}),manualNullCamera:validate({...manualRequest,cameraSyncAt:null}),sharedTelemetry:validate({...sharedRequest,telemetrySyncAt:manualRequest.telemetrySyncAt}),sharedCamera:validate({...sharedRequest,cameraSyncAt:manualRequest.cameraSyncAt}),sharedBoth:validate({...sharedRequest,telemetrySyncAt:manualRequest.telemetrySyncAt,cameraSyncAt:manualRequest.cameraSyncAt})};"
+         "const labels=[...document.querySelectorAll('input[name=\"synchronization-mode\"]')].map(input=>input.labels[0].textContent.trim());"
+         "outcome={initial,manual,shared,missing,unknown,validation,labels};"
+         "}catch(error){outcome={error:error.message,stack:error.stack};}"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-synchronization-mode-browser-"
+     "Synchronization mode form regression requires Chrome or Chromium"
      html)))
 
 (defn- early-access-browser-outcome [page window-size]
@@ -803,6 +832,7 @@
          "const tick=()=>new Promise(resolve=>setTimeout(resolve,0)),waitPop=(action,expectedFragment)=>new Promise(resolve=>{const onPop=event=>{if((event.state?.contextualHelp||null)!==expectedFragment)return;window.removeEventListener('popstate',onPop);setTimeout(()=>resolve(true),0);};window.addEventListener('popstate',onPop);action();}),safeClick=link=>{link.addEventListener('click',event=>event.preventDefault(),{once:true});link.click();if(!dialog.open)throw new Error('Contextual help link did not open the dialog');};"
          "const fragment=link=>new URL(link.href).hash.slice(1),templateFor=link=>[...dialog.querySelectorAll('template[data-contextual-help-fragment]')].find(template=>template.dataset.contextualHelpFragment===fragment(link));"
          "const inspect=link=>{const template=templateFor(link),rect=dialog.getBoundingClientRect();return {fragment:fragment(link),open:dialog.open,modal:dialog.matches(':modal'),focusContained:dialog.contains(document.activeElement),title:title.textContent,expectedTitle:template?.dataset.contextualHelpQuestion||null,answer:answer.innerHTML,expectedAnswer:template?.content.firstElementChild?.innerHTML||null,fullHref:full.getAttribute('href'),fullTarget:full.getAttribute('target'),fullRel:full.getAttribute('rel'),urlUnchanged:location.href===baseUrl,historyFragment:history.state?.contextualHelp||null,fits:rect.left>=-.5&&rect.right<=innerWidth+.5&&rect.top>=-.5&&rect.bottom<=innerHeight+.5,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};};"
+         "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();"
          "const telemetryContent='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120\\n2026-07-17T10:00:02Z,124',telemetryFile=document.getElementById('telemetry-file'),transfer=new DataTransfer(),selectedFile=new File([telemetryContent],'activity.csv',{type:'text/csv'});transfer.items.add(selectedFile);telemetryFile.files=transfer.files;document.getElementById('source-video-file-id').value='private-drive-video';document.getElementById('picker-selection').textContent='training.mp4';document.getElementById('output-format').value='prores-422-mov';document.getElementById('fit-mode').value='crop';document.getElementById('audio-mode').value='source-only';document.getElementById('preset').value='2.7k25';document.getElementById('timezone').value='UTC';document.getElementById('future-trace-opacity-percent').value='37';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02'],['timer-start-at','2026-07-17T10:00:00'],['timer-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);document.getElementById('spo2-enabled').checked=true;document.getElementById('spo2-telemetry').value='reading_time,spo2\\n2026-07-17T10:00:00Z,97';document.getElementById('timer-enabled').checked=true;telemetryFile.dispatchEvent(new Event('change',{bubbles:true}));await new Promise((resolve,reject)=>{const deadline=Date.now()+1000,check=()=>{if(document.getElementById('telemetry-status').classList.contains('success'))resolve();else if(Date.now()>deadline)reject(new Error('Telemetry file was not loaded'));else setTimeout(check,5);};check();});document.getElementById('video-recording-start').value='2026-07-17T10:00:00';document.getElementById('video-timezone').value='UTC';document.getElementById('confirm-video-clock').click();"
          "const previewResult=document.getElementById('preview-result'),jobResult=document.getElementById('job-result'),renderForm=document.getElementById('render-form'),raw=document.getElementById('raw-json');previewResult.innerHTML='<article class=\"preview-gallery\" data-preview-operation=\"preview-live\"><h2>Preview ready</h2></article>';jobResult.innerHTML='<article class=\"job\" id=\"job-live\" data-job-state=\"running\"><h2>Creating finished video</h2></article>';document.getElementById('video-player').hidden=false;video.setAttribute('src','/v1/drive/playback/live-compose-state');video.currentTime=42.25;"
          "const snapshotState=async()=>({drive:{fileId:document.getElementById('source-video-file-id').value,selection:document.getElementById('picker-selection').textContent,playerSrc:video.getAttribute('src'),playhead:video.currentTime},form:{outputFormat:document.getElementById('output-format').value,fitMode:document.getElementById('fit-mode').value,audioMode:document.getElementById('audio-mode').value,preset:document.getElementById('preset').value,timeZone:document.getElementById('timezone').value,opacity:document.getElementById('future-trace-opacity-percent').value,spo2Enabled:document.getElementById('spo2-enabled').checked,timerEnabled:document.getElementById('timer-enabled').checked},file:{count:telemetryFile.files.length,name:telemetryFile.files[0]?.name||null,text:telemetryFile.files[0]?await telemetryFile.files[0].text():null,loadedValue:document.getElementById('telemetry').value},raw:raw.value,hidden:document.getElementById('render-request').value,preview:previewResult.innerHTML,job:jobResult.innerHTML});const stateBefore=await snapshotState(),liveNodes={form:renderForm,file:telemetryFile,preview:previewResult,job:jobResult};"
@@ -1015,6 +1045,8 @@
          "Heart-rate data format"
          "Heart-rate data file"
          "Or paste heart-rate data"
+         "Camera and activity devices used the same clock - no synchronization adjustment needed"
+         "Camera and activity devices used different clocks - choose a matching moment"
          "Heart-rate sync time"
          "Timestamp in the heart-rate data file"
          "Preview"
@@ -1033,6 +1065,7 @@
         technical-identifiers
         ["<code>telemetryFormat</code>"
          "<code>telemetry</code>"
+         "<code>synchronizationMode</code>"
          "<code>telemetrySyncAt</code>"
          "Request.telemetryFormat"
          "Request.telemetry"
@@ -2020,6 +2053,61 @@
     (is (str/includes? (get-in outcome [:blank :message])
                        "Future trace opacity"))))
 
+(deftest synchronization-mode-is-conscious-conditional-and-round-trips
+  (let [outcome
+        (synchronization-mode-browser-outcome
+         (ui/page {:user {:email "member@example.com" :role :member}
+                   :csrf "csrf-test"
+                   :tokens []
+                   :members []
+                   :logs-enabled? false}))]
+    (is (nil? (:error outcome)) outcome)
+    (is (= {:selected nil
+            :manualHidden true
+            :previewDisabled true
+            :submitDisabled true
+            :request {}}
+           (:initial outcome)))
+    (is (= ["Camera and activity devices used the same clock - no synchronization adjustment needed"
+            "Camera and activity devices used different clocks - choose a matching moment"]
+           (:labels outcome)))
+    (is (= "manual-anchor" (get-in outcome [:manual :selected])))
+    (is (false? (get-in outcome [:manual :manualHidden])))
+    (is (false? (get-in outcome [:manual :previewDisabled])))
+    (is (false? (get-in outcome [:manual :submitDisabled])))
+    (is (= "manual-anchor"
+           (get-in outcome [:manual :request :synchronizationMode])))
+    (is (contains? (get-in outcome [:manual :request]) :telemetrySyncAt))
+    (is (contains? (get-in outcome [:manual :request]) :cameraSyncAt))
+    (is (= "shared-clock" (get-in outcome [:shared :selected])))
+    (is (true? (get-in outcome [:shared :manualHidden])))
+    (is (false? (get-in outcome [:shared :previewDisabled])))
+    (is (false? (get-in outcome [:shared :submitDisabled])))
+    (is (= "shared-clock"
+           (get-in outcome [:shared :request :synchronizationMode])))
+    (is (not (contains? (get-in outcome [:shared :request])
+                        :telemetrySyncAt)))
+    (is (not (contains? (get-in outcome [:shared :request])
+                        :cameraSyncAt)))
+    (is (str/includes? (:missing outcome)
+                       "Request.synchronizationMode is required"))
+    (is (str/includes? (:unknown outcome)
+                       "Request.synchronizationMode must be shared-clock or manual-anchor"))
+    (doseq [[case-name field guidance]
+            [[:manualMissingTelemetry "telemetrySyncAt" "required"]
+             [:manualMissingCamera "cameraSyncAt" "required"]
+             [:manualMissingBoth "telemetrySyncAt" "required"]
+             [:manualInvalidTelemetry "telemetrySyncAt" "ISO-8601"]
+             [:manualInvalidCamera "cameraSyncAt" "ISO-8601"]
+             [:manualBlankTelemetry "telemetrySyncAt" "ISO-8601"]
+             [:manualNullCamera "cameraSyncAt" "ISO-8601"]
+             [:sharedTelemetry "telemetrySyncAt" "omitted"]
+             [:sharedCamera "cameraSyncAt" "omitted"]
+             [:sharedBoth "telemetrySyncAt" "omitted"]]]
+      (let [message (get-in outcome [:validation case-name])]
+        (is (str/includes? message field) case-name)
+        (is (str/includes? message guidance) case-name)))))
+
 (deftest display-time-zone-generates-valid-iana-and-round-trips-raw-json
   (let [outcome
         (display-time-zone-browser-outcome
@@ -2126,13 +2214,13 @@
                            :members []
                            :logs-enabled? false}))]
     (is (nil? (:error outcome)) outcome)
-    (is (= {:submitDisabled false
+    (is (= {:submitDisabled true
             :status "Preview is optional. Create the finished video when ready."}
            (select-keys (:initial outcome)
                         [:submitDisabled :status])))
     (is (= {:spinnerHidden true
             :spinnerInside true
-            :previewCursor "pointer"}
+            :previewCursor "not-allowed"}
            (select-keys (get-in outcome [:initial :presentation])
                         [:spinnerHidden :spinnerInside :previewCursor])))
     (is (= (get-in outcome [:initial :presentation :previewBackground])
@@ -2155,8 +2243,8 @@
                          :submitCursor :previewShadow])))
     (is (not= (get-in outcome [:pending :presentation :previewBackground])
               (get-in outcome [:pending :presentation :submitBackground])))
-    (is (= (get-in outcome [:pending :presentation :submitBackground])
-           (get-in outcome [:initial :presentation :submitBackground])))
+    (is (not= (get-in outcome [:pending :presentation :submitBackground])
+              (get-in outcome [:initial :presentation :submitBackground])))
     (is (:unrelatedIgnored outcome))
     (is (:duplicateSuppressed outcome))
     (is (false? (get-in outcome [:platformFailure :disabled])))

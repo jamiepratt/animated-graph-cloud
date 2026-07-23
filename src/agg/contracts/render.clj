@@ -153,6 +153,44 @@
 (defn- display-time-zone [value]
   (iana-time-zone value "displayTimeZone"))
 
+(defn- synchronization-mode [value]
+  (require! (some? value)
+            "synchronizationMode is required; choose shared-clock or manual-anchor"
+            {:type ::invalid-synchronization-mode
+             :field "synchronizationMode"})
+  (require! (contains? #{"shared-clock" "manual-anchor"} value)
+            "synchronizationMode must be shared-clock or manual-anchor"
+            {:type ::invalid-synchronization-mode
+             :field "synchronizationMode"})
+  value)
+
+(defn- synchronization-anchors [request mode]
+  (case mode
+    "shared-clock"
+    (do
+      (doseq [[key field] [[:telemetrySyncAt "telemetrySyncAt"]
+                           [:cameraSyncAt "cameraSyncAt"]]]
+        (require! (not (contains? request key))
+                  (str field
+                       " must be omitted when synchronizationMode is shared-clock")
+                  {:type ::synchronization-anchor-forbidden
+                   :field field}))
+      nil)
+
+    "manual-anchor"
+    (do
+      (doseq [[key field] [[:telemetrySyncAt "telemetrySyncAt"]
+                           [:cameraSyncAt "cameraSyncAt"]]]
+        (require! (contains? request key)
+                  (str field
+                       " is required when synchronizationMode is manual-anchor")
+                  {:type ::synchronization-anchor-required
+                   :field field}))
+      {:telemetry-sync (instant (:telemetrySyncAt request)
+                                "telemetrySyncAt")
+       :camera-sync (instant (:cameraSyncAt request)
+                             "cameraSyncAt")})))
+
 (def default-future-trace-opacity-percent 25)
 
 (defn- future-trace-opacity-percent [request]
@@ -258,11 +296,13 @@
 
 (defn prepare
   "Validates a render request and returns its shared normalized contract."
-  [{:keys [telemetryFormat telemetry preset telemetrySyncAt cameraSyncAt
-           sectionStartAt sectionEndAt displayTimeZone spo2 timer watermark sourceVideo
-           outputFormat fitMode audioMode format fit audio sourceVideoServerMetadata]
+  [{:keys [telemetryFormat telemetry preset sectionStartAt sectionEndAt
+           displayTimeZone spo2 timer watermark sourceVideo
+           outputFormat fitMode audioMode format fit audio sourceVideoServerMetadata
+           synchronizationMode]
     :as request}]
-  (let [future-trace-opacity-percent
+  (let [synchronization-mode (synchronization-mode synchronizationMode)
+        future-trace-opacity-percent
         (future-trace-opacity-percent request)
         source (source-options sourceVideo
                                (or outputFormat format)
@@ -307,21 +347,27 @@
                 "Invalid watermark input"
                 {:type ::invalid-watermark}))
     (let [render-preset (spec/preset preset)
-          telemetry-sync (instant telemetrySyncAt :telemetrySyncAt)
-          camera-sync (instant cameraSyncAt :cameraSyncAt)
-          section-start (instant sectionStartAt :sectionStartAt)
-          section-end (instant sectionEndAt :sectionEndAt)
+          {:keys [telemetry-sync camera-sync]}
+          (synchronization-anchors request synchronization-mode)
+          section-start (instant sectionStartAt "sectionStartAt")
+          section-end (instant sectionEndAt "sectionEndAt")
           display-time-zone (display-time-zone displayTimeZone)
           timer-start (when timer (instant (:startAt timer) :timerStartAt))
           timer-end (when timer (instant (:endAt timer) :timerEndAt))
           duration-nanos (.toNanos (Duration/between section-start section-end))
           duration-seconds (/ duration-nanos 1000000000)
-          telemetry-start (.plusNanos telemetry-sync
-                                      (.toNanos (Duration/between camera-sync
-                                                                  section-start)))
-          telemetry-end (.plusNanos telemetry-sync
-                                    (.toNanos (Duration/between camera-sync
-                                                                section-end)))
+          telemetry-start
+          (if (= "shared-clock" synchronization-mode)
+            section-start
+            (.plusNanos telemetry-sync
+                        (.toNanos (Duration/between camera-sync
+                                                    section-start))))
+          telemetry-end
+          (if (= "shared-clock" synchronization-mode)
+            section-end
+            (.plusNanos telemetry-sync
+                        (.toNanos (Duration/between camera-sync
+                                                    section-end))))
           parsed-samples (parse-heart-rate telemetryFormat telemetry
                                            telemetry-start telemetry-end)
           samples (filterv #(not (::polar/sensor-gap %)) parsed-samples)
@@ -330,9 +376,12 @@
           watermark-image (when watermark
                             (watermark/decode-base64
                              (:contentBase64 watermark)))]
-      (require! (and (not (.isAfter camera-sync section-start))
-                     (.isBefore section-start section-end))
-                "Timestamps must be ordered cameraSyncAt <= sectionStartAt < sectionEndAt"
+      (require! (and (.isBefore section-start section-end)
+                     (or (= "shared-clock" synchronization-mode)
+                         (not (.isAfter camera-sync section-start))))
+                (if (= "shared-clock" synchronization-mode)
+                  "Timestamps must be ordered sectionStartAt < sectionEndAt"
+                  "Timestamps must be ordered cameraSyncAt <= sectionStartAt < sectionEndAt")
                 {:type ::invalid-timestamp-order})
       (require! (zero? (rem duration-nanos 1000000000))
                 "Section duration must be a whole number of seconds"
@@ -367,6 +416,7 @@
                   {:type ::insufficient-spo2-coverage
                    :field "spo2.telemetry"}))
       (cond-> (assoc (spec/with-duration render-preset duration-seconds)
+                     :synchronization-mode synchronization-mode
                      :future-trace-opacity-percent
                      future-trace-opacity-percent
                      :section-start-at section-start

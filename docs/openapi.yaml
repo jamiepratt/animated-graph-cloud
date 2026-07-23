@@ -895,8 +895,7 @@ components:
         - telemetry
         - preset
         - displayTimeZone
-        - telemetrySyncAt
-        - cameraSyncAt
+        - synchronizationMode
         - sectionStartAt
         - sectionEndAt
       properties:
@@ -921,6 +920,10 @@ components:
           type: string
           minLength: 1
           description: Required IANA timezone identifier, such as Europe/Warsaw or UTC, used only for the rendered 24-hour local clock. Missing, blank, offset-only, and unknown values are invalid. This field does not reinterpret any input timestamp and has no fallback.
+        synchronizationMode:
+          type: string
+          enum: [shared-clock, manual-anchor]
+          description: Required explicit clock relationship. shared-clock aligns activity timestamps directly to sectionStartAt and forbids synchronization anchors. manual-anchor requires both synchronization anchors.
         futureTraceOpacityPercent:
           type: number
           minimum: 0
@@ -1021,6 +1024,18 @@ components:
           default: source+heartbeat
           description: Audio tracks for composited output. Only valid with sourceVideo.
       allOf:
+        - oneOf:
+            - title: Shared clock
+              properties:
+                synchronizationMode:
+                  const: shared-clock
+              required: [synchronizationMode]
+              not: {anyOf: [{required: [telemetrySyncAt]}, {required: [cameraSyncAt]}]}
+            - title: Manual anchor
+              properties:
+                synchronizationMode:
+                  const: manual-anchor
+              required: [telemetrySyncAt, cameraSyncAt]
         - if:
             properties:
               telemetryFormat: {const: garmin-fit}
@@ -1366,7 +1381,14 @@ components:
         retryable: {type: boolean}
         field:
           type: string
-          enum: [displayTimeZone, futureTraceOpacityPercent]
+          enum: [displayTimeZone, futureTraceOpacityPercent, synchronizationMode, telemetrySyncAt, cameraSyncAt]
+        guidance:
+          type: string
+          enum:
+            - Choose synchronizationMode as shared-clock or manual-anchor.
+            - Omit telemetrySyncAt and cameraSyncAt when synchronizationMode is shared-clock.
+            - Provide telemetrySyncAt and cameraSyncAt when synchronizationMode is manual-anchor.
+            - Provide telemetrySyncAt and cameraSyncAt as ISO-8601 instants with Z or an explicit UTC offset.
         recoveryPath: {type: string, const: "/v1/auth/login/start?recovery=true"}
     SynchronousOverlayDurationExceeded:
       type: object
