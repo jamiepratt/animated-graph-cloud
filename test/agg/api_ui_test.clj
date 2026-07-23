@@ -857,6 +857,90 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest consumer-copy-uses-activity-data-without-renaming-the-json-contract
+  (let [compose (ui/page {:user {:email "owner@example.com" :role :member}
+                          :csrf "csrf-test"
+                          :tokens []
+                          :members []
+                          :logs-enabled? false})
+        heart-rate-error
+        (ui/preview-failure-fragment
+         {:failureCode "unsupported_telemetry_columns"
+          :field "telemetry"
+          :documentationPath
+          "/openapi.yaml#/components/schemas/RenderRequest"})
+        oxygen-saturation-error
+        (ui/preview-failure-fragment
+         {:failureCode "malformed_telemetry_row"
+          :field "spo2.telemetry"})
+        expected-compose-copy
+        ["Activity data for video"
+         "Create your video"
+         "Choose your activity data"
+         "Heart rate is the main supported graph"
+         "optional OxiWear SpO2 (oxygen saturation)"
+         "Heart-rate data format"
+         "Heart-rate data file"
+         "Or paste heart-rate data"
+         "Heart-rate sync time"
+         "Timestamp in the heart-rate data file"
+         "Preview"
+         "Create finished video"
+         "Alpha Compose calls these inputs activity data"
+         "API contract uses the exact field names below"]
+        retired-compose-copy
+        ["Telemetry overlays for video"
+         "Compose your overlay"
+         "Select a supported telemetry format"
+         "Telemetry file"
+         "Or paste telemetry content"
+         "Telemetry sync time"
+         "Telemetry timestamps"
+         "Preview overlay"]
+        technical-identifiers
+        ["<code>telemetryFormat</code>"
+         "<code>telemetry</code>"
+         "<code>telemetrySyncAt</code>"
+         "Request.telemetryFormat"
+         "Request.telemetry"
+         "Request.spo2.telemetry"]]
+    (doseq [copy expected-compose-copy]
+      (is (str/includes? compose copy) copy))
+    (doseq [copy retired-compose-copy]
+      (is (not (str/includes? compose copy)) copy))
+    (doseq [identifier technical-identifiers]
+      (is (str/includes? compose identifier) identifier))
+    (is (str/includes? heart-rate-error "Heart-rate data"))
+    (is (str/includes? heart-rate-error
+                       "selected heart-rate data format"))
+    (is (str/includes? oxygen-saturation-error
+                       "Oxygen-saturation data (SpO2)"))
+    (doseq [copy ["Heart-rate telemetry"
+                  "SpO2 telemetry"
+                  "telemetry input"]]
+      (is (not (str/includes?
+                (str/lower-case
+                 (str heart-rate-error oxygen-saturation-error))
+                (str/lower-case copy)))
+          copy))
+    (doseq [[page expected retired]
+            [[ui/privacy-page
+              ["process activity data"
+               "use activity data for advertising"
+               "logs exclude activity-data values"]
+              ["process telemetry"
+               "use telemetry for advertising"
+               "logs exclude telemetry values"]]
+             [ui/terms-page
+              ["content and activity data"
+               "Alpha Compose outputs are not medical advice"]
+              ["content and telemetry"
+               "Telemetry overlays are not medical advice"]]]]
+      (doseq [copy expected]
+        (is (str/includes? page copy) copy))
+      (doseq [copy retired]
+        (is (not (str/includes? page copy)) copy)))))
+
 (deftest public-faq-provides-stable-product-guidance-without-authentication
   (let [port (available-port)
         {:keys [auth-system]} (fixture)
@@ -1180,7 +1264,7 @@
                        :members []
                        :logs-enabled? false})
         optional-source "<h2>Optional source video</h2>"
-        step-1 "<div class=\"step\">Step 1</div><h2>Choose your data</h2>"
+        step-1 "<div class=\"step\">Step 1</div><h2>Choose your activity data</h2>"
         step-2 "<div class=\"step\">Step 2</div><h2>Line up the timeline</h2>"
         step-3 "<div class=\"step\">Step 3</div><h2>Optional overlays</h2>"]
     (is (every? #(str/includes? page %)
@@ -1259,7 +1343,7 @@
                        :csrf "csrf-test" :tokens [] :members []
                        :logs-enabled? false})]
     (is (str/includes? page
-                       "id=\"submit-button\" class=\"primary\" type=\"submit\">Submit render"))
+                       "id=\"submit-button\" class=\"primary\" type=\"submit\">Create finished video"))
     (is (str/includes? page "id=\"preview-submit-status\""))
     (is (str/includes? page "Preview is optional"))
     (doseq [disclosure ["Each Preview attempt reserves up to PLN 1.25"
@@ -1333,7 +1417,7 @@
                            :logs-enabled? false}))]
     (is (nil? (:error outcome)) outcome)
     (is (= {:submitDisabled false
-            :status "Preview is optional. Submit when ready."}
+            :status "Preview is optional. Create the finished video when ready."}
            (select-keys (:initial outcome)
                         [:submitDisabled :status])))
     (is (= {:spinnerHidden true
@@ -1388,7 +1472,7 @@
     (is (false? (get-in outcome [:terminalFailure :submitDisabled])))
     (is (true? (get-in outcome
                        [:terminalFailure :presentation :spinnerHidden])))
-    (is (= "Preview failed. Submit remains available."
+    (is (= "Preview failed. Create finished video remains available."
            (get-in outcome [:terminalFailure :submitStatus])))
     (is (= "Preview failed. See details below."
            (get-in outcome [:terminalFailure :status])))
@@ -1434,67 +1518,67 @@
     (is (:duplicateSuppressed outcome))
     (is (:disabled outcome))
     (is (= "true" (:ariaDisabled outcome)))
-    (is (= "Submitted. Change any render setting to start another render."
+    (is (= "Creation started. Change any setting to start another finished video."
            (:submitStatus outcome)))
-    (is (= "Durable render submitted. Track its progress below."
+    (is (= "Finished video creation started. Track its progress below."
            (:formStatus outcome)))
     (is (= {:disabled true
             :ariaDisabled "true"
             :submitStatus
-            "Render succeeded. Change any render setting to start another render."
-            :formStatus "Durable render succeeded. Open the result below."}
+            "Finished video created. Change any setting to start another."
+            :formStatus "Finished video is ready. Open it below."}
            (:succeeded outcome)))
     (is (= {:disabled true
             :ariaDisabled "true"
             :submitStatus
-            "Render failed. Review the result below, then change any render setting to start another render."
-            :formStatus "Durable render failed. Review the result below."}
+            "Creation failed. Review the result below, then change any setting to retry."
+            :formStatus "Finished video was not created. Review the result below."}
            (:failed outcome)))
     (is (= {:disabled false
             :ariaDisabled "false"
             :submitStatus "Preview is optional."
-            :formStatus "Ready to preview or submit."}
+            :formStatus "Ready to preview or create the finished video."}
            (:oldJobIgnored outcome)))
     (is (= {:disabled true
             :ariaDisabled "true"
-            :submitStatus "Submitting durable render…"
-            :formStatus "Submitting durable render…"}
+            :submitStatus "Creating finished video…"
+            :formStatus "Creating finished video…"}
            (:lateOldPoll outcome)))
     (is (= {:disabled true
             :ariaDisabled "true"
             :submitStatus
-            "Submitted. Change any render setting to start another render."
-            :formStatus "Durable render submitted. Track its progress below."}
+            "Creation started. Change any setting to start another finished video."
+            :formStatus "Finished video creation started. Track its progress below."}
            (:nextAccepted outcome)))
     (is (= {:disabled false
             :ariaDisabled "false"
             :submitStatus
-            "Submission failed. Review the error below, then retry Submit render."
-            :formStatus "Durable render was not submitted. Retry when ready."
+            "Creation failed. Review the error below, then retry Create finished video."
+            :formStatus "Finished video was not created. Retry when ready."
             :retryAllowed true
             :sameKey true}
            (:responseError outcome)))
     (is (= {:disabled false
             :ariaDisabled "false"
             :submitStatus
-            "Submission connection lost. Retry Submit render. Repeating is safe."
-            :formStatus "Submission connection lost. Retry when ready."
+            "Connection lost. Retry Create finished video. Repeating is safe."
+            :formStatus "Connection lost. Retry when ready."
             :retryAllowed true
             :sameKey true}
            (:connectionError outcome)))
     (is (= {:disabled false
             :ariaDisabled "false"
             :submitStatus
-            "Submission timed out. Retry Submit render. Repeating is safe."
-            :formStatus "Submission timed out. Retry when ready."
+            "Creation timed out. Retry Create finished video. Repeating is safe."
+            :formStatus "Creation timed out. Retry when ready."
             :retryAllowed true
             :sameKey true}
            (:timeout outcome)))
     (is (= {:disabled false
             :ariaDisabled "false"
             :submitStatus
-            "Submission cancelled. Retry Submit render. Repeating is safe."
-            :formStatus "Submission cancelled. Retry when ready."
+            "Creation cancelled. Retry Create finished video. Repeating is safe."
+            :formStatus "Creation cancelled. Retry when ready."
             :retryAllowed true
             :sameKey true}
            (:cancelled outcome)))))
@@ -1513,7 +1597,8 @@
     (is (false? (:previewDisabled outcome)) outcome)
     (is (:spinnerHidden outcome) outcome)
     (is (false? (:submitDisabled outcome)) outcome)
-    (is (= "Preview failed. Submit remains available." (:submitStatus outcome))
+    (is (= "Preview failed. Create finished video remains available."
+           (:submitStatus outcome))
         outcome)
     (is (= "Preview failed. See details below." (:status outcome)) outcome)
     (is (str/includes? (:text outcome)
@@ -1782,7 +1867,7 @@
         (is (re-matches #"[0-9a-f-]{36}" request-id))
         (is (str/includes? body "<article id=\"preview-result\""))
         (is (str/includes? body "Preview failed"))
-        (is (str/includes? body "Heart-rate telemetry"))
+        (is (str/includes? body "Heart-rate data"))
         (is (str/includes? body "between 20 and 260 bpm"))
         (doseq [developer-detail
                 ["request_contract" "heart_rate_out_of_range" request-id
@@ -1817,10 +1902,10 @@
          "unordered_telemetry" "strictly increasing"
          "insufficient_telemetry_coverage" "cover the full requested section"
          "telemetry_too_large" "documented size limit"
-         "telemetry_sample_limit_exceeded" "fewer telemetry samples"
+         "telemetry_sample_limit_exceeded" "fewer activity-data samples"
          "unsupported_telemetry_format" "Polar CSV, Garmin FIT, or OxiWear"
-         "unknown_failure" "Review the telemetry input"}]
-    (is (str/includes? summary "Heart-rate telemetry"))
+         "unknown_failure" "Review the activity-data input"}]
+    (is (str/includes? summary "Heart-rate data"))
     (is (str/includes? summary "timestamped Polar CSV"))
     (doseq [column ["timestamp" "date/time" "datetime" "heart_rate"
                     "heart rate" "heart rate (bpm)" "HR" "HR (bpm)"]]
@@ -1835,7 +1920,7 @@
     (let [spo2 (ui/preview-failure-fragment
                 (assoc base :field "spo2.telemetry"
                        :failureCode "malformed_telemetry_row"))]
-      (is (str/includes? spo2 "SpO₂ telemetry")))))
+      (is (str/includes? spo2 "Oxygen-saturation data (SpO2)")))))
 
 (deftest site-icon-assets-are-served-and-linked
   (let [port (available-port)
