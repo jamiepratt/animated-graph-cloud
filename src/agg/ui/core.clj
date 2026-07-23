@@ -647,36 +647,48 @@
      (picker-script picker-config)
      "})();</script></div></body></html>")))
 
-(defn- public-page [title body]
-  (str "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-       "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-       (icon-links)
-       "<title>" title " · Alpha Compose</title>"
-       "<meta name=\"color-scheme\" content=\"dark\">"
-       "<style>"
-       ":root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;line-height:1.45}"
-       "*{box-sizing:border-box}body{margin:0}.shell{max-width:78rem;margin:0 auto;padding:2rem 1.25rem 4rem}"
-       ".public-header{display:flex;justify-content:space-between;gap:1rem;align-items:center;margin:1rem 0 2rem}.brand{color:var(--color-text);font-weight:800;letter-spacing:-.03em;text-decoration:none}"
-       "nav{display:flex;gap:1rem;flex-wrap:wrap}nav a,footer a{color:var(--color-link)}"
-       "h1,h2,p{margin-top:0}h1{font-size:clamp(2.5rem,6vw,5rem);line-height:1.02;letter-spacing:-.06em;max-width:11ch;margin-bottom:1rem}h2{font-size:1.25rem;margin-bottom:.35rem}"
-       ".muted{color:var(--color-muted)}.eyebrow{color:var(--color-accent);font-size:.75rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}"
-       ".hero{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(18rem,.8fr);gap:1rem;align-items:stretch;margin:2.5rem 0 1rem}.hero-copy{padding:2rem 0 1rem}"
-       ".hero-card,.card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:1.1rem;box-shadow:var(--shadow-surface);padding:1.35rem}.hero-card{background:var(--color-surface-strong);color:var(--color-text);border-color:var(--color-border-strong);display:flex;flex-direction:column;justify-content:space-between}.hero-card .muted{color:#c8ddef}"
-       ".step{color:var(--color-subtle);font-weight:800;font-size:.8rem}.hero-card .step{color:var(--color-accent)}.hero-card-note{color:#c8ddef;margin:2rem 0 0}"
-       ".actions{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-top:1.25rem}.button,.cta{border:1px solid var(--color-border);border-radius:.65rem;padding:.7rem 1rem;font-weight:800;cursor:pointer;background:var(--color-surface-soft);color:var(--color-text);text-decoration:none;display:inline-block}.button.primary,.cta{background:var(--color-accent);color:var(--color-accent-ink);box-shadow:0 .35rem .8rem #0fc3ff2e}"
-       "form.card{display:grid;gap:.55rem;margin-top:1rem}input,textarea{width:100%;min-width:0;border:1px solid #6b8ba5;border-radius:.55rem;padding:.7rem;font:inherit;color:var(--color-text);background:#06182b}input[readonly]{background:#10263c;color:#c1d3e4}textarea{resize:vertical}.card:focus{outline:3px solid var(--color-warning);outline-offset:3px}"
-       ".feature-grid,.value-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem;margin:1rem 0}.feature-grid .card,.value-grid .card{margin:0;min-width:0}"
-       ".value-section{min-width:0;margin:1.75rem 0 1rem}.value-section>h2{font-size:clamp(1.5rem,3vw,2.25rem);max-width:22ch;margin:.3rem 0 1rem}.support-note{margin:1rem 0 0}.trust-card{margin-top:1rem}.trust-card p:last-child{margin-bottom:0}"
-       "footer{margin-top:2rem;color:var(--color-muted)}footer a{margin-right:.75rem}"
-       "@media(max-width:680px){.shell{padding:1rem .8rem 3rem}.public-header{display:block}.public-header nav{margin-top:1rem}.hero{grid-template-columns:1fr;margin-top:1.5rem}.hero-copy{padding:1rem 0}.feature-grid,.value-grid{grid-template-columns:1fr}}"
-       (theme-style)
-       ".public-header{padding:.75rem 1rem;border:1px solid var(--color-border);border-radius:1rem;background:#06182be8;box-shadow:var(--shadow-surface)}"
-       ".brand{color:var(--color-text)}.hero-copy{padding:clamp(1.25rem,3vw,2rem);background:var(--color-surface);border:1px solid var(--color-border);border-radius:1.1rem;box-shadow:var(--shadow-surface)}"
-       "</style></head><body data-theme=\"telemetry\"><div class=\"shell\">"
-       "<header class=\"public-header\"><a class=\"brand\" href=\"/\">Alpha Compose</a><nav><a href=\"/privacy\">Privacy</a>"
-       "<a href=\"/terms\">Terms</a></nav></header><main>" body "</main>"
-       "<footer><small>© 2026 Alpha Compose · <a href=\"mailto:me@jamiep.org\">Contact</a></small></footer>"
-       "</div></body></html>"))
+(defn- public-nav-link [active-path path label]
+  (str "<a href=\"" path "\""
+       (when (= active-path path) " aria-current=\"page\"")
+       ">" label "</a>"))
+
+(defn- public-page
+  ([title body]
+   (public-page title body nil))
+  ([title body active-path]
+   (str "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        (icon-links)
+        "<title>" title " · Alpha Compose</title>"
+        "<meta name=\"color-scheme\" content=\"dark\">"
+        "<style>"
+        ":root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;line-height:1.45}"
+        "*{box-sizing:border-box}body{margin:0}.shell{max-width:78rem;margin:0 auto;padding:2rem 1.25rem 4rem}"
+        ".public-header{display:flex;justify-content:space-between;gap:1rem;align-items:center;margin:1rem 0 2rem}.brand{color:var(--color-text);font-weight:800;letter-spacing:-.03em;text-decoration:none}"
+        "nav{display:flex;gap:1rem;flex-wrap:wrap}nav a,footer a{color:var(--color-link)}nav a[aria-current=\"page\"]{color:var(--color-text);font-weight:800;text-decoration-thickness:.18rem;text-underline-offset:.28rem}"
+        "h1,h2,p{margin-top:0}h1{font-size:clamp(2.5rem,6vw,5rem);line-height:1.02;letter-spacing:-.06em;max-width:11ch;margin-bottom:1rem}h2{font-size:1.25rem;margin-bottom:.35rem}"
+        ".muted{color:var(--color-muted)}.eyebrow{color:var(--color-accent);font-size:.75rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}"
+        ".hero{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(18rem,.8fr);gap:1rem;align-items:stretch;margin:2.5rem 0 1rem}.hero-copy{padding:2rem 0 1rem}"
+        ".hero-card,.card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:1.1rem;box-shadow:var(--shadow-surface);padding:1.35rem}.hero-card{background:var(--color-surface-strong);color:var(--color-text);border-color:var(--color-border-strong);display:flex;flex-direction:column;justify-content:space-between}.hero-card .muted{color:#c8ddef}"
+        ".step{color:var(--color-subtle);font-weight:800;font-size:.8rem}.hero-card .step{color:var(--color-accent)}.hero-card-note{color:#c8ddef;margin:2rem 0 0}"
+        ".actions{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-top:1.25rem}.button,.cta{border:1px solid var(--color-border);border-radius:.65rem;padding:.7rem 1rem;font-weight:800;cursor:pointer;background:var(--color-surface-soft);color:var(--color-text);text-decoration:none;display:inline-block}.button.primary,.cta{background:var(--color-accent);color:var(--color-accent-ink);box-shadow:0 .35rem .8rem #0fc3ff2e}"
+        "form.card{display:grid;gap:.55rem;margin-top:1rem}input,textarea{width:100%;min-width:0;border:1px solid #6b8ba5;border-radius:.55rem;padding:.7rem;font:inherit;color:var(--color-text);background:#06182b}input[readonly]{background:#10263c;color:#c1d3e4}textarea{resize:vertical}.card:focus{outline:3px solid var(--color-warning);outline-offset:3px}"
+        ".feature-grid,.value-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem;margin:1rem 0}.feature-grid .card,.value-grid .card{margin:0;min-width:0}"
+        ".value-section{min-width:0;margin:1.75rem 0 1rem}.value-section>h2{font-size:clamp(1.5rem,3vw,2.25rem);max-width:22ch;margin:.3rem 0 1rem}.support-note{margin:1rem 0 0}.trust-card{margin-top:1rem}.trust-card p:last-child{margin-bottom:0}"
+        ".faq-intro{max-width:46rem}.faq-sections{display:grid;gap:1.25rem;min-width:0;margin-top:2rem}.faq-category{min-width:0}.faq-category>h2{font-size:clamp(1.4rem,3vw,2rem);margin:0 0 .75rem}.faq-question{min-width:0;background:var(--color-surface);border:1px solid var(--color-border);border-radius:.8rem;box-shadow:var(--shadow-surface);margin:.65rem 0;scroll-margin-top:1rem;overflow-wrap:anywhere}.faq-question summary{cursor:pointer;padding:1rem 1.1rem;color:var(--color-link)}.faq-question summary h3{display:inline;font-size:1.05rem}.faq-answer{max-width:72ch;padding:0 1.1rem 1rem}.faq-answer p:last-child{margin-bottom:0}.faq-permalink{font-size:.9rem}.faq-question:target{outline:3px solid var(--color-warning);outline-offset:3px}"
+        "footer{margin-top:2rem;color:var(--color-muted)}footer a{margin-right:.75rem}"
+        "@media(max-width:680px){.shell{padding:1rem .8rem 3rem}.public-header{display:block}.public-header nav{margin-top:1rem}.hero{grid-template-columns:1fr;margin-top:1.5rem}.hero-copy{padding:1rem 0}.feature-grid,.value-grid{grid-template-columns:1fr}.faq-question summary,.faq-answer{padding-left:.85rem;padding-right:.85rem}}"
+        (theme-style)
+        ".public-header{padding:.75rem 1rem;border:1px solid var(--color-border);border-radius:1rem;background:#06182be8;box-shadow:var(--shadow-surface)}"
+        ".brand{color:var(--color-text)}.hero-copy{padding:clamp(1.25rem,3vw,2rem);background:var(--color-surface);border:1px solid var(--color-border);border-radius:1.1rem;box-shadow:var(--shadow-surface)}"
+        "</style></head><body data-theme=\"telemetry\"><div class=\"shell\">"
+        "<header class=\"public-header\"><a class=\"brand\" href=\"/\">Alpha Compose</a><nav>"
+        (public-nav-link active-path "/faq" "FAQ")
+        (public-nav-link active-path "/privacy" "Privacy")
+        (public-nav-link active-path "/terms" "Terms")
+        "</nav></header><main>" body "</main>"
+        "<footer><small>© 2026 Alpha Compose · <a href=\"mailto:me@jamiep.org\">Contact</a></small></footer>"
+        "</div></body></html>")))
 
 (def anonymous-page
   (public-page
@@ -726,6 +738,159 @@
         "<h2>Your Google Drive stays under your control.</h2>"
         "<p class=\"muted\">Alpha Compose can only use files you choose and the finished "
         "videos it creates. It cannot access the rest of your Google Drive.</p></section>")))
+
+(defn- faq-question [fragment question answer]
+  (str "<details class=\"faq-question\" id=\"" fragment "\">"
+       "<summary><h3>" question "</h3></summary>"
+       "<div class=\"faq-answer\">" answer
+       "<p class=\"faq-permalink\"><a href=\"#" fragment
+       "\" aria-label=\"Link to: " question "\">Link to this question</a></p>"
+       "</div></details>"))
+
+(defn- faq-category [fragment title questions]
+  (str "<section class=\"faq-category\" aria-labelledby=\"" fragment "\">"
+       "<h2 id=\"" fragment "\">" title "</h2>"
+       (apply str questions)
+       "</section>"))
+
+(def faq-page
+  (public-page
+   "FAQ"
+   (str
+    "<header class=\"faq-intro\"><div class=\"eyebrow\">Product guidance</div>"
+    "<h1>Frequently asked questions</h1>"
+    "<p class=\"muted\">Learn what Alpha Compose makes, which activity data it supports, "
+    "how files move through the service, and where its limits are.</p></header>"
+    "<div class=\"faq-sections\">"
+    (faq-category
+     "category-what-alpha-compose-makes"
+     "What Alpha Compose makes"
+     [(faq-question
+       "what-alpha-compose-does"
+       "What does Alpha Compose do?"
+       (str "<p>Alpha Compose combines a compatible activity video with supported activity "
+            "data. It adds a heart-rate graph, time readouts, and a generated heartbeat "
+            "soundtrack, lets you preview key moments, and creates a finished video.</p>"))
+      (faq-question
+       "beyond-freediving"
+       "Is Alpha Compose only for freediving?"
+       (str "<p>No. Alpha Compose grew from freediving, but it is not limited to freediving. "
+            "You can use any compatible activity video and supported activity data that "
+            "line up on a shared timeline.</p>"))
+      (faq-question
+       "progress-over-time"
+       "Can Alpha Compose compare my progress over time?"
+       (str "<p>Saved videos can help you notice changes over time for yourself. "
+            "Alpha Compose does not store sessions, analyze trends, or compare activities. "
+            "Any comparison is one you make from the finished videos you keep.</p>"))])
+    (faq-category
+     "category-heart-rate-and-heartbeat"
+     "Heart rate and the heartbeat sound"
+     [(faq-question
+       "why-show-heart-rate"
+       "Why put heart rate on a workout video?"
+       (str "<p>Heart rate can show your physiological response during a memorable moment. "
+            "Seeing that response alongside the action, and hearing its pace, can make "
+            "reliving the activity feel more immediate.</p>"))
+      (faq-question
+       "generated-heartbeat-sound"
+       "Is the heartbeat sound a recording of my heart?"
+       (str "<p>No. The heartbeat sound is generated from your recorded heart-rate data "
+            "and paced from those samples. It is not a recording of your heart or other "
+            "audio captured by a medical device.</p>"))
+      (faq-question
+       "audio-options"
+       "Can I keep the source audio, use only the heartbeat, or combine them?"
+       (str "<p>Yes. When you make a finished video, you can keep only the source audio, "
+            "use only the generated heartbeat, or combine the source audio and heartbeat.</p>"))])
+    (faq-category
+     "category-supported-activity-data"
+     "Supported activity data"
+     [(faq-question
+       "supported-activity-data"
+       "What activity data is supported today?"
+       (str "<p>Heart rate is the primary supported graph. Current heart-rate inputs are "
+            "Polar CSV, Garmin FIT, and OxiWear heart-rate CSV. Each input must include "
+            "timestamps so it can be synchronized with the video.</p>"))
+      (faq-question
+       "oxygen-saturation-support"
+       "Does Alpha Compose support oxygen saturation?"
+       (str "<p>Yes, as an optional addition. Compatible heart-rate renders can include "
+            "optional OxiWear SpO2 activity data and display oxygen saturation alongside "
+            "the primary heart-rate graph.</p>"))
+      (faq-question
+       "future-graphs"
+       "Will other graphs be supported?"
+       (str "<p>Other activity-data graphs are a possible future direction, but there "
+            "are no announced data types, dates, or delivery promises.</p>"))])
+    (faq-category
+     "category-files-and-synchronization"
+     "Files and synchronization"
+     [(faq-question
+       "file-sources"
+       "Where are my video and activity-data files read from?"
+       (str "<p>You choose a source video from Google Drive. Your browser reads the "
+            "activity-data file you choose and sends the required data for your render. "
+            "Alpha Compose does not search your device or the rest of your Drive.</p>"))
+      (faq-question
+       "synchronizing-data-and-camera"
+       "Why do I need to synchronize the activity data and camera time?"
+       (str "<p>The sensor and camera may have started at different times. Synchronization "
+            "identifies one matching moment so Alpha Compose can place each heart-rate or "
+            "SpO2 value at the correct point in the video.</p>"))
+      (faq-question
+       "output-file"
+       "What output does Alpha Compose create?"
+       (str "<p>With a source video, Alpha Compose creates a finished H.264 MP4 or "
+            "ProRes 422 MOV. It can also create a transparent ProRes 4444 MOV overlay "
+            "for a separate editing workflow. See the <a href=\"/openapi.yaml\">technical "
+            "API documentation</a> for file-format details.</p>"))])
+    (faq-category
+     "category-google-drive-and-privacy"
+     "Google Drive and privacy"
+     [(faq-question
+       "google-drive-access"
+       "What can Alpha Compose access in Google Drive?"
+       (str "<p>Alpha Compose uses the restricted <code>drive.file</code> permission. "
+            "It can access files you explicitly choose and files it creates for you. "
+            "It cannot browse or read the rest of your Google Drive.</p>"))
+      (faq-question
+       "finished-video-location"
+       "Where is my finished video saved?"
+       (str "<p>The finished video is saved in your Alpha Compose folder in My Drive, "
+            "including when the source video came from a Shared Drive or was shared with "
+            "you. It remains in your Drive until you delete it.</p>"))
+      (faq-question
+       "source-and-activity-data-retention"
+       "Does Alpha Compose retain my source video or log my activity data?"
+       (str "<p>No source-video copy is retained: the source video is streamed from "
+            "Google Drive into the renderer and is never persisted by Alpha Compose. "
+            "Activity data may be held in encrypted temporary request objects while the "
+            "render is processed; those objects are deleted after 24 hours. The service "
+            "does not log activity-data values. Read the <a href=\"/privacy\">complete "
+            "privacy policy</a> for retention details.</p>"))])
+    (faq-category
+     "category-safety-and-medical-limitations"
+     "Safety and medical limitations"
+     [(faq-question
+       "medical-or-training-advice"
+       "Is Alpha Compose medical or training advice?"
+       (str "<p>No. Alpha Compose output is not medical advice or training advice. "
+            "Do not use it to diagnose a condition, decide whether an activity is safe, "
+            "or replace qualified professional guidance.</p>"))
+      (faq-question
+       "displayed-value-accuracy"
+       "How accurate are the displayed values?"
+       (str "<p>The output reflects the sensor data you supply and the synchronization "
+            "you choose. It does not infer emotions, health, or training readiness, "
+            "and it does not validate the sensor. Check the source data and timing before "
+            "relying on a displayed value.</p>"))])
+    "</div>"
+    "<script>(function(){"
+    "function openFaqTarget(){let fragment;try{fragment=decodeURIComponent(location.hash.slice(1));}catch(_){return;}const target=document.getElementById(fragment);if(!(target instanceof HTMLDetailsElement)||!target.classList.contains('faq-question'))return;target.open=true;requestAnimationFrame(()=>target.scrollIntoView({block:'start'}));}"
+    "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',openFaqTarget,{once:true});else openFaqTarget();window.addEventListener('hashchange',openFaqTarget);"
+    "})();</script>")
+   "/faq"))
 
 (def drive-recovery-fragment
   (str "<section class=\"notice\" role=\"alert\"><h2>Google Drive access needs renewal</h2>"

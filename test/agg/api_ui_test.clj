@@ -654,7 +654,7 @@
          "const focusTarget=document.querySelector('.cta,button.primary,button,a[href]');focusTarget?.focus({focusVisible:true});const focusStyle=focusTarget?getComputedStyle(focusTarget):null;"
          "const focusRule=[...document.styleSheets].flatMap(sheet=>[...sheet.cssRules]).find(rule=>rule.selectorText?.includes(':focus')&&parseFloat(rule.style.outlineWidth)>=3);"
          "const declaredFocus=[...document.querySelectorAll('style')].some(style=>style.textContent.includes(':focus,:focus-visible{outline:3px solid var(--color-warning)'));"
-         "const heroCopy=document.querySelector('.hero-copy'),surface=parse(heroCopy?getComputedStyle(heroCopy).backgroundColor:getComputedStyle(document.querySelector('.card')).backgroundColor),topHeader=document.querySelector('.shell>header'),headerSurface=parse(getComputedStyle(topHeader).backgroundColor),bodyStyle=getComputedStyle(document.body);"
+         "const contentSurface=document.querySelector('.hero-copy,.card,.faq-question'),surface=parse(getComputedStyle(contentSurface).backgroundColor),topHeader=document.querySelector('.shell>header'),headerSurface=parse(getComputedStyle(topHeader).backgroundColor),bodyStyle=getComputedStyle(document.body);"
          "const computedFocusVisible=!!focusTarget&&focusStyle.outlineStyle!=='none'&&parseFloat(focusStyle.outlineWidth)>=3;outcome={viewportWidth:window.innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth,layoutOffenders,contrastOffenders,minContrast:Math.min(...contrasts.map(entry=>entry.ratio)),focusVisible:!!focusTarget&&focusTarget.tabIndex>=0&&(computedFocusVisible||!!focusRule||declaredFocus),computedFocusVisible,focusActive:document.activeElement===focusTarget,focusMatches:focusTarget?.matches(':focus')||false,focusOutlineStyle:focusStyle?.outlineStyle||null,focusOutlineWidth:focusStyle?.outlineWidth||null,focusOutlineColor:focusStyle?.outlineColor||null,contentSurfaceAlpha:surface.a,headerSurfaceAlpha:headerSurface.a,backgroundIncludesAsset:bodyStyle.backgroundImage.includes('telemetry-background.webp'),backgroundAnimated:bodyStyle.animationName!=='none'};"
          "}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
          "</script>")
@@ -666,6 +666,30 @@
      "Telemetry theme regression requires Chrome or Chromium"
      html
      (str "--window-size=" window-size))))
+
+(defn- faq-browser-outcome [page initial-fragment window-size]
+  (let [scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "document.addEventListener('DOMContentLoaded',()=>{"
+         "const snapshot=id=>{const target=document.getElementById(id),rect=target?.getBoundingClientRect();return {id,hash:location.hash,open:target?.open??null,inView:!!rect&&rect.bottom>0&&rect.top<window.innerHeight,top:rect?.top??null};};"
+         "const record=outcome=>{if(document.getElementById('browser-result').dataset.outcome)return;const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));};"
+         "setTimeout(()=>{const initial=snapshot('" initial-fragment "'),changedFragment='source-and-activity-data-retention';location.hash='#'+changedFragment;"
+         "setTimeout(()=>{const changed=snapshot(changedFragment),initialStillOpen=document.getElementById('" initial-fragment "').open,summaryNodes=[...document.querySelectorAll('.faq-question>summary')],details=[...document.querySelectorAll('.faq-question')],permalinks=[...document.querySelectorAll('.faq-permalink a')],activeNavNode=document.querySelector('nav a[aria-current=\"page\"]'),activeNavStyle=activeNavNode?getComputedStyle(activeNavNode):null,base={initial,changed,initialStillOpen,summaryCount:summaryNodes.length,summariesKeyboardReachable:summaryNodes.every(node=>node.tabIndex>=0&&node.textContent.trim()),permalinksAccessible:permalinks.length===summaryNodes.length&&permalinks.every(link=>link.getAttribute('aria-label')?.includes(link.closest('details').querySelector('summary').textContent.trim())&&link.getAttribute('href')==='#'+link.closest('details').id),nestedDetails:document.querySelectorAll('details details').length,activeNav:activeNavNode?.getAttribute('href')||null,activeNavStyled:!!activeNavStyle&&parseInt(activeNavStyle.fontWeight,10)>=700&&activeNavStyle.textDecorationLine.includes('underline'),viewportWidth:window.innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth,detailsFit:details.every(node=>{const rect=node.getBoundingClientRect();return rect.left>=-.5&&rect.right<=window.innerWidth+.5;})};"
+         "let recorded=false;const finish=()=>{if(recorded)return;recorded=true;record({...base,back:snapshot('" initial-fragment "'),changedStillOpen:document.getElementById(changedFragment).open});};window.addEventListener('hashchange',()=>setTimeout(finish,50),{once:true});history.back();setTimeout(finish,250);},80);},80);"
+         "},{once:true});"
+         "</script>")
+        html (str/replace page "</body>" (str scenario "</body>"))
+        temp (File/createTempFile "agg-faq-browser-" ".html")]
+    (try
+      (spit temp html)
+      (browser-location-outcome
+       "FAQ fragment and responsive behavior requires Chrome or Chromium"
+       (str (.toURI temp) "#" initial-fragment)
+       1500
+       [(str "--window-size=" window-size)])
+      (finally
+        (.delete temp)))))
 
 (deftest public-product-and-legal-pages-identify-alpha-compose
   (let [port (available-port)
@@ -718,6 +742,116 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest public-faq-provides-stable-product-guidance-without-authentication
+  (let [port (available-port)
+        {:keys [auth-system]} (fixture)
+        server (start-api! port {:auth-system auth-system})]
+    (try
+      (let [homepage (request! port :get "/" nil {})
+            response (request! port :get "/faq" nil {})
+            page (.body response)
+            categories ["What Alpha Compose makes"
+                        "Heart rate and the heartbeat sound"
+                        "Supported activity data"
+                        "Files and synchronization"
+                        "Google Drive and privacy"
+                        "Safety and medical limitations"]
+            questions [["what-alpha-compose-does" "What does Alpha Compose do?"]
+                       ["beyond-freediving" "Is Alpha Compose only for freediving?"]
+                       ["progress-over-time" "Can Alpha Compose compare my progress over time?"]
+                       ["why-show-heart-rate" "Why put heart rate on a workout video?"]
+                       ["generated-heartbeat-sound" "Is the heartbeat sound a recording of my heart?"]
+                       ["audio-options" "Can I keep the source audio, use only the heartbeat, or combine them?"]
+                       ["supported-activity-data" "What activity data is supported today?"]
+                       ["oxygen-saturation-support" "Does Alpha Compose support oxygen saturation?"]
+                       ["future-graphs" "Will other graphs be supported?"]
+                       ["file-sources" "Where are my video and activity-data files read from?"]
+                       ["synchronizing-data-and-camera" "Why do I need to synchronize the activity data and camera time?"]
+                       ["output-file" "What output does Alpha Compose create?"]
+                       ["google-drive-access" "What can Alpha Compose access in Google Drive?"]
+                       ["finished-video-location" "Where is my finished video saved?"]
+                       ["source-and-activity-data-retention" "Does Alpha Compose retain my source video or log my activity data?"]
+                       ["medical-or-training-advice" "Is Alpha Compose medical or training advice?"]
+                       ["displayed-value-accuracy" "How accurate are the displayed values?"]]]
+        (is (= 200 (.statusCode response)))
+        (is (str/includes? page "<title>FAQ · Alpha Compose</title>"))
+        (is (str/includes? page "<h1>Frequently asked questions</h1>"))
+        (doseq [category categories]
+          (is (str/includes? page category) category))
+        (is (= (count questions)
+               (count (re-seq #"<details class=\"faq-question\"" page))))
+        (doseq [[fragment question] questions]
+          (is (str/includes? page
+                             (str "<details class=\"faq-question\" id=\""
+                                  fragment "\""))
+              fragment)
+          (is (str/includes? page (str "<summary><h3>" question "</h3></summary>"))
+              question))
+        (doseq [claim ["grew from freediving"
+                       "not limited to freediving"
+                       "does not store sessions, analyze trends, or compare activities"
+                       "generated from your recorded heart-rate data"
+                       "not a recording of your heart"
+                       "Polar CSV"
+                       "Garmin FIT"
+                       "OxiWear heart-rate CSV"
+                       "optional OxiWear SpO2"
+                       "source video is streamed"
+                       "does not log activity-data values"
+                       "not medical advice"
+                       "does not infer emotions, health, or training readiness"]]
+          (is (str/includes? page claim) claim))
+        (let [faq-position (str/index-of (.body homepage) "href=\"/faq\"")
+              privacy-position (str/index-of (.body homepage) "href=\"/privacy\"")
+              terms-position (str/index-of (.body homepage) "href=\"/terms\"")]
+          (is (every? some? [faq-position privacy-position terms-position]))
+          (when (every? some? [faq-position privacy-position terms-position])
+            (is (< faq-position privacy-position terms-position))))
+        (is (str/includes? page
+                           "<a href=\"/faq\" aria-current=\"page\">FAQ</a>"))
+        (let [positions (mapv #(str/index-of page %)
+                              ["href=\"/faq\""
+                               "href=\"/privacy\""
+                               "href=\"/terms\""])]
+          (is (every? some? positions))
+          (when (every? some? positions)
+            (is (apply < positions)))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest faq-fragments-open-scroll-and-preserve-browser-navigation
+  (let [outcomes {"desktop" (faq-browser-outcome ui/faq-page
+                                                 "generated-heartbeat-sound"
+                                                 "1280,900")
+                  "mobile" (faq-browser-outcome ui/faq-page
+                                                "generated-heartbeat-sound"
+                                                "390,844")}]
+    (doseq [[surface outcome] outcomes]
+      (testing surface
+        (is (nil? (:error outcome)) (:error outcome))
+        (is (true? (get-in outcome [:initial :open])))
+        (is (true? (get-in outcome [:initial :inView])))
+        (is (= "#generated-heartbeat-sound"
+               (get-in outcome [:initial :hash])))
+        (is (true? (get-in outcome [:changed :open])))
+        (is (true? (get-in outcome [:changed :inView])))
+        (is (= "#source-and-activity-data-retention"
+               (get-in outcome [:changed :hash])))
+        (is (true? (:initialStillOpen outcome)))
+        (is (= "#generated-heartbeat-sound"
+               (get-in outcome [:back :hash])))
+        (is (true? (get-in outcome [:back :open])))
+        (is (true? (get-in outcome [:back :inView])))
+        (is (true? (:changedStillOpen outcome)))
+        (is (= 17 (:summaryCount outcome)))
+        (is (true? (:summariesKeyboardReachable outcome)))
+        (is (true? (:permalinksAccessible outcome)))
+        (is (zero? (:nestedDetails outcome)))
+        (is (= "/faq" (:activeNav outcome)))
+        (is (true? (:activeNavStyled outcome)))
+        (is (true? (:noHorizontalOverflow outcome)))
+        (is (true? (:detailsFit outcome)))))))
+
 (deftest anonymous-homepage-explains-why-activity-video-matters
   (let [page ui/anonymous-page
         lower-page (str/lower-case page)]
@@ -743,6 +877,7 @@
 (deftest full-page-surfaces-share-the-telemetry-theme
   (let [pages
         {"anonymous" ui/anonymous-page
+         "faq" ui/faq-page
          "privacy" ui/privacy-page
          "terms" ui/terms-page
          "Drive recovery" ui/drive-recovery-page
@@ -783,6 +918,8 @@
                                                              "1280,900")
                   "anonymous mobile" (theme-browser-outcome ui/anonymous-page
                                                             "390,844")
+                  "faq desktop" (theme-browser-outcome ui/faq-page "1280,900")
+                  "faq mobile" (theme-browser-outcome ui/faq-page "390,844")
                   "compose desktop" (theme-browser-outcome compose "1280,900")
                   "compose mobile" (theme-browser-outcome compose "390,844")}]
     (doseq [[surface outcome] outcomes]
@@ -834,7 +971,7 @@
     (is (= "early-access-instagram" (:instagramLabel retry)))
     (is (= "early-access-message" (:messageLabel retry)))
     (is (true? (:keyboardReachable retry)))
-    (is (= ["/" "/privacy" "/terms" "early-access-email"
+    (is (= ["/" "/faq" "/privacy" "/terms" "early-access-email"
             "early-access-instagram" "early-access-message" "button"
             "mailto:me@jamiep.org" "/v1/auth/login/start"
             "mailto:me@jamiep.org"]
