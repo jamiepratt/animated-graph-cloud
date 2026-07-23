@@ -1127,8 +1127,8 @@
       (.set "Referrer-Policy" "no-referrer")
       (.set "Content-Security-Policy"
             (if picker-config
-              "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://apis.google.com https://www.gstatic.com; frame-src https://docs.google.com https://accounts.google.com; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://www.googleapis.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
-              "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")))
+              "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://apis.google.com https://www.gstatic.com; frame-src https://docs.google.com https://accounts.google.com; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' https://www.googleapis.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+              "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")))
     (respond! exchange 200 "text/html; charset=utf-8" body)))
 
 (defn- picker! [^HttpExchange exchange auth-system picker-api-key picker-app-id]
