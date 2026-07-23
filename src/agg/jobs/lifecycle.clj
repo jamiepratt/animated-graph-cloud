@@ -128,13 +128,20 @@
                 omitted-moment-count requested-duration-seconds]}
         limits]
     (and (= (set preview-count-limit-keys) (set (keys limits)))
-         (every? integer? (vals limits))
+         (every? integer? [requested-moment-count generated-moment-count
+                           omitted-moment-count])
          (<= 1 requested-moment-count 32)
          (<= 0 generated-moment-count requested-moment-count)
          (<= 1 omitted-moment-count requested-moment-count)
          (= requested-moment-count
             (+ generated-moment-count omitted-moment-count))
-         (<= 1 requested-duration-seconds 480))))
+         (number? requested-duration-seconds)
+         (<= 1/25 requested-duration-seconds 480)
+         (let [duration-frames (* 25.0
+                                  (double requested-duration-seconds))]
+           (< (Math/abs (- duration-frames
+                           (Math/rint duration-frames)))
+              1.0e-9)))))
 
 (defn- throwable-data [cause]
   (loop [current cause

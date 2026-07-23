@@ -492,7 +492,7 @@
         request (assoc (fixture/render-request)
                        :sourceVideo
                        {:fileId "drive-file-1"
-                        :recordingStartAt "2026-07-23T12:30:15Z"
+                        :recordingStartAt "2026-07-17T09:00:00Z"
                         :timeZone "Europe/Warsaw"}
                        :fitMode "letterbox"
                        :timer {:startAt "2026-07-17T09:00:00.500Z"
@@ -585,7 +585,7 @@
         request (assoc (fixture/render-request)
                        :sourceVideo
                        {:fileId "drive-file-1"
-                        :recordingStartAt "2026-07-23T12:30:15Z"
+                        :recordingStartAt "2026-07-17T09:00:00Z"
                         :timeZone "Europe/Warsaw"}
                        :fitMode "letterbox"
                        :timer {:startAt "2026-07-17T09:00:00.500Z"

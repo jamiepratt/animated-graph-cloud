@@ -243,6 +243,20 @@
                         #"Duration"
                         (spec/with-duration (spec/preset "1080p25") 481))))
 
+(deftest frame-accurate-duration-is-accepted-by-render-spec-and-cli
+  (let [bounded (spec/with-duration (spec/preset "1080p25") 1.04)
+        {:keys [output-path report-path] :as request}
+        (renderer/parse-options ["--preset" "1080p25"
+                                 "--duration-seconds" "1.04"
+                                 "--profile" "false"])]
+    (try
+      (is (= 26 (:duration-frames bounded)))
+      (is (= 26 (spec/frame-count bounded)))
+      (is (= 26 (:duration-frames request)))
+      (finally
+        (Files/deleteIfExists output-path)
+        (Files/deleteIfExists report-path)))))
+
 (deftest invalid-duration-text-cannot-fall-through-to-a-maximum-render
   (is (thrown-with-msg? clojure.lang.ExceptionInfo
                         #"Duration"
@@ -946,7 +960,8 @@
 (deftest compositing-command-keeps-drive-source-on-a-non-seekable-pipe
   (let [command (media/composite-command
                  "ffmpeg"
-                 {:width 1920 :height 1080 :fps 25 :duration-seconds 2
+                 {:width 1920 :height 1080 :fps 25 :duration-seconds 26/25
+                  :source-video {:trim-offset-seconds 26/25}
                   :output-format "h264-mp4"
                   :fit-mode "letterbox"
                   :audio-mode "source+heartbeat"}
@@ -956,14 +971,68 @@
         joined (str/join " " command)]
     (is (some #{"pipe:0"} command))
     (is (some #{"/tmp/overlay.pipe"} command))
-    (is (str/includes? joined "[0:v]scale="))
+    (is (str/includes? joined
+                       "[0:v]trim=start=1.04,setpts=PTS-STARTPTS,scale="))
     (is (str/includes? joined "[1:v]format=rgba"))
-    (is (str/includes? joined "[0:a]aformat="))
+    (is (str/includes?
+         joined
+         "[0:a]atrim=start=1.04,asetpts=PTS-STARTPTS,aformat="))
     (is (str/includes? joined "force_original_aspect_ratio=decrease"))
     (is (str/includes? joined "amix=inputs=2"))
     (is (str/includes? joined "volume=0.5[src]"))
     (is (str/includes? joined "volume=1.0[beat]"))
+    (is (= ["-t" "1.04"]
+           (->> (partition 2 1 command)
+                (some #(when (= "-t" (first %)) %)))))
     (is (not (some #(str/includes? % "source.mp4") command)))))
+
+(deftest selected-source-gallery-decodes-trim-offset-plus-output-frame
+  (let [command
+        (media/composite-gallery-command
+         "ffmpeg"
+         {:width 1920
+          :height 1080
+          :fps 25
+          :source-video {:trim-offset-frames 26}
+          :fit-mode "letterbox"}
+         [0 24 25]
+         "/tmp/overlays.rgba")
+        joined (str/join " " command)]
+    (is (some #{"pipe:0"} command))
+    (is (str/includes?
+         joined
+         "select='eq(n\\,26)+eq(n\\,50)+eq(n\\,51)'"))
+    (is (not (some #{"-ss"} command)))))
+
+(deftest every-durable-format-and-audio-mode-shares-the-source-trim
+  (doseq [output-format ["h264-mp4" "prores-422-mov"]
+          audio-mode ["source+heartbeat" "source-only" "heartbeat-only"]]
+    (let [command
+          (media/composite-command
+           "ffmpeg"
+           {:width 64 :height 36 :fps 25 :duration-seconds 26/25
+            :source-video {:trim-offset-seconds 26/25}
+            :output-format output-format
+            :fit-mode "letterbox"
+            :audio-mode audio-mode}
+           "/tmp/heartbeat.wav"
+           "/tmp/overlay.pipe"
+           "/tmp/output")
+          joined (str/join " " command)]
+      (is (str/includes?
+           joined "[0:v]trim=start=1.04,setpts=PTS-STARTPTS")
+          [output-format audio-mode])
+      (if (= "heartbeat-only" audio-mode)
+        (is (not (str/includes? joined "[0:a]atrim="))
+            [output-format audio-mode])
+        (is (str/includes?
+             joined "[0:a]atrim=start=1.04,asetpts=PTS-STARTPTS")
+            [output-format audio-mode]))
+      (is (some #{(if (= "prores-422-mov" output-format)
+                    "prores_ks"
+                    "libx264")}
+                command)
+          [output-format audio-mode]))))
 
 (deftest durable-composite-stops-before-its-render-deadline
   (let [ffmpeg (executable-script! (delayed-composite-script "0.5"))

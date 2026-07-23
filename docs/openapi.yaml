@@ -938,10 +938,10 @@ components:
           description: Camera timestamp corresponding to telemetrySyncAt; must not follow sectionStartAt.
         sectionStartAt:
           allOf: [{$ref: "#/components/schemas/Instant"}]
-          description: Start of the rendered camera section.
+          description: Start of the rendered camera section. With sourceVideo, the offset from recordingStartAt must be a nonnegative whole 25 fps frame count.
         sectionEndAt:
           allOf: [{$ref: "#/components/schemas/Instant"}]
-          description: End of the rendered camera section; duration must be a whole number of seconds and within the preset maximum.
+          description: End of the rendered camera section; duration must be a whole 25 fps frame count (40 ms steps), remain within the preset maximum, and not exceed known source duration.
         spo2:
           type: object
           additionalProperties: false
@@ -1006,8 +1006,10 @@ components:
             video/quicktime, video/webm, video/mpeg, video/ogg,
             video/x-msvideo, and video/x-matroska. The source must be at most
             2 GiB, downloadable, decodable, not trashed, and long enough for
-            the requested section. Folders, shortcuts, and Google Workspace
-            documents are rejected.
+            the selected source-relative output range. Source trim is derived
+            from sectionStartAt minus recordingStartAt, must be nonnegative,
+            and is applied identically to video and source audio. Folders,
+            shortcuts, and Google Workspace documents are rejected.
         outputFormat:
           type: string
           enum: [h264-mp4, prores-422-mov]
