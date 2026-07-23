@@ -326,6 +326,25 @@
     (is (not (re-find #"private|100|481"
                       (pr-str diagnostics))))))
 
+(deftest frame-accurate-source-duration-limits-are-published
+  (let [cause
+        (try
+          (jobs/with-durable-stage
+            "composition_encode"
+            #(errors/raise!
+              "private frame-accurate limits"
+              {:type ::source-duration-too-short
+               :reason "source_duration_too_short"
+               :limits {:requested-moment-count 2
+                        :generated-moment-count 0
+                        :omitted-moment-count 2
+                        :requested-duration-seconds 1.04}
+               :retryable false}))
+          (catch Throwable error error))]
+    (is (= 1.04
+           (:requested-duration-seconds
+            (jobs/failure-diagnostics cause 1))))))
+
 (deftest durable-render-stages-have-bounded-owned-failure-codes
   (doseq [[stage failure-code]
           [["request_load" "request_load_failed"]
