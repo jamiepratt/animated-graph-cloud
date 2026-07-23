@@ -298,7 +298,9 @@
   (let [fixture
         (str
          "<script>"
-         "window.__playerState={callback:null,loads:[],sessionRequests:[],playCalls:0};"
+         "window.__playerState={callback:null,loads:[],sessionRequests:[],playCalls:0,fullscreenElement:null,fullscreenRequests:[],fullscreenExits:0,fullscreenTimers:[],clearedTimers:[]};"
+         "const nativeSetTimeout=window.setTimeout.bind(window),nativeClearTimeout=window.clearTimeout.bind(window);window.setTimeout=(callback,delay,...args)=>{if(delay===4000){const timer={id:'fullscreen-'+(window.__playerState.fullscreenTimers.length+1),callback,cleared:false};window.__playerState.fullscreenTimers.push(timer);return timer.id;}return nativeSetTimeout(callback,delay,...args);};window.clearTimeout=id=>{const timer=window.__playerState.fullscreenTimers.find(candidate=>candidate.id===id);if(timer){timer.cleared=true;window.__playerState.clearedTimers.push(id);return;}nativeClearTimeout(id);};"
+         "Object.defineProperty(document,'fullscreenElement',{configurable:true,get(){return window.__playerState.fullscreenElement;}});Element.prototype.requestFullscreen=function(){window.__playerState.fullscreenElement=this;window.__playerState.fullscreenRequests.push(this.id);document.dispatchEvent(new Event('fullscreenchange'));return Promise.resolve();};document.exitFullscreen=function(){window.__playerState.fullscreenElement=null;window.__playerState.fullscreenExits++;document.dispatchEvent(new Event('fullscreenchange'));return Promise.resolve();};"
          "window.fetch=(path,options={})=>{if(path==='/v1/drive/playback-sessions'){window.__playerState.sessionRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000115',contentType:'video/mp4',size:2048})});}return Promise.resolve({ok:true,status:204,json:()=>Promise.resolve({})});};"
          "class PickerView{setMimeTypes(){return this;}setIncludeFolders(){return this;}setSelectFolderEnabled(){return this;}setMode(){return this;}setEnableDrives(){return this;}}"
          "class UploadView extends PickerView{}"
@@ -315,12 +317,22 @@
          "const state=window.__playerState;state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'private-mp4',name:'ride.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));"
          "const player=document.getElementById('video-player'),video=document.getElementById('source-video-player'),timeline=document.getElementById('video-timeline'),fit=document.getElementById('fit-mode'),play=document.getElementById('video-play-pause');video.__duration=125.5;video.dispatchEvent(new Event('loadedmetadata'));video.dispatchEvent(new Event('progress'));"
          "const initial={hidden:player.hidden,paused:video.paused,currentTime:video.currentTime,playCalls:state.playCalls,src:video.getAttribute('src'),selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,time:document.getElementById('video-time').textContent,timelineMax:timeline.getAttribute('aria-valuemax'),bufferedSegments:document.querySelectorAll('#video-buffered-ranges span').length,fit:getComputedStyle(video).objectFit,request:state.sessionRequests[0]};"
+         "const shortcutHints=[...document.querySelectorAll('.video-control')].map(control=>{const button=control.querySelector('button'),hint=control.querySelector('.video-shortcut'),before=control.getBoundingClientRect();button.focus();const after=control.getBoundingClientRect(),style=hint&&getComputedStyle(hint);return {name:button.getAttribute('aria-label')||button.textContent.trim(),keys:button.getAttribute('aria-keyshortcuts'),hint:hint?.textContent||null,focusVisible:style?.visibility==='visible'&&style?.opacity==='1',stable:before.width===after.width&&before.height===after.height};});"
          "fit.value='crop';fit.dispatchEvent(new Event('input',{bubbles:true}));const cropped=getComputedStyle(video).objectFit;"
          "document.querySelector('[data-seek-seconds=\"10\"]').click();document.querySelector('[data-seek-seconds=\"60\"]').click();document.querySelector('[data-seek-seconds=\"-10\"]').click();const transportTime=video.currentTime;"
-         "const rect=timeline.getBoundingClientRect();timeline.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:rect.left+rect.width*.75}));const hover={hidden:document.getElementById('video-timeline-tooltip').hidden,text:document.getElementById('video-timeline-tooltip').textContent};timeline.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:rect.left+rect.width*.5,pointerId:1}));const scrubTime=video.currentTime;timeline.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,key:'ArrowRight'}));const keyboardTime=video.currentTime;"
+         "const rect=timeline.getBoundingClientRect();timeline.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:rect.left+rect.width*.75}));const hover={hidden:document.getElementById('video-timeline-tooltip').hidden,text:document.getElementById('video-timeline-tooltip').textContent};timeline.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:rect.left+rect.width*.5,pointerId:1}));const scrubTime=video.currentTime;timeline.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'ArrowRight'}));const keyboardTime=video.currentTime;"
          "play.click();await Promise.resolve();const playing={paused:video.paused,label:play.textContent};play.click();const paused={paused:video.paused,label:play.textContent};"
-         "video.dispatchEvent(new Event('error'));const unsupported={selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,message:document.getElementById('video-player-status').textContent};"
-         "outcome={initial,cropped,transportTime,scrubTime,keyboardTime,hover,playing,paused,unsupported,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+         "function press(target,key,options={}){const event=new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key,...options});target.dispatchEvent(event);return event.defaultPrevented;}"
+         "const shortcutStart=video.currentTime,rightPrevented=press(document.body,'ArrowRight'),afterRight=video.currentTime,shiftRightPrevented=press(document.body,'ArrowRight',{shiftKey:true}),afterShiftRight=video.currentTime,leftPrevented=press(document.body,'ArrowLeft'),afterLeft=video.currentTime,shiftLeftPrevented=press(document.body,'ArrowLeft',{shiftKey:true}),afterShiftLeft=video.currentTime,spacePrevented=press(document.body,' '),afterSpacePaused=video.paused;press(document.body,' ');"
+         "const editable=document.createElement('div'),textbox=document.createElement('div');editable.contentEditable='true';textbox.setAttribute('role','textbox');document.body.append(editable,textbox);const editableChecks=[['select',fit,'ArrowRight'],['textarea',document.getElementById('telemetry'),' '],['input',document.getElementById('future-trace-opacity-percent'),'ArrowLeft'],['contenteditable',editable,'ArrowRight'],['textbox',textbox,' ']].map(([kind,target,key])=>{const before=video.currentTime,prevented=press(target,key);return {kind,prevented,before,after:video.currentTime};});"
+         "const modifiedChecks=[['ctrl','ArrowRight',{ctrlKey:true}],['meta',' ',{metaKey:true}],['alt','f',{altKey:true}]].map(([kind,key,options])=>{const before=video.currentTime,prevented=press(document.body,key,options);return {kind,prevented,before,after:video.currentTime};});"
+         "const forwardButton=document.querySelector('[data-seek-seconds=\"10\"]');forwardButton.focus();const focusedButtonPrevented=press(forwardButton,' '),afterFocusedButtonKey=video.currentTime;forwardButton.click();const afterFocusedButtonClick=video.currentTime;player.hidden=true;const hiddenStart=video.currentTime,hiddenPrevented=press(document.body,'ArrowRight'),afterHidden=video.currentTime;player.hidden=false;"
+         "const chrome=document.getElementById('video-chrome'),dock=document.getElementById('video-controls-dock'),fullscreen=document.getElementById('video-fullscreen'),fullscreenControl=document.getElementById('video-fullscreen-control'),fullscreenHint=document.getElementById('video-fullscreen-shortcut');function hintVisible(){const style=getComputedStyle(fullscreenHint);return style.visibility==='visible'&&style.opacity==='1';}"
+         "const fullscreenEntryPrevented=press(document.body,'f'),fullscreenEntry={prevented:fullscreenEntryPrevented,request:state.fullscreenRequests.at(-1),elementId:document.fullscreenElement?.id||null,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),hint:fullscreenHint.textContent,hintVisible:hintVisible(),auto:fullscreenControl.classList.contains('shortcut-auto'),focusUnchanged:document.activeElement===forwardButton,completeChrome:!!chrome&&chrome.contains(document.getElementById('video-stage'))&&chrome.contains(document.querySelector('.video-transport'))&&chrome.contains(timeline),dockInside:chrome?.lastElementChild===dock,fullscreenLayout:getComputedStyle(chrome).display==='grid',dockVisible:!!dock&&dock.getBoundingClientRect().height>0,timelineVisible:timeline.getBoundingClientRect().height>0,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,timerCount:state.fullscreenTimers.length};"
+         "state.fullscreenTimers.at(-1).callback();const afterFourSeconds={auto:fullscreenControl.classList.contains('shortcut-auto'),hintVisible:hintVisible()};fullscreen.focus();const focusedFullscreenHint={hint:fullscreenHint.textContent,visible:hintVisible()};forwardButton.focus();const fullscreenExitPrevented=press(document.body,'f'),fullscreenExit={prevented:fullscreenExitPrevented,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),elementId:document.fullscreenElement?.id||null,auto:fullscreenControl.classList.contains('shortcut-auto')};"
+         "press(document.body,'f');const restartedTimer=state.fullscreenTimers.at(-1),escapePrevented=press(document.body,'Escape');state.fullscreenElement=null;document.dispatchEvent(new Event('fullscreenchange'));const browserExit={escapePrevented,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),auto:fullscreenControl.classList.contains('shortcut-auto'),timerCleared:restartedTimer.cleared};fullscreen.click();const buttonEntry={request:state.fullscreenRequests.at(-1),label:fullscreen.textContent};fullscreen.click();const buttonExit={exitCount:state.fullscreenExits,label:fullscreen.textContent};"
+         "video.dispatchEvent(new Event('error'));const disabledStart=video.currentTime,disabledSeekPrevented=press(document.body,'ArrowRight'),requestsBeforeDisabledF=state.fullscreenRequests.length,disabledFullscreenPrevented=press(document.body,'f'),unsupported={selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,message:document.getElementById('video-player-status').textContent,disabledStart,disabledSeekPrevented,afterDisabledSeek:video.currentTime,disabledFullscreenPrevented,fullscreenRequestsUnchanged:state.fullscreenRequests.length===requestsBeforeDisabledF};"
+         "outcome={initial,shortcutHints,cropped,transportTime,scrubTime,keyboardTime,hover,playing,paused,shortcuts:{shortcutStart,rightPrevented,afterRight,shiftRightPrevented,afterShiftRight,leftPrevented,afterLeft,shiftLeftPrevented,afterShiftLeft,spacePrevented,afterSpacePaused,pausedAfterSecondSpace:video.paused},exclusions:{editableChecks,modifiedChecks,focusedButtonPrevented,afterFocusedButtonKey,afterFocusedButtonClick,hiddenStart,hiddenPrevented,afterHidden},fullscreen:{entry:fullscreenEntry,afterFourSeconds,focusedHint:focusedFullscreenHint,exit:fullscreenExit,browserExit,buttonEntry,buttonExit},unsupported,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
          "</script>")
         html (-> page
@@ -1505,6 +1517,8 @@
                        :members []
                        :logs-enabled? false})]
     (doseq [fragment ["id=\"video-player\""
+                      "id=\"video-chrome\""
+                      "id=\"video-controls-dock\""
                       "id=\"source-video-player\""
                       "playsinline"
                       "id=\"video-play-pause\""
@@ -1520,6 +1534,18 @@
                       "id=\"video-buffered-ranges\""
                       "id=\"video-playhead\""
                       "id=\"video-timeline-tooltip\""
+                      "aria-keyshortcuts=\"Shift+ArrowLeft\""
+                      "aria-keyshortcuts=\"ArrowLeft\""
+                      "aria-keyshortcuts=\"Space\""
+                      "aria-keyshortcuts=\"ArrowRight\""
+                      "aria-keyshortcuts=\"Shift+ArrowRight\""
+                      "aria-keyshortcuts=\"F\""
+                      "aria-pressed=\"false\""
+                      ".video-control:hover .video-shortcut"
+                      ".video-control:focus-within .video-shortcut"
+                      ".video-chrome:fullscreen"
+                      ".video-chrome.is-fullscreen"
+                      ".video-controls-dock"
                       "Output framing preview"
                       "Player audio is the original source"]]
       (is (str/includes? page fragment) fragment))
@@ -1554,6 +1580,37 @@
               :fit "contain"
               :request {:fileId "private-mp4"}}
              (:initial outcome)))
+      (is (= [{:name "Jump back 60 seconds"
+               :keys "Shift+ArrowLeft"
+               :hint "Shift+Left"
+               :focusVisible true
+               :stable true}
+              {:name "Jump back 10 seconds"
+               :keys "ArrowLeft"
+               :hint "Left"
+               :focusVisible true
+               :stable true}
+              {:name "Play"
+               :keys "Space"
+               :hint "Space"
+               :focusVisible true
+               :stable true}
+              {:name "Jump forward 10 seconds"
+               :keys "ArrowRight"
+               :hint "Right"
+               :focusVisible true
+               :stable true}
+              {:name "Jump forward 60 seconds"
+               :keys "Shift+ArrowRight"
+               :hint "Shift+Right"
+               :focusVisible true
+               :stable true}
+              {:name "Fullscreen"
+               :keys "F"
+               :hint "F"
+               :focusVisible true
+               :stable true}]
+             (:shortcutHints outcome)))
       (is (= "cover" (:cropped outcome)))
       (is (= 60 (:transportTime outcome)))
       (is (= 62.75 (:scrubTime outcome)))
@@ -1561,10 +1618,110 @@
       (is (= {:hidden false :text "00:01:34.125"} (:hover outcome)))
       (is (= {:paused false :label "Pause"} (:playing outcome)))
       (is (= {:paused true :label "Play"} (:paused outcome)))
+      (is (= {:shortcutStart 63.75
+              :rightPrevented true
+              :afterRight 73.75
+              :shiftRightPrevented true
+              :afterShiftRight 125.5
+              :leftPrevented true
+              :afterLeft 115.5
+              :shiftLeftPrevented true
+              :afterShiftLeft 55.5
+              :spacePrevented true
+              :afterSpacePaused false
+              :pausedAfterSecondSpace true}
+             (:shortcuts outcome)))
+      (is (= {:editableChecks [{:kind "select"
+                                :prevented false
+                                :before 55.5
+                                :after 55.5}
+                               {:kind "textarea"
+                                :prevented false
+                                :before 55.5
+                                :after 55.5}
+                               {:kind "input"
+                                :prevented false
+                                :before 55.5
+                                :after 55.5}
+                               {:kind "contenteditable"
+                                :prevented false
+                                :before 55.5
+                                :after 55.5}
+                               {:kind "textbox"
+                                :prevented false
+                                :before 55.5
+                                :after 55.5}]
+              :modifiedChecks [{:kind "ctrl"
+                                :prevented false
+                                :before 55.5
+                                :after 55.5}
+                               {:kind "meta"
+                                :prevented false
+                                :before 55.5
+                                :after 55.5}
+                               {:kind "alt"
+                                :prevented false
+                                :before 55.5
+                                :after 55.5}]
+              :focusedButtonPrevented false
+              :afterFocusedButtonKey 55.5
+              :afterFocusedButtonClick 65.5
+              :hiddenStart 65.5
+              :hiddenPrevented false
+              :afterHidden 65.5}
+             (:exclusions outcome)))
+      (is (= {:prevented true
+              :request "video-chrome"
+              :elementId "video-chrome"
+              :label "Exit fullscreen"
+              :pressed "true"
+              :hint "F or Esc"
+              :hintVisible true
+              :auto true
+              :focusUnchanged true
+              :completeChrome true
+              :dockInside true
+              :fullscreenLayout true
+              :dockVisible true
+              :timelineVisible true
+              :noHorizontalOverflow true
+              :timerCount 1}
+             (get-in outcome [:fullscreen :entry])))
+      (is (= {:auto false :hintVisible false}
+             (get-in outcome [:fullscreen :afterFourSeconds])))
+      (is (= {:hint "F or Esc" :visible true}
+             (get-in outcome [:fullscreen :focusedHint])))
+      (is (= {:prevented true
+              :label "Fullscreen"
+              :pressed "false"
+              :elementId nil
+              :auto false}
+             (get-in outcome [:fullscreen :exit])))
+      (is (= {:escapePrevented false
+              :label "Fullscreen"
+              :pressed "false"
+              :auto false
+              :timerCleared true}
+             (get-in outcome [:fullscreen :browserExit])))
+      (is (= {:request "video-chrome" :label "Exit fullscreen"}
+             (get-in outcome [:fullscreen :buttonEntry])))
+      (is (= {:exitCount 2 :label "Fullscreen"}
+             (get-in outcome [:fullscreen :buttonExit])))
       (is (= "ride.mp4" (get-in outcome [:unsupported :selection])))
       (is (= "private-mp4" (get-in outcome [:unsupported :fileId])))
       (is (str/includes? (get-in outcome [:unsupported :message])
                          "remains selected for rendering"))
+      (is (= {:disabledStart 65.5
+              :disabledSeekPrevented false
+              :afterDisabledSeek 65.5
+              :disabledFullscreenPrevented false
+              :fullscreenRequestsUnchanged true}
+             (select-keys (:unsupported outcome)
+                          [:disabledStart
+                           :disabledSeekPrevented
+                           :afterDisabledSeek
+                           :disabledFullscreenPrevented
+                           :fullscreenRequestsUnchanged])))
       (is (:noHorizontalOverflow outcome) outcome))
     (is (= 1280 (:viewportWidth (first outcomes))))
     (is (<= (:viewportWidth (second outcomes)) 500))))
