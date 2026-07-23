@@ -1153,6 +1153,11 @@
         (is (re-find #"/v1/auth/login/start" (.body anonymous)))
         (is (re-find #"Continue with Google" (.body anonymous)))
         (is (= 200 (.statusCode authenticated)))
+        (is (str/includes?
+             (.orElse (.firstValue (.headers authenticated)
+                                   "Content-Security-Policy")
+                      "")
+             "media-src 'self'"))
         (is (not (re-find #"/v1/auth/drive/start" (.body authenticated))))
         (is (not (re-find #"Connect Drive" (.body authenticated))))
         (is (re-find #"gapi\.load\('picker'" (.body authenticated)))
