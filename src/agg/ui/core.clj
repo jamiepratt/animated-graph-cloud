@@ -23,7 +23,8 @@
 (defn- contextual-help-link [fragment accessible-name]
   (str "<a class=\"contextual-help\" href=\"/faq#" fragment
        "\" aria-label=\"" (escape-html accessible-name)
-       "\"><span aria-hidden=\"true\">?</span></a>"))
+       "\"><span class=\"contextual-help-mark\" aria-hidden=\"true\">"
+       "<span>?</span></span></a>"))
 
 (defn- preview-admission-costs []
   {:preview (minor-units->pln
@@ -108,8 +109,11 @@
    ".product-header nav a[aria-current=\"page\"]{color:var(--color-text);font-weight:800;text-decoration-line:underline;text-decoration-thickness:.18rem;text-underline-offset:.28rem}"
    ".help-heading,.toggle-help{display:flex}.help-label{display:inline-flex}.help-heading,.help-label,.toggle-help{align-items:center;gap:.4rem;max-width:100%;min-width:0}"
    ".help-heading{margin-bottom:.35rem}.help-heading h2{margin:0}.help-label>label,.help-label>strong{min-width:0}.toggle-help{flex-wrap:wrap}"
-   ".contextual-help{display:inline-flex;align-items:center;justify-content:center;flex:0 0 2rem;width:2rem;height:2rem;border:2px solid currentColor;border-radius:50%;background:#06182b;color:var(--color-link);font-weight:900;line-height:1;text-decoration:none;vertical-align:middle}"
-   ".contextual-help:hover{background:var(--color-accent);color:var(--color-accent-ink);border-color:var(--color-accent)}"
+   ".contextual-help{display:inline-flex;align-items:center;justify-content:flex-start;flex:0 0 2rem;width:2rem;height:2rem;color:var(--color-link);font-weight:900;line-height:1;text-decoration:none;vertical-align:middle}"
+   ".help-heading>.contextual-help{font-size:1.25em}.help-label>label~.contextual-help,.toggle-help>.contextual-help{font-size:.9em}"
+   ".contextual-help-mark{display:inline-flex;align-items:center;justify-content:center;flex:0 0 .8em;width:.8em;height:.8em;border:.08em solid currentColor;border-radius:50%;background:#06182b}"
+   ".contextual-help-mark>span{font-size:.65em;line-height:1}"
+   ".contextual-help:hover{color:var(--color-accent-ink)}.contextual-help:hover .contextual-help-mark{background:var(--color-accent);border-color:var(--color-accent)}"
    ".eyebrow{color:var(--color-accent)}.step{color:var(--color-subtle)}"
    ".card,.hero-card,.drive-card,.trace-preview,.preview-pending,.preview-error,.preview-stale,.preview-empty,.log-entry{"
    "background:var(--color-surface);border-color:var(--color-border);box-shadow:var(--shadow-surface)}"
