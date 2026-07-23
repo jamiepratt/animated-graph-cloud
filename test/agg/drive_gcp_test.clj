@@ -9,8 +9,120 @@
            (com.google.cloud.firestore FirestoreOptions)
            (java.io ByteArrayInputStream ByteArrayOutputStream)
            (java.net InetSocketAddress)
+           (java.nio ByteBuffer ByteOrder)
            (java.nio.charset StandardCharsets)
            (java.nio.file Files OpenOption)))
+
+(defn- atom-bytes [atom-type payload]
+  (let [type-bytes (.getBytes ^String atom-type StandardCharsets/ISO_8859_1)
+        buffer (doto (ByteBuffer/allocate (+ 8 (alength ^bytes payload)))
+                 (.order ByteOrder/BIG_ENDIAN)
+                 (.putInt (+ 8 (alength ^bytes payload)))
+                 (.put type-bytes)
+                 (.put ^bytes payload))]
+    (.array buffer)))
+
+(defn- quicktime-header [creation-seconds-since-1904]
+  (let [buffer (doto (ByteBuffer/allocate 20)
+                 (.order ByteOrder/BIG_ENDIAN)
+                 (.putInt 0)
+                 (.putInt (unchecked-int creation-seconds-since-1904))
+                 (.putInt (unchecked-int creation-seconds-since-1904))
+                 (.putInt 1000)
+                 (.putInt 125500))]
+    (.array buffer)))
+
+(defn- joined-bytes [& chunks]
+  (let [output (ByteArrayOutputStream.)]
+    (doseq [chunk chunks]
+      (.write output ^bytes chunk))
+    (.toByteArray output)))
+
+(deftest recording-clock-inspection-is-bounded-and-prefers-explicit-offsets
+  (let [requests (atom [])
+        explicit
+        (atom-bytes "©day"
+                    (.getBytes "2026-07-23T14:30:15+02:00"
+                               StandardCharsets/UTF_8))
+        local-movie (atom-bytes "mvhd" (quicktime-header 3867667200))
+        bytes (joined-bytes local-movie explicit)
+        gateway
+        (reify drive/PlaybackGateway
+          (open-source-range! [_ _ _ byte-range]
+            (swap! requests conj byte-range)
+            {:status 206
+             :headers {}
+             :body (ByteArrayInputStream.
+                    (if (zero? (:start byte-range))
+                      bytes
+                      (.getBytes "no metadata" StandardCharsets/UTF_8)))}))
+        result (gcp/inspect-recording-clock!
+                gateway "access" "private-file"
+                {:size (* 2 1024 1024)})]
+    (is (= [{:start 0 :end 262143 :timeout-ms 3000}
+            {:start 1835008 :end 2097151 :timeout-ms 3000}]
+           @requests))
+    (is (= {:maxBytes 524288
+            :maxRanges 2
+            :timeoutMillis 3000}
+           (:limits result)))
+    (is (= 125.5 (:durationSeconds result)))
+    (is (= "candidate" (:status result)))
+    (is (= "2026-07-23T14:30:15+02:00"
+           (get-in result [:candidates 0 :value])))
+    (is (= "explicit-offset"
+           (get-in result [:candidates 0 :kind])))
+    (is (= 0 (:recommendedIndex result)))
+    (is (= false (:ambiguous result)))
+    (is (some #(= "local-date-time" (:kind %))
+              (:candidates result)))))
+
+(deftest recording-clock-inspection-exposes-conflicts-and-falls-back-safely
+  (let [conflicting
+        (joined-bytes
+         (atom-bytes "mvhd"
+                     (.getBytes "2026-07-23T14:30:15+02:00"
+                                StandardCharsets/UTF_8))
+         (atom-bytes "tkhd"
+                     (.getBytes "2026-07-23T13:30:15Z"
+                                StandardCharsets/UTF_8)))
+        inspect
+        (fn [bytes]
+          (gcp/inspect-recording-clock!
+           (reify drive/PlaybackGateway
+             (open-source-range! [_ _ _ _]
+               {:status 206
+                :headers {}
+                :body (ByteArrayInputStream. bytes)}))
+           "access" "private-file" {:size (alength ^bytes bytes)}))]
+    (let [result (inspect conflicting)]
+      (is (= "candidate" (:status result)))
+      (is (= true (:ambiguous result)))
+      (is (nil? (:recommendedIndex result)))
+      (is (= #{"movie" "track"}
+             (set (map :source (:candidates result))))))
+    (doseq [bytes [(.getBytes "malformed 2026-99-99T88:00:00+02:00"
+                              StandardCharsets/UTF_8)
+                   (.getBytes "container has no clock" StandardCharsets/UTF_8)]]
+      (is (= {:status "manual"
+              :candidates []
+              :recommendedIndex nil
+              :ambiguous false
+              :durationSeconds nil
+              :limits {:maxBytes 524288
+                       :maxRanges 2
+                       :timeoutMillis 3000}}
+             (inspect bytes))))))
+
+(deftest recording-clock-inspection-timeout-prompts-manual-entry
+  (let [result
+        (gcp/inspect-recording-clock!
+         (reify drive/PlaybackGateway
+           (open-source-range! [_ _ _ _]
+             (throw (java.net.http.HttpTimeoutException. "bounded timeout"))))
+         "access" "private-file" {:size (* 4 1024 1024)})]
+    (is (= "manual" (:status result)))
+    (is (empty? (:candidates result)))))
 
 (defn- local-upload-server [requests]
   (let [server (HttpServer/create (InetSocketAddress. 0) 0)]
@@ -61,7 +173,11 @@
                                             :name "source.mp4"
                                             :mimeType "video/mp4"
                                             :size "2147483648"
-                                            :trashed false})})
+                                            :trashed false
+                                            :videoMediaMetadata
+                                            {:durationMillis "125500"
+                                             :width 1920
+                                             :height 1080}})})
                   (* 8 1024 1024))
                  :stream-source-request!
                  (fn [request]
@@ -77,6 +193,9 @@
     (is (= "video-bytes" (.toString output StandardCharsets/UTF_8)))
     (is (str/includes? (:url (first @requests))
                        "supportsAllDrives=true"))
+    (is (str/includes? (:url (first @requests))
+                       "videoMediaMetadata(durationMillis,width,height)"))
+    (is (not (str/includes? (:url (first @requests)) "createdTime")))
     (is (str/includes? (:url (first @stream-requests))
                        "alt=media&supportsAllDrives=true"))
     (is (= "Bearer access"
