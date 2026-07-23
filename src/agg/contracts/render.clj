@@ -392,12 +392,8 @@
           watermark-image (when watermark
                             (watermark/decode-base64
                              (:contentBase64 watermark)))]
-      (require! (and (.isBefore section-start section-end)
-                     (or (= "shared-clock" synchronization-mode)
-                         (not (.isAfter camera-sync section-start))))
-                (if (= "shared-clock" synchronization-mode)
-                  "Timestamps must be ordered sectionStartAt < sectionEndAt"
-                  "Timestamps must be ordered cameraSyncAt <= sectionStartAt < sectionEndAt")
+      (require! (.isBefore section-start section-end)
+                "Timestamps must be ordered sectionStartAt < sectionEndAt"
                 {:type ::invalid-timestamp-order})
       (require! duration-frames
                 "Section duration must be a whole number of 25 fps frames"
