@@ -762,6 +762,26 @@
      html
      (str "--window-size=" window-size))))
 
+(defn- compose-card-layout-browser-outcome [page window-size reveal-source?]
+  (let [scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{"
+         "const shell=document.querySelector('.shell'),form=document.getElementById('render-form'),reference=document.querySelector('.shell > .drive-card'),source=document.getElementById('video-player');"
+         "source.hidden=!" reveal-source? ";"
+         "const rect=node=>{const value=node.getBoundingClientRect();return {left:value.left,right:value.right,width:value.width};},referenceRect=rect(reference),cards=[...form.querySelectorAll(':scope > .card')],cardRects=cards.map(card=>({heading:card.querySelector('h2,summary')?.textContent||'Preview and finished-video actions',...rect(card)})),aligned=value=>Math.abs(value.left-referenceRect.left)<=.5&&Math.abs(value.right-referenceRect.right)<=.5;"
+         "outcome={viewportWidth:innerWidth,revealedSource:!source.hidden,form:rect(form),reference:referenceRect,cards:cardRects,aligned:aligned(rect(form))&&cardRects.every(aligned),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,shellFits:shell.getBoundingClientRect().left>=-.5&&shell.getBoundingClientRect().right<=innerWidth+.5};"
+         "}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-compose-card-layout-browser-"
+     "Compose card layout regression requires Chrome or Chromium"
+     html
+     (str "--window-size=" window-size))))
+
 (defn- theme-browser-outcome [page window-size]
   (let [scenario
         (str
@@ -1667,6 +1687,33 @@
         (is (<= 0.9 (:headerSurfaceAlpha outcome)))
         (is (true? (:backgroundIncludesAsset outcome)))
         (is (false? (:backgroundAnimated outcome)))))))
+
+(deftest compose-workflow-cards-share-one-responsive-column
+  (let [page (ui/page {:user {:email "owner@example.com" :role :owner}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? true})
+        outcomes {"desktop hidden source"
+                  (compose-card-layout-browser-outcome page "1280,900" false)
+                  "desktop revealed source"
+                  (compose-card-layout-browser-outcome page "1280,900" true)
+                  "mobile hidden source"
+                  (compose-card-layout-browser-outcome page "390,844" false)
+                  "mobile revealed source"
+                  (compose-card-layout-browser-outcome page "390,844" true)}]
+    (doseq [[surface outcome] outcomes]
+      (testing surface
+        (is (nil? (:error outcome)) (:error outcome))
+        (is (= ["Set output timing"
+                "Choose your activity data"
+                "Optional overlays"
+                "Advanced: paste or inspect raw JSON"
+                "Preview and finished-video actions"]
+               (mapv :heading (:cards outcome))))
+        (is (true? (:aligned outcome)) (pr-str outcome))
+        (is (true? (:noHorizontalOverflow outcome)) (pr-str outcome))
+        (is (true? (:shellFits outcome)) (pr-str outcome))))))
 
 (deftest product-header-is-keyboard-visible-and-responsive-across-complete-pages
   (let [compose (ui/page {:user {:email "owner@example.com" :role :owner}
