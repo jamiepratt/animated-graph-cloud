@@ -519,6 +519,18 @@
        (:requester-subject
         (snapshot-job
          (await! (.get (.document (.collection firestore "jobs") job-id)))))))
+  lifecycle/JobPlaybackAccess
+  (completed-playback-output [_ job-id subject]
+    (let [job (snapshot-job
+               (await! (.get (.document (.collection firestore "jobs") job-id))))]
+      (when (and (= subject (:requester-subject job))
+                 (= :succeeded (:state job))
+                 (= "video/mp4" (get-in job [:output :contentType]))
+                 (string? (get-in job [:output :driveFileId]))
+                 (not (clojure.string/blank?
+                       (get-in job [:output :driveFileId]))))
+        {:file-id (get-in job [:output :driveFileId])
+         :mime-type (get-in job [:output :contentType])})))
   lifecycle/JobReconciler
   (reconcile-jobs! [_]
     (let [jobs (.collection firestore "jobs")

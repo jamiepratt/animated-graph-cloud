@@ -675,7 +675,10 @@
     (is (str/includes? openapi "https://alphacompose.com"))
     (doseq [path ["/health:" "/v1/preview:" "/v1/overlay:" "/v1/jobs:"
                   "/v1/jobs/{jobId}:" "/v1/jobs/{jobId}/cancel:"
-                  "/v1/jobs/{jobId}/retry:" "/v1/uploads:" "/v1/tokens:"
+                  "/v1/jobs/{jobId}/retry:"
+                  "/v1/jobs/{jobId}/playback-sessions:"
+                  "/v1/jobs/{jobId}/playback/{playbackId}:"
+                  "/v1/uploads:" "/v1/tokens:"
                   "/v1/tokens/{tokenId}/revoke:" "/v1/admin/members:"
                   "/v1/admin/members/revoke:" "/v1/auth/login/start:"
                   "/v1/auth/login/callback:" "/v1/auth/logout:"
@@ -705,6 +708,8 @@
                       "operationId: inspectDriveRecordingClock"
                       "operationId: createDrivePlaybackSession"
                       "operationId: streamDrivePlayback"
+                      "operationId: createCompletedOutputPlaybackSession"
+                      "operationId: streamCompletedOutputPlayback"
                       "name: code" "name: state" "security: []"
                       "description: Redirect to Google OAuth authorization."
                       "description: Redirect to the signed-in homepage."]]

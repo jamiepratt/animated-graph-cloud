@@ -21,6 +21,9 @@
 (defprotocol JobAccess
   (owns-job? [service job-id subject]))
 
+(defprotocol JobPlaybackAccess
+  (completed-playback-output [service job-id subject]))
+
 (defprotocol JobReconciler
   (reconcile-jobs! [service]))
 
@@ -372,6 +375,17 @@
   JobAccess
   (owns-job? [_ job-id subject]
     (= subject (get-in @state [:jobs job-id :request :requesterSubject])))
+  JobPlaybackAccess
+  (completed-playback-output [_ job-id subject]
+    (let [job (get-in @state [:jobs job-id])]
+      (when (and (= subject (get-in job [:request :requesterSubject]))
+                 (= :succeeded (:state job))
+                 (= "video/mp4" (get-in job [:output :contentType]))
+                 (string? (get-in job [:output :driveFileId]))
+                 (not (clojure.string/blank?
+                       (get-in job [:output :driveFileId]))))
+        {:file-id (get-in job [:output :driveFileId])
+         :mime-type (get-in job [:output :contentType])})))
   JobReconciler
   (reconcile-jobs! [_]
     (let [now (Instant/now clock)]

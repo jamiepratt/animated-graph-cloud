@@ -362,6 +362,19 @@
               :exp (.getEpochSecond
                     (.plusSeconds (Instant/now clock) playback-seconds))}))
 
+(defn issue-completed-playback-token
+  [{:keys [session-key clock]}
+   {:keys [subject job-id playback-id mime-type size]}]
+  (sign-json session-key
+             {:purpose "completed-output-playback"
+              :sub subject
+              :jobId job-id
+              :playbackId playback-id
+              :mimeType mime-type
+              :size size
+              :exp (.getEpochSecond
+                    (.plusSeconds (Instant/now clock) playback-seconds))}))
+
 (defn playback-source
   [{:keys [session-key clock]} subject playback-id token]
   (try
@@ -379,6 +392,34 @@
         (throw (errors/raise! "Playback session is invalid or expired"
                               {:type ::invalid-playback})))
       {:file-id fileId :mime-type mimeType :size size})
+    (catch clojure.lang.ExceptionInfo error
+      (if (= ::invalid-playback (:type (ex-data error)))
+        (throw error)
+        (throw (errors/raise! "Playback session is invalid"
+                              {:type ::invalid-playback}
+                              error))))
+    (catch Throwable error
+      (throw (errors/raise! "Playback session is invalid"
+                            {:type ::invalid-playback}
+                            error)))))
+
+(defn completed-playback-session
+  [{:keys [session-key clock]} subject job-id playback-id token]
+  (try
+    (let [{:keys [purpose sub jobId playbackId mimeType size exp]}
+          (verify-json session-key token ::invalid-playback)]
+      (when-not (and (= "completed-output-playback" purpose)
+                     (= subject sub)
+                     (= job-id jobId)
+                     (= playback-id playbackId)
+                     (string? mimeType)
+                     (integer? size)
+                     (pos? size)
+                     (number? exp)
+                     (> (long exp) (.getEpochSecond (Instant/now clock))))
+        (throw (errors/raise! "Playback session is invalid or expired"
+                              {:type ::invalid-playback})))
+      {:mime-type mimeType :size size})
     (catch clojure.lang.ExceptionInfo error
       (if (= ::invalid-playback (:type (ex-data error)))
         (throw error)

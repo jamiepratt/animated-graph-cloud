@@ -603,6 +603,145 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         "429": {$ref: "#/components/responses/AdmissionRejected"}
+  /v1/jobs/{jobId}/playback-sessions:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    post:
+      operationId: createCompletedOutputPlaybackSession
+      tags: [Jobs]
+      summary: Prepare one owned succeeded H.264 output for private browser playback.
+      description: |
+        Resolves the delivered Drive file through the owner-verified durable
+        job, revalidates authoritative Drive metadata, and returns an opaque
+        same-origin URL. The Drive file ID, access token, and signed authority
+        never enter that URL. One-hour, owner-, job-, and URL-bound playback
+        authority is signed into the Firebase-compatible `__session` HttpOnly
+        cookie while preserving the authenticated browser session.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "201":
+          description: Completed-output playback session created.
+          headers:
+            Set-Cookie:
+              description: Signed Firebase-compatible `__session` cookie containing the existing session and short-lived playback authority.
+              schema: {type: string}
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [playbackUrl, contentType, size]
+                properties:
+                  playbackUrl:
+                    type: string
+                    pattern: "^/v1/jobs/[0-9a-f-]{36}/playback/[0-9a-f-]{36}$"
+                  contentType: {const: video/mp4}
+                  size: {type: integer, minimum: 1, maximum: 2147483648}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "403": {$ref: "#/components/responses/CsrfRequired"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "415":
+          description: The delivered output is not available for browser playback.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      error: {const: browser_playback_not_supported}
+        "503":
+          description: Restricted Drive access or output metadata is temporarily unavailable.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+  /v1/jobs/{jobId}/playback/{playbackId}:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      operationId: streamCompletedOutputPlayback
+      tags: [Jobs]
+      summary: Stream an owned succeeded H.264 output with browser Range semantics.
+      description: |
+        Rechecks the active member session plus signed owner, job, and path
+        binding on every request. One single `Range` is accepted. Open-ended
+        and suffix ranges are capped at 8 MiB, proxied directly from Drive,
+        and never persisted. Drive must return truthful 206 `Content-Range`
+        and `Content-Length` headers. The response is always private and
+        no-store.
+      parameters:
+        - name: playbackId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: Range
+          in: header
+          required: false
+          description: One byte range, including bounded, open-ended, or suffix form.
+          schema:
+            type: string
+            examples: ["bytes=0-1048575", "bytes=1048576-", "bytes=-1048576"]
+      responses:
+        "200":
+          description: Complete MP4 returned when Range is omitted.
+          headers:
+            Accept-Ranges:
+              schema: {const: bytes}
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            video/mp4:
+              schema: {type: string, contentEncoding: binary}
+        "206":
+          description: Requested single byte range.
+          headers:
+            Accept-Ranges:
+              schema: {const: bytes}
+            Content-Range:
+              schema: {type: string, example: "bytes 0-1048575/7340032"}
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            video/mp4:
+              schema: {type: string, contentEncoding: binary}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "416":
+          description: Range is malformed, multiple, empty, or outside the completed output.
+          headers:
+            Accept-Ranges:
+              schema: {const: bytes}
+            Content-Range:
+              schema: {type: string, example: "bytes */7340032"}
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      error: {const: playback_range_not_satisfiable}
+        "502":
+          description: Drive returned an invalid or untruthful ranged response.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      error: {const: drive_playback_unavailable}
   /v1/uploads:
     post:
       operationId: createUpload
