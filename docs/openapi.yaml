@@ -4,9 +4,11 @@ info:
   version: 1.0.0
   description: |
     Create transparent ProRes 4444 telemetry overlays or bounded composites for
-    short videos. Browser sessions
-    require `X-CSRF-Token` on writes; personal bearer tokens do not. Google
-    Drive delivery uses only the `drive.file` scope.
+    short videos. The Compose UI can export a Project JSON workflow envelope,
+    but this API accepts only the nested `RenderRequest`. Successful H.264 jobs
+    can later open owner-bound completed-output playback sessions. Browser
+    sessions require `X-CSRF-Token` on writes; personal bearer tokens do not.
+    Google Drive delivery uses only the `drive.file` scope.
   contact:
     email: me@jamiep.org
   license:
@@ -297,7 +299,7 @@ paths:
                     type: string
                     pattern: "^/v1/drive/playback/[0-9a-f-]{36}$"
                   contentType: {const: video/mp4}
-                  size: {type: integer, minimum: 1, maximum: 2147483648}
+                  size: {type: integer, minimum: 1}
         "400":
           description: Selected Drive metadata is invalid.
           content:
@@ -646,7 +648,7 @@ paths:
                     type: string
                     pattern: "^/v1/jobs/[0-9a-f-]{36}/playback/[0-9a-f-]{36}$"
                   contentType: {const: video/mp4}
-                  size: {type: integer, minimum: 1, maximum: 2147483648}
+                  size: {type: integer, minimum: 1}
         "400": {$ref: "#/components/responses/InvalidRequest"}
         "401": {$ref: "#/components/responses/AuthenticationRequired"}
         "403": {$ref: "#/components/responses/CsrfRequired"}
@@ -944,6 +946,7 @@ components:
   requestBodies:
     RenderRequest:
       required: true
+      description: Nested API request body only. The outer Compose Project JSON envelope is not accepted here.
       content:
         application/json:
           schema: {$ref: "#/components/schemas/RenderRequest"}
@@ -1143,10 +1146,11 @@ components:
             the user, or a supported Shared Drive. Server metadata is
             authoritative. Supported MIME types are video/mp4,
             video/quicktime, video/webm, video/mpeg, video/ogg,
-            video/x-msvideo, and video/x-matroska. The source must be at most
-            2 GiB, downloadable, decodable, not trashed, and long enough for
-            the selected source-relative output range. Source trim is derived
-            from sectionStartAt minus recordingStartAt, must be nonnegative,
+            video/x-msvideo, and video/x-matroska. The source must satisfy the
+            current server-enforced size bound, be downloadable, decodable, not
+            trashed, and be long enough for the selected source-relative output
+            range. Source trim is derived from sectionStartAt minus
+            recordingStartAt, must be nonnegative,
             and is applied identically to video and source audio. Folders,
             shortcuts, and Google Workspace documents are rejected.
         outputFormat:
