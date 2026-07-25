@@ -32,8 +32,10 @@ leave wrong and may drift.
 When Alpha Compose says only `time` or `current time`, it means activity-device
 time. A different clock must be named explicitly, such as `video time`,
 `video recording start`, `video timezone`, or `output clock`. The full-source
-player and rendered local clock are explicit video/output-clock views; they do
-not replace activity-data time as the synchronization authority.
+player shows elapsed time before a manual match, then derived synced recording
+time; the shared-clock route shows confirmed recording time. These explicit
+video/output-clock views and the rendered local clock do not replace
+activity-data time as the synchronization authority.
 
 ## Error metadata and source locations
 
