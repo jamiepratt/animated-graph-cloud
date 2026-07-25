@@ -1447,6 +1447,10 @@
                        ["future-graphs" "Will other graphs be supported?"]
                        ["file-sources" "Where are my video and activity-data files read from?"]
                        ["video-timezone" "Which timezone should I choose for my video?"]
+                       ["which-devices-should-i-synchronize" "Which devices should I synchronize?"]
+                       ["how-should-i-synchronize-devices-before-recording" "How should I synchronize devices before recording?"]
+                       ["when-do-i-need-a-matching-moment" "When do I need a matching moment on the timeline?"]
+                       ["why-can-camera-timecode-differ-from-clock-time" "Why can camera timecode differ from clock time?"]
                        ["synchronizing-data-and-camera" "Why do I need to synchronize the activity data and camera time?"]
                        ["output-file" "What output does Alpha Compose create?"]
                        ["google-drive-access" "What can Alpha Compose access in Google Drive?"]
@@ -1479,8 +1483,16 @@
                        "optional OxiWear SpO2"
                        "embedded recording timestamp may contain only a UTC offset"
                        "Alpha Compose never treats the Google Drive upload time as the recording time"
-                       "drag the marker on the full video timeline"
-                       "Shift+Left or Shift+Right moves 10 frames"
+                       "Garmin watch + DJI camera"
+                       "phone recording activity data + GoPro"
+                       "For synchronization, trust the time in your activity data."
+                       "automatic date and time"
+                       "film the activity device's clock with seconds visible"
+                       "Alpha Compose currently applies one fixed offset"
+                       "camera's system clock, recording timestamp, and production timecode"
+                       "GoPro product manuals"
+                       "DJI Osmo Action date and time"
+                       "Garmin watch time troubleshooting and synchronization"
                        "source video is streamed"
                        "does not log activity-data values"
                        "not medical advice"
@@ -1546,8 +1558,8 @@
                 :fragment "supported-activity-data"
                 :name "Learn about supported activity-data formats"}
                {:page compose
-                :fragment "synchronizing-data-and-camera"
-                :name "Learn about activity-data synchronization"}
+                :fragment "how-should-i-synchronize-devices-before-recording"
+                :name "Learn how to synchronize devices before recording"}
                {:page compose
                 :fragment "video-timezone"
                 :name "Learn which video timezone to choose"}
@@ -1586,7 +1598,7 @@
                    "audio-options"
                    "supported-activity-data"
                    "video-timezone"
-                   "synchronizing-data-and-camera"
+                   "how-should-i-synchronize-devices-before-recording"
                    "oxygen-saturation-support"
                    "preview-admission-cost"]]
     (is (= 1 (count (re-seq #"id=\"contextual-help-dialog\"" compose))))
@@ -1753,8 +1765,8 @@
                            "Learn about heartbeat audio options"]
                           ["/faq#video-timezone"
                            "Learn which video timezone to choose"]
-                          ["/faq#synchronizing-data-and-camera"
-                           "Learn about activity-data synchronization"]
+                          ["/faq#how-should-i-synchronize-devices-before-recording"
+                           "Learn how to synchronize devices before recording"]
                           ["/faq#supported-activity-data"
                            "Learn about supported activity-data formats"]
                           ["/faq#oxygen-saturation-support"
@@ -1833,7 +1845,7 @@
         (is (true? (get-in outcome [:back :open])))
         (is (true? (get-in outcome [:back :inView])))
         (is (true? (:changedStillOpen outcome)))
-        (is (= 19 (:summaryCount outcome)))
+        (is (= 23 (:summaryCount outcome)))
         (is (true? (:summariesKeyboardReachable outcome)))
         (is (true? (:permalinksAccessible outcome)))
         (is (zero? (:nestedDetails outcome)))
@@ -1848,6 +1860,18 @@
                                      "390,844")]
     (is (nil? (:error outcome)) outcome)
     (is (= "#preview-admission-cost" (get-in outcome [:initial :hash])))
+    (is (true? (get-in outcome [:initial :open])))
+    (is (true? (get-in outcome [:initial :inView])))
+    (is (true? (:noHorizontalOverflow outcome)))
+    (is (true? (:detailsFit outcome)))))
+
+(deftest pre-recording-synchronization-deep-link-opens-the-new-faq-answer
+  (let [outcome (faq-browser-outcome ui/faq-page
+                                     "how-should-i-synchronize-devices-before-recording"
+                                     "390,844")]
+    (is (nil? (:error outcome)) outcome)
+    (is (= "#how-should-i-synchronize-devices-before-recording"
+           (get-in outcome [:initial :hash])))
     (is (true? (get-in outcome [:initial :open])))
     (is (true? (get-in outcome [:initial :inView])))
     (is (true? (:noHorizontalOverflow outcome)))
