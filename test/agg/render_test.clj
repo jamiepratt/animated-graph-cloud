@@ -292,6 +292,43 @@
           :target-bitrate-bps 192000}
          media/aac-lc-contract)))
 
+(deftest output-timing-metadata-has-one-versioned-utc-contract
+  (is (= {"com.alphacompose.timing.version" "1"
+          "com.alphacompose.timing.start_utc" "2026-07-17T10:00:00Z"
+          "com.alphacompose.timing.end_utc" "2026-07-17T10:00:01.040Z"
+          "com.alphacompose.timing.time_zone" "Europe/Warsaw"}
+         (media/timing-metadata
+          {:section-start-at (Instant/parse "2026-07-17T10:00:00Z")
+           :duration-seconds 26/25
+           :display-time-zone (ZoneId/of "Europe/Warsaw")}))))
+
+(deftest rendered-overlay-artifact-retains-the-timing-metadata-contract
+  (let [render-spec {:width 64
+                     :height 36
+                     :fps 25
+                     :duration-seconds 1
+                     :section-start-at (Instant/parse "2026-07-17T10:00:00Z")
+                     :display-time-zone (ZoneId/of "Europe/Warsaw")}
+        audio-path (Files/createTempFile "agg-timing-audio-" ".wav"
+                                         (make-array java.nio.file.attribute.FileAttribute 0))
+        output-path (Files/createTempFile "agg-timing-overlay-" ".mov"
+                                          (make-array java.nio.file.attribute.FileAttribute 0))]
+    (try
+      (with-open [output (Files/newOutputStream audio-path
+                                                (make-array OpenOption 0))]
+        (audio/write-wav! render-spec output))
+      (is (= {:exit-status 0}
+             (media/encode! (media/ffmpeg-video-encoder)
+                            render-spec audio-path output-path
+                            #(.write ^OutputStream %
+                                     (byte-array (* 64 36 4 25))))))
+      (is (= (media/timing-metadata render-spec)
+             (:timing (media/verify! (media/ffmpeg-video-encoder)
+                                     render-spec output-path))))
+      (finally
+        (Files/deleteIfExists output-path)
+        (Files/deleteIfExists audio-path)))))
+
 (deftest rendering-boundaries-are-protocol-backed
   (is (satisfies? frames/FrameRenderer frames/java2d-frame-renderer))
   (is (satisfies? media/VideoEncoder (media/ffmpeg-video-encoder)))
@@ -1011,6 +1048,8 @@
           (media/composite-command
            "ffmpeg"
            {:width 64 :height 36 :fps 25 :duration-seconds 26/25
+            :section-start-at (Instant/parse "2026-07-17T10:00:00Z")
+            :display-time-zone (ZoneId/of "Europe/Warsaw")
             :source-video {:trim-offset-seconds 26/25}
             :output-format output-format
             :fit-mode "letterbox"
@@ -1032,6 +1071,11 @@
                     "prores_ks"
                     "libx264")}
                 command)
+          [output-format audio-mode])
+      (is (str/includes? joined "+use_metadata_tags")
+          [output-format audio-mode])
+      (is (str/includes? joined
+                         "com.alphacompose.timing.start_utc=2026-07-17T10:00:00Z")
           [output-format audio-mode]))))
 
 (deftest durable-composite-stops-before-its-render-deadline

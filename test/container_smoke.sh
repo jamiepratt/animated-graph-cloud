@@ -166,6 +166,11 @@ docker run --rm "$image" clojure.main -e '
                      (= "aac" (get-in result [:media :audio :codec]))
                      (= 9.0 (get-in result [:media :container
                                             :duration-seconds]))
+                     (= {"com.alphacompose.timing.version" "1"
+                         "com.alphacompose.timing.start_utc" "1970-01-01T00:00:00Z"
+                         "com.alphacompose.timing.end_utc" "1970-01-01T00:00:09Z"
+                         "com.alphacompose.timing.time_zone" "UTC"}
+                        (get-in result [:media :timing]))
                      (pos? (:output-bytes result)))
         (throw (ex-info "durable selected-source smoke failed"
                         {:elapsed-ms elapsed-ms}))))
