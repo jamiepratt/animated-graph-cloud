@@ -334,7 +334,7 @@
          "const state=window.__playerState;state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'private-mp4',name:'ride.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));document.getElementById('telemetry-format').value='polar-csv';document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-23T21:59:30Z,120\\n2026-07-23T22:01:36Z,124';document.getElementById('wizard-next').click();document.querySelector('input[name=\"synchronization-mode\"][value=\"shared-clock\"]').click();document.getElementById('timezone').value='UTC';document.getElementById('video-timezone').value='+02:00';document.getElementById('confirm-video-clock').click();const fixedOffsetRejected={confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,status:document.getElementById('video-clock-status').textContent};document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();"
          "const player=document.getElementById('video-player'),video=document.getElementById('source-video-player'),timeline=document.getElementById('video-timeline'),fit=document.getElementById('fit-mode'),play=document.getElementById('video-play-pause'),track=document.querySelector('.video-timeline-track'),bufferedLayer=document.getElementById('video-buffered-ranges'),outputRange=document.getElementById('video-output-range'),unusedAfter=document.getElementById('video-unused-after'),playhead=document.getElementById('video-playhead');function playbackControl(){const symbol=play.querySelector('.video-play-pause-symbol'),rect=play.getBoundingClientRect(),symbolRect=symbol?.getBoundingClientRect();return {paused:video.paused,name:play.getAttribute('aria-label'),symbol:symbol?.textContent||null,decorative:symbol?.getAttribute('aria-hidden')==='true',visible:!!symbolRect&&symbolRect.width>0&&symbolRect.height>0,width:rect.width,height:rect.height};}function bufferedAppearance(){const segments=[...bufferedLayer.children],layerStyle=getComputedStyle(bufferedLayer),segmentStyle=segments[0]&&getComputedStyle(segments[0]),trackRect=track.getBoundingClientRect(),layerRect=bufferedLayer.getBoundingClientRect();return {segments:segments.length,visible:segments.every(segment=>segment.getBoundingClientRect().width>0&&segment.getBoundingClientRect().height>0),alongside:layerRect.height>0&&layerRect.height<trackRect.height,railFraction:layerRect.height/trackRect.height,layerZ:Number(layerStyle.zIndex),outputZ:Number(getComputedStyle(outputRange).zIndex),unusedZ:Number(getComputedStyle(unusedAfter).zIndex),playheadZ:Number(getComputedStyle(playhead).zIndex),pointerEvents:layerStyle.pointerEvents,colorsDistinct:!!segmentStyle&&new Set([segmentStyle.backgroundColor,getComputedStyle(track).backgroundColor,getComputedStyle(outputRange).backgroundColor,getComputedStyle(playhead).backgroundColor]).size===4};}video.__duration=125.5;video.__bufferedRanges=[[0,30]];video.dispatchEvent(new Event('loadedmetadata'));const initialPlayback=playbackControl(),bufferedBeforeProgress=bufferedAppearance();video.__bufferedRanges.push([60,90]);video.dispatchEvent(new Event('progress'));const bufferedAfterProgress=bufferedAppearance();"
          "const outputStart=document.getElementById('output-start-handle'),outputEnd=document.getElementById('output-end-handle'),syncMarker=document.getElementById('manual-sync-marker'),cameraSync=document.getElementById('camera-sync-at'),cameraSyncField=document.getElementById('camera-sync-field'),telemetrySyncField=document.getElementById('telemetry-sync-field'),markerReady={hidden:syncMarker.hidden,disabled:syncMarker.disabled,value:syncMarker.getAttribute('aria-valuenow')};cameraSync.value=document.getElementById('section-start-at').value;cameraSync.dispatchEvent(new Event('input',{bubbles:true}));const initialRange={start:outputStart.getAttribute('aria-valuenow'),end:outputEnd.getAttribute('aria-valuenow'),startField:document.getElementById('section-start-at').value,endField:document.getElementById('section-end-at').value,unusedBefore:document.getElementById('video-unused-before').getBoundingClientRect().width,unusedAfter:document.getElementById('video-unused-after').getBoundingClientRect().width};"
-         "const generatedRequest=JSON.parse(document.getElementById('render-request').value),initial={hidden:player.hidden,paused:video.paused,currentTime:video.currentTime,playCalls:state.playCalls,src:video.getAttribute('src'),selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,time:document.getElementById('video-time').textContent,timelineMax:timeline.getAttribute('aria-valuemax'),timelineValueText:timeline.getAttribute('aria-valuetext'),bufferedSegments:document.querySelectorAll('#video-buffered-ranges span').length,fit:getComputedStyle(video).objectFit,request:state.sessionRequests[0],inspectionRequest:state.inspectionRequests[0],mode:{sourceControlsHidden:document.getElementById('source-output-controls').hidden,summaryHidden:document.getElementById('no-source-output-summary').hidden,stageHidden:document.getElementById('video-stage').hidden,transportHidden:document.querySelector('.video-transport').hidden,timelineLabel:timeline.getAttribute('aria-label')},clock:{start:document.getElementById('video-recording-start').value,zone:document.getElementById('video-timezone').value,confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,candidates:document.querySelectorAll('#video-clock-candidates input').length,summary:document.getElementById('video-source-summary').textContent,request:generatedRequest.sourceVideo}};const timerToggle=document.getElementById('timer-enabled'),timerStartMarker=document.getElementById('timer-start-marker'),timerEndMarker=document.getElementById('timer-end-marker'),overlaps=(first,second)=>{const a=first.getBoundingClientRect(),b=second.getBoundingClientRect();return a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top;};function timerAt(seconds){video.currentTime=seconds;timerToggle.click();const snapshot={current:video.currentTime,fields:[document.getElementById('timer-start-at').value,document.getElementById('timer-end-at').value],request:JSON.parse(document.getElementById('render-request').value).timer||null,markers:[timerStartMarker.hidden,timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.hidden,timerEndMarker.getAttribute('aria-valuenow')],fieldsHidden:document.getElementById('timer-fields').hidden,markersSeparated:!overlaps(timerStartMarker,timerEndMarker),handlesSeparated:!overlaps(timerStartMarker,outputStart)&&!overlaps(timerEndMarker,outputEnd)};timerToggle.click();return snapshot;}const timerDefaults={start:timerAt(0),middle:timerAt(62.75),end:timerAt(125.48),outside:timerAt(125.5),disabled:{request:JSON.parse(document.getElementById('render-request').value).timer||null,markers:[timerStartMarker.hidden,timerEndMarker.hidden]}};video.currentTime=0;"
+         "const generatedRequest=JSON.parse(document.getElementById('render-request').value),contextText=()=>[...document.getElementById('video-time-context-visual').children].filter(node=>!node.hidden).map(node=>node.textContent).join(' '),dateLabels=()=>[...document.getElementById('video-dates').children].map(label=>{const rect=label.getBoundingClientRect();return {text:label.textContent,date:label.dataset.date,start:Number(label.dataset.startRatio),end:Number(label.dataset.endRatio),visible:rect.width>0,left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom};}),dateLabelsSeparated=()=>{const labels=dateLabels();return labels.every((label,index)=>labels.slice(index+1).every(other=>label.right<=other.left||other.right<=label.left||label.bottom<=other.top||other.bottom<=label.top));},initial={hidden:player.hidden,paused:video.paused,currentTime:video.currentTime,playCalls:state.playCalls,src:video.getAttribute('src'),selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,time:document.getElementById('video-time').textContent,timeAria:document.getElementById('video-time').getAttribute('aria-label'),context:contextText(),contextAria:document.getElementById('video-time-context').getAttribute('aria-label'),dates:dateLabels(),dateLabelsSeparated:dateLabelsSeparated(),ticks:[...document.getElementById('video-ticks').children].map(tick=>tick.textContent),timelineMax:timeline.getAttribute('aria-valuemax'),timelineValueText:timeline.getAttribute('aria-valuetext'),bufferedSegments:document.querySelectorAll('#video-buffered-ranges span').length,fit:getComputedStyle(video).objectFit,request:state.sessionRequests[0],inspectionRequest:state.inspectionRequests[0],mode:{sourceControlsHidden:document.getElementById('source-output-controls').hidden,summaryHidden:document.getElementById('no-source-output-summary').hidden,stageHidden:document.getElementById('video-stage').hidden,transportHidden:document.querySelector('.video-transport').hidden,timelineLabel:timeline.getAttribute('aria-label')},clock:{start:document.getElementById('video-recording-start').value,zone:document.getElementById('video-timezone').value,confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,candidates:document.querySelectorAll('#video-clock-candidates input').length,summary:document.getElementById('video-source-summary').textContent,request:generatedRequest.sourceVideo}};const timerToggle=document.getElementById('timer-enabled'),timerStartMarker=document.getElementById('timer-start-marker'),timerEndMarker=document.getElementById('timer-end-marker'),overlaps=(first,second)=>{const a=first.getBoundingClientRect(),b=second.getBoundingClientRect();return a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top;};function timerAt(seconds){video.currentTime=seconds;timerToggle.click();const snapshot={current:video.currentTime,fields:[document.getElementById('timer-start-at').value,document.getElementById('timer-end-at').value],request:JSON.parse(document.getElementById('render-request').value).timer||null,markers:[timerStartMarker.hidden,timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.hidden,timerEndMarker.getAttribute('aria-valuenow')],fieldsHidden:document.getElementById('timer-fields').hidden,markersSeparated:!overlaps(timerStartMarker,timerEndMarker),handlesSeparated:!overlaps(timerStartMarker,outputStart)&&!overlaps(timerEndMarker,outputEnd)};timerToggle.click();return snapshot;}const timerDefaults={start:timerAt(0),middle:timerAt(62.75),end:timerAt(125.48),outside:timerAt(125.5),disabled:{request:JSON.parse(document.getElementById('render-request').value).timer||null,markers:[timerStartMarker.hidden,timerEndMarker.hidden]}};video.currentTime=0;"
          "document.getElementById('timer-enabled').click();document.getElementById('timer-start-at').value='2026-07-23T21:59:50';document.getElementById('timer-end-at').value='2026-07-23T22:01:10';const rangeRect=timeline.getBoundingClientRect();outputStart.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:rangeRect.left+rangeRect.width*.5,pointerId:7}));outputStart.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:rangeRect.left+rangeRect.width*.5,pointerId:7}));const clampedStart=outputStart.getAttribute('aria-valuenow'),timerStartMessage=document.getElementById('video-range-status').textContent;outputStart.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'ArrowLeft'}));const keyboardStart={value:outputStart.getAttribute('aria-valuenow'),field:document.getElementById('section-start-at').value,highlighted:document.getElementById('section-start-at').classList.contains('range-receiver')};outputEnd.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:rangeRect.left+rangeRect.width*.5,pointerId:8}));outputEnd.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:rangeRect.left+rangeRect.width*.5,pointerId:8}));const timerRange={clampedStart,clampedEnd:outputEnd.getAttribute('aria-valuenow'),startMessage:timerStartMessage,endMessage:document.getElementById('video-range-status').textContent,keyboardStart};"
          "const timerMarkerVideoTime=video.currentTime;timerStartMarker.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX:rangeRect.left+rangeRect.width*.95,pointerId:10}));const timerStartCrossing={values:[timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.getAttribute('aria-valuenow')],fields:[document.getElementById('timer-start-at').value,document.getElementById('timer-end-at').value],request:JSON.parse(document.getElementById('render-request').value).timer,startHighlighted:document.getElementById('timer-start-field').classList.contains('timer-field-active'),endHighlighted:document.getElementById('timer-end-field').classList.contains('timer-field-active')};timerStartMarker.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,clientX:rangeRect.left+rangeRect.width*.95,pointerId:10}));timerEndMarker.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX:rangeRect.left+rangeRect.width*.05,pointerId:11}));const timerEndCrossing={values:[timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.getAttribute('aria-valuenow')],startHighlighted:document.getElementById('timer-start-field').classList.contains('timer-field-active'),endHighlighted:document.getElementById('timer-end-field').classList.contains('timer-field-active')};timerEndMarker.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,clientX:rangeRect.left+rangeRect.width*.05,pointerId:11}));const timerMarkerPointer={start:timerStartCrossing,end:timerEndCrossing,captures:state.pointerCaptures.slice(-2),releases:state.pointerReleases.slice(-2),released:[document.getElementById('timer-start-field').classList.contains('timer-field-active'),document.getElementById('timer-end-field').classList.contains('timer-field-active')],videoUnchanged:video.currentTime===timerMarkerVideoTime};"
          "const timerKey=(marker,key,options={})=>{const event=new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key,...options});marker.dispatchEvent(event);return event.defaultPrevented;};timerStartMarker.focus();const timerStartFocus=[document.getElementById('timer-start-field').classList.contains('timer-field-active'),document.getElementById('timer-end-field').classList.contains('timer-field-active')],timerStartLeftPrevented=timerKey(timerStartMarker,'ArrowLeft'),timerStartAfterLeft=timerStartMarker.getAttribute('aria-valuenow'),timerStartShiftLeftPrevented=timerKey(timerStartMarker,'ArrowLeft',{shiftKey:true}),timerStartAfterShiftLeft=timerStartMarker.getAttribute('aria-valuenow'),timerStartHomePrevented=timerKey(timerStartMarker,'Home'),timerStartAfterHome=timerStartMarker.getAttribute('aria-valuenow'),timerStartEndPrevented=timerKey(timerStartMarker,'End'),timerStartAfterEnd=timerStartMarker.getAttribute('aria-valuenow');timerKey(timerStartMarker,'Home');timerEndMarker.focus();const timerEndFocus=[document.getElementById('timer-start-field').classList.contains('timer-field-active'),document.getElementById('timer-end-field').classList.contains('timer-field-active')],timerEndLeftPrevented=timerKey(timerEndMarker,'ArrowLeft'),timerEndAfterLeft=timerEndMarker.getAttribute('aria-valuenow'),timerEndShiftLeftPrevented=timerKey(timerEndMarker,'ArrowLeft',{shiftKey:true}),timerEndAfterShiftLeft=timerEndMarker.getAttribute('aria-valuenow'),timerEndHomePrevented=timerKey(timerEndMarker,'Home'),timerEndAfterHome=timerEndMarker.getAttribute('aria-valuenow'),timerEndEndPrevented=timerKey(timerEndMarker,'End'),timerEndAfterEnd=timerEndMarker.getAttribute('aria-valuenow'),timerMarkerKeyboard={startFocus:timerStartFocus,startLeftPrevented:timerStartLeftPrevented,startAfterLeft:timerStartAfterLeft,startShiftLeftPrevented:timerStartShiftLeftPrevented,startAfterShiftLeft:timerStartAfterShiftLeft,startHomePrevented:timerStartHomePrevented,startAfterHome:timerStartAfterHome,startEndPrevented:timerStartEndPrevented,startAfterEnd:timerStartAfterEnd,endFocus:timerEndFocus,endLeftPrevented:timerEndLeftPrevented,endAfterLeft:timerEndAfterLeft,endShiftLeftPrevented:timerEndShiftLeftPrevented,endAfterShiftLeft:timerEndAfterShiftLeft,endHomePrevented:timerEndHomePrevented,endAfterHome:timerEndAfterHome,endEndPrevented:timerEndEndPrevented,endAfterEnd:timerEndAfterEnd,request:JSON.parse(document.getElementById('render-request').value).timer,videoUnchanged:video.currentTime===timerMarkerVideoTime};timerEndMarker.blur();"
@@ -350,7 +350,7 @@
          "const modifiedChecks=[['ctrl','ArrowRight',{ctrlKey:true}],['meta',' ',{metaKey:true}],['alt','f',{altKey:true}]].map(([kind,key,options])=>{const before=video.currentTime,prevented=press(document.body,key,options);return {kind,prevented,before,after:video.currentTime};});"
          "const forwardButton=document.querySelector('[data-seek-seconds=\"10\"]');forwardButton.focus();const focusedButtonPrevented=press(forwardButton,' '),afterFocusedButtonKey=video.currentTime;forwardButton.click();const afterFocusedButtonClick=video.currentTime;player.hidden=true;const hiddenStart=video.currentTime,hiddenPrevented=press(document.body,'ArrowRight'),afterHidden=video.currentTime;player.hidden=false;"
          "const chrome=document.getElementById('video-chrome'),dock=document.getElementById('video-controls-dock'),fullscreen=document.getElementById('video-fullscreen'),fullscreenControl=document.getElementById('video-fullscreen-control'),fullscreenHint=document.getElementById('video-fullscreen-shortcut');function hintVisible(){const style=getComputedStyle(fullscreenHint);return style.visibility==='visible'&&style.opacity==='1';}"
-         "const fullscreenEntryPrevented=press(document.body,'f'),fullscreenBuffered=bufferedAppearance(),fullscreenEntry={prevented:fullscreenEntryPrevented,request:state.fullscreenRequests.at(-1),elementId:document.fullscreenElement?.id||null,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),hint:fullscreenHint.textContent,hintVisible:hintVisible(),auto:fullscreenControl.classList.contains('shortcut-auto'),focusUnchanged:document.activeElement===forwardButton,completeChrome:!!chrome&&chrome.contains(document.getElementById('video-stage'))&&chrome.contains(document.querySelector('.video-transport'))&&chrome.contains(timeline),dockInside:chrome?.lastElementChild===dock,fullscreenLayout:getComputedStyle(chrome).display==='grid',dockVisible:!!dock&&dock.getBoundingClientRect().height>0,timelineVisible:timeline.getBoundingClientRect().height>0,markerInside:chrome.contains(syncMarker),markerVisible:syncMarker.getBoundingClientRect().height>0,markerValueText:syncMarker.getAttribute('aria-valuetext'),markerControls:syncMarker.getAttribute('aria-controls'),helpVisible:document.getElementById('manual-sync-marker-help').getBoundingClientRect().height>0,timerMarkersInside:chrome.contains(timerStartMarker)&&chrome.contains(timerEndMarker),timerMarkersVisible:timerStartMarker.getBoundingClientRect().height>0&&timerEndMarker.getBoundingClientRect().height>0,timerMarkerValues:[timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.getAttribute('aria-valuenow')],timerMarkerControls:[timerStartMarker.getAttribute('aria-controls'),timerEndMarker.getAttribute('aria-controls')],timerHelpVisible:document.getElementById('timer-marker-help').getBoundingClientRect().height>0,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,timerCount:state.fullscreenTimers.length},fullscreenPlayback=playbackControl();"
+         "const fullscreenEntryPrevented=press(document.body,'f'),fullscreenBuffered=bufferedAppearance(),fullscreenDates=document.getElementById('video-dates'),fullscreenContext=document.getElementById('video-time-context'),fullscreenEntry={prevented:fullscreenEntryPrevented,request:state.fullscreenRequests.at(-1),elementId:document.fullscreenElement?.id||null,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),hint:fullscreenHint.textContent,hintVisible:hintVisible(),auto:fullscreenControl.classList.contains('shortcut-auto'),focusUnchanged:document.activeElement===forwardButton,completeChrome:!!chrome&&chrome.contains(document.getElementById('video-stage'))&&chrome.contains(document.querySelector('.video-transport'))&&chrome.contains(timeline),contextInside:chrome.contains(fullscreenContext),contextVisible:fullscreenContext.getBoundingClientRect().height>0,datesVisible:fullscreenDates.getBoundingClientRect().height>0,dateLabelsVisible:dateLabels().every(label=>label.visible),dateLabelsSeparated:dateLabelsSeparated(),dockInside:chrome?.lastElementChild===dock,fullscreenLayout:getComputedStyle(chrome).display==='grid',dockVisible:!!dock&&dock.getBoundingClientRect().height>0,timelineVisible:timeline.getBoundingClientRect().height>0,markerInside:chrome.contains(syncMarker),markerVisible:syncMarker.getBoundingClientRect().height>0,markerValueText:syncMarker.getAttribute('aria-valuetext'),markerControls:syncMarker.getAttribute('aria-controls'),helpVisible:document.getElementById('manual-sync-marker-help').getBoundingClientRect().height>0,timerMarkersInside:chrome.contains(timerStartMarker)&&chrome.contains(timerEndMarker),timerMarkersVisible:timerStartMarker.getBoundingClientRect().height>0&&timerEndMarker.getBoundingClientRect().height>0,timerMarkerValues:[timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.getAttribute('aria-valuenow')],timerMarkerControls:[timerStartMarker.getAttribute('aria-controls'),timerEndMarker.getAttribute('aria-controls')],timerHelpVisible:document.getElementById('timer-marker-help').getBoundingClientRect().height>0,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,timerCount:state.fullscreenTimers.length},fullscreenPlayback=playbackControl();"
          "state.fullscreenTimers.at(-1).callback();const afterFourSeconds={auto:fullscreenControl.classList.contains('shortcut-auto'),hintVisible:hintVisible()};fullscreen.focus();const focusedFullscreenHint={hint:fullscreenHint.textContent,visible:hintVisible()};forwardButton.focus();const fullscreenExitPrevented=press(document.body,'f'),fullscreenExit={prevented:fullscreenExitPrevented,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),elementId:document.fullscreenElement?.id||null,auto:fullscreenControl.classList.contains('shortcut-auto')};"
          "press(document.body,'f');const restartedTimer=state.fullscreenTimers.at(-1),escapePrevented=press(document.body,'Escape');state.fullscreenElement=null;document.dispatchEvent(new Event('fullscreenchange'));const browserExit={escapePrevented,label:fullscreen.textContent,pressed:fullscreen.getAttribute('aria-pressed'),auto:fullscreenControl.classList.contains('shortcut-auto'),timerCleared:restartedTimer.cleared};fullscreen.click();const buttonEntry={request:state.fullscreenRequests.at(-1),label:fullscreen.textContent};fullscreen.click();const buttonExit={exitCount:state.fullscreenExits,label:fullscreen.textContent};"
          "video.dispatchEvent(new Event('error'));const disabledStart=video.currentTime,disabledSeekPrevented=press(document.body,'ArrowRight'),requestsBeforeDisabledF=state.fullscreenRequests.length,disabledFullscreenPrevented=press(document.body,'f'),unsupported={selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,message:document.getElementById('video-player-status').textContent,disabledStart,disabledSeekPrevented,afterDisabledSeek:video.currentTime,disabledFullscreenPrevented,fullscreenRequestsUnchanged:state.fullscreenRequests.length===requestsBeforeDisabledF,range:[outputStart.getAttribute('aria-valuenow'),outputEnd.getAttribute('aria-valuenow')],marker:{hidden:syncMarker.hidden,disabled:syncMarker.disabled,value:syncMarker.getAttribute('aria-valuenow')},timerMarkers:[timerStartMarker.hidden,timerStartMarker.disabled,timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.hidden,timerEndMarker.disabled,timerEndMarker.getAttribute('aria-valuenow')]};"
@@ -891,15 +891,38 @@
                            :fitMode "letterbox"
                            :audioMode "source-only")
                     (dissoc :telemetrySyncAt :cameraSyncAt))
+        clock-request
+        (fn [start end zone]
+          (assoc request
+                 :sectionStartAt start
+                 :sectionEndAt end
+                 :displayTimeZone zone
+                 :sourceVideo
+                 {:fileId "drive-source"
+                  :recordingStartAt start
+                  :timeZone zone}))
+        gap-request
+        (clock-request "2026-03-08T06:59:59.000Z"
+                       "2026-03-08T07:00:01.000Z"
+                       "America/New_York")
+        repeat-request
+        (clock-request "2026-11-01T05:59:59.000Z"
+                       "2026-11-01T06:00:01.000Z"
+                       "America/New_York")
+        kathmandu-request
+        (clock-request "2026-07-17T09:00:00.000Z"
+                       "2026-07-17T09:00:02.000Z"
+                       "Asia/Kathmandu")
         scenario
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
-         "const workflow=document.getElementById('compose-workflow'),raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),next=document.getElementById('wizard-next'),video=document.getElementById('source-video-player'),timeline=document.getElementById('video-timeline'),modeLabel=document.getElementById('timeline-mode-label'),modeStatus=document.getElementById('timeline-mode-status'),marker=document.getElementById('manual-sync-marker'),sourceElapsed=document.getElementById('manual-sync-source-seconds'),sourceElapsedText=document.getElementById('manual-sync-elapsed'),activity=document.getElementById('telemetry-sync-at'),camera=document.getElementById('camera-sync-at'),submit=document.getElementById('submit-button'),input=node=>node.dispatchEvent(new Event('input',{bubbles:true})),snapshot=()=>({current:workflow.dataset.currentStep,mode:modeLabel?.textContent||null,status:modeStatus?.textContent||null,transport:document.getElementById('video-time').textContent,ticks:[...document.getElementById('video-ticks').children].map(node=>node.textContent),timelineText:timeline.getAttribute('aria-valuetext'),marker:{hidden:marker.hidden,disabled:marker.disabled,value:marker.getAttribute('aria-valuenow'),text:marker.getAttribute('aria-valuetext')},sourceSeconds:sourceElapsed?.value??null,sourceText:sourceElapsedText?.textContent||null,videoCurrent:video.currentTime,cameraType:camera.type,clockPanelHidden:document.getElementById('video-clock-confirmation').hidden,submitDisabled:submit.disabled,browserOption:document.getElementById('timezone').options[0].textContent});"
+         "const workflow=document.getElementById('compose-workflow'),raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),next=document.getElementById('wizard-next'),video=document.getElementById('source-video-player'),videoStage=document.getElementById('video-stage'),controlsDock=document.getElementById('video-controls-dock'),timeContext=document.getElementById('video-time-context'),timeContextVisual=document.getElementById('video-time-context-visual'),dateRow=document.getElementById('video-dates'),timeline=document.getElementById('video-timeline'),modeLabel=document.getElementById('timeline-mode-label'),modeStatus=document.getElementById('timeline-mode-status'),marker=document.getElementById('manual-sync-marker'),sourceElapsed=document.getElementById('manual-sync-source-seconds'),sourceElapsedText=document.getElementById('manual-sync-elapsed'),activity=document.getElementById('telemetry-sync-at'),camera=document.getElementById('camera-sync-at'),submit=document.getElementById('submit-button'),transportNode=document.getElementById('video-time'),visibleContext=()=>[...(timeContextVisual?.children||[])].filter(node=>!node.hidden).map(node=>node.textContent.trim()).join(' '),input=node=>node.dispatchEvent(new Event('input',{bubbles:true})),snapshot=()=>({current:workflow.dataset.currentStep,mode:modeLabel?.textContent||null,status:modeStatus?.textContent||null,context:{visual:timeContextVisual?visibleContext():null,accessible:timeContext?.getAttribute('aria-label')||null},dates:[...(dateRow?.children||[])].map(node=>node.textContent),transport:transportNode.textContent,transportAccessible:transportNode.getAttribute('aria-label'),ticks:[...document.getElementById('video-ticks').children].map(node=>node.textContent),timelineText:timeline.getAttribute('aria-valuetext'),marker:{hidden:marker.hidden,disabled:marker.disabled,value:marker.getAttribute('aria-valuenow'),text:marker.getAttribute('aria-valuetext')},sourceSeconds:sourceElapsed?.value??null,sourceText:sourceElapsedText?.textContent||null,videoCurrent:video.currentTime,cameraType:camera.type,clockPanelHidden:document.getElementById('video-clock-confirmation').hidden,submitDisabled:submit.disabled,browserOption:document.getElementById('timezone').options[0].textContent});"
          "raw.value=JSON.stringify(" (json/write-str request) ");apply.click();next.click();next.click();next.click();document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();const unavailable=snapshot();Object.defineProperty(video,'duration',{configurable:true,value:125.5});Object.defineProperty(video,'paused',{configurable:true,value:true});video.dispatchEvent(new Event('loadedmetadata'));const elapsed=snapshot();"
          "marker.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));const selected=snapshot();activity.value='2026-10-25T01:30:00';input(activity);const synced=snapshot(),generated=JSON.parse(document.getElementById('render-request').value);"
          "activity.value='';input(activity);const reversed=snapshot();sourceElapsed.value='';const pointerStartedEmpty=sourceElapsed.value===''&&camera.value==='';const rect=timeline.getBoundingClientRect(),clientX=rect.left+rect.width*.4;marker.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX,pointerId:14}));marker.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,clientX,pointerId:14}));const pointer=snapshot();"
-         "outcome={viewportWidth:innerWidth,stepCount:document.querySelectorAll('#wizard-step-list li').length,unavailable,elapsed,selected,synced,reversed,pointerStartedEmpty,pointer,generated:{mode:generated.synchronizationMode,telemetrySyncAt:generated.telemetrySyncAt,cameraSyncAt:generated.cameraSyncAt,sourceVideo:generated.sourceVideo,sectionStartAt:generated.sectionStartAt,sectionEndAt:generated.sectionEndAt},modeInsideDock:document.getElementById('timing-dock').contains(modeLabel)&&document.getElementById('timing-dock').contains(modeStatus),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+         "const clockSnapshot=()=>({context:{visual:visibleContext(),accessible:timeContext.getAttribute('aria-label')},dates:[...dateRow.children].map(node=>node.textContent),transport:transportNode.textContent,timelineText:timeline.getAttribute('aria-valuetext'),ticks:[...document.getElementById('video-ticks').children].map(node=>node.textContent)}),clockCase=request=>{raw.value=JSON.stringify(request);apply.click();Object.defineProperty(video,'duration',{configurable:true,value:2});video.__clockTime=0;Object.defineProperty(video,'currentTime',{configurable:true,get(){return this.__clockTime;},set(value){this.__clockTime=Number(value);this.dispatchEvent(new Event('timeupdate'));}});video.currentTime=0;video.dispatchEvent(new Event('loadedmetadata'));const start=clockSnapshot();video.currentTime=1;const transition=clockSnapshot();video.currentTime=2;const end=clockSnapshot();return {start,transition,end};},gap=clockCase(" (json/write-str gap-request) "),repeat=clockCase(" (json/write-str repeat-request) "),kathmandu=clockCase(" (json/write-str kathmandu-request) ");"
+         "outcome={viewportWidth:innerWidth,stepCount:document.querySelectorAll('#wizard-step-list li').length,unavailable,elapsed,selected,synced,reversed,pointerStartedEmpty,pointer,gap,repeat,kathmandu,generated:{mode:generated.synchronizationMode,telemetrySyncAt:generated.telemetrySyncAt,cameraSyncAt:generated.cameraSyncAt,sourceVideo:generated.sourceVideo,sectionStartAt:generated.sectionStartAt,sectionEndAt:generated.sectionEndAt},contextOrder:videoStage?.nextElementSibling===timeContext&&timeContext?.nextElementSibling===controlsDock,modeInsideContext:timeContext?.contains(modeLabel)&&timeContext?.contains(modeStatus),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
          "</script>")
@@ -928,7 +951,7 @@
          "const initial={workspaceHidden:workspace.hidden,timelineHidden:timelineHidden(),sourceControlsHidden:document.getElementById('source-output-controls').hidden,summaryHidden:document.getElementById('no-source-output-summary').hidden};"
          "document.getElementById('timezone').value='UTC';input(document.getElementById('timezone'));sectionStart.value='2026-07-17T09:00:00';input(sectionStart);const incomplete={timelineHidden:timelineHidden(),status:rangeStatus.textContent};"
          "sectionEnd.value='2026-07-17T09:00:01.02';input(sectionEnd);const offFrame={timelineHidden:timelineHidden(),status:rangeStatus.textContent};"
-         "sectionEnd.value='2026-07-17T09:00:02';input(sectionEnd);const valid={timelineHidden:timelineHidden(),stageHidden:stage.hidden,transportHidden:transport.hidden,label:timeline.getAttribute('aria-label'),valueText:timeline.getAttribute('aria-valuetext'),ticks:document.getElementById('video-ticks').children.length,status:rangeStatus.textContent};"
+         "sectionEnd.value='2026-07-17T09:00:02';input(sectionEnd);const valid={timelineHidden:timelineHidden(),stageHidden:stage.hidden,transportHidden:transport.hidden,label:timeline.getAttribute('aria-label'),valueText:timeline.getAttribute('aria-valuetext'),context:[...document.getElementById('video-time-context-visual').children].filter(node=>!node.hidden).map(node=>node.textContent).join(' '),contextAria:document.getElementById('video-time-context').getAttribute('aria-label'),dates:[...document.getElementById('video-dates').children].map(label=>label.textContent),tickValues:[...document.getElementById('video-ticks').children].map(tick=>tick.textContent),ticks:document.getElementById('video-ticks').children.length,status:rangeStatus.textContent};"
          "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('camera-sync-at').value='2026-07-17T09:00:01';input(document.getElementById('camera-sync-at'));document.getElementById('telemetry-sync-at').value='2026-07-17T10:00:01';input(document.getElementById('telemetry-sync-at'));const manual={hidden:syncMarker.hidden,disabled:syncMarker.disabled,value:syncMarker.getAttribute('aria-valuenow'),valueText:syncMarker.getAttribute('aria-valuetext')};"
          "raw.value=JSON.stringify(base);apply.click();const applied={enabled:toggle.checked,fields:[start.value,end.value],request:generated().timer||null,markers:[startMarker.hidden,endMarker.hidden],timelineHidden:timelineHidden(),sourceVideo:generated().sourceVideo||null,outputFormat:generated().outputFormat||null};"
          "toggle.click();const timelineRect=timeline.getBoundingClientRect(),markerRects=[startMarker.getBoundingClientRect(),endMarker.getBoundingClientRect()],enabled={enabled:toggle.checked,fields:[start.value,end.value],request:generated().timer||null,markers:[startMarker.hidden,endMarker.hidden],fieldsHidden:document.getElementById('timer-fields').hidden,markersInside:markerRects.every(rect=>rect.left>=timelineRect.left-.5&&rect.right<=timelineRect.right+.5&&rect.top>=timelineRect.top-.5&&rect.bottom<=timelineRect.bottom+.5)};"
@@ -2589,11 +2612,20 @@
               :src "/v1/drive/playback/00000000-0000-0000-0000-000000000115"
               :selection "ride.mp4"
               :fileId "private-mp4"
-              :time (str "2026-07-23 23:59:30.000 Europe/Warsaw / "
-                         "2026-07-24 00:01:35.500 Europe/Warsaw")
+              :time "23:59:30.000 / 00:01:35.500"
+              :timeAria
+              (str "Recording time, current 23 July 2026 at "
+                   "23:59:30.000, Europe/Warsaw (GMT+02:00); "
+                   "source end 24 July 2026 at 00:01:35.500, "
+                   "Europe/Warsaw (GMT+02:00)")
+              :context
+              "Recording time · 23-24 Jul 2026 · Europe/Warsaw"
+              :contextAria
+              "Recording time, 23 to 24 July 2026, Europe/Warsaw"
               :timelineMax "125.5"
               :timelineValueText
-              "2026-07-23 23:59:30.000 Europe/Warsaw"
+              (str "Recording time, 23 July 2026 at 23:59:30.000, "
+                   "Europe/Warsaw (GMT+02:00)")
               :bufferedSegments 2
               :fit "contain"
               :request {:fileId "private-mp4"}
@@ -2617,7 +2649,24 @@
                {:fileId "private-mp4"
                 :recordingStartAt "2026-07-23T21:59:30.000Z"
                 :timeZone "Europe/Warsaw"}}}
-             (:initial outcome)))
+             (dissoc (:initial outcome)
+                     :dates :dateLabelsSeparated :ticks)))
+      (is (= ["23 Jul 2026" "24 Jul 2026"]
+             (mapv :text (get-in outcome [:initial :dates]))))
+      (is (= ["2026-07-23" "2026-07-24"]
+             (mapv :date (get-in outcome [:initial :dates]))))
+      (is (every? :visible (get-in outcome [:initial :dates])))
+      (is (true? (get-in outcome [:initial :dateLabelsSeparated])))
+      (is (< (Math/abs
+              (- (/ 30.0 125.5)
+                 (get-in outcome [:initial :dates 0 :end])))
+             1.0e-9))
+      (is (= (get-in outcome [:initial :dates 0 :end])
+             (get-in outcome [:initial :dates 1 :start])))
+      (is (every? #(re-matches #"\d{2}:\d{2}:\d{2}\.\d{3}" %)
+                  (get-in outcome [:initial :ticks])))
+      (is (= ["23:59:30.000" "00:01:35.500"]
+             ((juxt first last) (get-in outcome [:initial :ticks]))))
       (is (= {:confirmed "false"
               :status
               "Video timezone must be a valid IANA timezone identifier."}
@@ -2658,7 +2707,7 @@
       (is (= 62.75 (:scrubTime outcome)))
       (is (= 63.75 (:keyboardTime outcome)))
       (is (= {:hidden false
-              :text "2026-07-24 00:01:04.125 Europe/Warsaw"}
+              :text "00:01:04.125"}
              (:hover outcome)))
       (let [states [(:initialPlayback outcome)
                     (:playing outcome)
@@ -2772,13 +2821,18 @@
               :auto true
               :focusUnchanged true
               :completeChrome true
+              :contextInside true
+              :contextVisible true
+              :datesVisible true
+              :dateLabelsVisible true
+              :dateLabelsSeparated true
               :dockInside true
               :fullscreenLayout true
               :dockVisible true
               :timelineVisible true
               :markerInside true
               :markerVisible false
-              :markerValueText "00:00:00.000"
+              :markerValueText "Elapsed time, 00:00:00.000"
               :markerControls "manual-sync-source-seconds telemetry-sync-at"
               :helpVisible false
               :timerMarkersInside true
@@ -2881,14 +2935,24 @@
               :stageHidden true
               :transportHidden true
               :label "Output clock timeline"
-              :valueText "2026-07-17 09:00:00.000 UTC"
-              :ticks 5
+              :valueText
+              "Output clock, 17 July 2026 at 09:00:00.000, UTC (GMT+00:00)"
+              :context "Output clock · 17 Jul 2026 · UTC"
+              :contextAria "Output clock, 17 July 2026, UTC"
+              :dates ["17 Jul 2026"]
+              :tickValues
+              (if (= 1280 (:viewportWidth outcome))
+                ["09:00:00.000" "09:00:00.500" "09:00:01.000"
+                 "09:00:01.500" "09:00:02.000"]
+                ["09:00:00.000" "09:00:01.000" "09:00:02.000"])
+              :ticks (if (= 1280 (:viewportWidth outcome)) 5 3)
               :status "Output timeline ready."}
              (:valid outcome)))
       (is (= {:hidden false
               :disabled false
               :value "1"
-              :valueText "2026-07-17 09:00:01.000 UTC"}
+              :valueText
+              "Output clock, 17 July 2026 at 09:00:01.000, UTC (GMT+00:00)"}
              (:manual outcome)))
       (is (= {:enabled false
               :fields ["" ""]
@@ -3026,10 +3090,13 @@
       (is (= 7 (:stepCount outcome)))
       (is (= "synchronization" (get-in outcome [:elapsed :current])))
       (is (= "Elapsed time" (get-in outcome [:elapsed :mode])))
+      (is (= {:visual "Elapsed time" :accessible "Elapsed time"}
+             (get-in outcome [:elapsed :context])))
+      (is (= [] (get-in outcome [:elapsed :dates])))
       (is (= {:hidden false
               :disabled true
               :value "0"
-              :text "00:00:00.000"}
+              :text "Elapsed time, 00:00:00.000"}
              (get-in outcome [:unavailable :marker])))
       (is (= "" (get-in outcome [:unavailable :sourceSeconds])))
       (is (str/starts-with? (get-in outcome [:elapsed :transport])
@@ -3039,7 +3106,7 @@
       (is (= {:hidden false
               :disabled false
               :value "0"
-              :text "00:00:00.000"}
+              :text "Elapsed time, 00:00:00.000"}
              (get-in outcome [:elapsed :marker])))
       (is (= "" (get-in outcome [:elapsed :sourceSeconds])))
       (is (= "hidden" (get-in outcome [:elapsed :cameraType])))
@@ -3050,12 +3117,22 @@
       (is (= "00:00:00.040"
              (get-in outcome [:selected :sourceText])))
       (is (= 0.04 (get-in outcome [:selected :videoCurrent])))
-      (is (= "Synced recording time · UTC"
+      (is (= "Synced recording time"
              (get-in outcome [:synced :mode])))
+      (is (= {:visual "Synced recording time · 25 Oct 2026 · UTC"
+              :accessible "Synced recording time, 25 October 2026, UTC"}
+             (get-in outcome [:synced :context])))
+      (is (= ["25 Oct 2026"] (get-in outcome [:synced :dates])))
       (is (str/includes? (get-in outcome [:synced :status])
                          "Timeline labels now show synced recording time"))
-      (is (str/starts-with? (get-in outcome [:synced :transport])
-                            "2026-10-25 01:30:00.000"))
+      (is (= "01:30:00.000 / 01:32:05.460"
+             (get-in outcome [:synced :transport])))
+      (is (= "Synced recording time, current 25 October 2026 at 01:30:00.000, UTC (GMT+00:00); source end 25 October 2026 at 01:32:05.460, UTC (GMT+00:00)"
+             (get-in outcome [:synced :transportAccessible])))
+      (is (= "Synced recording time, 25 October 2026 at 01:30:00.000, UTC (GMT+00:00)"
+             (get-in outcome [:synced :timelineText])))
+      (is (every? #(re-matches #"\d{2}:\d{2}:\d{2}\.\d{3}" %)
+                  (get-in outcome [:synced :ticks])))
       (is (= "manual-anchor" (get-in outcome [:generated :mode])))
       (is (= "2026-10-25T01:30:00.000Z"
              (get-in outcome [:generated :telemetrySyncAt])))
@@ -3066,6 +3143,9 @@
               :timeZone "UTC"}
              (get-in outcome [:generated :sourceVideo])))
       (is (= "Elapsed time" (get-in outcome [:reversed :mode])))
+      (is (= {:visual "Elapsed time" :accessible "Elapsed time"}
+             (get-in outcome [:reversed :context])))
+      (is (= [] (get-in outcome [:reversed :dates])))
       (is (str/includes? (get-in outcome [:reversed :status])
                          "Timeline labels now show elapsed time"))
       (is (= "0.04" (get-in outcome [:reversed :sourceSeconds])))
@@ -3074,12 +3154,49 @@
       (is (= {:hidden false
               :disabled false
               :value "50.2"
-              :text "00:00:50.200"}
+              :text "Elapsed time, 00:00:50.200"}
              (get-in outcome [:pointer :marker])))
       (is (= "50.2" (get-in outcome [:pointer :sourceSeconds])))
       (is (= "00:00:50.200" (get-in outcome [:pointer :sourceText])))
       (is (= 50.2 (get-in outcome [:pointer :videoCurrent])))
-      (is (true? (:modeInsideDock outcome)))
+      (is (= {:visual
+              "Recording time · 08 Mar 2026 · America/New_York"
+              :accessible
+              "Recording time, 08 March 2026, America/New_York"}
+             (get-in outcome [:gap :start :context])))
+      (is (= ["08 Mar 2026"] (get-in outcome [:gap :start :dates])))
+      (is (= "01:59:59.000 / 03:00:01.000"
+             (get-in outcome [:gap :start :transport])))
+      (is (= "03:00:00.000 / 03:00:01.000"
+             (get-in outcome [:gap :transition :transport])))
+      (is (str/ends-with? (get-in outcome [:gap :start :timelineText])
+                          "America/New_York (GMT-05:00)"))
+      (is (str/ends-with? (get-in outcome [:gap :transition :timelineText])
+                          "America/New_York (GMT-04:00)"))
+      (is (= {:visual
+              "Recording time · 01 Nov 2026 · America/New_York"
+              :accessible
+              "Recording time, 01 November 2026, America/New_York"}
+             (get-in outcome [:repeat :start :context])))
+      (is (= ["01 Nov 2026"] (get-in outcome [:repeat :start :dates])))
+      (is (= "01:59:59.000 / 01:00:01.000"
+             (get-in outcome [:repeat :start :transport])))
+      (is (= "01:00:00.000 / 01:00:01.000"
+             (get-in outcome [:repeat :transition :transport])))
+      (is (str/ends-with? (get-in outcome [:repeat :start :timelineText])
+                          "America/New_York (GMT-04:00)"))
+      (is (str/ends-with? (get-in outcome [:repeat :transition :timelineText])
+                          "America/New_York (GMT-05:00)"))
+      (is (= {:visual "Recording time · 17 Jul 2026 · Asia/Kathmandu"
+              :accessible
+              "Recording time, 17 July 2026, Asia/Kathmandu"}
+             (get-in outcome [:kathmandu :start :context])))
+      (is (= "14:45:00.000 / 14:45:02.000"
+             (get-in outcome [:kathmandu :start :transport])))
+      (is (str/ends-with? (get-in outcome [:kathmandu :start :timelineText])
+                          "Asia/Kathmandu (GMT+05:45)"))
+      (is (true? (:contextOrder outcome)))
+      (is (true? (:modeInsideContext outcome)))
       (is (true? (:noHorizontalOverflow outcome))))
     (is (= 1280 (:viewportWidth (first outcomes))))
     (is (<= (:viewportWidth (second outcomes)) 500))))
