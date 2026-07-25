@@ -1,7 +1,8 @@
 (ns agg.jobs.lifecycle
   (:require [agg.errors :as errors]
             [agg.admin.core :as admin]
-            [agg.contracts.render :as contract])
+            [agg.contracts.render :as contract]
+            [clojure.string :as str])
   (:import (java.security MessageDigest)
            (java.time Clock Instant LocalDate YearMonth ZoneOffset)
            (java.util HexFormat UUID)
@@ -382,8 +383,7 @@
                  (= :succeeded (:state job))
                  (= "video/mp4" (get-in job [:output :contentType]))
                  (string? (get-in job [:output :driveFileId]))
-                 (not (clojure.string/blank?
-                       (get-in job [:output :driveFileId]))))
+                 (not (str/blank? (get-in job [:output :driveFileId]))))
         {:file-id (get-in job [:output :driveFileId])
          :mime-type (get-in job [:output :contentType])})))
   JobReconciler
