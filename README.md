@@ -11,10 +11,16 @@ behavioral evidence only and none of its source or assets belong here.
 Requires JDK 21, Clojure CLI, Terraform, Google Cloud CLI, and Docker Desktop.
 
 ```sh
-clojure -M:test
+clojure -M:test-all
 clojure -T:build uber
 terraform -chdir=infra/dev init
 terraform -chdir=infra/dev validate
+```
+
+Targeted TDD keeps the normal test classpath but skips the full runner:
+
+```sh
+clojure -M:test -m agg.test-targeted agg.api-auth-test
 ```
 
 The versioned production OpenAPI contract is publicly available at
