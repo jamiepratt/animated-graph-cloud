@@ -63,6 +63,13 @@
 (def ^:private drive-playback-path-pattern
   (re-pattern (str "/v1/drive/playback/" uuid-path-component)))
 
+(def ^:private completed-playback-session-path-pattern
+  (re-pattern (str "/v1/jobs/" uuid-path-component "/playback-sessions")))
+
+(def ^:private completed-playback-path-pattern
+  (re-pattern (str "/v1/jobs/" uuid-path-component "/playback/"
+                   uuid-path-component)))
+
 (def ^:private public-assets
   {"/openapi.yaml" ["openapi.yaml" "application/yaml; charset=utf-8"]
    "/alpha-compose-mark.svg" ["public/alpha-compose-mark.svg" "image/svg+xml; charset=utf-8"]
@@ -1428,6 +1435,105 @@
                 output (.getResponseBody exchange)]
       (.transferTo input output))))
 
+(defn- completed-playback-output!
+  [job-service subject job-id]
+  (when-not (satisfies? jobs/JobPlaybackAccess job-service)
+    (throw (errors/raise! "Completed playback job access is unavailable"
+                          {:type ::jobs/job-not-found})))
+  (or (jobs/completed-playback-output job-service job-id subject)
+      (throw (errors/raise! "Job does not exist"
+                            {:type ::jobs/job-not-found}))))
+
+(defn- create-completed-playback-session!
+  [^HttpExchange exchange job-service auth-system job-id]
+  (let [user (require-session-user! exchange auth-system)
+        _ (require-csrf! exchange auth-system user)
+        request (request-json exchange)
+        _ (when-not (empty? request)
+            (throw (errors/raise! "Completed playback request is invalid"
+                                  {:type ::invalid-playback-source})))
+        {:keys [file-id]} (completed-playback-output! job-service
+                                                      (:subject user) job-id)
+        {:keys [access-token]} (auth/drive-access! auth-system (:subject user))
+        gateway (:drive auth-system)
+        _ (when-not (and (satisfies? drive/SourceGateway gateway)
+                         (satisfies? drive/PlaybackGateway gateway))
+            (throw (errors/raise! "Drive playback dependencies are incomplete"
+                                  {:type ::drive/source-unavailable})))
+        metadata (drive/source-metadata! gateway access-token file-id)
+        mime-type (:mimeType metadata)
+        size (:size metadata)
+        _ (when-not (and (= "video/mp4" mime-type) (integer? size) (pos? size))
+            (throw (errors/raise! "Completed output is not available for browser playback"
+                                  {:type ::browser-playback-not-supported})))
+        playback-id (str (UUID/randomUUID))
+        playback-path (str "/v1/jobs/" job-id "/playback/" playback-id)
+        playback-token (auth/issue-completed-playback-token
+                        auth-system
+                        {:subject (:subject user)
+                         :job-id job-id
+                         :playback-id playback-id
+                         :mime-type mime-type
+                         :size size})
+        browser-token
+        (auth/issue-browser-cookie
+         auth-system
+         (assoc (or (browser-cookie exchange auth-system) {})
+                :session (session-token exchange auth-system)
+                :playback playback-token))]
+    (.add (.getResponseHeaders exchange) "Set-Cookie"
+          (browser-cookie-header browser-token))
+    (respond-json! exchange 201
+                   {:playbackUrl playback-path
+                    :contentType mime-type
+                    :size size})))
+
+(defn- stream-completed-playback!
+  [^HttpExchange exchange job-service auth-system path]
+  (let [user (require-session-user! exchange auth-system)
+        [job-id playback-id]
+        (rest (re-matches (re-pattern
+                           (str "/v1/jobs/(" uuid-path-component ")/playback/("
+                                uuid-path-component ")"))
+                          path))
+        {:keys [mime-type size]}
+        (auth/completed-playback-session auth-system
+                                         (:subject user)
+                                         job-id
+                                         playback-id
+                                         (:playback
+                                          (browser-cookie exchange auth-system)))
+        {:keys [file-id]}
+        (completed-playback-output! job-service (:subject user) job-id)
+        {:keys [start end partial?] :as byte-range}
+        (playback-range (some-> exchange .getRequestHeaders (.getFirst "Range"))
+                        size)
+        {:keys [access-token]} (auth/drive-access! auth-system (:subject user))
+        gateway (:drive auth-system)
+        {:keys [body] :as source-response}
+        (drive/open-source-range! gateway access-token file-id
+                                  (select-keys byte-range [:start :end]))
+        response-status (if partial? 206 200)
+        content-length (inc (- end start))]
+    (when-not (valid-playback-response? source-response start end size)
+      (when body (.close ^java.io.InputStream body))
+      (throw (errors/raise! "Google Drive playback response was invalid"
+                            {:type ::drive/invalid-playback-response
+                             :status (long (or (:status source-response) 0))
+                             :size content-length})))
+    (doto (.getResponseHeaders exchange)
+      (.set "Content-Type" mime-type)
+      (.set "Cache-Control" "no-store")
+      (.set "X-Content-Type-Options" "nosniff")
+      (.set "Accept-Ranges" "bytes"))
+    (when partial?
+      (.set (.getResponseHeaders exchange) "Content-Range"
+            (str "bytes " start "-" end "/" size)))
+    (.sendResponseHeaders exchange response-status content-length)
+    (with-open [input ^java.io.InputStream body
+                output (.getResponseBody exchange)]
+      (.transferTo input output))))
+
 (defn- cancel-job! [exchange job-service job-id]
   (let [job (jobs/cancel-job! job-service job-id)]
     (respond-json! exchange
@@ -1861,6 +1967,18 @@
                                     (poll-job! exchange
                                                (require-durable-job!
                                                 job-service job-id)))
+
+                                  (and auth-system job-service (= "POST" method)
+                                       (re-matches completed-playback-session-path-pattern
+                                                   path))
+                                  (let [job-id (nth (.split path "/") 3)]
+                                    (create-completed-playback-session!
+                                     exchange job-service auth-system job-id))
+
+                                  (and auth-system job-service (= "GET" method)
+                                       (re-matches completed-playback-path-pattern path))
+                                  (stream-completed-playback! exchange job-service
+                                                              auth-system path)
 
                                   (and job-service (= "POST" method)
                                        (re-matches #"/internal/v1/jobs/[^/]+/dispatch" path))

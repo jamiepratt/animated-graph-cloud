@@ -150,9 +150,10 @@
                  :timeoutMs 45000})]
     (is (str/includes? h264 "<h2>Finished video ready</h2>"))
     (is (str/includes? h264 "Open finished video in Google Drive"))
-    (is (str/includes? h264 "data-inline-player-slot=\"job-h264\""))
+    (is (str/includes? h264 "data-inline-player-job-id=\"job-h264\""))
+    (is (str/includes? h264 "Preparing inline playback"))
     (is (str/includes? prores "Use this finished video in desktop editing software"))
-    (is (not (str/includes? prores "data-inline-player-slot=")))
+    (is (not (str/includes? prores "data-inline-player-job-id=")))
     (is (str/includes? failed "<h2>Finished video did not complete</h2>"))
     (is (str/includes? failed "Retry"))
     (doseq [developer-detail ["Attempt 2" "worker_failed" "composition_encode"
