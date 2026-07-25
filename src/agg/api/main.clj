@@ -1371,6 +1371,31 @@
                     :contentType mimeType
                     :size size})))
 
+(defn- validate-project-source!
+  [^HttpExchange exchange auth-system]
+  (let [user (require-session-user! exchange auth-system)
+        _ (require-csrf! exchange auth-system user)
+        request (request-json exchange)
+        file-id (:fileId request)
+        _ (when-not (and (= #{:fileId} (set (keys request)))
+                         (string? file-id)
+                         (<= 1 (count file-id) 256))
+            (throw (errors/raise! "Project source reference is invalid"
+                                  {:type ::invalid-playback-source})))
+        {:keys [access-token]} (auth/drive-access! auth-system (:subject user))
+        gateway (:drive auth-system)
+        _ (when-not (satisfies? drive/SourceGateway gateway)
+            (throw (errors/raise! "Drive source dependencies are incomplete"
+                                  {:type ::drive/source-unavailable})))
+        metadata (drive/source-metadata! gateway access-token file-id)
+        prepared (contract/attach-source-metadata
+                  {:source-video {:file-id file-id}} metadata)
+        {:keys [id name mimeType]} (get-in prepared [:source-video :metadata])]
+    (respond-json! exchange 200
+                   {:fileId id
+                    :fileName name
+                    :mimeType mimeType})))
+
 (defn- inspect-recording-clock!
   [^HttpExchange exchange auth-system]
   (let [user (require-session-user! exchange auth-system)
@@ -1784,6 +1809,10 @@
                                   (and auth-system (= "POST" method)
                                        (= "/v1/drive/playback-sessions" path))
                                   (create-playback-session! exchange auth-system)
+
+                                  (and auth-system (= "POST" method)
+                                       (= "/ui/project-source-validation" path))
+                                  (validate-project-source! exchange auth-system)
 
                                   (and auth-system (= "POST" method)
                                        (= "/v1/drive/recording-clock-inspections"
