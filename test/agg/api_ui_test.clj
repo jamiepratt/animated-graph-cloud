@@ -714,6 +714,38 @@
      "Wizard outcome browser regression requires Chrome or Chromium"
      html)))
 
+(defn- wizard-shell-browser-outcome [page window-size]
+  (let [scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "(async()=>{let outcome;try{"
+         "const workflow=document.getElementById('compose-workflow'),header=document.getElementById('wizard-current-step-header'),heading=document.getElementById('wizard-current-step-heading'),progress=document.getElementById('wizard-progress'),stepList=document.getElementById('wizard-step-list'),errorSummary=document.getElementById('wizard-error-summary'),back=document.getElementById('wizard-back'),next=document.getElementById('wizard-next'),finished=document.querySelector('input[name=\"wizard-outcome\"][value=\"finished-video\"]'),transparent=document.querySelector('input[name=\"wizard-outcome\"][value=\"transparent-overlay\"]');"
+         "const current=()=>workflow.dataset.currentStep,activePanels=()=>[...document.querySelectorAll('[data-wizard-panel]')].filter(panel=>!panel.hidden).map(panel=>panel.dataset.stepId),snapshot=()=>({current:current(),heading:heading.textContent,progress:progress.textContent,activePanels:activePanels(),currentSemantic:header.getAttribute('aria-current'),currentButtons:[...stepList.querySelectorAll('[aria-current=\"step\"]')].map(button=>button.dataset.stepId),backDisabled:back.disabled,nextHidden:next.hidden,focus:document.activeElement.id||null,noOverflow:document.documentElement.scrollWidth<=innerWidth});"
+         "const initial=snapshot();"
+         "finished.click();const finishedRoute=snapshot();next.click();const source=snapshot();"
+         "next.click();const sourceError={...snapshot(),message:errorSummary.textContent,errorFocused:document.activeElement===errorSummary};"
+         "document.getElementById('source-video-file-id').value='drive-source';next.click();const clock=snapshot();"
+         "const backedPop=new Promise(resolve=>window.addEventListener('popstate',()=>setTimeout(resolve,0),{once:true}));back.click();await backedPop;const backed=snapshot();const outcomeButton=[...stepList.querySelectorAll('button')].find(button=>button.dataset.stepId==='outcome');outcomeButton.click();const direct=snapshot();"
+         "transparent.click();const transparentRoute=snapshot();next.click();const timespan=snapshot();next.click();const timingError={...snapshot(),message:errorSummary.textContent,errorFocused:document.activeElement===errorSummary};"
+         "document.getElementById('timezone').value='UTC';document.getElementById('section-start-at').value='2026-07-17T09:00:00';document.getElementById('section-end-at').value='2026-07-17T09:00:02';next.click();const activity=snapshot();"
+         "document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T09:00:00Z,120';next.click();const synchronization=snapshot();"
+         "document.querySelector('input[name=\"synchronization-mode\"][value=\"shared-clock\"]').click();const shared={...snapshot(),stepCount:stepList.querySelectorAll('li').length};"
+         "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();const manual={...snapshot(),stepCount:stepList.querySelectorAll('li').length};next.click();const matching=snapshot();next.click();const matchingError={...snapshot(),message:errorSummary.textContent,errorFocused:document.activeElement===errorSummary};"
+         "const popped=new Promise(resolve=>window.addEventListener('popstate',()=>setTimeout(resolve,0),{once:true}));history.back();await popped;const browserBack=snapshot();"
+         "document.querySelector('input[name=\"synchronization-mode\"][value=\"shared-clock\"]').click();next.click();const optional=snapshot();document.getElementById('timer-enabled').click();const branched={...snapshot(),stepCount:stepList.querySelectorAll('li').length};next.click();const timer=snapshot();document.getElementById('timer-start-at').value='';document.getElementById('timer-end-at').value='';next.click();const timerError={...snapshot(),message:errorSummary.textContent,errorFocused:document.activeElement===errorSummary};document.getElementById('timer-enabled').click();const pruned={...snapshot(),stepCount:stepList.querySelectorAll('li').length};"
+         "outcome={viewportWidth:innerWidth,initial,finishedRoute,source,sourceError,clock,backed,direct,transparentRoute,timespan,timingError,activity,synchronization,shared,manual,matching,matchingError,browserBack,optional,branched,timer,timerError,pruned};"
+         "}catch(error){outcome={error:error.message,stack:error.stack};}"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-wizard-shell-browser-"
+     "Wizard shell browser regression requires Chrome or Chromium"
+     html
+     (str "--window-size=" window-size))))
+
 (defn- synchronization-mode-browser-outcome [page]
   (let [manual (assoc (fixture/render-request)
                       :synchronizationMode "manual-anchor")
@@ -798,10 +830,9 @@
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
-         "const shell=document.querySelector('.shell'),form=document.getElementById('render-form'),reference=document.querySelector('#compose-workflow > .drive-card'),source=document.getElementById('video-player');"
-         "source.hidden=!" reveal-source? ";"
-         "const rect=node=>{const value=node.getBoundingClientRect();return {left:value.left,right:value.right,width:value.width};},referenceRect=rect(reference),cards=[...form.querySelectorAll(':scope > .card')],cardRects=cards.map(card=>({heading:card.querySelector('h2,summary')?.textContent||'Preview and finished-video actions',...rect(card)})),aligned=value=>Math.abs(value.left-referenceRect.left)<=.5&&Math.abs(value.right-referenceRect.right)<=.5;"
-         "outcome={viewportWidth:innerWidth,revealedSource:!source.hidden,form:rect(form),reference:referenceRect,cards:cardRects,aligned:aligned(rect(form))&&cardRects.every(aligned),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,shellFits:shell.getBoundingClientRect().left>=-.5&&shell.getBoundingClientRect().right<=innerWidth+.5};"
+         "const shell=document.querySelector('.shell'),navigation=document.getElementById('wizard-navigation'),route=document.querySelector('input[name=\"wizard-outcome\"][value=\"" (if reveal-source? "finished-video" "transparent-overlay") "\"]'),next=document.getElementById('wizard-next');route.click();next.click();"
+         "const rect=node=>{const value=node.getBoundingClientRect();return {left:value.left,right:value.right,width:value.width};},referenceRect=rect(navigation),panels=[...document.querySelectorAll('[data-wizard-panel]')].filter(panel=>!panel.hidden),panelRects=panels.map(panel=>({step:panel.dataset.stepId,heading:panel.querySelector('h2,summary')?.textContent||'',...rect(panel)})),aligned=value=>Math.abs(value.left-referenceRect.left)<=.5&&Math.abs(value.right-referenceRect.right)<=.5;"
+         "outcome={viewportWidth:innerWidth,route:route.value,currentStep:document.getElementById('compose-workflow').dataset.currentStep,reference:referenceRect,panels:panelRects,aligned:panels.length===1&&panelRects.every(aligned),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,shellFits:shell.getBoundingClientRect().left>=-.5&&shell.getBoundingClientRect().right<=innerWidth+.5};"
          "}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
          "</script>")
         html (-> page
@@ -869,8 +900,8 @@
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
-         "const links=[...document.querySelectorAll('.contextual-help')].filter(link=>!link.closest('[hidden]')),styles=[...document.querySelectorAll('style')].map(node=>node.textContent).join(''),declaredFocus=styles.includes(':focus,:focus-visible{outline:3px solid var(--color-warning)');"
-         "const presentations=links.map(link=>{link.focus({focusVisible:true});const rect=link.getBoundingClientRect(),style=getComputedStyle(link),wrapper=link.closest('.help-heading,.help-label,.toggle-help'),wrapperRect=wrapper?.getBoundingClientRect(),associated=wrapper?.querySelector(':scope>h1,:scope>h2,:scope>h3,:scope>label,:scope>strong,:scope>.toggle'),associatedRect=associated?.getBoundingClientRect(),mark=link.querySelector('.contextual-help-mark'),markRect=mark?.getBoundingClientRect(),centerDelta=markRect&&associatedRect?Math.abs((markRect.top+markRect.bottom-associatedRect.top-associatedRect.bottom)/2):null,computedFocus=style.outlineStyle!=='none'&&parseFloat(style.outlineWidth)>=3,overlapsSibling=wrapper?[...wrapper.children].some(node=>{if(node===link)return false;const siblingRect=node.getBoundingClientRect();return rect.left<siblingRect.right&&rect.right>siblingRect.left&&rect.top<siblingRect.bottom&&rect.bottom>siblingRect.top;}):true;return {href:link.getAttribute('href'),name:link.getAttribute('aria-label'),target:link.getAttribute('target'),text:link.textContent.trim(),symbolHidden:link.querySelector('[aria-hidden=\"true\"]')?.textContent==='?',width:rect.width,height:rect.height,markWidth:markRect?.width??null,markHeight:markRect?.height??null,associatedWidth:associatedRect?.width??null,associatedHeight:associatedRect?.height??null,wrapperWidth:wrapperRect?.width??null,wrapperContained:!!wrapper&&wrapper.scrollWidth<=wrapper.clientWidth+.5,associatedFontSize:associated?parseFloat(getComputedStyle(associated).fontSize):null,centerDelta,aligned:centerDelta!==null&&centerDelta<=1,fits:rect.left>=-.5&&rect.right<=window.innerWidth+.5,visible:style.display!=='none'&&style.visibility!=='hidden',keyboardReachable:link.tabIndex>=0,focusVisible:computedFocus||declaredFocus,associated:!!associated,overlapsSibling,insideLabel:!!link.closest('label')};});"
+         "const links=[...document.querySelectorAll('.contextual-help')],styles=[...document.querySelectorAll('style')].map(node=>node.textContent).join(''),declaredFocus=styles.includes(':focus,:focus-visible{outline:3px solid var(--color-warning)'),expose=link=>{const panel=link.closest('[data-wizard-panel]');if(panel){document.querySelectorAll('[data-wizard-panel]').forEach(candidate=>{candidate.hidden=true;});for(let node=link;node&&node!==panel.parentElement;node=node.parentElement)node.hidden=false;}};"
+         "const presentations=links.map(link=>{expose(link);link.focus({focusVisible:true});const rect=link.getBoundingClientRect(),style=getComputedStyle(link),wrapper=link.closest('.help-heading,.help-label,.toggle-help'),wrapperRect=wrapper?.getBoundingClientRect(),associated=wrapper?.querySelector(':scope>h1,:scope>h2,:scope>h3,:scope>label,:scope>strong,:scope>.toggle'),associatedRect=associated?.getBoundingClientRect(),mark=link.querySelector('.contextual-help-mark'),markRect=mark?.getBoundingClientRect(),centerDelta=markRect&&associatedRect?Math.abs((markRect.top+markRect.bottom-associatedRect.top-associatedRect.bottom)/2):null,computedFocus=style.outlineStyle!=='none'&&parseFloat(style.outlineWidth)>=3,overlapsSibling=wrapper?[...wrapper.children].some(node=>{if(node===link)return false;const siblingRect=node.getBoundingClientRect();return rect.left<siblingRect.right&&rect.right>siblingRect.left&&rect.top<siblingRect.bottom&&rect.bottom>siblingRect.top;}):true;return {href:link.getAttribute('href'),name:link.getAttribute('aria-label'),target:link.getAttribute('target'),text:link.textContent.trim(),symbolHidden:link.querySelector('[aria-hidden=\"true\"]')?.textContent==='?',width:rect.width,height:rect.height,markWidth:markRect?.width??null,markHeight:markRect?.height??null,associatedWidth:associatedRect?.width??null,associatedHeight:associatedRect?.height??null,wrapperWidth:wrapperRect?.width??null,wrapperContained:!!wrapper&&wrapper.scrollWidth<=wrapper.clientWidth+.5,associatedFontSize:associated?parseFloat(getComputedStyle(associated).fontSize):null,centerDelta,aligned:centerDelta!==null&&centerDelta<=1,fits:rect.left>=-.5&&rect.right<=window.innerWidth+.5,visible:style.display!=='none'&&style.visibility!=='hidden',keyboardReachable:link.tabIndex>=0,focusVisible:computedFocus||declaredFocus,associated:!!associated,overlapsSibling,insideLabel:!!link.closest('label')};});"
          "outcome={presentations,viewportWidth:window.innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth,hoverStyled:styles.includes('.contextual-help:hover .contextual-help-mark{background:var(--color-accent);border-color:var(--color-accent)}')};"
          "}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
          "</script>")
@@ -923,7 +954,7 @@
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "document.addEventListener('DOMContentLoaded',async()=>{let outcome;try{"
-         "document.getElementById('source-output-controls').hidden=false;document.getElementById('video-clock-confirmation').hidden=false;const dialog=document.getElementById('contextual-help-dialog'),title=document.getElementById('contextual-help-title'),answer=document.getElementById('contextual-help-answer'),full=document.getElementById('contextual-help-full'),close=document.querySelector('.contextual-help-close'),links=[...document.querySelectorAll('.contextual-help')].filter(link=>!link.closest('[hidden]')),video=document.getElementById('source-video-player'),baseUrl=location.href;"
+         "document.getElementById('source-output-controls').hidden=false;document.getElementById('video-clock-confirmation').hidden=false;const dialog=document.getElementById('contextual-help-dialog'),title=document.getElementById('contextual-help-title'),answer=document.getElementById('contextual-help-answer'),full=document.getElementById('contextual-help-full'),close=document.querySelector('.contextual-help-close'),links=[...document.querySelectorAll('.contextual-help')],video=document.getElementById('source-video-player'),baseUrl=location.href,expose=link=>{const panel=link.closest('[data-wizard-panel]');if(panel){document.querySelectorAll('[data-wizard-panel]').forEach(candidate=>{candidate.hidden=true;});for(let node=link;node&&node!==panel.parentElement;node=node.parentElement)node.hidden=false;}};"
          "if(!dialog||!title||!answer||!full||!close)throw new Error('Contextual help dialog is unavailable');"
          "const tick=()=>new Promise(resolve=>setTimeout(resolve,0)),waitPop=(action,expectedFragment)=>new Promise(resolve=>{const onPop=event=>{if((event.state?.contextualHelp||null)!==expectedFragment)return;window.removeEventListener('popstate',onPop);setTimeout(()=>resolve(true),0);};window.addEventListener('popstate',onPop);action();}),safeClick=link=>{link.addEventListener('click',event=>event.preventDefault(),{once:true});link.click();if(!dialog.open)throw new Error('Contextual help link did not open the dialog');};"
          "const fragment=link=>new URL(link.href).hash.slice(1),templateFor=link=>[...dialog.querySelectorAll('template[data-contextual-help-fragment]')].find(template=>template.dataset.contextualHelpFragment===fragment(link));"
@@ -932,9 +963,9 @@
          "const telemetryContent='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120\\n2026-07-17T10:00:02Z,124',telemetryFile=document.getElementById('telemetry-file'),transfer=new DataTransfer(),selectedFile=new File([telemetryContent],'activity.csv',{type:'text/csv'});transfer.items.add(selectedFile);telemetryFile.files=transfer.files;document.getElementById('source-video-file-id').value='private-drive-video';document.getElementById('picker-selection').textContent='training.mp4';document.getElementById('output-format').value='prores-422-mov';document.getElementById('fit-mode').value='crop';document.getElementById('audio-mode').value='source-only';document.getElementById('preset').value='2.7k25';document.getElementById('timezone').value='UTC';document.getElementById('future-trace-opacity-percent').value='37';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02'],['timer-start-at','2026-07-17T10:00:00'],['timer-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);document.getElementById('spo2-enabled').checked=true;document.getElementById('spo2-telemetry').value='reading_time,spo2\\n2026-07-17T10:00:00Z,97';document.getElementById('timer-enabled').checked=true;telemetryFile.dispatchEvent(new Event('change',{bubbles:true}));await new Promise((resolve,reject)=>{const deadline=Date.now()+1000,check=()=>{if(document.getElementById('telemetry-status').classList.contains('success'))resolve();else if(Date.now()>deadline)reject(new Error('Telemetry file was not loaded'));else setTimeout(check,5);};check();});document.getElementById('video-recording-start').value='2026-07-17T10:00:00';document.getElementById('video-timezone').value='UTC';document.getElementById('confirm-video-clock').click();"
          "const previewResult=document.getElementById('preview-result'),jobResult=document.getElementById('job-result'),renderForm=document.getElementById('render-form'),raw=document.getElementById('raw-json');previewResult.innerHTML='<article class=\"preview-gallery\" data-preview-operation=\"preview-live\"><h2>Preview ready</h2></article>';jobResult.innerHTML='<article class=\"job\" id=\"job-live\" data-job-state=\"running\"><h2>Creating finished video</h2></article>';document.getElementById('video-player').hidden=false;video.setAttribute('src','/v1/drive/playback/live-compose-state');video.currentTime=42.25;"
          "const snapshotState=async()=>({drive:{fileId:document.getElementById('source-video-file-id').value,selection:document.getElementById('picker-selection').textContent,playerSrc:video.getAttribute('src'),playhead:video.currentTime},form:{outputFormat:document.getElementById('output-format').value,fitMode:document.getElementById('fit-mode').value,audioMode:document.getElementById('audio-mode').value,preset:document.getElementById('preset').value,timeZone:document.getElementById('timezone').value,opacity:document.getElementById('future-trace-opacity-percent').value,spo2Enabled:document.getElementById('spo2-enabled').checked,timerEnabled:document.getElementById('timer-enabled').checked},file:{count:telemetryFile.files.length,name:telemetryFile.files[0]?.name||null,text:telemetryFile.files[0]?await telemetryFile.files[0].text():null,loadedValue:document.getElementById('telemetry').value},raw:raw.value,hidden:document.getElementById('render-request').value,preview:previewResult.innerHTML,job:jobResult.innerHTML});const stateBefore=await snapshotState(),liveNodes={form:renderForm,file:telemetryFile,preview:previewResult,job:jobResult};"
-         "const exerciseHistory=" exercise-history? ";await video.play();const first=links[0];first.focus();safeClick(first);await tick();const opened=inspect(first),pausedOnOpen={paused:video.paused,currentTime:video.currentTime,playCalls:window.__helpMedia.playCalls,pauseCalls:window.__helpMedia.pauseCalls},presentations=[opened];let back=null,forward=null,closed=null;"
+         "const exerciseHistory=" exercise-history? ";await video.play();const first=links[0];expose(first);first.focus();safeClick(first);await tick();const opened=inspect(first),pausedOnOpen={paused:video.paused,currentTime:video.currentTime,playCalls:window.__helpMedia.playCalls,pauseCalls:window.__helpMedia.pauseCalls},presentations=[opened];let back=null,forward=null,closed=null;"
          "if(exerciseHistory){const backPopped=await waitPop(()=>history.back(),null);back={popped:backPopped,open:dialog.open,focusReturned:document.activeElement===first,currentTime:video.currentTime,paused:video.paused};const forwardPopped=await waitPop(()=>history.forward(),fragment(first));forward={popped:forwardPopped,...inspect(first)};const closePopped=await waitPop(()=>close.click(),null);closed={popped:closePopped,open:dialog.open,focusReturned:document.activeElement===first,currentTime:video.currentTime,paused:video.paused};}else{history.replaceState(null,'',location.href);dialog.close();opened.closed=!dialog.open&&document.activeElement===first;}"
-         "for(const link of links.slice(1)){link.focus();safeClick(link);await tick();const presentation=inspect(link);presentations.push(presentation);if(exerciseHistory&&link===links[1]){const popPromise=waitPop(()=>{},null),cancelEvent=new Event('cancel',{cancelable:true}),cancelPrevented=!dialog.dispatchEvent(cancelEvent),popped=await popPromise;presentation.escape={cancelPrevented,popped,open:dialog.open,focusReturned:document.activeElement===link};}else{history.replaceState(null,'',location.href);dialog.close();presentation.closePopped=true;presentation.closed=!dialog.open&&document.activeElement===link;}}"
+         "for(const link of links.slice(1)){expose(link);link.focus();safeClick(link);await tick();const presentation=inspect(link);presentations.push(presentation);if(exerciseHistory&&link===links[1]){const popPromise=waitPop(()=>{},null),cancelEvent=new Event('cancel',{cancelable:true}),cancelPrevented=!dialog.dispatchEvent(cancelEvent),popped=await popPromise;presentation.escape={cancelPrevented,popped,open:dialog.open,focusReturned:document.activeElement===link};}else{history.replaceState(null,'',location.href);dialog.close();presentation.closePopped=true;presentation.closed=!dialog.open&&document.activeElement===link;}}"
          "document.getElementById('copy-json').click();await tick();const stateAfter=await snapshotState(),statePreserved=JSON.stringify(stateBefore)===JSON.stringify(stateAfter)&&liveNodes.form===document.getElementById('render-form')&&liveNodes.file===document.getElementById('telemetry-file')&&liveNodes.preview===document.getElementById('preview-result')&&liveNodes.job===document.getElementById('job-result')&&selectedFile===document.getElementById('telemetry-file').files[0];outcome={exerciseHistory,linkCount:links.length,presentations,pausedOnOpen,back,forward,closed,stateBefore,stateAfter,statePreserved,finalPlayback:{paused:video.paused,currentTime:video.currentTime,playCalls:window.__helpMedia.playCalls},viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));},{once:true});"
          "</script>")
@@ -1534,6 +1565,10 @@
                             "Learn about generated heartbeat audio"]]
         expected-compose [["/faq#google-drive-access"
                            "Learn about Google Drive access"]
+                          ["/faq#audio-options"
+                           "Learn about heartbeat audio options"]
+                          ["/faq#video-timezone"
+                           "Learn which video timezone to choose"]
                           ["/faq#synchronizing-data-and-camera"
                            "Learn about activity-data synchronization"]
                           ["/faq#supported-activity-data"
@@ -1719,7 +1754,7 @@
         (is (true? (:backgroundIncludesAsset outcome)))
         (is (false? (:backgroundAnimated outcome)))))))
 
-(deftest compose-workflow-cards-share-one-responsive-column
+(deftest compose-wizard-panels-share-one-responsive-column
   (let [page (ui/page {:user {:email "owner@example.com" :role :owner}
                        :csrf "csrf-test"
                        :tokens []
@@ -1736,12 +1771,15 @@
     (doseq [[surface outcome] outcomes]
       (testing surface
         (is (nil? (:error outcome)) (:error outcome))
-        (is (= ["Set output timing"
-                "Choose your activity data"
-                "Optional overlays"
-                "Advanced: paste or inspect raw JSON"
-                "Preview and finished-video actions"]
-               (mapv :heading (:cards outcome))))
+        (if (str/includes? surface "revealed source")
+          (do
+            (is (= "finished-video" (:route outcome)))
+            (is (= "source-video" (:currentStep outcome)))
+            (is (= ["source-video"] (mapv :step (:panels outcome)))))
+          (do
+            (is (= "transparent-overlay" (:route outcome)))
+            (is (= "overlay-timespan" (:currentStep outcome)))
+            (is (= ["overlay-timespan"] (mapv :step (:panels outcome))))))
         (is (true? (:aligned outcome)) (pr-str outcome))
         (is (true? (:noHorizontalOverflow outcome)) (pr-str outcome))
         (is (true? (:shellFits outcome)) (pr-str outcome))))))
@@ -1922,6 +1960,95 @@
     (is (not (str/includes? page "localStorage")))
     (is (not (str/includes? page "sessionStorage")))))
 
+(deftest authenticated-compose-renders-semantic-wizard-navigation
+  (let [page (ui/page {:user {:email "member@example.com"
+                              :role :member}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})]
+    (doseq [fragment ["id=\"wizard-current-step-header\""
+                      "id=\"wizard-current-step-heading\""
+                      "id=\"wizard-progress\""
+                      "id=\"wizard-step-overview\""
+                      "id=\"wizard-step-list\""
+                      "id=\"wizard-error-summary\""
+                      "id=\"wizard-back\""
+                      "id=\"wizard-next\""
+                      "aria-current=\"step\""
+                      "data-wizard-panel"
+                      "data-step-id=\"source-video\""
+                      "data-step-id=\"video-recording-clock\""
+                      "data-step-id=\"overlay-timespan\""
+                      "data-step-id=\"activity-data\""
+                      "data-step-id=\"synchronization\""
+                      "data-step-id=\"matching-moment\""
+                      "data-step-id=\"optional-overlays\""
+                      "data-step-id=\"output-settings\""
+                      "data-step-id=\"review\""]]
+      (is (str/includes? page fragment) fragment))))
+
+(deftest wizard-shell-gates-and-restores-navigation-on-both-routes
+  (let [page (ui/page {:user {:email "member@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})
+        outcomes [(wizard-shell-browser-outcome page "1280,900")
+                  (wizard-shell-browser-outcome page "390,844")]]
+    (doseq [outcome outcomes]
+      (is (nil? (:error outcome)) outcome)
+      (is (= {:current "outcome"
+              :heading "What would you like to make?"
+              :progress "Step 1 of 1"
+              :activePanels ["outcome"]
+              :currentSemantic "step"
+              :currentButtons []
+              :backDisabled true
+              :nextHidden false
+              :focus nil
+              :noOverflow true}
+             (:initial outcome)))
+      (is (= "Step 1 of 8" (get-in outcome [:finishedRoute :progress])))
+      (is (= "outcome" (get-in outcome [:finishedRoute :current])))
+      (is (= "source-video" (get-in outcome [:source :current])))
+      (is (= ["source-video"] (get-in outcome [:source :activePanels])))
+      (is (= ["source-video"] (get-in outcome [:source :currentButtons])))
+      (is (= "Step 2 of 8" (get-in outcome [:source :progress])))
+      (is (true? (get-in outcome [:sourceError :errorFocused])))
+      (is (str/includes? (get-in outcome [:sourceError :message])
+                         "source video"))
+      (is (= "video-recording-clock" (get-in outcome [:clock :current])))
+      (is (= "source-video" (get-in outcome [:backed :current])))
+      (is (= "outcome" (get-in outcome [:direct :current])))
+      (is (= "Step 1 of 7"
+             (get-in outcome [:transparentRoute :progress])))
+      (is (= "overlay-timespan" (get-in outcome [:timespan :current])))
+      (is (true? (get-in outcome [:timingError :errorFocused])))
+      (is (str/includes? (get-in outcome [:timingError :message])
+                         "Output start"))
+      (is (= "activity-data" (get-in outcome [:activity :current])))
+      (is (= "synchronization"
+             (get-in outcome [:synchronization :current])))
+      (is (= 7 (get-in outcome [:shared :stepCount])))
+      (is (= 8 (get-in outcome [:manual :stepCount])))
+      (is (= "matching-moment" (get-in outcome [:matching :current])))
+      (is (true? (get-in outcome [:matchingError :errorFocused])))
+      (is (= "synchronization"
+             (get-in outcome [:browserBack :current])))
+      (is (true? (get-in outcome [:browserBack :noOverflow])))
+      (is (= "optional-overlays" (get-in outcome [:optional :current])))
+      (is (= 8 (get-in outcome [:branched :stepCount])))
+      (is (= "timer-overlay" (get-in outcome [:timer :current])))
+      (is (true? (get-in outcome [:timerError :errorFocused])))
+      (is (str/includes? (get-in outcome [:timerError :message])
+                         "Timer start"))
+      (is (= "optional-overlays" (get-in outcome [:pruned :current])))
+      (is (= 7 (get-in outcome [:pruned :stepCount])))
+      (is (true? (get-in outcome [:pruned :noOverflow]))))
+    (is (= 1280 (:viewportWidth (first outcomes))))
+    (is (<= (:viewportWidth (second outcomes)) 500))))
+
 (deftest outcome-route-switches-project-only-active-data-and-restore-dormant-source
   (let [outcome
         (wizard-outcome-browser-outcome
@@ -1935,20 +2062,20 @@
            (:initial outcome)))
     (is (= {:workflowHidden false
             :route "finished-video"
-            :currentStep "source-video"
+            :currentStep "outcome"
             :selected "finished-video"
             :source "drive-source"
             :projectedSource "drive-source"}
            (:applied outcome)))
     (is (= {:route "transparent-overlay"
-            :currentStep "overlay-timespan"
+            :currentStep "outcome"
             :selected true
             :sourceDraft "drive-source"
             :projectedSource nil
             :outputFormat nil}
            (:inactive outcome)))
     (is (= {:route "finished-video"
-            :currentStep "source-video"
+            :currentStep "outcome"
             :selected true
             :source "drive-source"
             :projectedSource "drive-source"
@@ -2443,7 +2570,7 @@
                   (no-source-timer-browser-outcome page "390,844")]]
     (doseq [outcome outcomes]
       (is (nil? (:error outcome)) outcome)
-      (is (= {:workspaceHidden false
+      (is (= {:workspaceHidden true
               :timelineHidden true
               :sourceControlsHidden true
               :summaryHidden false}
