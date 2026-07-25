@@ -26,6 +26,47 @@
 (def ^:private overlay-order
   [:timer :spo2 :watermark])
 
+(def ^:private step-copy
+  {:outcome
+   {:title "What would you like to make?"
+    :description "Choose the kind of video workflow you want to complete."}
+   :source-video
+   {:title "Choose your source video"
+    :description "Choose exactly one video from Google Drive."}
+   :video-recording-clock
+   {:title "Confirm when your video was recorded"
+    :description "Check the detected suggestion, recording start, and video timezone."}
+   :overlay-timespan
+   {:title "Choose the overlay timespan"
+    :description "Set the start, end, and timezone for the transparent overlay."}
+   :activity-data
+   {:title "Choose your heart-rate file"
+    :description "Provide the activity data used to draw the heart-rate trace."}
+   :synchronization
+   {:title "Were your device clocks synchronized?"
+    :description "Choose whether the camera and activity device used the same clock."}
+   :matching-moment
+   {:title "Match one moment"
+    :description "Enter one recognizable moment on both device clocks."}
+   :optional-overlays
+   {:title "Choose optional overlays"
+    :description "Add only the supporting overlays you want."}
+   :timer-overlay
+   {:title "Set the elapsed timer"
+    :description "Choose timer boundaries inside the output range."}
+   :spo2-overlay
+   {:title "Choose OxiWear SpO2 data"
+    :description "Provide the optional oxygen-saturation CSV."}
+   :watermark-overlay
+   {:title "Choose a PNG watermark"
+    :description "Provide the optional watermark image."}
+   :output-settings
+   {:title "Choose output settings"
+    :description "Choose the preset and settings for the active output route."}
+   :review
+   {:title "Review and create"
+    :description "Inspect the active request before previewing or creating the output."}})
+
 (def ^:private finished-video-request-fields
   [:sourceVideo :outputFormat :fitMode :audioMode])
 
@@ -243,4 +284,11 @@
                    [(name overlay) (name step)]))
          overlay-step)
    "overlayOrder" (mapv name overlay-order)
-   "tail" ["output-settings" "review"]})
+   "tail" ["output-settings" "review"]
+   "copy"
+   (into {}
+         (map (fn [[step {:keys [title description]}]]
+                [(name step)
+                 {"title" title
+                  "description" description}]))
+         step-copy)})

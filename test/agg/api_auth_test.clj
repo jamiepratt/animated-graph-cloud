@@ -1177,9 +1177,9 @@
                       "folders are only for navigation"
                       "Shared Drive"
                       "upload a source video"
-                      "access to that file only"
-                      "2 GiB limit"]]
+                      "access to that file only"]]
           (is (str/includes? (.body authenticated) copy) copy))
+        (is (not (str/includes? (.body authenticated) "2 GiB limit")))
         (is (not (re-find #"window\.open\('/v1/drive/picker'" (.body authenticated))))
         (is (not (re-find #"addEventListener\('message'" (.body authenticated))))
         (is (not (re-find #"Select Drive input" (.body authenticated)))))
