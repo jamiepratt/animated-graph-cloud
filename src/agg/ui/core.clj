@@ -570,29 +570,82 @@
                             state)
         cancellable? (contains? #{"queued" "launching" "running"} state)
         retryable? (jobs/retry-eligible? job)
-        drive-link (:driveWebViewLink output)]
+        drive-link (:driveWebViewLink output)
+        content-type (:contentType output)
+        h264? (= "video/mp4" content-type)
+        prores? (= "video/quicktime" content-type)
+        heading (case state
+                  "queued" "Finished video queued"
+                  "launching" "Starting finished video"
+                  "running" "Creating finished video"
+                  "cancellation-requested" "Cancellation requested"
+                  "cancelled" "Finished video cancelled"
+                  "failed" "Finished video did not complete"
+                  "succeeded" (if h264?
+                                "Finished video ready"
+                                "Finished video delivered")
+                  (title-case state))
+        summary (case state
+                  "queued"
+                  "Your finished video is queued. This page updates automatically."
+                  "launching"
+                  "Your finished video is starting now. This page updates automatically."
+                  "running"
+                  "Your finished video is rendering now. Keep this page open to watch progress."
+                  "cancellation-requested"
+                  "Alpha Compose is stopping this finished video now."
+                  "cancelled"
+                  "This finished video was cancelled before delivery completed."
+                  "failed"
+                  (cond
+                    (= "source_duration_too_short" (:reason job))
+                    "The selected video ends before the requested section. Shorten the section or choose a longer video, then retry."
+
+                    (false? retryable)
+                    "Check the selected video and current settings, then start another finished video."
+
+                    :else
+                    "This finished video stopped before delivery completed. Retry when ready.")
+                  "succeeded"
+                  (cond
+                    h264?
+                    "Open the MP4 in Google Drive. Inline playback appears below this card."
+
+                    prores?
+                    "Use this finished video in desktop editing software that supports ProRes exports."
+
+                    :else
+                    "Open the finished video in Google Drive.")
+                  "")
+        progress-copy (case state
+                        "queued" "Waiting for a render slot."
+                        "launching" "Preparing the render worker."
+                        "running" "Rendering and delivering the finished video."
+                        "cancellation-requested" "Stopping the active render."
+                        nil)]
     (str "<article id=\"job-" (escape-html id) "\" class=\"job\" data-job-state=\""
          (escape-html state) "\""
          (when polling?
            (str " hx-get=\"" (escape-html path)
                 "\" hx-trigger=\"load delay:2s\" hx-swap=\"outerHTML\""))
-         "><h2>" (escape-html (title-case state))
-         "</h2><p>Attempt " (long attempt) "</p>"
-         (when failureCode
-           (str "<p>Failure: " (escape-html failureCode) "</p>"))
-         (when stage
-           (str "<p>Stage: " (escape-html (title-case stage)) "</p>"))
-         (when (some? status)
-           (str "<p>Status: " (long status) "</p>"))
-         (when (some? retryable)
-           (str "<p>Retryable: " (if retryable "yes" "no") "</p>"))
-         (when (some? elapsedMs)
-           (str "<p>Elapsed: " (long elapsedMs) " ms</p>"))
-         (when (some? timeoutMs)
-           (str "<p>Deadline: " (long timeoutMs) " ms</p>"))
+         " role=\"status\" aria-live=\"polite\"><h2>" (escape-html heading)
+         "</h2><p>" (escape-html summary) "</p>"
+         (when progress-copy
+           (str "<p class=\"muted\">" (escape-html progress-copy) "</p>"
+                "<div class=\"button-with-spinner\"><span class=\"button-spinner\" aria-hidden=\"true\"></span><span>Updating automatically</span></div>"))
+         (when (and (= "failed" state) retryable?)
+           "<p class=\"muted\">Retry keeps the same request and starts a new finished-video attempt.</p>")
          (when drive-link
            (str "<p><a href=\"" (escape-html drive-link)
-                "\" rel=\"noopener noreferrer\">Open result in Google Drive</a></p>"))
+                "\" rel=\"noopener noreferrer\">"
+                (if (= "succeeded" state)
+                  "Open finished video in Google Drive"
+                  "Open result in Google Drive")
+                "</a></p>"))
+         (when (and (= "succeeded" state) h264?)
+           (str "<div class=\"job-player-slot\" data-inline-player-slot=\""
+                (escape-html id)
+                "\" aria-label=\"Finished video player\"></div>"))
          (when cancellable?
            (str "<button type=\"button\" hx-post=\"" (escape-html path)
                 "/cancel\" hx-target=\"#job-" (escape-html id)
