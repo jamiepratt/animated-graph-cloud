@@ -879,11 +879,11 @@
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
-         "const workflow=document.getElementById('compose-workflow'),raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),next=document.getElementById('wizard-next'),video=document.getElementById('source-video-player'),modeLabel=document.getElementById('timeline-mode-label'),modeStatus=document.getElementById('timeline-mode-status'),marker=document.getElementById('manual-sync-marker'),sourceElapsed=document.getElementById('manual-sync-source-seconds'),sourceElapsedText=document.getElementById('manual-sync-elapsed'),activity=document.getElementById('telemetry-sync-at'),camera=document.getElementById('camera-sync-at'),submit=document.getElementById('submit-button'),input=node=>node.dispatchEvent(new Event('input',{bubbles:true})),snapshot=()=>({current:workflow.dataset.currentStep,mode:modeLabel?.textContent||null,status:modeStatus?.textContent||null,transport:document.getElementById('video-time').textContent,ticks:[...document.getElementById('video-ticks').children].map(node=>node.textContent),timelineText:document.getElementById('video-timeline').getAttribute('aria-valuetext'),marker:{hidden:marker.hidden,disabled:marker.disabled,value:marker.getAttribute('aria-valuenow'),text:marker.getAttribute('aria-valuetext')},sourceSeconds:sourceElapsed?.value||null,sourceText:sourceElapsedText?.textContent||null,cameraType:camera.type,clockPanelHidden:document.getElementById('video-clock-confirmation').hidden,submitDisabled:submit.disabled,browserOption:document.getElementById('timezone').options[0].textContent});"
-         "raw.value=JSON.stringify(" (json/write-str request) ");apply.click();Object.defineProperty(video,'duration',{configurable:true,value:125.5});Object.defineProperty(video,'paused',{configurable:true,value:true});video.dispatchEvent(new Event('loadedmetadata'));next.click();next.click();next.click();document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();const elapsed=snapshot();"
+         "const workflow=document.getElementById('compose-workflow'),raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),next=document.getElementById('wizard-next'),video=document.getElementById('source-video-player'),timeline=document.getElementById('video-timeline'),modeLabel=document.getElementById('timeline-mode-label'),modeStatus=document.getElementById('timeline-mode-status'),marker=document.getElementById('manual-sync-marker'),sourceElapsed=document.getElementById('manual-sync-source-seconds'),sourceElapsedText=document.getElementById('manual-sync-elapsed'),activity=document.getElementById('telemetry-sync-at'),camera=document.getElementById('camera-sync-at'),submit=document.getElementById('submit-button'),input=node=>node.dispatchEvent(new Event('input',{bubbles:true})),snapshot=()=>({current:workflow.dataset.currentStep,mode:modeLabel?.textContent||null,status:modeStatus?.textContent||null,transport:document.getElementById('video-time').textContent,ticks:[...document.getElementById('video-ticks').children].map(node=>node.textContent),timelineText:timeline.getAttribute('aria-valuetext'),marker:{hidden:marker.hidden,disabled:marker.disabled,value:marker.getAttribute('aria-valuenow'),text:marker.getAttribute('aria-valuetext')},sourceSeconds:sourceElapsed?.value??null,sourceText:sourceElapsedText?.textContent||null,videoCurrent:video.currentTime,cameraType:camera.type,clockPanelHidden:document.getElementById('video-clock-confirmation').hidden,submitDisabled:submit.disabled,browserOption:document.getElementById('timezone').options[0].textContent});"
+         "raw.value=JSON.stringify(" (json/write-str request) ");apply.click();next.click();next.click();next.click();document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();const unavailable=snapshot();Object.defineProperty(video,'duration',{configurable:true,value:125.5});Object.defineProperty(video,'paused',{configurable:true,value:true});video.dispatchEvent(new Event('loadedmetadata'));const elapsed=snapshot();"
          "marker.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));const selected=snapshot();activity.value='2026-10-25T01:30:00';input(activity);const synced=snapshot(),generated=JSON.parse(document.getElementById('render-request').value);"
-         "activity.value='';input(activity);const reversed=snapshot();"
-         "outcome={viewportWidth:innerWidth,stepCount:document.querySelectorAll('#wizard-step-list li').length,elapsed,selected,synced,reversed,generated:{mode:generated.synchronizationMode,telemetrySyncAt:generated.telemetrySyncAt,cameraSyncAt:generated.cameraSyncAt,sourceVideo:generated.sourceVideo,sectionStartAt:generated.sectionStartAt,sectionEndAt:generated.sectionEndAt},modeInsideDock:document.getElementById('timing-dock').contains(modeLabel)&&document.getElementById('timing-dock').contains(modeStatus),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+         "activity.value='';input(activity);const reversed=snapshot();sourceElapsed.value='';const pointerStartedEmpty=sourceElapsed.value===''&&camera.value==='';const rect=timeline.getBoundingClientRect(),clientX=rect.left+rect.width*.4;marker.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX,pointerId:14}));marker.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,clientX,pointerId:14}));const pointer=snapshot();"
+         "outcome={viewportWidth:innerWidth,stepCount:document.querySelectorAll('#wizard-step-list li').length,unavailable,elapsed,selected,synced,reversed,pointerStartedEmpty,pointer,generated:{mode:generated.synchronizationMode,telemetrySyncAt:generated.telemetrySyncAt,cameraSyncAt:generated.cameraSyncAt,sourceVideo:generated.sourceVideo,sectionStartAt:generated.sectionStartAt,sectionEndAt:generated.sectionEndAt},modeInsideDock:document.getElementById('timing-dock').contains(modeLabel)&&document.getElementById('timing-dock').contains(modeStatus),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
          "</script>")
@@ -2950,6 +2950,12 @@
       (is (= 7 (:stepCount outcome)))
       (is (= "synchronization" (get-in outcome [:elapsed :current])))
       (is (= "Elapsed time" (get-in outcome [:elapsed :mode])))
+      (is (= {:hidden false
+              :disabled true
+              :value "0"
+              :text "00:00:00.000"}
+             (get-in outcome [:unavailable :marker])))
+      (is (= "" (get-in outcome [:unavailable :sourceSeconds])))
       (is (str/starts-with? (get-in outcome [:elapsed :transport])
                             "00:00:00.000"))
       (is (every? #(re-matches #"\d{2}:\d{2}:\d{2}\.\d{3}" %)
@@ -2959,6 +2965,7 @@
               :value "0"
               :text "00:00:00.000"}
              (get-in outcome [:elapsed :marker])))
+      (is (= "" (get-in outcome [:elapsed :sourceSeconds])))
       (is (= "hidden" (get-in outcome [:elapsed :cameraType])))
       (is (true? (get-in outcome [:elapsed :clockPanelHidden])))
       (is (= "My browser timezone ("
@@ -2966,12 +2973,13 @@
       (is (= "0.04" (get-in outcome [:selected :sourceSeconds])))
       (is (= "00:00:00.040"
              (get-in outcome [:selected :sourceText])))
+      (is (= 0.04 (get-in outcome [:selected :videoCurrent])))
       (is (= "Synced recording time · UTC"
              (get-in outcome [:synced :mode])))
       (is (str/includes? (get-in outcome [:synced :status])
                          "Timeline labels now show synced recording time"))
       (is (str/starts-with? (get-in outcome [:synced :transport])
-                            "2026-10-25 01:29:59.960"))
+                            "2026-10-25 01:30:00.000"))
       (is (= "manual-anchor" (get-in outcome [:generated :mode])))
       (is (= "2026-10-25T01:30:00.000Z"
              (get-in outcome [:generated :telemetrySyncAt])))
@@ -2986,6 +2994,15 @@
                          "Timeline labels now show elapsed time"))
       (is (= "0.04" (get-in outcome [:reversed :sourceSeconds])))
       (is (true? (get-in outcome [:reversed :submitDisabled])))
+      (is (true? (:pointerStartedEmpty outcome)))
+      (is (= {:hidden false
+              :disabled false
+              :value "50.2"
+              :text "00:00:50.200"}
+             (get-in outcome [:pointer :marker])))
+      (is (= "50.2" (get-in outcome [:pointer :sourceSeconds])))
+      (is (= "00:00:50.200" (get-in outcome [:pointer :sourceText])))
+      (is (= 50.2 (get-in outcome [:pointer :videoCurrent])))
       (is (true? (:modeInsideDock outcome)))
       (is (true? (:noHorizontalOverflow outcome))))
     (is (= 1280 (:viewportWidth (first outcomes))))
