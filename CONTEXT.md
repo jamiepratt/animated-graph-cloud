@@ -15,6 +15,8 @@ Alpha Compose is the public product. The `animated-graph-cloud` service accepts 
 - Source video is streamed directly from Google Drive into FFmpeg for durable compositing jobs or through short-lived owner-bound browser playback; it is never persisted by the service.
 - Google Drive upload time is never recording-clock authority.
 - Source recording-clock inspection and browser playback state are never persisted.
+- Compose wizard state and dormant route drafts remain browser-memory-only;
+  only the active projected `RenderRequest` is sent to preview or render APIs.
 - Every durable submission preflights its Drive delivery grant before job creation, including transparent overlay jobs without a source video.
 - Rendering emits a standard seekable MOV with ProRes 4444 alpha, 25 fps, and heartbeat audio.
 - Logs exclude email addresses, Google subjects, filenames, tokens, telemetry values, Drive credentials, and signed URLs.
