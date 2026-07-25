@@ -122,8 +122,43 @@
           cancelled (fragment "cancelled")]
       (is (str/includes? requested "<h2>Cancellation requested</h2>"))
       (is (str/includes? requested "hx-trigger=\"load delay:2s\""))
-      (is (str/includes? cancelled "<h2>Cancelled</h2>"))
+      (is (str/includes? cancelled "<h2>Finished video cancelled</h2>"))
       (is (not (str/includes? cancelled "hx-get="))))))
+
+(deftest durable-job-fragment-uses-plain-language-result-cards
+  (let [h264 (ui/job-fragment
+              {:id "job-h264"
+               :state "succeeded"
+               :attempt 1
+               :output {:contentType "video/mp4"
+                        :driveWebViewLink "https://drive.example/h264"}})
+        prores (ui/job-fragment
+                {:id "job-prores"
+                 :state "succeeded"
+                 :attempt 1
+                 :output {:contentType "video/quicktime"
+                          :driveWebViewLink "https://drive.example/prores"}})
+        failed (ui/job-fragment
+                {:id "job-failed"
+                 :state "failed"
+                 :attempt 2
+                 :failureCode "worker_failed"
+                 :stage "composition_encode"
+                 :status 504
+                 :retryable true
+                 :elapsedMs 45004
+                 :timeoutMs 45000})]
+    (is (str/includes? h264 "<h2>Finished video ready</h2>"))
+    (is (str/includes? h264 "Open finished video in Google Drive"))
+    (is (str/includes? h264 "data-inline-player-slot=\"job-h264\""))
+    (is (str/includes? prores "Use this finished video in desktop editing software"))
+    (is (not (str/includes? prores "data-inline-player-slot=")))
+    (is (str/includes? failed "<h2>Finished video did not complete</h2>"))
+    (is (str/includes? failed "Retry"))
+    (doseq [developer-detail ["Attempt 2" "worker_failed" "composition_encode"
+                              "Status: 504" "Retryable: no"
+                              "Elapsed: 45004 ms" "Deadline: 45000 ms"]]
+      (is (not (str/includes? failed developer-detail)) developer-detail))))
 
 (deftest preview-work-is-distinguished-from-durable-render-jobs
   (let [service (:service (jobs/in-memory-system))
@@ -792,7 +827,9 @@
               :retryable true}
              (select-keys failed [:state :failureCode :stage :timeoutMs
                                   :retryable])))
-      (is (str/includes? (ui/job-fragment failed) "Deadline")))
+      (is (str/includes? (ui/job-fragment failed)
+                         "Finished video did not complete"))
+      (is (str/includes? (ui/job-fragment failed) ">Retry<")))
     (is (nil? (get-in @(:state system) [:jobs job-id :lease])))))
 
 (deftest typed-render-failure-has-one-privacy-safe-public-diagnosis
@@ -827,8 +864,9 @@
              (select-keys failed [:failureCode :stage :status :retryable
                                   :attempt])))
       (is (nat-int? (:elapsedMs failed)))
-      (is (str/includes? html "Source content"))
-      (is (str/includes? html "Retryable: yes"))
+      (is (str/includes? html "Finished video did not complete"))
+      (is (str/includes? html "Retry keeps the same request"))
+      (is (str/includes? html ">Retry<"))
       (is (not (re-find #"private|secret|token|file-id" serialized))))
     (is (= {:state "queued" :attempt 2}
            (select-keys (jobs/retry-job! service job-id) [:state :attempt])))

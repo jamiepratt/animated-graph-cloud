@@ -4018,20 +4018,20 @@
         (is (string? job-id))
         (is (str/includes? (.body submission)
                            (str "hx-get=\"" status-path "\"")))
-        (is (str/includes? (.body submission) "Queued"))
+        (is (str/includes? (.body submission) "Finished video queued"))
         (is (= 200 (.statusCode
                     (request! port :get status-path nil {"Cookie" owner-cookie}))))
         (is (= 404 (.statusCode
                     (request! port :get status-path nil {"Cookie" member-cookie}))))
         (let [cancelled (request! port :post (str status-path "/cancel") "" headers)]
           (is (= 200 (.statusCode cancelled)))
-          (is (str/includes? (.body cancelled) "Cancelled"))
+          (is (str/includes? (.body cancelled) "Finished video cancelled"))
           (is (str/includes? (.body cancelled)
                              (str "hx-post=\"" status-path "/retry\""))))
         (let [retried (request! port :post (str status-path "/retry") "" headers)]
           (is (= 202 (.statusCode retried)))
-          (is (str/includes? (.body retried) "Queued"))
-          (is (str/includes? (.body retried) "Attempt 2"))))
+          (is (str/includes? (.body retried) "Finished video queued"))
+          (is (not (str/includes? (.body retried) "Attempt 2")))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
