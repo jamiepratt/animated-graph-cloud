@@ -815,6 +815,28 @@
      html
      (str "--window-size=" window-size))))
 
+(defn- project-json-browser-outcome [page]
+  (let [request (assoc (fixture/render-request)
+                       :displayTimeZone "Europe/Warsaw")
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "(async()=>{let outcome;try{"
+         "const workflow=document.getElementById('compose-workflow'),raw=document.getElementById('raw-json'),applyRaw=document.getElementById('apply-json'),project=document.getElementById('project-json'),applyProject=document.getElementById('apply-project-json'),copyProject=document.getElementById('copy-project-json'),projectStatus=document.getElementById('project-json-status'),hidden=document.getElementById('render-request');"
+         "raw.value=JSON.stringify(" (json/write-str request) ");applyRaw.click();copyProject.click();await new Promise(resolve=>setTimeout(resolve,0));const exported=JSON.parse(project.value);"
+         "const edited={...exported,renderRequest:null,currentStepId:'activity-data',visitedStepIds:['outcome','overlay-timespan','activity-data'],decisions:{synchronizationMode:'shared-clock',optionalOverlays:[]},sharedInput:{...exported.sharedInput,telemetry:'timestamp,heart_rate\\n2026-07-17T09:00:00Z,111'},routeDrafts:{...exported.routeDrafts,'transparent-overlay':{sectionStartAt:'2026-07-17T09:00:00.000Z',sectionEndAt:'2026-07-17T09:00:02.000Z'}}};project.value=JSON.stringify(edited);applyProject.click();await new Promise(resolve=>setTimeout(resolve,0));const applied={route:workflow.dataset.activeRoute,currentStep:workflow.dataset.currentStep,status:projectStatus.textContent,telemetry:document.getElementById('telemetry').value,renderRequest:hidden.value,project:JSON.parse(project.value)};"
+         "const preservedBefore={route:workflow.dataset.activeRoute,currentStep:workflow.dataset.currentStep,telemetry:document.getElementById('telemetry').value,renderRequest:hidden.value};project.value=JSON.stringify({...edited,extra:true});applyProject.click();await new Promise(resolve=>setTimeout(resolve,0));const invalid={route:workflow.dataset.activeRoute,currentStep:workflow.dataset.currentStep,status:projectStatus.textContent,telemetry:document.getElementById('telemetry').value,renderRequest:hidden.value,project:project.value,preserved:JSON.stringify(preservedBefore)===JSON.stringify({route:workflow.dataset.activeRoute,currentStep:workflow.dataset.currentStep,telemetry:document.getElementById('telemetry').value,renderRequest:hidden.value})};"
+         "outcome={exported:{schemaVersion:exported.schemaVersion,activeRoute:exported.activeRoute,hasRenderRequest:!!exported.renderRequest,nestedTelemetry:exported.renderRequest?.telemetry||null},applied,invalid};"
+         "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-project-json-browser-"
+     "Project JSON browser regression requires Chrome or Chromium"
+     html)))
+
 (defn- persistent-timing-dock-browser-outcome [page window-size]
   (let [fixture
         (str
@@ -3228,6 +3250,64 @@
                        "Request.displayTimeZone"))
     (is (str/includes? (get-in outcome [:unknown :status])
                        "IANA timezone"))))
+
+(deftest project-json-downloads-round-trips-and-rejects-invalid-envelopes-atomically
+  (let [outcome
+        (project-json-browser-outcome
+         (ui/page {:user {:email "member@example.com" :role :member}
+                   :csrf "csrf-test"
+                   :tokens []
+                   :members []
+                   :logs-enabled? false}))]
+    (is (nil? (:error outcome)) outcome)
+    (is (= 1 (get-in outcome [:exported :schemaVersion])))
+    (is (= "transparent-overlay" (get-in outcome [:exported :activeRoute])))
+    (is (true? (get-in outcome [:exported :hasRenderRequest])))
+    (is (= "timestamp,heart_rate\n2026-07-17T10:00:00Z,120\n2026-07-17T10:00:01Z,124\n2026-07-17T10:00:02Z,128\n"
+           (get-in outcome [:exported :nestedTelemetry])))
+    (is (= "transparent-overlay" (get-in outcome [:applied :route])))
+    (is (= "activity-data" (get-in outcome [:applied :currentStep])))
+    (is (str/includes? (get-in outcome [:applied :status])
+                       "Project JSON applied"))
+    (is (= "timestamp,heart_rate\n2026-07-17T09:00:00Z,111"
+           (get-in outcome [:applied :telemetry])))
+    (is (= "{}" (get-in outcome [:applied :renderRequest])))
+    (is (= nil (get-in outcome [:applied :project :renderRequest])))
+    (is (= "activity-data"
+           (get-in outcome [:applied :project :currentStepId])))
+    (is (str/includes? (get-in outcome [:invalid :status])
+                       "unknown field extra"))
+    (is (true? (get-in outcome [:invalid :preserved])))))
+
+(deftest project-json-drive-source-validation-returns-authoritative-metadata
+  (let [port (available-port)
+        {:keys [auth-system owner-cookie owner-csrf]} (fixture)
+        gateway (reify drive/SourceGateway
+                  (source-metadata! [_ access-token file-id]
+                    (is (= "drive-access" access-token))
+                    (is (= "drive-file" file-id))
+                    {:id file-id
+                     :name "validated-source.mp4"
+                     :mimeType "video/mp4"
+                     :size 2048
+                     :trashed false})
+                  (stream-source! [_ _ _ _]
+                    (throw (UnsupportedOperationException.))))
+        server (start-api! port {:auth-system (assoc auth-system :drive gateway)})]
+    (try
+      (let [response (request! port :post "/ui/project-source-validation"
+                               (json/write-str {:fileId "drive-file"})
+                               {"Cookie" owner-cookie
+                                "X-CSRF-Token" owner-csrf
+                                "Content-Type" "application/json"})
+            body (json/read-str (.body response))]
+        (is (= 200 (.statusCode response)))
+        (is (= {"fileId" "drive-file"
+                "fileName" "validated-source.mp4"
+                "mimeType" "video/mp4"}
+               body)))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
 
 (deftest compose-submit-starts-enabled-with-preview-available
   (let [page (ui/page {:user {:email "member@example.com" :role :member}

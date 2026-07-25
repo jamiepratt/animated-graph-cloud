@@ -33,6 +33,7 @@
             [agg.timeline-property-test]
             [agg.tokens-test]
             [agg.tokens-gcp-test]
+            [agg.ui-project-test]
             [agg.ui-wizard-test]
             [agg.watermark-test]
             [clojure.test :as test]))
@@ -72,6 +73,7 @@
                                              'agg.timeline-property-test
                                              'agg.tokens-test
                                              'agg.tokens-gcp-test
+                                             'agg.ui-project-test
                                              'agg.ui-wizard-test
                                              'agg.watermark-test)]
     (System/exit (if (pos? (+ error fail)) 1 0))))
