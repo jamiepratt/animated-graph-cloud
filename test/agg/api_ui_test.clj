@@ -761,6 +761,46 @@
      html
      (str "--window-size=" window-size))))
 
+(defn- wizard-review-browser-outcome [page window-size]
+  (let [request (-> (fixture/render-request)
+                    (assoc :synchronizationMode "shared-clock"
+                           :timer {:startAt "2026-07-17T09:00:00.400Z"
+                                   :endAt "2026-07-17T09:00:01.600Z"})
+                    (dissoc :telemetrySyncAt :cameraSyncAt))
+        finished-request (assoc request
+                                :sourceVideo
+                                {:fileId "drive-source"
+                                 :recordingStartAt
+                                 "2026-07-17T09:00:00.000Z"
+                                 :timeZone "Europe/Warsaw"}
+                                :outputFormat "prores-422-mov"
+                                :fitMode "crop"
+                                :audioMode "source-only")
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{"
+         "const workflow=document.getElementById('compose-workflow'),raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),next=document.getElementById('wizard-next'),review=document.getElementById('review-step'),reviewSections=document.getElementById('review-sections'),timer=document.getElementById('timer-enabled'),timerStart=document.getElementById('timer-start-at'),timerEnd=document.getElementById('timer-end-at'),input=node=>node.dispatchEvent(new Event('input',{bubbles:true})),current=()=>workflow.dataset.currentStep,reviewSnapshot=()=>({current:current(),steps:[...reviewSections.querySelectorAll('[data-review-step]')].map(section=>section.dataset.reviewStep),titles:[...reviewSections.querySelectorAll('h3')].map(node=>node.textContent),summaries:[...reviewSections.querySelectorAll('p')].map(node=>node.textContent),editSteps:[...reviewSections.querySelectorAll('[data-edit-step]')].map(button=>button.dataset.editStep),nextHidden:next.hidden,actionsInside:review.contains(document.getElementById('preview-button'))&&review.contains(document.getElementById('submit-button')),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth});"
+         "raw.value=JSON.stringify(" (json/write-str request) ");apply.click();"
+         "for(let count=0;count<7&&current()!=='review';count++)next.click();"
+         "const initialReview=reviewSnapshot(),timerEdit=[...reviewSections.querySelectorAll('[data-edit-step]')].find(button=>button.dataset.editStep==='timer-overlay');timerEdit.click();const edited={current:current(),start:timerStart.value,end:timerEnd.value},previewResult=document.getElementById('preview-result');previewResult.dataset.previewOperation='preview-1';previewResult.className='preview-gallery';"
+         "timer.click();const deselected={current:current(),requestTimer:JSON.parse(document.getElementById('render-request').value).timer||null,previewClass:previewResult.className};"
+         "const optionalEdit=[...reviewSections.querySelectorAll('[data-edit-step]')].find(button=>button.dataset.editStep==='optional-overlays');optionalEdit.click();timer.click();next.click();const restored={current:current(),start:timerStart.value,end:timerEnd.value};next.click();const finishLabel=next.textContent;next.click();const restoredReview=reviewSnapshot();"
+         "const transparent={summaryHidden:document.getElementById('no-source-output-summary').hidden,sourceControlsHidden:document.getElementById('source-output-controls').hidden,requestOutputFormat:JSON.parse(document.getElementById('render-request').value).outputFormat||null};"
+         "raw.value=JSON.stringify(" (json/write-str finished-request) ");apply.click();for(let count=0;count<12&&current()!=='review';count++)next.click();const finishedReview=reviewSnapshot(),finishedGenerated=JSON.parse(document.getElementById('render-request').value),finished={review:finishedReview,summaryHidden:document.getElementById('no-source-output-summary').hidden,sourceControlsHidden:document.getElementById('source-output-controls').hidden,request:{outputFormat:finishedGenerated.outputFormat,fitMode:finishedGenerated.fitMode,audioMode:finishedGenerated.audioMode}};"
+         "outcome={viewportWidth:innerWidth,initialReview,edited,deselected,restored,finishLabel,restoredReview,transparent,finished,advancedOpen:document.querySelector('.advanced-output-settings').open};"
+         "}catch(error){outcome={error:error.message,stack:error.stack};}"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-wizard-review-browser-"
+     "Wizard Review browser regression requires Chrome or Chromium"
+     html
+     (str "--window-size=" window-size))))
+
 (defn- persistent-timing-dock-browser-outcome [page window-size]
   (let [fixture
         (str
@@ -2040,6 +2080,84 @@
                       "data-step-id=\"review\""]]
       (is (str/includes? page fragment) fragment))))
 
+(deftest compose-review-owns-actions-and-keeps-trace-opacity-advanced
+  (let [page (ui/page {:user {:email "member@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})
+        review-start (str/index-of page "id=\"review-step\"")
+        review-end (str/index-of page "</form>" review-start)]
+    (doseq [fragment ["id=\"review-sections\""
+                      "class=\"advanced-output-settings\""
+                      "Future trace opacity (%)"
+                      "id=\"preview-button\""
+                      "id=\"submit-button\""]]
+      (is (str/includes? page fragment) fragment))
+    (let [positions [review-start
+                     (str/index-of page "id=\"review-sections\"")
+                     (str/index-of page "id=\"preview-button\"")
+                     (str/index-of page "id=\"submit-button\"")
+                     review-end]]
+      (is (every? some? positions))
+      (when (every? some? positions)
+        (is (apply < positions))))))
+
+(deftest review-orders-active-decisions-and-edits-populated-drafts
+  (let [page (ui/page {:user {:email "member@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})
+        outcomes [(wizard-review-browser-outcome page "1280,900")
+                  (wizard-review-browser-outcome page "390,844")]]
+    (doseq [outcome outcomes]
+      (is (nil? (:error outcome)) outcome)
+      (is (= ["outcome" "overlay-timespan" "activity-data"
+              "synchronization" "optional-overlays" "timer-overlay"
+              "output-settings"]
+             (get-in outcome [:initialReview :steps])))
+      (is (= (get-in outcome [:initialReview :steps])
+             (get-in outcome [:initialReview :editSteps])))
+      (is (= "review" (get-in outcome [:initialReview :current])))
+      (is (true? (get-in outcome [:initialReview :nextHidden])))
+      (is (true? (get-in outcome [:initialReview :actionsInside])))
+      (is (some #(str/includes? % "ProRes 4444 MOV")
+                (get-in outcome [:initialReview :summaries])))
+      (is (= {:current "timer-overlay"
+              :start "2026-07-17T11:00:00.4"
+              :end "2026-07-17T11:00:01.6"}
+             (:edited outcome)))
+      (is (nil? (get-in outcome [:deselected :requestTimer])))
+      (is (= "preview-stale"
+             (get-in outcome [:deselected :previewClass])))
+      (is (= (:edited outcome) (:restored outcome)))
+      (is (= "Finish" (:finishLabel outcome)))
+      (is (= (get-in outcome [:initialReview :steps])
+             (get-in outcome [:restoredReview :steps])))
+      (is (false? (:advancedOpen outcome)))
+      (is (= {:summaryHidden false
+              :sourceControlsHidden true
+              :requestOutputFormat nil}
+             (:transparent outcome)))
+      (is (= ["outcome" "source-video" "video-recording-clock"
+              "activity-data" "synchronization" "optional-overlays"
+              "timer-overlay" "output-settings"]
+             (get-in outcome [:finished :review :steps])))
+      (doseq [choice ["ProRes 422 MOV" "Crop to fill" "Source only"]]
+        (is (some #(str/includes? % choice)
+                  (get-in outcome [:finished :review :summaries]))
+            choice))
+      (is (= {:summaryHidden true
+              :sourceControlsHidden false
+              :request {:outputFormat "prores-422-mov"
+                        :fitMode "crop"
+                        :audioMode "source-only"}}
+             (dissoc (:finished outcome) :review)))
+      (is (true? (get-in outcome [:initialReview :noHorizontalOverflow]))))
+    (is (= 1280 (:viewportWidth (first outcomes))))
+    (is (<= (:viewportWidth (second outcomes)) 500))))
+
 (deftest wizard-shell-gates-and-restores-navigation-on-both-routes
   (let [page (ui/page {:user {:email "member@example.com" :role :member}
                        :csrf "csrf-test"
@@ -2318,21 +2436,21 @@
                :handlesSeparated true}
               :middle
               {:current 62.75
-               :fields ["2026-07-23T22:00:32.76"
+               :fields ["2026-07-23T21:59:30"
                         "2026-07-23T22:01:35.48"]
-               :request {:startAt "2026-07-23T22:00:32.760Z"
+               :request {:startAt "2026-07-23T21:59:30.000Z"
                          :endAt "2026-07-23T22:01:35.480Z"}
-               :markers [false "62.76" false "125.48"]
+               :markers [false "0" false "125.48"]
                :fieldsHidden false
                :markersSeparated true
                :handlesSeparated true}
               :end
               {:current 125.48
-               :fields ["2026-07-23T22:01:35.44"
+               :fields ["2026-07-23T21:59:30"
                         "2026-07-23T22:01:35.48"]
-               :request {:startAt "2026-07-23T22:01:35.440Z"
+               :request {:startAt "2026-07-23T21:59:30.000Z"
                          :endAt "2026-07-23T22:01:35.480Z"}
-               :markers [false "125.44" false "125.48"]
+               :markers [false "0" false "125.48"]
                :fieldsHidden false
                :markersSeparated true
                :handlesSeparated true}

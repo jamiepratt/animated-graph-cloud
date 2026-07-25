@@ -66,29 +66,56 @@
                    :timer
                    {:startAt "2026-07-17T10:00:00.000Z"
                     :endAt "2026-07-17T10:00:01.000Z"})
+                  (wizard/set-overlay-draft
+                   :spo2
+                   {:format "oxiwear-spo2-csv"
+                    :telemetry "reading_time,spo2"})
+                  (wizard/set-overlay-draft
+                   :watermark
+                   {:contentBase64 "iVBORw0KGgo="})
                   (wizard/choose-route :finished-video)
                   (wizard/choose-synchronization :shared-clock)
-                  (wizard/choose-optional-overlays #{:timer}))
+                  (wizard/choose-optional-overlays
+                   #{:timer :spo2 :watermark}))
         active-request (wizard/project-render-request state)
         transparent (wizard/choose-route state :transparent-overlay)
         inactive-request (wizard/project-render-request transparent)
-        restored (wizard/choose-route transparent :finished-video)]
+        deselected (wizard/choose-optional-overlays state #{})
+        restored (-> deselected
+                     (wizard/choose-route :transparent-overlay)
+                     (wizard/choose-route :finished-video)
+                     (wizard/choose-optional-overlays
+                      #{:timer :spo2 :watermark}))
+        restored-request (wizard/project-render-request restored)]
     (is (= (:sourceVideo finished-request) (:sourceVideo active-request)))
     (is (= {:startAt "2026-07-17T10:00:00.000Z"
             :endAt "2026-07-17T10:00:01.000Z"}
            (:timer active-request)))
-    (is (not (contains? active-request :spo2)))
-    (is (not (contains? active-request :watermark)))
+    (is (= {:format "oxiwear-spo2-csv"
+            :telemetry "reading_time,spo2"}
+           (:spo2 active-request)))
+    (is (= {:contentBase64 "iVBORw0KGgo="}
+           (:watermark active-request)))
     (is (not (contains? inactive-request :sourceVideo)))
     (is (not (contains? inactive-request :outputFormat)))
+    (is (not (contains? (wizard/project-render-request deselected)
+                        :timer)))
+    (is (not (contains? (wizard/project-render-request deselected)
+                        :spo2)))
+    (is (not (contains? (wizard/project-render-request deselected)
+                        :watermark)))
     (is (= transparent-request
            (select-keys inactive-request
                         [:sectionStartAt :sectionEndAt])))
     (is (= finished-request
            (get-in restored [:route-drafts :finished-video])))
-    (is (= (get-in state [:optional-overlay-drafts :timer])
-           (get-in (wizard/choose-optional-overlays state #{})
-                   [:optional-overlay-drafts :timer])))))
+    (doseq [overlay [:timer :spo2 :watermark]]
+      (is (= (get-in state [:optional-overlay-drafts overlay])
+             (get-in deselected [:optional-overlay-drafts overlay])))
+      (is (= (get-in state [:optional-overlay-drafts overlay])
+             (get-in restored [:optional-overlay-drafts overlay])))
+      (is (= (get-in state [:optional-overlay-drafts overlay])
+             (get restored-request overlay))))))
 
 (deftest navigation-completion-and-invalidation-use-semantic-step-ids
   (let [chosen (wizard/choose-route (wizard/initial-state) :finished-video)
