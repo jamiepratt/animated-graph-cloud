@@ -923,7 +923,7 @@ components:
         synchronizationMode:
           type: string
           enum: [shared-clock, manual-anchor]
-          description: Required explicit clock relationship. shared-clock aligns activity timestamps directly to sectionStartAt and forbids synchronization anchors. manual-anchor requires both synchronization anchors and maps the selected output through their offset.
+          description: Required explicit clock relationship. shared-clock aligns activity timestamps directly to sectionStartAt and forbids synchronization anchors. manual-anchor requires both synchronization anchors and maps the selected output through their offset. For a source video, the Compose UI derives the recording start and equal API anchors from a selected elapsed source position plus its matching activity-data instant.
         futureTraceOpacityPercent:
           type: number
           minimum: 0
@@ -932,10 +932,10 @@ components:
           description: Opacity percentage for the not-yet-reached heart-rate trace. Zero hides it; 100 makes it fully opaque.
         telemetrySyncAt:
           allOf: [{$ref: "#/components/schemas/Instant"}]
-          description: Timestamp in telemetry at the camera synchronization moment.
+          description: Activity-data timestamp at the synchronization moment.
         cameraSyncAt:
           allOf: [{$ref: "#/components/schemas/Instant"}]
-          description: Camera timestamp corresponding to telemetrySyncAt. It may be before, within, or after the selected output interval.
+          description: API camera-clock anchor corresponding to telemetrySyncAt. It may be before, within, or after the selected output interval. For a source video with different clocks, the Compose UI does not request this absolute camera value; it derives recordingStartAt from the selected elapsed source position and submits the activity-data instant here.
         sectionStartAt:
           allOf: [{$ref: "#/components/schemas/Instant"}]
           description: Start of the rendered camera section. With sourceVideo, the offset from recordingStartAt must be a nonnegative whole 25 fps frame count.
@@ -993,10 +993,10 @@ components:
             recordingStartAt:
               type: string
               format: date-time
-              description: User-confirmed source recording start instant.
+              description: Source recording start instant, user-confirmed for shared clocks or derived by the Compose UI from an elapsed source-frame match for different clocks.
             timeZone:
               type: string
-              description: User-confirmed IANA timezone for the source video clock. Fixed offsets are invalid.
+              description: IANA timezone for the source video clock, user-confirmed for shared clocks or selected for the derived synced recording-time display. Fixed offsets are invalid.
             name: {type: string, description: Ignored client metadata.}
             mimeType: {type: string, description: Ignored client metadata.}
           description: |
