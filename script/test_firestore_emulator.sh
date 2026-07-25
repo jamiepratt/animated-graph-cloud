@@ -21,7 +21,7 @@ emulator_pid="$!"
 
 for _ in $(seq 1 60); do
   if curl --silent --fail "http://$emulator_host/" >/dev/null 2>&1; then
-    FIRESTORE_EMULATOR_HOST="$emulator_host" clojure -M:test
+    FIRESTORE_EMULATOR_HOST="$emulator_host" clojure -M:test-all
     exit 0
   fi
   if ! kill -0 "$emulator_pid" 2>/dev/null; then

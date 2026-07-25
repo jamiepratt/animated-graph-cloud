@@ -23,7 +23,7 @@ jobs:
           cli: 1.12.5.1654
           clj-kondo: 2026.05.25
       - run: clj-kondo --lint src test build.clj
-      - run: clojure -M:test
+      - run: clojure -M:test-all
       - run: clojure -T:build uber
 
   terraform:

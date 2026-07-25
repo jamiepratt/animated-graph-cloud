@@ -659,8 +659,15 @@
                        "terraform -chdir=infra/prod init -backend=false -input=false"))
     (is (str/includes? workflow "terraform -chdir=infra/prod validate"))
     (is (str/includes? workflow "@redocly/cli@2.39.0 lint docs/openapi.yaml"))
+    (is (str/includes? workflow "clojure -M:test-all"))
     (is (str/includes? workflow
                        "bash -n script/release_acceptance.sh script/production_load_test.sh"))))
+
+(deftest readme-separates-targeted-and-full-test-commands
+  (let [readme (slurp "README.md")]
+    (is (str/includes? readme "clojure -M:test-all"))
+    (is (str/includes? readme "clojure -M:test -m agg.test-targeted agg.api-auth-test"))
+    (is (str/includes? readme "Targeted TDD keeps the normal test classpath but skips the full runner"))))
 
 (deftest openapi-describes-the-supported-production-api
   (let [openapi (slurp "docs/openapi.yaml")]
@@ -765,7 +772,7 @@
         load-test (slurp "script/production_load_test.sh")
         acceptance (slurp "docs/release-acceptance.md")
         evidence (slurp "docs/release-evidence.template.json")]
-    (doseq [command ["clojure -M:test" "clojure -T:build uber"
+    (doseq [command ["clojure -M:test-all" "clojure -T:build uber"
                      "terraform -chdir=infra/dev" "terraform -chdir=infra/prod"
                      "@redocly/cli@2.39.0" "docker build" "trivy image"]]
       (testing command (is (str/includes? automation command))))

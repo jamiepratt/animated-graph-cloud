@@ -15,7 +15,7 @@ done
 
 echo "[1/8] Clojure lint and complete automated test suite"
 clj-kondo --lint src test build.clj
-clojure -M:test
+clojure -M:test-all
 
 echo "[2/8] Production artifact build"
 clojure -T:build uber
