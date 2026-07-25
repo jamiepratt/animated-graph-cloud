@@ -133,13 +133,20 @@
                     StandardCharsets/UTF_8)
            :key-fn keyword))))))
 
-(defn- browser-outcome [prefix requirement html & browser-args]
+(defn- browser-outcome*
+  [prefix requirement html virtual-time-budget & browser-args]
   (let [temp (File/createTempFile prefix ".html")]
     (try
       (spit temp html)
-      (browser-location-outcome requirement (.toURI temp) 1000 browser-args)
+      (browser-location-outcome requirement
+                                (.toURI temp)
+                                virtual-time-budget
+                                browser-args)
       (finally
         (.delete temp)))))
+
+(defn- browser-outcome [prefix requirement html & browser-args]
+  (apply browser-outcome* prefix requirement html 1000 browser-args))
 
 (defn- respond-browser-fixture!
   [^HttpExchange exchange status content-type body generation]
@@ -663,10 +670,11 @@
         html (-> page
                  (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
                  (str/replace "</body>" (str scenario "</body>")))]
-    (browser-outcome
+    (browser-outcome*
      "agg-telemetry-file-browser-"
      "Browser-level telemetry file regression requires Chrome or Chromium"
      html
+     5000
      (str "--window-size=" window-size))))
 
 (defn- future-trace-opacity-browser-outcome [page]
