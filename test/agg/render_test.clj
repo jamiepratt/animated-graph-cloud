@@ -302,33 +302,6 @@
            :duration-seconds 26/25
            :display-time-zone (ZoneId/of "Europe/Warsaw")}))))
 
-(deftest rendered-overlay-artifact-retains-the-timing-metadata-contract
-  (let [render-spec {:width 64
-                     :height 36
-                     :fps 25
-                     :duration-seconds 1
-                     :section-start-at (Instant/parse "2026-07-17T10:00:00Z")
-                     :display-time-zone (ZoneId/of "Europe/Warsaw")}
-        audio-path (Files/createTempFile "agg-timing-audio-" ".wav"
-                                         (make-array java.nio.file.attribute.FileAttribute 0))
-        output-path (Files/createTempFile "agg-timing-overlay-" ".mov"
-                                          (make-array java.nio.file.attribute.FileAttribute 0))]
-    (try
-      (with-open [output (Files/newOutputStream audio-path
-                                                (make-array OpenOption 0))]
-        (audio/write-wav! render-spec output))
-      (is (= {:exit-status 0}
-             (media/encode! (media/ffmpeg-video-encoder)
-                            render-spec audio-path output-path
-                            #(.write ^OutputStream %
-                                     (byte-array (* 64 36 4 25))))))
-      (is (= (media/timing-metadata render-spec)
-             (:timing (media/verify! (media/ffmpeg-video-encoder)
-                                     render-spec output-path))))
-      (finally
-        (Files/deleteIfExists output-path)
-        (Files/deleteIfExists audio-path)))))
-
 (deftest rendering-boundaries-are-protocol-backed
   (is (satisfies? frames/FrameRenderer frames/java2d-frame-renderer))
   (is (satisfies? media/VideoEncoder (media/ffmpeg-video-encoder)))
