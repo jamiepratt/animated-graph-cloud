@@ -1,4 +1,5 @@
-(ns agg.ui.wizard)
+(ns agg.ui.wizard
+  (:import (java.time Instant ZoneId)))
 
 (def outcome-options
   [{:route :transparent-overlay
@@ -16,7 +17,7 @@
 
 (def ^:private route-prefix
   {:transparent-overlay [:outcome :overlay-timespan]
-   :finished-video [:outcome :source-video :video-recording-clock]})
+   :finished-video [:outcome :source-video]})
 
 (def ^:private overlay-step
   {:timer :timer-overlay
@@ -33,9 +34,6 @@
    :source-video
    {:title "Choose your source video"
     :description "Choose exactly one video from Google Drive."}
-   :video-recording-clock
-   {:title "Confirm when your video was recorded"
-    :description "Check the detected suggestion, recording start, and video timezone."}
    :overlay-timespan
    {:title "Choose the overlay timespan"
     :description "Set the start, end, and timezone for the transparent overlay."}
@@ -43,8 +41,8 @@
    {:title "Choose your heart-rate file"
     :description "Provide the activity data used to draw the heart-rate trace."}
    :synchronization
-   {:title "Were your device clocks synchronized?"
-    :description "Choose whether the camera and activity device used the same clock."}
+   {:title "Synchronize video and activity data"
+    :description "Confirm a shared clock or match one video frame to activity time."}
    :matching-moment
    {:title "Match one moment"
     :description "Enter one recognizable moment on both device clocks."}
@@ -73,6 +71,45 @@
 (def ^:private optional-overlay-request-fields
   [:timer :spo2 :watermark])
 
+(def ^:private internal-route-fields
+  [:manualSync])
+
+(defn derive-manual-sync
+  [{:keys [source-seconds activity-instant time-zone] :as primary}]
+  (when-not (and (number? source-seconds)
+                 (Double/isFinite (double source-seconds))
+                 (not (neg? source-seconds))
+                 (< (Math/abs
+                     (- (* (double source-seconds) 25.0)
+                        (Math/rint (* (double source-seconds) 25.0))))
+                    0.0001))
+    (throw (ex-info "Manual synchronization source time must be a non-negative 25 fps frame."
+                    {:source-seconds source-seconds})))
+  (let [activity
+        (try
+          (Instant/parse activity-instant)
+          (catch Exception _
+            (throw (ex-info "Manual synchronization activity time must be an ISO-8601 instant."
+                            {:activity-instant activity-instant}))))
+        zone
+        (try
+          (when (and (string? time-zone)
+                     (not (re-matches
+                           #"(?:Z|[+-]\d{2}(?::?\d{2})?)"
+                           time-zone)))
+            (ZoneId/of time-zone))
+          (catch Exception _ nil))]
+    (when-not zone
+      (throw (ex-info "Manual synchronization timezone must be an IANA identifier."
+                      {:time-zone time-zone})))
+    (assoc primary
+           :recording-start-at
+           (str (.minusMillis activity
+                              (Math/round
+                               (* (double source-seconds) 1000.0))))
+           :telemetry-sync-at activity-instant
+           :camera-sync-at activity-instant)))
+
 (defn initial-state []
   {:active-route nil
    :current-step :outcome
@@ -98,7 +135,8 @@
       (into (get route-prefix active-route)
             (concat
              [:activity-data :synchronization]
-             (when (= :manual-anchor synchronization-mode)
+             (when (and (= :transparent-overlay active-route)
+                        (= :manual-anchor synchronization-mode))
                [:matching-moment])
              [:optional-overlays]
              (keep #(when (contains? selected-overlays %)
@@ -205,12 +243,36 @@
   (let [synchronization-mode (:synchronization-mode decisions)
         selected-overlays (:optional-overlays decisions)
         active-input (merge shared-input (get route-drafts active-route))
+        manual-sync (:manualSync active-input)
+        derived-sync
+        (when (and (= :finished-video active-route)
+                   (= :manual-anchor synchronization-mode)
+                   (number? (:sourceSeconds manual-sync))
+                   (seq (:activityInstant manual-sync))
+                   (seq (:timeZone manual-sync)))
+          (derive-manual-sync
+           {:source-seconds (:sourceSeconds manual-sync)
+            :activity-instant (:activityInstant manual-sync)
+            :time-zone (:timeZone manual-sync)}))
         active-input (apply dissoc active-input
-                            optional-overlay-request-fields)
+                            (concat optional-overlay-request-fields
+                                    internal-route-fields))
         active-input (if (= :transparent-overlay active-route)
                        (apply dissoc active-input
                               finished-video-request-fields)
-                       active-input)]
+                       active-input)
+        active-input
+        (if derived-sync
+          (-> active-input
+              (update :sourceVideo merge
+                      {:recordingStartAt
+                       (:recording-start-at derived-sync)
+                       :timeZone (:time-zone derived-sync)})
+              (assoc :telemetrySyncAt
+                     (:telemetry-sync-at derived-sync)
+                     :cameraSyncAt
+                     (:camera-sync-at derived-sync)))
+          active-input)]
     (cond-> active-input
       synchronization-mode
       (assoc :synchronizationMode (name synchronization-mode))

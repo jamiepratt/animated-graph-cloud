@@ -25,11 +25,12 @@
       (is (= :review (last steps)))
       (is (= (= route :finished-video)
              (boolean
-              (and (some #{:source-video} steps)
-                   (some #{:video-recording-clock} steps)))))
+              (some #{:source-video} steps))))
+      (is (not (some #{:video-recording-clock} steps)))
       (is (= (= route :transparent-overlay)
              (boolean (some #{:overlay-timespan} steps))))
-      (is (= (= synchronization-mode :manual-anchor)
+      (is (= (and (= route :transparent-overlay)
+                  (= synchronization-mode :manual-anchor))
              (boolean (some #{:matching-moment} steps))))
       (doseq [[overlay step] [[:timer :timer-overlay]
                               [:spo2 :spo2-overlay]
@@ -37,6 +38,57 @@
         (is (= (contains? overlays overlay)
                (boolean (some #{step} steps)))))
       (is (= (count steps) (count (distinct steps)))))))
+
+(deftest manual-video-sync-derives-renderer-time-without-camera-clock-input
+  (let [primary {:source-seconds 3600.04
+                 :activity-instant "2026-10-25T01:30:00.000Z"
+                 :time-zone "Europe/Warsaw"}
+        derived (wizard/derive-manual-sync primary)]
+    (is (= {:source-seconds 3600.04
+            :activity-instant "2026-10-25T01:30:00.000Z"
+            :time-zone "Europe/Warsaw"
+            :recording-start-at "2026-10-25T00:29:59.960Z"
+            :telemetry-sync-at "2026-10-25T01:30:00.000Z"
+            :camera-sync-at "2026-10-25T01:30:00.000Z"}
+           derived))
+    (doseq [invalid [(assoc primary :source-seconds -0.04)
+                     (assoc primary :source-seconds 1.01)
+                     (assoc primary :activity-instant "not-an-instant")
+                     (assoc primary :time-zone "+02:00")]]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (wizard/derive-manual-sync invalid))))))
+
+(deftest manual-video-sync-projects-only-stable-renderer-fields
+  (let [state (-> (wizard/initial-state)
+                  (wizard/set-shared-input
+                   {:telemetryFormat "polar-csv"
+                    :telemetry "timestamp,heart_rate"
+                    :preset "1080p25"
+                    :displayTimeZone "Europe/Warsaw"})
+                  (wizard/set-route-draft
+                   :finished-video
+                   {:sourceVideo {:fileId "drive-file"}
+                    :manualSync
+                    {:sourceSeconds 10.04
+                     :activityInstant "2026-07-17T10:00:00.000Z"
+                     :timeZone "Europe/Warsaw"}
+                    :sectionStartAt "2026-07-17T10:00:00.000Z"
+                    :sectionEndAt "2026-07-17T10:00:02.000Z"
+                    :outputFormat "h264-mp4"
+                    :fitMode "letterbox"
+                    :audioMode "source+heartbeat"})
+                  (wizard/choose-route :finished-video)
+                  (wizard/choose-synchronization :manual-anchor))
+        request (wizard/project-render-request state)]
+    (is (= {:fileId "drive-file"
+            :recordingStartAt "2026-07-17T09:59:49.960Z"
+            :timeZone "Europe/Warsaw"}
+           (:sourceVideo request)))
+    (is (= "2026-07-17T10:00:00.000Z"
+           (:telemetrySyncAt request)))
+    (is (= "2026-07-17T10:00:00.000Z"
+           (:cameraSyncAt request)))
+    (is (not (contains? request :manualSync)))))
 
 (deftest dormant-route-and-overlay-drafts-survive-inactive-projection
   (let [finished-request
@@ -121,23 +173,22 @@
   (let [chosen (wizard/choose-route (wizard/initial-state) :finished-video)
         at-source (wizard/go-to-step chosen :source-video)
         source-complete (wizard/complete-step at-source :source-video)
-        at-clock (wizard/go-to-step source-complete :video-recording-clock)
-        downstream-complete (-> at-clock
-                                (wizard/complete-step :video-recording-clock)
+        at-activity (wizard/go-to-step source-complete :activity-data)
+        downstream-complete (-> at-activity
                                 (wizard/complete-step :activity-data)
                                 (wizard/complete-step :synchronization))
         invalidated (wizard/invalidate-after downstream-complete
-                                             :video-recording-clock)]
+                                             :activity-data)]
     (is (wizard/step-complete? chosen :outcome))
     (is (wizard/navigation-eligible? chosen :source-video))
     (is (not (wizard/navigation-eligible? chosen :activity-data)))
     (is (= :source-video (:current-step at-source)))
     (is (wizard/navigation-eligible? source-complete
-                                     :video-recording-clock))
-    (is (= #{:activity-data :synchronization}
+                                     :activity-data))
+    (is (= #{:synchronization}
            (get-in invalidated [:validation :invalidated-steps])))
-    (is (not (wizard/step-complete? invalidated :activity-data)))
-    (is (= :video-recording-clock (:current-step invalidated)))))
+    (is (not (wizard/step-complete? invalidated :synchronization)))
+    (is (= :activity-data (:current-step invalidated)))))
 
 (deftest completion-requires-every-active-input-step-but-not-review
   (doseq [route [:transparent-overlay :finished-video]]

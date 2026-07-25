@@ -157,7 +157,7 @@ The render JSON fields are:
 | `spo2` | No | `{ "format": "oxiwear-spo2-csv", "telemetry": "..." }`; CSV is limited to 10 MiB |
 | `timer` | No | `{ "startAt": "...", "endAt": "..." }`, within the requested section |
 | `watermark` | No | `{ "contentBase64": "..." }`, a valid PNG up to 2 MiB and 1024×1024 pixels |
-| `sourceVideo` | No | `{ "fileId": "...", "recordingStartAt": "...", "timeZone": "Europe/Warsaw" }`; the confirmed start is an ISO-8601 instant and the video zone must be IANA; optional client `name` and `mimeType` are ignored |
+| `sourceVideo` | No | `{ "fileId": "...", "recordingStartAt": "...", "timeZone": "Europe/Warsaw" }`; the shared-clock confirmed or manual-sync derived start is an ISO-8601 instant and the video zone must be IANA; optional client `name` and `mimeType` are ignored |
 | `outputFormat` | No | With `sourceVideo`: `h264-mp4` or `prores-422-mov` |
 | `fitMode` | No | With `sourceVideo`: `letterbox`, `pillarbox`, or `crop` |
 | `audioMode` | No | With `sourceVideo`: `source+heartbeat`, `source-only`, or `heartbeat-only` |
@@ -174,10 +174,16 @@ video/output timezone. A valid whole-frame output range reveals the same clock t
 without a player stage, including manual synchronization and optional timer
 markers. Incomplete, unordered, off-frame, or overlong ranges remain in the
 prompt with field-specific guidance.
-In `manual-anchor` mode, the browser's full-source marker sets `cameraSyncAt`
-on a 25 fps frame. The marker may be before, within, or after the selected
-output interval while remaining inside the available source timeline. The
-anchor offset maps the camera section onto activity-data time.
+With a source video in `manual-anchor` mode, the browser first labels the
+full-source timeline as elapsed time. The user selects a 25 fps source frame
+and enters the matching activity-data instant, without entering an absolute
+camera time. The browser derives `sourceVideo.recordingStartAt` by subtracting
+the source-frame offset from that instant and submits the activity instant as
+both synchronization anchors. The timeline then changes to synced recording
+time in the selected IANA zone. The marker may be before, within, or after the
+selected output interval while remaining inside the available source timeline.
+For a transparent overlay without a source, `manual-anchor` continues to accept
+explicit camera and activity anchors.
 In `shared-clock` mode, activity timestamps align directly to `sectionStartAt`
 with no adjustment.
 
@@ -185,8 +191,9 @@ For synchronization, activity-data timestamps are the clock of record. In
 user-facing copy, an unqualified time means activity-device time because a
 watch or phone is normally set automatically, while a camera clock is easier to
 leave wrong or may drift. Video-specific values are named explicitly. The
-full-source player uses the confirmed video clock, and the rendered local clock
-uses the selected video/output timezone.
+full-source player uses elapsed time until a manual match, then the derived
+synced recording time; the shared-clock route uses the confirmed video clock.
+The rendered local clock uses the selected video/output timezone.
 
 Telemetry must cover both mapped boundaries. The selected
 preset supplies size, 25 fps, and maximum
@@ -254,8 +261,9 @@ See ADR 0006.
 
 ## Durable render jobs
 
-To composite one Drive video, send its server-verified file ID and confirmed
-recording clock:
+To composite one Drive video, send its server-verified file ID and recording
+clock. The browser confirms it for shared clocks or derives it from an elapsed
+source-frame match for different clocks:
 
 ```json
 {
@@ -282,12 +290,15 @@ After selection, the browser starts an advisory inspection that reads at most
 two 256 KiB source ranges with a three-second limit per Drive request. It never
 requests or uses Drive `createdTime`. Explicit-offset container candidates are
 preferred, conflicts remain visible, and missing or untrustworthy metadata
-falls back to manual entry. The user must confirm both the editable start and a
-valid IANA video timezone. The confirmed instant controls only the full-source
-editor clock; rendered graph axes remain timer- or section-relative. Output
-start and end handles select exact 25 fps frames while the complete source
-remains playable. The source trim is `sectionStartAt - recordingStartAt`, cannot
-be negative, and the selected end cannot exceed known source duration. FFmpeg
+falls back to manual synchronization. For shared clocks, the user confirms the
+editable start and a valid IANA video timezone. For different clocks, the user
+selects an elapsed source position and matching activity-data instant; the
+browser derives the recording start and does not request an absolute camera
+time. The confirmed or derived instant controls only the full-source editor
+clock; rendered graph axes remain timer- or section-relative. Output start and
+end handles select exact 25 fps frames while the complete source remains
+playable. The source trim is `sectionStartAt - recordingStartAt`, cannot be
+negative, and the selected end cannot exceed known source duration. FFmpeg
 decodes and discards preceding non-seekable source frames in memory; source
 bytes are never persisted. Video, source audio, heartbeat audio, and selected
 preview frames use the same output interval.
