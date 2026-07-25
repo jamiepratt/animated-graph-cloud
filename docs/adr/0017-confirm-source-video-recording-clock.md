@@ -51,11 +51,20 @@ start as `sourceVideo.recordingStartAt`, the IANA zone as
 `telemetrySyncAt` and `cameraSyncAt`. Derived values are projections, not
 separately confirmed user input.
 
-After the match, the full-source transport clock, ticks, tooltip, and accessible
-playhead value change to synced recording time in the selected IANA zone. A
-persistent label says either `Elapsed time` or
-`Synced recording time · <zone>`, including in fullscreen, and the transition
-is announced politely. The rendered graph axis remains timer-relative or
+The player has one persistent time-context strip between its frame and
+transport, including in fullscreen. It identifies `Elapsed time`, `Recording
+time`, `Synced recording time`, or `Output clock`. Absolute modes add a compact
+local date or date range and the selected IANA zone; elapsed mode adds neither.
+Transport, tick, tooltip, and marker text stays time-only. A separate,
+collision-safe date row places one `DD Mon YYYY` label over each represented
+local day.
+
+After a manual match, the strip and timeline change from elapsed to synced
+recording time and announce the transition politely. Accessible slider and
+transport values include the mode, local date, time, IANA zone, and UTC offset.
+All local labels are derived from absolute instants in the selected IANA zone,
+so DST gaps and repeated hours retain their correct offset and remain
+distinguishable. The rendered graph axis remains timer-relative or
 section-relative. The rendered local clock uses the explicitly selected
 video/output timezone. These named video/output views do not make camera
 metadata the synchronization authority.
