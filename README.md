@@ -195,6 +195,14 @@ full-source player uses elapsed time until a manual match, then the derived
 synced recording time; the shared-clock route uses the confirmed video clock.
 The rendered local clock uses the selected video/output timezone.
 
+The player keeps one time-context strip between the frame and transport in
+normal and fullscreen layouts. It names elapsed, recording, synced recording,
+or output-clock mode. Absolute modes show a compact local date range and IANA
+zone there, while transport, ticks, hover labels, and markers remain time-only.
+A separate row labels each represented local day as `DD Mon YYYY`. Accessible
+values include the mode, date, time, IANA zone, and UTC offset, including across
+local midnight and DST gaps or repeated hours.
+
 Telemetry must cover both mapped boundaries. The selected
 preset supplies size, 25 fps, and maximum
 duration. Telemetry is limited to 10 MiB and the JSON envelope to 10 MiB plus
