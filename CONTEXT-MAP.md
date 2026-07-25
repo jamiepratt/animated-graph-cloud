@@ -12,3 +12,4 @@
 | Architectural decisions | ADRs added with the implementing change |
 | Recording-clock authority | `docs/adr/0017-confirm-source-video-recording-clock.md` |
 | Frame-accurate source trimming | `docs/adr/0018-trim-non-seekable-source-on-frame-boundaries.md` |
+| Canonical wizard state and Project JSON boundary | `docs/adr/0019-canonical-wizard-state-and-project-boundary.md` |

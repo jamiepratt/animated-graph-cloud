@@ -683,6 +683,37 @@
      "Browser-level display timezone regression requires Chrome or Chromium"
      html)))
 
+(defn- wizard-outcome-browser-outcome [page]
+  (let [request (assoc (fixture/render-request)
+                       :sourceVideo
+                       {:fileId "drive-source"
+                        :recordingStartAt "2026-07-17T09:00:00Z"
+                        :timeZone "Europe/Warsaw"}
+                       :outputFormat "h264-mp4"
+                       :fitMode "letterbox"
+                       :audioMode "source+heartbeat")
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{"
+         "const workflow=document.getElementById('compose-workflow'),source=document.getElementById('source-video-file-id'),hidden=document.getElementById('render-request'),raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),transparent=document.querySelector('input[name=\"wizard-outcome\"][value=\"transparent-overlay\"]'),finished=document.querySelector('input[name=\"wizard-outcome\"][value=\"finished-video\"]');"
+         "const initial={workflowHidden:workflow.hidden,selected:document.querySelector('input[name=\"wizard-outcome\"]:checked')?.value||null};"
+         "raw.value=JSON.stringify(" (json/write-str request) ");apply.click();"
+         "const appliedRequest=JSON.parse(hidden.value),applied={workflowHidden:workflow.hidden,route:workflow.dataset.activeRoute,currentStep:workflow.dataset.currentStep,selected:document.querySelector('input[name=\"wizard-outcome\"]:checked')?.value,source:source.value,projectedSource:appliedRequest.sourceVideo?.fileId||null};"
+         "transparent.click();const transparentRequest=JSON.parse(hidden.value),inactive={route:workflow.dataset.activeRoute,currentStep:workflow.dataset.currentStep,selected:transparent.checked,sourceDraft:source.value,projectedSource:transparentRequest.sourceVideo||null,outputFormat:transparentRequest.outputFormat||null};"
+         "finished.click();const restoredRequest=JSON.parse(hidden.value),restored={route:workflow.dataset.activeRoute,currentStep:workflow.dataset.currentStep,selected:finished.checked,source:source.value,projectedSource:restoredRequest.sourceVideo?.fileId||null,outputFormat:restoredRequest.outputFormat||null};"
+         "outcome={initial,applied,inactive,restored};"
+         "}catch(error){outcome={error:error.message};}"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-wizard-outcome-browser-"
+     "Wizard outcome browser regression requires Chrome or Chromium"
+     html)))
+
 (defn- synchronization-mode-browser-outcome [page]
   (let [manual (assoc (fixture/render-request)
                       :synchronizationMode "manual-anchor")
@@ -767,7 +798,7 @@
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
-         "const shell=document.querySelector('.shell'),form=document.getElementById('render-form'),reference=document.querySelector('.shell > .drive-card'),source=document.getElementById('video-player');"
+         "const shell=document.querySelector('.shell'),form=document.getElementById('render-form'),reference=document.querySelector('#compose-workflow > .drive-card'),source=document.getElementById('video-player');"
          "source.hidden=!" reveal-source? ";"
          "const rect=node=>{const value=node.getBoundingClientRect();return {left:value.left,right:value.right,width:value.width};},referenceRect=rect(reference),cards=[...form.querySelectorAll(':scope > .card')],cardRects=cards.map(card=>({heading:card.querySelector('h2,summary')?.textContent||'Preview and finished-video actions',...rect(card)})),aligned=value=>Math.abs(value.left-referenceRect.left)<=.5&&Math.abs(value.right-referenceRect.right)<=.5;"
          "outcome={viewportWidth:innerWidth,revealedSource:!source.hidden,form:rect(form),reference:referenceRect,cards:cardRects,aligned:aligned(rect(form))&&cardRects.every(aligned),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,shellFits:shell.getBoundingClientRect().left>=-.5&&shell.getBoundingClientRect().right<=innerWidth+.5};"
@@ -1865,7 +1896,64 @@
            (str/index-of page activity)
            (str/index-of page overlays)))
     (is (re-find #"id=\"source-output-controls\"[^>]* hidden" page))
-    (is (not (re-find #"<div class=\"step\">Step [123]</div>" page)))))
+    (is (not (re-find #"<div class=\"step\">Step [23]</div>" page)))))
+
+(deftest authenticated-compose-opens-with-the-canonical-outcome-choice
+  (let [page (ui/page {:user {:email "member@example.com"
+                              :role :member}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})]
+    (doseq [fragment ["id=\"wizard-outcome-step\""
+                      "data-step-id=\"outcome\""
+                      "Step 1"
+                      "What would you like to make?"
+                      "A transparent overlay for my video editor."
+                      "A finished video with my overlay already added."
+                      "name=\"wizard-outcome\""
+                      "value=\"transparent-overlay\""
+                      "value=\"finished-video\""
+                      "id=\"compose-workflow\""
+                      "const wizardState="]]
+      (is (str/includes? page fragment) fragment))
+    (is (< (str/index-of page "id=\"wizard-outcome-step\"")
+           (str/index-of page "id=\"compose-workflow\"")))
+    (is (not (str/includes? page "localStorage")))
+    (is (not (str/includes? page "sessionStorage")))))
+
+(deftest outcome-route-switches-project-only-active-data-and-restore-dormant-source
+  (let [outcome
+        (wizard-outcome-browser-outcome
+         (ui/page {:user {:email "member@example.com" :role :member}
+                   :csrf "csrf-test"
+                   :tokens []
+                   :members []
+                   :logs-enabled? false}))]
+    (is (nil? (:error outcome)) outcome)
+    (is (= {:workflowHidden false :selected nil}
+           (:initial outcome)))
+    (is (= {:workflowHidden false
+            :route "finished-video"
+            :currentStep "source-video"
+            :selected "finished-video"
+            :source "drive-source"
+            :projectedSource "drive-source"}
+           (:applied outcome)))
+    (is (= {:route "transparent-overlay"
+            :currentStep "overlay-timespan"
+            :selected true
+            :sourceDraft "drive-source"
+            :projectedSource nil
+            :outputFormat nil}
+           (:inactive outcome)))
+    (is (= {:route "finished-video"
+            :currentStep "source-video"
+            :selected true
+            :source "drive-source"
+            :projectedSource "drive-source"
+            :outputFormat "h264-mp4"}
+           (:restored outcome)))))
 
 (deftest compose-page-includes-a-custom-output-framing-video-player
   (let [page (ui/page {:user {:email "member@example.com" :role :member}
