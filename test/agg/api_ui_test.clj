@@ -153,7 +153,7 @@
          "document.addEventListener('DOMContentLoaded',()=>{try{"
          "const events=[];['htmx:beforeSwap','htmx:afterSwap','htmx:afterSettle','htmx:swapError'].forEach(type=>document.body.addEventListener(type,event=>events.push({type,eventTarget:event.target?.id||event.target?.tagName,detailElt:event.detail?.elt?.id||null,detailTarget:event.detail?.target?.id||null,className:event.detail?.elt?.className||'',connected:event.detail?.elt?.isConnected??null,xhrGeneration:event.detail?.xhr?.aggPreviewGeneration||null,elementGeneration:event.detail?.elt?.dataset?.previewGeneration||null})));"
          "const button=document.getElementById('preview-button'),spinner=button.querySelector('.button-spinner'),submit=document.getElementById('submit-button');"
-         "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
+         "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('telemetry-format').value='polar-csv';document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
          "button.click();const deadline=Date.now()+3500;function inspect(){const result=document.getElementById('preview-result'),finished=result?.classList.contains('preview-error')&&!button.disabled;if(finished||Date.now()>=deadline){recordOutcome({htmxVersion:window.htmx?.version||null,className:result?.className||'',text:result?.textContent||'',previewDisabled:button.disabled,spinnerHidden:spinner.hidden,submitDisabled:submit.disabled,submitStatus:document.getElementById('preview-submit-status').textContent,status:document.getElementById('form-status').textContent,events});return;}setTimeout(inspect,25);}setTimeout(inspect,25);"
          "}catch(error){recordOutcome({error:error.message});}},{once:true});"
          "</script>")
@@ -315,7 +315,7 @@
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "(async()=>{let outcome;try{"
-         "const state=window.__playerState;state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'private-mp4',name:'ride.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120\\n2026-07-17T10:00:02Z,124';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02']].forEach(([id,value])=>document.getElementById(id).value=value);document.getElementById('video-timezone').value='+02:00';document.getElementById('confirm-video-clock').click();const fixedOffsetRejected={confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,status:document.getElementById('video-clock-status').textContent};document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();"
+         "const state=window.__playerState;state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'private-mp4',name:'ride.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('telemetry-format').value='polar-csv';document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120\\n2026-07-17T10:00:02Z,124';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02']].forEach(([id,value])=>document.getElementById(id).value=value);document.getElementById('video-timezone').value='+02:00';document.getElementById('confirm-video-clock').click();const fixedOffsetRejected={confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,status:document.getElementById('video-clock-status').textContent};document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();"
          "const player=document.getElementById('video-player'),video=document.getElementById('source-video-player'),timeline=document.getElementById('video-timeline'),fit=document.getElementById('fit-mode'),play=document.getElementById('video-play-pause');video.__duration=125.5;video.dispatchEvent(new Event('loadedmetadata'));video.dispatchEvent(new Event('progress'));"
          "const outputStart=document.getElementById('output-start-handle'),outputEnd=document.getElementById('output-end-handle'),syncMarker=document.getElementById('manual-sync-marker'),cameraSync=document.getElementById('camera-sync-at'),cameraSyncField=document.getElementById('camera-sync-field'),telemetrySyncField=document.getElementById('telemetry-sync-field'),markerReady={hidden:syncMarker.hidden,disabled:syncMarker.disabled,value:syncMarker.getAttribute('aria-valuenow')};cameraSync.value=document.getElementById('section-start-at').value;cameraSync.dispatchEvent(new Event('input',{bubbles:true}));const initialRange={start:outputStart.getAttribute('aria-valuenow'),end:outputEnd.getAttribute('aria-valuenow'),startField:document.getElementById('section-start-at').value,endField:document.getElementById('section-end-at').value,unusedBefore:document.getElementById('video-unused-before').getBoundingClientRect().width,unusedAfter:document.getElementById('video-unused-after').getBoundingClientRect().width};"
          "const generatedRequest=JSON.parse(document.getElementById('render-request').value),initial={hidden:player.hidden,paused:video.paused,currentTime:video.currentTime,playCalls:state.playCalls,src:video.getAttribute('src'),selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,time:document.getElementById('video-time').textContent,timelineMax:timeline.getAttribute('aria-valuemax'),timelineValueText:timeline.getAttribute('aria-valuetext'),bufferedSegments:document.querySelectorAll('#video-buffered-ranges span').length,fit:getComputedStyle(video).objectFit,request:state.sessionRequests[0],inspectionRequest:state.inspectionRequests[0],mode:{sourceControlsHidden:document.getElementById('source-output-controls').hidden,summaryHidden:document.getElementById('no-source-output-summary').hidden,stageHidden:document.getElementById('video-stage').hidden,transportHidden:document.querySelector('.video-transport').hidden,timelineLabel:timeline.getAttribute('aria-label')},clock:{start:document.getElementById('video-recording-start').value,zone:document.getElementById('video-timezone').value,confirmed:document.getElementById('video-clock-confirmation').dataset.confirmed,candidates:document.querySelectorAll('#video-clock-candidates input').length,summary:document.getElementById('video-source-summary').textContent,request:generatedRequest.sourceVideo}};const timerToggle=document.getElementById('timer-enabled'),timerStartMarker=document.getElementById('timer-start-marker'),timerEndMarker=document.getElementById('timer-end-marker'),overlaps=(first,second)=>{const a=first.getBoundingClientRect(),b=second.getBoundingClientRect();return a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top;};function timerAt(seconds){video.currentTime=seconds;timerToggle.click();const snapshot={current:video.currentTime,fields:[document.getElementById('timer-start-at').value,document.getElementById('timer-end-at').value],request:JSON.parse(document.getElementById('render-request').value).timer||null,markers:[timerStartMarker.hidden,timerStartMarker.getAttribute('aria-valuenow'),timerEndMarker.hidden,timerEndMarker.getAttribute('aria-valuenow')],fieldsHidden:document.getElementById('timer-fields').hidden,markersSeparated:!overlaps(timerStartMarker,timerEndMarker),handlesSeparated:!overlaps(timerStartMarker,outputStart)&&!overlaps(timerEndMarker,outputEnd)};timerToggle.click();return snapshot;}const timerDefaults={start:timerAt(0),middle:timerAt(62.75),end:timerAt(125.48),outside:timerAt(125.5),disabled:{request:JSON.parse(document.getElementById('render-request').value).timer||null,markers:[timerStartMarker.hidden,timerEndMarker.hidden]}};video.currentTime=0;"
@@ -376,7 +376,7 @@
          "let outcome;try{"
          "const terminalFragment=" (json/write-str terminal-fragment) ";"
          "const button=document.querySelector('[hx-post=\"/ui/preview\"]'),submit=document.getElementById('submit-button'),spinner=button.querySelector('.button-spinner');function buttonPresentation(){const previewStyle=getComputedStyle(button),submitStyle=getComputedStyle(submit);return {spinnerHidden:spinner?.hidden??null,spinnerInside:!!spinner&&button.contains(spinner),previewBackground:previewStyle.backgroundColor,submitBackground:submitStyle.backgroundColor,previewCursor:previewStyle.cursor,submitCursor:submitStyle.cursor,previewShadow:previewStyle.boxShadow,submitShadow:submitStyle.boxShadow};}const initial={submitDisabled:submit.disabled,status:document.getElementById('preview-submit-status').textContent,presentation:buttonPresentation()};"
-         "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
+         "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('telemetry-format').value='polar-csv';document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
          "function configure(){const detail={elt:button,parameters:{},headers:{}};const event=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail});button.dispatchEvent(event);return {event,detail};}"
          "function transport(name,status=0){const target=document.getElementById('preview-result');target.dispatchEvent(new CustomEvent(name,{bubbles:true,detail:{elt:button,target,xhr:{status,getResponseHeader:()=>null}}}));return target;}"
          "const first=configure(),firstGeneration=first.detail.headers['X-Preview-Generation'],firstResult=document.getElementById('preview-result');"
@@ -438,7 +438,7 @@
          "let outcome;try{"
          "const acceptedFragment=" (json/write-str accepted-fragment) ",succeededFragment=" (json/write-str succeeded-fragment) ",failedFragment=" (json/write-str failed-fragment) ",nextAcceptedFragment=" (json/write-str next-accepted-fragment) ";"
          "const form=document.getElementById('render-form'),submit=document.getElementById('submit-button'),jobResult=document.getElementById('job-result');"
-         "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
+         "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('telemetry-format').value='polar-csv';document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T10:00:00Z,120';document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:01']].forEach(([id,value])=>document.getElementById(id).value=value);"
          "function configure(){const detail={elt:submit,parameters:{},headers:{}};const event=new CustomEvent('htmx:configRequest',{bubbles:true,cancelable:true,detail});submit.dispatchEvent(event);return {event,detail};}"
          "function swap(fragment){jobResult.innerHTML=fragment;jobResult.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{elt:form,target:jobResult}}));return {disabled:submit.disabled,ariaDisabled:submit.getAttribute('aria-disabled'),submitStatus:document.getElementById('preview-submit-status').textContent,formStatus:document.getElementById('form-status').textContent};}"
          "function pollSwap(fragment){jobResult.innerHTML=fragment;const job=jobResult.firstElementChild;job.dispatchEvent(new CustomEvent('htmx:afterSwap',{bubbles:true,detail:{elt:job,target:job}}));return {disabled:submit.disabled,ariaDisabled:submit.getAttribute('aria-disabled'),submitStatus:document.getElementById('preview-submit-status').textContent,formStatus:document.getElementById('form-status').textContent};}"
@@ -604,32 +604,46 @@
                         "Desktop preview regression requires Chrome or Chromium"
                         html "--window-size=1280,900")))))
 
-(defn- telemetry-file-browser-outcome [page]
+(defn- telemetry-file-browser-outcome [page window-size]
   (let [fit-base64 (str/trim
                     (slurp (io/resource "fixtures/garmin/activity.fit.b64")))
         csv-text (str/trim (slurp (io/resource "fixtures/polar/valid.csv")))
-        second-csv-text (str "timestamp,heart_rate\n"
-                             "2026-07-17T10:00:00Z,130\n"
-                             "2026-07-17T10:00:02Z,132")
+        alternate-polar-text (str "Date/Time;HR (bpm)\n"
+                                  "2026-07-17T10:00:00Z;130\n"
+                                  "2026-07-17T10:00:02Z;132")
         oxiwear-text (str/trim
                       (slurp (io/resource "fixtures/oxiwear/hr-midnight.csv")))
+        summary-text (str "Activity Type,Date,Favorite,Title,Distance\n"
+                          "Running,2026-07-17,false,Morning Run,5.2")
+        ambiguous-text (str "timestamp,heart_rate,reading_time,pulse_rate\n"
+                            "2026-07-17T10:00:00Z,130,"
+                            "2026-07-17T10:00:00Z,130")
+        malformed-polar-text (str "timestamp,heart_rate\n"
+                                  "not-a-time,secret-row-value")
         scenario
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "(async()=>{let outcome;try{"
-         "const format=document.getElementById('telemetry-format'),input=document.getElementById('telemetry-file'),telemetry=document.getElementById('telemetry'),raw=document.getElementById('raw-json'),status=document.getElementById('telemetry-status');"
-         "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('timezone').value='UTC';[['telemetry-sync-at','2026-07-17T10:00:00'],['camera-sync-at','2026-07-17T10:00:00'],['section-start-at','2026-07-17T10:00:00'],['section-end-at','2026-07-17T10:00:02']].forEach(([id,value])=>document.getElementById(id).value=value);"
-         "const upload=async file=>{const transfer=new DataTransfer();transfer.items.add(file);input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));const cleared=telemetry.value==='';await new Promise((resolve,reject)=>{const deadline=Date.now()+1000;const check=()=>{if(status.classList.contains('success'))resolve();else if(status.classList.contains('error')||Date.now()>deadline)reject(new Error('file read failed'));else setTimeout(check,5);};check();});return {request:JSON.parse(raw.value),cleared};};"
-         "const selectFile=async(value,file)=>{format.value=value;format.dispatchEvent(new Event('change',{bubbles:true}));return upload(file);};"
+         "const format=document.getElementById('telemetry-format'),input=document.getElementById('telemetry-file'),telemetry=document.getElementById('telemetry'),status=document.getElementById('telemetry-status'),advanced=document.getElementById('advanced-activity-data'),advancedFormat=document.getElementById('advanced-telemetry-format'),advancedInput=document.getElementById('advanced-telemetry-file'),advancedStatus=document.getElementById('advanced-telemetry-status'),advancedRoute=document.getElementById('open-advanced-activity-data'),next=document.getElementById('wizard-next');"
+         "document.querySelector('input[name=\"wizard-outcome\"][value=\"transparent-overlay\"]').click();next.click();document.getElementById('timezone').value='UTC';document.getElementById('section-start-at').value='2026-07-17T10:00:00';document.getElementById('section-end-at').value='2026-07-17T10:00:02';next.click();"
+         "const waitForStatus=node=>new Promise((resolve,reject)=>{const deadline=Date.now()+1500,check=()=>{if(node.classList.contains('success')||node.classList.contains('error'))resolve();else if(Date.now()>deadline)reject(new Error('Timed out waiting for activity-file status'));else setTimeout(check,5);};check();});"
+         "const upload=async(target,file,statusNode)=>{const transfer=new DataTransfer();if(file)transfer.items.add(file);target.files=transfer.files;target.dispatchEvent(new Event('change',{bubbles:true}));const clearedImmediately=telemetry.value==='';if(file)await waitForStatus(statusNode);return {clearedImmediately,format:format.value,content:telemetry.value,status:statusNode.textContent,success:statusNode.classList.contains('success'),error:statusNode.classList.contains('error')};};"
          "const fitBytes=Uint8Array.from(atob(" (json/write-str fit-base64) "),character=>character.charCodeAt(0));"
-         "const fitUpload=await selectFile('garmin-fit',new File([fitBytes],'input.fit',{type:'application/octet-stream'}));"
-         "format.value='polar-csv';format.dispatchEvent(new Event('change',{bubbles:true}));"
-         "const clearedOnFormatChange=telemetry.value===''&&input.files.length===0;"
-         "const csvUpload=await selectFile('polar-csv',new File([" (json/write-str csv-text) "],'input.csv',{type:'text/csv'}));"
-         "const secondCsvUpload=await upload(new File([" (json/write-str second-csv-text) "],'replacement.csv',{type:'text/csv'}));"
-         "const oxiwearUpload=await selectFile('oxiwear-hr-csv',new File([" (json/write-str oxiwear-text) "],'input.csv',{type:'text/csv'}));"
-         "outcome={fitMatches:fitUpload.request.telemetry===" (json/write-str fit-base64) ",fitFormat:fitUpload.request.telemetryFormat,csvMatches:csvUpload.request.telemetry===" (json/write-str csv-text) ",csvFormat:csvUpload.request.telemetryFormat,clearedOnFormatChange,clearedOnFileChange:secondCsvUpload.cleared,secondCsvMatches:secondCsvUpload.request.telemetry===" (json/write-str second-csv-text) ",oxiwearMatches:oxiwearUpload.request.telemetry===" (json/write-str oxiwear-text) ",oxiwearFormat:oxiwearUpload.request.telemetryFormat};"
-         "}catch(_error){outcome={error:'browser telemetry upload scenario failed'};}"
+         "const fit=await upload(input,new File([fitBytes],'input.fit',{type:'application/octet-stream'}),status);fit.matches=fit.content===" (json/write-str fit-base64) ";"
+         "const polar=await upload(input,new File([" (json/write-str csv-text) "],'polar.csv',{type:'text/csv'}),status);polar.matches=polar.content===" (json/write-str csv-text) ";"
+         "const alternate=await upload(input,new File([" (json/write-str alternate-polar-text) "],'alternate.csv',{type:'text/csv'}),status);alternate.matches=alternate.content===" (json/write-str alternate-polar-text) ";"
+         "const cancelled=await upload(input,null,status);cancelled.inputFiles=input.files.length;cancelled.status=status.textContent;"
+         "const oxiwear=await upload(input,new File([" (json/write-str oxiwear-text) "],'oxiwear.csv',{type:'text/csv'}),status);oxiwear.routeVisible=!advancedRoute.hidden;advancedRoute.click();oxiwear.advancedOpen=advanced.open;oxiwear.focused=document.activeElement===advancedFormat;advancedFormat.value='oxiwear-hr-csv';advancedFormat.dispatchEvent(new Event('change',{bubbles:true}));"
+         "const advancedUpload=await upload(advancedInput,new File([" (json/write-str oxiwear-text) "],'oxiwear.csv',{type:'text/csv'}),advancedStatus);advancedUpload.matches=advancedUpload.content===" (json/write-str oxiwear-text) ";advancedUpload.advancedFormat=advancedFormat.value;"
+         "const summary=await upload(input,new File([" (json/write-str summary-text) "],'activities.csv',{type:'text/csv'}),status);"
+         "const ambiguous=await upload(input,new File([" (json/write-str ambiguous-text) "],'ambiguous.csv',{type:'text/csv'}),status);"
+         "const wrongExtension=await upload(input,new File([" (json/write-str csv-text) "],'activity.txt',{type:'text/plain'}),status);"
+         "const malformedCsv=await upload(input,new File([" (json/write-str malformed-polar-text) "],'malformed.csv',{type:'text/csv'}),status);malformedCsv.privateContentLeaked=malformedCsv.status.includes('secret-row-value');"
+         "const malformedFit=await upload(input,new File([new Uint8Array([14,1,0,0,4,0,0,0,46,70,73,84])],'malformed.fit',{type:'application/octet-stream'}),status);"
+         "const oversized=await upload(input,new File([new Uint8Array(10485761)],'oversized.fit',{type:'application/octet-stream'}),status);"
+         "const originalReadAsText=FileReader.prototype.readAsText;FileReader.prototype.readAsText=function(){setTimeout(()=>this.onerror?.(new ProgressEvent('error')),0);};const readFailure=await upload(input,new File([" (json/write-str csv-text) "],'unreadable.csv',{type:'text/csv'}),status);FileReader.prototype.readAsText=originalReadAsText;readFailure.privateContentLeaked=readFailure.status.includes('2026-07-17');"
+         "const panel=document.getElementById('activity-data-step'),rect=panel.getBoundingClientRect();outcome={fit,polar,alternate,cancelled,oxiwear,advancedUpload,summary,ambiguous,wrongExtension,malformedCsv,malformedFit,oversized,readFailure,activityStep:document.getElementById('compose-workflow').dataset.currentStep,labels:{simple:input.labels[0]?.textContent||'',advanced:advancedInput.labels[0]?.textContent||'',format:advancedFormat.labels[0]?.textContent||''},advancedSummary:advanced.querySelector('summary').textContent,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,panelFits:rect.left>=-.5&&rect.right<=innerWidth+.5};"
+         "}catch(error){outcome={error:error.message,stack:error.stack};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
          "</script>")
         html (-> page
@@ -638,7 +652,8 @@
     (browser-outcome
      "agg-telemetry-file-browser-"
      "Browser-level telemetry file regression requires Chrome or Chromium"
-     html)))
+     html
+     (str "--window-size=" window-size))))
 
 (defn- future-trace-opacity-browser-outcome [page]
   (let [request (fixture/render-request)
@@ -728,7 +743,7 @@
          "const backedPop=new Promise(resolve=>window.addEventListener('popstate',()=>setTimeout(resolve,0),{once:true}));back.click();await backedPop;const backed=snapshot();const outcomeButton=[...stepList.querySelectorAll('button')].find(button=>button.dataset.stepId==='outcome');outcomeButton.click();const direct=snapshot();"
          "transparent.click();const transparentRoute=snapshot();next.click();const timespan=snapshot();next.click();const timingError={...snapshot(),message:errorSummary.textContent,errorFocused:document.activeElement===errorSummary};"
          "document.getElementById('timezone').value='UTC';document.getElementById('section-start-at').value='2026-07-17T09:00:00';document.getElementById('section-end-at').value='2026-07-17T09:00:02';next.click();const activity=snapshot();"
-         "document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T09:00:00Z,120';next.click();const synchronization=snapshot();"
+         "document.getElementById('telemetry-format').value='polar-csv';document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T09:00:00Z,120';next.click();const synchronization=snapshot();"
          "document.querySelector('input[name=\"synchronization-mode\"][value=\"shared-clock\"]').click();const shared={...snapshot(),stepCount:stepList.querySelectorAll('li').length};"
          "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();const manual={...snapshot(),stepCount:stepList.querySelectorAll('li').length};next.click();const matching=snapshot();next.click();const matchingError={...snapshot(),message:errorSummary.textContent,errorFocused:document.activeElement===errorSummary};"
          "const popped=new Promise(resolve=>window.addEventListener('popstate',()=>setTimeout(resolve,0),{once:true}));history.back();await popped;const browserBack=snapshot();"
@@ -763,7 +778,7 @@
          "const initial={workspaceHidden:workspace.hidden,current:workflow.dataset.currentStep};transparent.click();const chosen={workspaceHidden:workspace.hidden,current:workflow.dataset.currentStep};next.click();const localOption=zone.options[0].textContent,overlay={workspaceHidden:workspace.hidden,current:workflow.dataset.currentStep,panel:currentPanel()?.dataset.stepId||null,beforePanel:before(workspace,currentPanel()),parents:[zone.closest('label').parentElement.id,start.closest('label').parentElement.id,end.closest('label').parentElement.id],localOption,browserZone:Intl.DateTimeFormat().resolvedOptions().timeZone};"
          "start.value='2026-07-17T09:00:00';const keys=['ArrowLeft','ArrowRight','Home','End','PageUp','PageDown','f','F',' '],keyboard=keys.map(key=>{const event=new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key,code:key===' '?'Space':''});start.dispatchEvent(event);return {key,prevented:event.defaultPrevented,value:start.value};});"
          "zone.value='UTC';input(zone);input(start);const incomplete={timelineHidden:timelineWrap.hidden,dockVisible:visible(dock)};end.value='2026-07-17T09:00:02';input(end);const ready={timelineHidden:timelineWrap.hidden,dockVisible:visible(dock),workspaceHidden:workspace.hidden};next.click();const activity={current:workflow.dataset.currentStep,workspaceHidden:workspace.hidden,beforePanel:before(workspace,currentPanel())};"
-         "document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T09:00:00Z,120';next.click();document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();next.click();const matching={current:workflow.dataset.currentStep,workspaceHidden:workspace.hidden,parent:camera.closest('#timing-dock')?.id||null,fieldsVisible:visible(camera)&&visible(telemetrySync)};camera.value='2026-07-17T09:00:01';telemetrySync.value='2026-07-17T10:00:01';input(camera);input(telemetrySync);next.click();document.getElementById('timer-enabled').click();next.click();const timer={current:workflow.dataset.currentStep,workspaceHidden:workspace.hidden,parent:timerStart.closest('#timing-dock')?.id||null,fieldsVisible:visible(timerStart)&&visible(timerEnd)};"
+         "document.getElementById('telemetry-format').value='polar-csv';document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T09:00:00Z,120';next.click();document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();next.click();const matching={current:workflow.dataset.currentStep,workspaceHidden:workspace.hidden,parent:camera.closest('#timing-dock')?.id||null,fieldsVisible:visible(camera)&&visible(telemetrySync)};camera.value='2026-07-17T09:00:01';telemetrySync.value='2026-07-17T10:00:01';input(camera);input(telemetrySync);next.click();document.getElementById('timer-enabled').click();next.click();const timer={current:workflow.dataset.currentStep,workspaceHidden:workspace.hidden,parent:timerStart.closest('#timing-dock')?.id||null,fieldsVisible:visible(timerStart)&&visible(timerEnd)};"
          "const identities={start,timerStart,camera};document.getElementById('video-fullscreen').click();const fullscreen={element:document.fullscreenElement?.id||null,dockInside:chrome.contains(dock),sameInputs:identities.start===document.getElementById('section-start-at')&&identities.timerStart===document.getElementById('timer-start-at')&&identities.camera===document.getElementById('camera-sync-at'),scrollable:getComputedStyle(document.getElementById('video-controls-dock')).overflowY,fieldsVisible:visible(start)&&visible(timerStart)&&visible(camera)};start.focus();document.exitFullscreen();const exited={focusRestored:document.activeElement===start,sameInput:identities.start===document.getElementById('section-start-at')};"
          "finished.click();const switched={current:workflow.dataset.currentStep,workspaceHidden:workspace.hidden};next.click();document.getElementById('source-video-file-id').value='drive-source';next.click();const sourceClock={current:workflow.dataset.currentStep,workspaceHidden:workspace.hidden,panel:currentPanel()?.dataset.stepId||null,beforePanel:before(workspace,currentPanel()),sameDock:dock===document.getElementById('timing-dock')};"
          "outcome={viewportWidth:innerWidth,initial,chosen,overlay,keyboard,incomplete,ready,activity,matching,timer,fullscreen,exited,switched,sourceClock,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
@@ -1201,12 +1216,13 @@
         expected-compose-copy
         ["Activity data for video"
          "Create your video"
-         "Choose your activity data"
-         "Heart rate is the main supported graph"
-         "optional OxiWear SpO2 (oxygen saturation)"
+         "Choose your heart-rate file"
+         "Upload a FIT or CSV file"
+         "detects Garmin FIT or Polar CSV automatically"
+         "Advanced activity data"
+         "OxiWear heart-rate CSV"
          "Heart-rate data format"
-         "Heart-rate data file"
-         "Or paste heart-rate data"
+         "Heart-rate file"
          "Camera and activity devices used the same clock - no synchronization adjustment needed"
          "Camera and activity devices used different clocks - choose a matching moment"
          "Video time at matching moment"
@@ -1223,6 +1239,7 @@
          "Select a supported telemetry format"
          "Telemetry file"
          "Or paste telemetry content"
+         "Or paste heart-rate data"
          "Telemetry sync time"
          "Heart-rate sync time"
          "Telemetry timestamps"
@@ -1951,7 +1968,7 @@
                        :tokens []
                        :members []
                        :logs-enabled? false})
-        activity "<h2>Choose your activity data</h2>"
+        activity "<h2>Choose your heart-rate file</h2>"
         output-controls "id=\"source-output-controls\""
         player "id=\"video-chrome\""
         timing "<h2>Set output timing</h2>"
@@ -3336,23 +3353,83 @@
     (is (str/includes? failed "retry with the Preview button"))
     (is (str/includes? empty "No preview moments"))))
 
-(deftest telemetry-files-follow-the-selected-format-in-a-browser
-  (let [outcome (telemetry-file-browser-outcome
-                 (ui/page {:user {:email "owner@example.com" :role :member}
-                           :csrf "csrf-test"
-                           :tokens []
-                           :members []
-                           :logs-enabled? false}))]
-    (is (nil? (:error outcome)) outcome)
-    (is (:fitMatches outcome) outcome)
-    (is (= "garmin-fit" (:fitFormat outcome)))
-    (is (:clearedOnFormatChange outcome) outcome)
-    (is (:csvMatches outcome) outcome)
-    (is (= "polar-csv" (:csvFormat outcome)))
-    (is (:clearedOnFileChange outcome) outcome)
-    (is (:secondCsvMatches outcome) outcome)
-    (is (:oxiwearMatches outcome) outcome)
-    (is (= "oxiwear-hr-csv" (:oxiwearFormat outcome)))))
+(deftest activity-files-are-detected-locally-with-advanced-oxiwear-routing
+  (let [page (ui/page {:user {:email "owner@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})
+        outcomes [(telemetry-file-browser-outcome page "1280,900")
+                  (telemetry-file-browser-outcome page "390,844")]]
+    (is (str/includes?
+         page
+         (str "Upload a FIT or CSV file. Alpha Compose detects Garmin FIT "
+              "or Polar CSV automatically.")))
+    (is (not (str/includes? page "<select id=\"telemetry-format\"")))
+    (is (not (str/includes? page "<textarea id=\"telemetry\"")))
+    (doseq [fragment ["id=\"telemetry-file\""
+                      "accept=\".fit,.csv"
+                      "id=\"advanced-activity-data\""
+                      "id=\"advanced-telemetry-format\""
+                      "id=\"advanced-telemetry-file\""
+                      "id=\"open-advanced-activity-data\""]]
+      (is (str/includes? page fragment) fragment))
+    (doseq [outcome outcomes]
+      (is (nil? (:error outcome)) outcome)
+      (is (= "activity-data" (:activityStep outcome)))
+      (is (= "garmin-fit" (get-in outcome [:fit :format])))
+      (is (true? (get-in outcome [:fit :matches])))
+      (is (true? (get-in outcome [:fit :success])))
+      (is (str/includes? (get-in outcome [:fit :status])
+                         "Detected Garmin FIT"))
+      (doseq [result [:polar :alternate]]
+        (is (= "polar-csv" (get-in outcome [result :format])))
+        (is (true? (get-in outcome [result :matches])))
+        (is (true? (get-in outcome [result :success])))
+        (is (str/includes? (get-in outcome [result :status])
+                           "Detected Polar CSV")))
+      (is (true? (get-in outcome [:polar :clearedImmediately])))
+      (is (= {:clearedImmediately true
+              :format ""
+              :content ""
+              :status ""
+              :success false
+              :error false
+              :inputFiles 0}
+             (:cancelled outcome)))
+      (is (true? (get-in outcome [:oxiwear :error])))
+      (is (str/includes? (get-in outcome [:oxiwear :status])
+                         "OxiWear heart-rate CSV"))
+      (is (true? (get-in outcome [:oxiwear :routeVisible])))
+      (is (true? (get-in outcome [:oxiwear :advancedOpen])))
+      (is (true? (get-in outcome [:oxiwear :focused])))
+      (is (= "oxiwear-hr-csv"
+             (get-in outcome [:advancedUpload :format])))
+      (is (= "oxiwear-hr-csv"
+             (get-in outcome [:advancedUpload :advancedFormat])))
+      (is (true? (get-in outcome [:advancedUpload :matches])))
+      (is (true? (get-in outcome [:advancedUpload :success])))
+      (doseq [[result guidance]
+              [[:summary "activity-list summary"]
+               [:ambiguous "matches more than one"]
+               [:wrongExtension "Choose a .fit or .csv file"]
+               [:malformedCsv "row 2"]
+               [:malformedFit "not a compatible Garmin FIT"]
+               [:oversized "10 MiB"]
+               [:readFailure "Could not read"]]]
+        (is (true? (get-in outcome [result :error])) result)
+        (is (str/includes? (get-in outcome [result :status]) guidance)
+            result)
+        (is (= "" (get-in outcome [result :content])) result))
+      (is (false? (get-in outcome [:malformedCsv :privateContentLeaked])))
+      (is (false? (get-in outcome [:readFailure :privateContentLeaked])))
+      (is (every? #(str/includes? % "Heart-rate")
+                  (vals (:labels outcome))))
+      (is (= "Advanced activity data" (:advancedSummary outcome)))
+      (is (true? (:noHorizontalOverflow outcome)))
+      (is (true? (:panelFits outcome))))
+    (is (= 1280 (:viewportWidth (first outcomes))))
+    (is (<= (:viewportWidth (second outcomes)) 500))))
 
 (deftest htmx-preview-failure-is-a-safe-correlated-html-fragment
   (let [port (available-port)
