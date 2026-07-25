@@ -2,6 +2,7 @@
   (:require [agg.auth-test]
             [agg.admin-test]
             [agg.admin-gcp-test]
+            [agg.browser-process-test]
             [agg.api-admin-test]
             [agg.auth-gcp-test]
             [agg.api-auth-test]
@@ -48,6 +49,7 @@
                                              'agg.api-ui-test
                                              'agg.auth-gcp-test
                                              'agg.auth-test
+                                             'agg.browser-process-test
                                              'agg.deploy-workflow-test
                                              'agg.development-gate-test
                                              'agg.errors-test
