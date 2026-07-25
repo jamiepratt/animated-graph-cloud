@@ -1314,6 +1314,11 @@
         (is (str/includes? (.body privacy) "Google Drive"))
         (is (str/includes? (.body privacy) "Google API Services User Data Policy"))
         (is (str/includes? (.body privacy) "Limited Use"))
+        (is (str/includes? (.body privacy) "Project JSON"))
+        (is (str/includes? (.body privacy)
+                           "Alpha Compose does not automatically persist Project JSON"))
+        (is (str/includes? (.body privacy)
+                           "Credentials, CSRF values, signed URLs, recording-clock candidates, preview images, playback state, and job results are excluded from Project JSON"))
         (is (str/includes? (.body privacy) "early-access request"))
         (is (str/includes? (.body privacy) "Instagram handle"))
         (is (str/includes? (.body privacy) "optional message"))
@@ -1443,6 +1448,7 @@
                        ["generated-heartbeat-sound" "Is the heartbeat sound a recording of my heart?"]
                        ["audio-options" "Can I keep the source audio, use only the heartbeat, or combine them?"]
                        ["supported-activity-data" "What activity data is supported today?"]
+                       ["compatible-activity-export" "How do I export a compatible activity file?"]
                        ["oxygen-saturation-support" "Does Alpha Compose support oxygen saturation?"]
                        ["future-graphs" "Will other graphs be supported?"]
                        ["file-sources" "Where are my video and activity-data files read from?"]
@@ -1453,6 +1459,10 @@
                        ["why-can-camera-timecode-differ-from-clock-time" "Why can camera timecode differ from clock time?"]
                        ["synchronizing-data-and-camera" "Why do I need to synchronize the activity data and camera time?"]
                        ["output-file" "What output does Alpha Compose create?"]
+                       ["transparent-overlay-editors" "Which editor should I use for a transparent overlay?"]
+                       ["completed-output-playback" "Which finished outputs can I play in the browser?"]
+                       ["project-json" "What is Project JSON and when does Alpha Compose save it?"]
+                       ["ai-assisted-preparation" "Can AI help me prepare Project JSON, FFmpeg commands, or editor steps?"]
                        ["google-drive-access" "What can Alpha Compose access in Google Drive?"]
                        ["finished-video-location" "Where is my finished video saved?"]
                        ["source-and-activity-data-retention" "Does Alpha Compose retain my source video or log my activity data?"]
@@ -1480,6 +1490,12 @@
                        "Polar CSV"
                        "Garmin FIT"
                        "OxiWear heart-rate CSV"
+                       "Garmin Connect, open the activity and choose Export Original"
+                       "Polar Flow, open one session and export a CSV file"
+                       "Strava's Export Original can work when the original uploaded file still contains compatible heart-rate data"
+                       "Apple Health exports all data as XML"
+                       "Health Connect backups export a Health Connect.zip archive"
+                       "not supported activity-file inputs for Alpha Compose today"
                        "optional OxiWear SpO2"
                        "embedded recording timestamp may contain only a UTC offset"
                        "Alpha Compose never treats the Google Drive upload time as the recording time"
@@ -1493,11 +1509,28 @@
                        "GoPro product manuals"
                        "DJI Osmo Action date and time"
                        "Garmin watch time troubleshooting and synchronization"
+                       "DaVinci Resolve is the recommended first choice"
+                       "Adobe Premiere Pro"
+                       "Final Cut Pro"
+                       "Completed H.264 MP4 outputs can open in the browser"
+                       "ProRes outputs remain download-first files for desktop editors"
+                       "Project JSON is a separate browser workflow envelope"
+                       "The public API accepts only the nested renderRequest"
+                       "Alpha Compose creates or stores Project JSON only when you explicitly download, copy, upload, or paste it"
+                       "excludes credentials, CSRF values, signed URLs, preview images, playback state, and job results"
+                       "Codex can help if you give it access to the relevant files and docs"
+                       "Claude can use code execution and file creation inside a chat"
+                       "Claude Code is a separate terminal and IDE tool"
+                       "FFmpeg itself is just the command-line media tool"
+                       "plan availability and limits can change"
                        "source video is streamed"
                        "does not log activity-data values"
                        "not medical advice"
                        "does not infer emotions, health, or training readiness"]]
           (is (str/includes? page claim) claim))
+        (doseq [retired ["2 GiB"
+                         "Freediver connector"]]
+          (is (not (str/includes? page retired)) retired))
         (let [faq-position (str/index-of (.body homepage) "href=\"/faq\"")
               privacy-position (str/index-of (.body homepage) "href=\"/privacy\"")
               terms-position (str/index-of (.body homepage) "href=\"/terms\"")]
@@ -1845,7 +1878,7 @@
         (is (true? (get-in outcome [:back :open])))
         (is (true? (get-in outcome [:back :inView])))
         (is (true? (:changedStillOpen outcome)))
-        (is (= 23 (:summaryCount outcome)))
+        (is (= 28 (:summaryCount outcome)))
         (is (true? (:summariesKeyboardReachable outcome)))
         (is (true? (:permalinksAccessible outcome)))
         (is (zero? (:nestedDetails outcome)))
@@ -4044,9 +4077,11 @@
                           "Shared Drives"
                           "folders remain visible for navigation"
                           "video/x-matroska"
-                          "2 GiB"
+                          "Project JSON"
+                          "completed-output playback"
                           "downloadable, decodable"]]
           (is (str/includes? body contract) contract))
+        (is (not (str/includes? body "2 GiB")))
         (is (not (str/includes? body "client_secret"))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))

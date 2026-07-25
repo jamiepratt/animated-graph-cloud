@@ -115,6 +115,24 @@
       (str "<p>Yes, as an optional addition. Compatible heart-rate renders can include "
            "optional OxiWear SpO2 activity data and display oxygen saturation alongside "
            "the primary heart-rate graph.</p>")}
+     {:fragment "compatible-activity-export"
+      :question "How do I export a compatible activity file?"
+      :answer
+      (str "<p>For Garmin Connect, open the activity and choose Export Original. "
+           "That usually gives you the device's original FIT file. For Polar Flow, "
+           "open one session and export a CSV file. Alpha Compose reads one activity "
+           "at a time, so prefer an individual session export over a bulk archive.</p>"
+           "<p>Strava's Export Original can work when the original uploaded file still "
+           "contains compatible heart-rate data, but Alpha Compose cannot recover "
+           "heart-rate samples from every Strava activity page or post-processed export.</p>"
+           "<p>Apple Health exports all data as XML, and Health Connect backups export "
+           "a Health Connect.zip archive. Those are not supported "
+           "activity-file inputs for Alpha Compose today.</p>"
+           "<ul><li><a href=\"https://support.garmin.com/en-US/?faq=W1TvTPW8JZ6LfJSfK512Q8\">Garmin Connect Export Original</a></li>"
+           "<li><a href=\"https://support.polar.com/us-en/export-training-sessions-flow\">Polar Flow individual session export</a></li>"
+           "<li><a href=\"https://support.strava.com/en-us/articles/15401919-exporting-your-data-and-bulk-export\">Strava Export Original</a></li>"
+           "<li><a href=\"https://support.apple.com/guide/iphone/share-your-health-data-iph5ede58c3d/ios\">Apple Health XML export</a></li>"
+           "<li><a href=\"https://support.google.com/android/answer/15323271?hl=en\">Health Connect backup and restore</a></li></ul>")}
      {:fragment "future-graphs"
       :question "Will other graphs be supported?"
       :answer
@@ -242,7 +260,36 @@
       (str "<p>With a source video, Alpha Compose creates a finished H.264 MP4 or "
            "ProRes 422 MOV. It can also create a transparent ProRes 4444 MOV overlay "
            "for a separate editing workflow. See the <a href=\"/openapi.yaml\">technical "
-           "API documentation</a> for file-format details.</p>")}]}
+           "API documentation</a> for file-format details.</p>")}
+     {:fragment "transparent-overlay-editors"
+      :question "Which editor should I use for a transparent overlay?"
+      :answer
+      (str "<p>DaVinci Resolve is the recommended first choice for transparent "
+           "overlays. It is the editor used in Alpha Compose's manual acceptance "
+           "check for transparent ProRes 4444 exports.</p>"
+           "<p>If you already pay for another editor, current officially documented "
+           "alternatives with alpha-capable ProRes workflows include Adobe Premiere "
+           "Pro and Final Cut Pro. Alpha Compose does not currently publish support "
+           "claims for unpaid editors or community-only workflows.</p>")}
+     {:fragment "completed-output-playback"
+      :question "Which finished outputs can I play in the browser?"
+      :answer
+      (str "<p>Completed H.264 MP4 outputs can open in the browser through Alpha "
+           "Compose's private completed-output playback flow.</p>"
+           "<p>ProRes outputs remain download-first files for desktop editors. "
+           "That includes transparent ProRes 4444 overlays and finished ProRes 422 "
+           "videos.</p>")}
+     {:fragment "ai-assisted-preparation"
+      :question "Can AI help me prepare Project JSON, FFmpeg commands, or editor steps?"
+      :answer
+      (str "<p>Yes, but the tools are different. Codex can help if you give it access "
+           "to the relevant files and docs. Claude can use code execution and file "
+           "creation inside a chat to generate or transform files. Claude Code is a "
+           "separate terminal and IDE tool with its own plan and permission model. "
+           "FFmpeg itself is just the command-line media tool, not an AI assistant.</p>"
+           "<p>Current plan availability and limits can change. Verify the current OpenAI or "
+           "Anthropic plan pages before relying on a specific allowance, connector, "
+           "or coding surface.</p>")}]}
    {:fragment "category-google-drive-and-privacy"
     :title "Google Drive and privacy"
     :questions
@@ -258,6 +305,15 @@
       (str "<p>The finished video is saved in your Alpha Compose folder in My Drive, "
            "including when the source video came from a Shared Drive or was shared with "
            "you. It remains in your Drive until you delete it.</p>")}
+     {:fragment "project-json"
+      :question "What is Project JSON and when does Alpha Compose save it?"
+      :answer
+      (str "<p>Project JSON is a separate browser workflow envelope, not the API "
+           "request itself. The public API accepts only the nested renderRequest.</p>"
+           "<p>Alpha Compose creates or stores Project JSON only when you explicitly "
+           "download, copy, upload, or paste it. It can include your private activity "
+           "data and bounded embedded assets, but it excludes credentials, CSRF "
+           "values, signed URLs, preview images, playback state, and job results.</p>")}
      {:fragment "source-and-activity-data-retention"
       :question "Does Alpha Compose retain my source video or log my activity data?"
       :answer
@@ -1027,7 +1083,7 @@
      "</div><p class=\"muted\">Pick a supported video from My Drive, files shared with you, or a Shared Drive. Video results are filtered; folders are only for navigation. You can also upload a source video. Selection grants Alpha Compose access to that file only. Every finished render still goes to your Alpha Compose folder in My Drive.</p></div><div class=\"drive-actions\"><button id=\"open-picker\" type=\"button\">Pick one video</button><span>Selected: <output id=\"picker-selection\">None</output></span></div></section>"
      "<div id=\"output-settings-step\" data-wizard-panel data-step-id=\"output-settings\" hidden>"
      "<section id=\"no-source-output-summary\" class=\"card output-summary\" hidden><h2>Output format</h2><p><strong>Transparent ProRes 4444 overlay</strong></p><p class=\"muted\">No source video is selected. Alpha Compose will create a transparent overlay for a separate editing workflow.</p></section>"
-     "<section id=\"source-output-controls\" class=\"card\" hidden><div class=\"section-head\"><div><h2>Output format</h2><p class=\"muted\">Choose the composite format and how the selected source fits the frame. The server verifies download access, decodability, and duration.</p></div></div><input id=\"source-video-file-id\" type=\"hidden\"><div class=\"field-grid\"><label>Output format<select id=\"output-format\"><option value=\"h264-mp4\">H.264 MP4</option><option value=\"prores-422-mov\">ProRes 422 MOV</option></select></label><label>Fit<select id=\"fit-mode\"><option value=\"letterbox\">Letterbox / pillarbox</option><option value=\"crop\">Crop to fill</option></select></label><div><div class=\"help-label\"><label for=\"audio-mode\">Audio</label>"
+     "<section id=\"source-output-controls\" class=\"card\" hidden><div class=\"section-head\"><div><h2>Output format</h2><p class=\"muted\">Choose the composite format and how the selected source fits the frame. The server verifies download access, decodability, and duration. Completed H.264 MP4 outputs support private browser playback when ready; ProRes outputs are for download-first editor workflows.</p></div></div><input id=\"source-video-file-id\" type=\"hidden\"><div class=\"field-grid\"><label>Output format<select id=\"output-format\"><option value=\"h264-mp4\">H.264 MP4</option><option value=\"prores-422-mov\">ProRes 422 MOV</option></select></label><label>Fit<select id=\"fit-mode\"><option value=\"letterbox\">Letterbox / pillarbox</option><option value=\"crop\">Crop to fill</option></select></label><div><div class=\"help-label\"><label for=\"audio-mode\">Audio</label>"
      (contextual-help-link "audio-options"
                            "Learn about heartbeat audio options")
      "</div><select id=\"audio-mode\"><option value=\"source+heartbeat\">Source + heartbeat</option><option value=\"source-only\">Source only</option><option value=\"heartbeat-only\">Heartbeat only</option></select></div></div></section>"
@@ -1068,7 +1124,7 @@
                            "Learn about optional SpO2 data")
      "</div><div id=\"spo2-fields\" hidden class=\"source-box\"><label for=\"spo2-file\">Oxygen-saturation CSV file</label><input id=\"spo2-file\" type=\"file\" accept=\".csv,text/csv\"><label for=\"spo2-telemetry\" style=\"margin-top:1rem\">Or paste oxygen-saturation CSV</label><textarea id=\"spo2-telemetry\" placeholder=\"reading_time,spo2\n2026-07-17T10:00:00Z,97\"></textarea><p id=\"spo2-status\" class=\"status\" role=\"status\"></p></div></div>"
      "<div id=\"watermark-option\" class=\"optional\" data-step-id=\"watermark-overlay\"><label class=\"toggle\"><input id=\"watermark-enabled\" type=\"checkbox\"> Add a PNG watermark</label><div id=\"watermark-fields\" hidden class=\"source-box\"><label for=\"watermark-file\">PNG file <small>It is converted to base64 locally and sent with this request.</small></label><input id=\"watermark-file\" type=\"file\" accept=\"image/png,.png\"><p id=\"watermark-status\" class=\"status\" role=\"status\"></p></div></div></section>"
-     "<div id=\"review-step\" data-wizard-panel data-step-id=\"review\" hidden><section class=\"card\"><h2>Your choices</h2><p class=\"muted\">Review each active choice. Edit returns to its populated step.</p><div id=\"review-sections\" class=\"review-sections\"></div></section><section class=\"card raw-panel\"><div class=\"raw-actions\"><button id=\"download-project-json\" type=\"button\">Download Project JSON</button><label class=\"button\" for=\"upload-project-json\">Upload Project JSON</label><input id=\"upload-project-json\" type=\"file\" accept=\".json,application/json\" hidden></div><p class=\"hint\">Project JSON stays private until you download it yourself. It can include your activity data and bounded embedded assets.</p><details><summary>Advanced: inspect or edit Project JSON</summary><p class=\"hint\">Paste a Project JSON envelope and choose “Apply Project JSON”. Validation is atomic. The current workflow changes only after the whole envelope and any imported Drive reference succeed.</p><p class=\"hint\">The public render API accepts only the nested <code>renderRequest</code>, not this Project JSON envelope.</p><textarea id=\"project-json\" spellcheck=\"false\">{}</textarea><div class=\"raw-actions\"><button id=\"apply-project-json\" type=\"button\">Apply Project JSON</button><button id=\"copy-project-json\" type=\"button\">Copy Project JSON</button></div><p id=\"project-json-status\" class=\"status json-errors\" role=\"status\"></p></details></section><section class=\"card raw-panel\"><details><summary>Advanced: paste or inspect raw RenderRequest JSON</summary><p class=\"hint\">Paste a request and choose “Apply JSON to form”. The JSON is checked for structural errors first; form edits are reflected here before preview or submission.</p><p class=\"hint\">Alpha Compose calls these inputs activity data. The API contract uses the exact field names below.</p><p class=\"hint\"><strong>Accepted fields</strong></p><ul class=\"field-reference\"><li><code>telemetryFormat</code> and <code>telemetry</code> are required. Formats: <code>polar-csv</code>, <code>garmin-fit</code> (base64 FIT), or <code>oxiwear-hr-csv</code>.</li><li><code>preset</code> is required: <code>1080p25</code> (1920×1080, 25 fps, up to 8 minutes) or <code>2.7k25</code> (2704×1520, 25 fps, up to 4 minutes).</li><li><code>displayTimeZone</code> is required: a known IANA timezone such as <code>Europe/Warsaw</code> or <code>UTC</code>; it controls only the rendered local clock.</li><li><code>synchronizationMode</code> is required. Use <code>shared-clock</code> and omit both synchronization anchors when the devices used the same clock. Use <code>manual-anchor</code> and provide both <code>telemetrySyncAt</code> and <code>cameraSyncAt</code> when their clocks differed; <code>cameraSyncAt</code> may be before, within, or after the selected output.</li><li><code>sectionStartAt</code> and <code>sectionEndAt</code> are required ISO-8601 instants with <code>Z</code> or an explicit UTC offset.</li><li><code>futureTraceOpacityPercent</code> is optional: a number from <code>0</code> through <code>100</code>, in percent; default <code>25</code>.</li><li><code>spo2</code> is optional: <code>{format:\"oxiwear-spo2-csv\", telemetry}</code>.</li><li><code>timer</code> is optional: <code>{startAt, endAt}</code>, within the requested section.</li><li><code>watermark</code> is optional: <code>{contentBase64}</code>, a bounded PNG encoded as base64.</li><li><code>sourceVideo</code> is optional: <code>{fileId, recordingStartAt, timeZone}</code>. The shared-clock confirmed or manual-sync derived start is an instant and <code>timeZone</code> is a valid IANA video timezone. When present, <code>outputFormat</code> (<code>h264-mp4</code> or <code>prores-422-mov</code>), <code>fitMode</code> (<code>letterbox</code>, <code>pillarbox</code>, or <code>crop</code>), and <code>audioMode</code> (<code>source+heartbeat</code>, <code>source-only</code>, or <code>heartbeat-only</code>) configure compositing.</li></ul><textarea id=\"raw-json\" spellcheck=\"false\">{}</textarea><div class=\"raw-actions\"><button id=\"apply-json\" type=\"button\">Apply JSON to form</button><button id=\"copy-json\" type=\"button\">Copy generated JSON</button></div><p id=\"json-status\" class=\"status json-errors\" role=\"status\"></p></details></section>"
+     "<div id=\"review-step\" data-wizard-panel data-step-id=\"review\" hidden><section class=\"card\"><h2>Your choices</h2><p class=\"muted\">Review each active choice. Edit returns to its populated step.</p><div id=\"review-sections\" class=\"review-sections\"></div></section><section class=\"card raw-panel\"><div class=\"raw-actions\"><button id=\"download-project-json\" type=\"button\">Download Project JSON</button><label class=\"button\" for=\"upload-project-json\">Upload Project JSON</label><input id=\"upload-project-json\" type=\"file\" accept=\".json,application/json\" hidden></div><p class=\"hint\">Project JSON stays private until you explicitly download, copy, upload, or paste it. It can include your activity data and bounded embedded assets, but excludes credentials, CSRF values, signed URLs, preview images, playback state, and job results.</p><details><summary>Advanced: inspect or edit Project JSON</summary><p class=\"hint\">Paste a Project JSON envelope and choose “Apply Project JSON”. Validation is atomic. The current workflow changes only after the whole envelope and any imported Drive reference succeed.</p><p class=\"hint\">The public render API accepts only the nested <code>renderRequest</code>, not this Project JSON envelope.</p><textarea id=\"project-json\" spellcheck=\"false\">{}</textarea><div class=\"raw-actions\"><button id=\"apply-project-json\" type=\"button\">Apply Project JSON</button><button id=\"copy-project-json\" type=\"button\">Copy Project JSON</button></div><p id=\"project-json-status\" class=\"status json-errors\" role=\"status\"></p></details></section><section class=\"card raw-panel\"><details><summary>Advanced: paste or inspect raw RenderRequest JSON</summary><p class=\"hint\">Paste a request and choose “Apply JSON to form”. The JSON is checked for structural errors first; form edits are reflected here before preview or submission.</p><p class=\"hint\">Alpha Compose calls these inputs activity data. The API contract uses the exact field names below.</p><p class=\"hint\"><strong>Accepted fields</strong></p><ul class=\"field-reference\"><li><code>telemetryFormat</code> and <code>telemetry</code> are required. Formats: <code>polar-csv</code>, <code>garmin-fit</code> (base64 FIT), or <code>oxiwear-hr-csv</code>.</li><li><code>preset</code> is required: <code>1080p25</code> (1920×1080, 25 fps, up to 8 minutes) or <code>2.7k25</code> (2704×1520, 25 fps, up to 4 minutes).</li><li><code>displayTimeZone</code> is required: a known IANA timezone such as <code>Europe/Warsaw</code> or <code>UTC</code>; it controls only the rendered local clock.</li><li><code>synchronizationMode</code> is required. Use <code>shared-clock</code> and omit both synchronization anchors when the devices used the same clock. Use <code>manual-anchor</code> and provide both <code>telemetrySyncAt</code> and <code>cameraSyncAt</code> when their clocks differed; <code>cameraSyncAt</code> may be before, within, or after the selected output.</li><li><code>sectionStartAt</code> and <code>sectionEndAt</code> are required ISO-8601 instants with <code>Z</code> or an explicit UTC offset.</li><li><code>futureTraceOpacityPercent</code> is optional: a number from <code>0</code> through <code>100</code>, in percent; default <code>25</code>.</li><li><code>spo2</code> is optional: <code>{format:\"oxiwear-spo2-csv\", telemetry}</code>.</li><li><code>timer</code> is optional: <code>{startAt, endAt}</code>, within the requested section.</li><li><code>watermark</code> is optional: <code>{contentBase64}</code>, a bounded PNG encoded as base64.</li><li><code>sourceVideo</code> is optional: <code>{fileId, recordingStartAt, timeZone}</code>. The shared-clock confirmed or manual-sync derived start is an instant and <code>timeZone</code> is a valid IANA video timezone. When present, <code>outputFormat</code> (<code>h264-mp4</code> or <code>prores-422-mov</code>), <code>fitMode</code> (<code>letterbox</code>, <code>pillarbox</code>, or <code>crop</code>), and <code>audioMode</code> (<code>source+heartbeat</code>, <code>source-only</code>, or <code>heartbeat-only</code>) configure compositing.</li></ul><textarea id=\"raw-json\" spellcheck=\"false\">{}</textarea><div class=\"raw-actions\"><button id=\"apply-json\" type=\"button\">Apply JSON to form</button><button id=\"copy-json\" type=\"button\">Copy generated JSON</button></div><p id=\"json-status\" class=\"status json-errors\" role=\"status\"></p></details></section>"
      "<section class=\"card\">"
      (preview-admission-disclosure)
      "<div class=\"actions\"><button id=\"preview-button\" class=\"primary button-with-spinner\" type=\"button\" hx-post=\"/ui/preview\" hx-include=\"closest form\" hx-target=\"#preview-result\" hx-swap=\"outerHTML\" hx-request='{\"timeout\":15000}'><span class=\"button-spinner\" aria-hidden=\"true\" hidden></span><span>Preview</span></button><button id=\"submit-button\" class=\"primary\" type=\"submit\">Create finished video</button><span id=\"preview-submit-status\" class=\"status\" role=\"status\">Preview is optional. Create the finished video when ready.</span><span id=\"form-status\" class=\"status\" role=\"status\"></span></div></section></div></form>"
@@ -1386,6 +1442,14 @@
         "content solely to create the requested output. For an early-access request, "
         "we collect the verified Google email address, an optional Instagram handle, "
         "and an optional message solely so the operator can respond about testing.</p>"
+        "<h2>Project JSON and browser state</h2><p>Alpha Compose does not automatically "
+        "persist Project JSON. Project JSON exists only when you explicitly download, "
+        "copy, upload, or paste it yourself. It may include private activity data, a "
+        "selected Drive reference, and bounded embedded assets so you can resume the "
+        "same browser workflow later.</p><p>Credentials, CSRF values, signed URLs, "
+        "recording-clock candidates, preview images, playback state, and job results "
+        "are excluded from Project JSON. Normal browsing, previewing, clock inspection, "
+        "and completed-output playback do not create an automatic saved project.</p>"
         "<h2>Storage and retention</h2><p>Encrypted Google Drive authorization, "
         "membership, and job records are stored in Google Cloud. Temporary request "
         "and output objects are deleted after 24 hours; job metadata is scheduled for "

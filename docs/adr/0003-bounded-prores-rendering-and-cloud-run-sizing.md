@@ -14,8 +14,9 @@ transparent ProRes 4444 MOV overlay. The new path also needs to take one video
 selected from the requester's Google Drive, composite the telemetry overlay
 over its first frames, and deliver a normal video output.
 
-The selected source is capped at 2 GiB and is streamed through a non-seekable
-input. A source is accepted only when the bundled FFmpeg can decode it from
+The selected source is capped by a bounded server-enforced size limit and is
+streamed through a non-seekable input. A source is accepted only when the
+bundled FFmpeg can decode it from
 that pipe; support is not claimed for every format that an unrestricted FFmpeg
 build could decode from a seekable file. The source is never persisted as a
 durable object or expanded into a frame collection.
@@ -146,7 +147,8 @@ path is released:
 - the expanded bundle starts as a non-root image and exposes H.264 encode,
   common streamable video decode, MP4/MOV muxing, overlay, audio mixing, and
   limiting;
-- streamable Drive-video fixtures cover the supported input matrix, the 2 GiB
+- streamable Drive-video fixtures cover the supported input matrix, the
+  bounded source-size admission rule,
   admission limit, short-source rejection, source/audio absence, and strict
   non-seekable failure behavior;
 - both fit modes, all audio modes, H.264 MP4, and ProRes 422 MOV validate at

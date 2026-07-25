@@ -297,7 +297,8 @@ metadata authoritatively with `drive.file`. The shared Picker and server policy
 accepts `video/mp4`, `video/quicktime`, `video/webm`, `video/mpeg`, `video/ogg`,
 `video/x-msvideo`, and `video/x-matroska`. The server rejects other MIME types,
 folders, shortcuts, Google Workspace documents, trashed files, inaccessible or
-download-restricted files, and sources above 2 GiB. A supported source must be
+download-restricted files, and sources above the current server-enforced size
+limit. A supported source must be
 downloadable, FFmpeg-decodable, and long enough for the requested section.
 Source bytes stream through a non-seekable FFmpeg pipe and are not persisted.
 After selection, the browser starts an advisory inspection that reads at most
@@ -319,6 +320,10 @@ preview frames use the same output interval.
 Supported outputs are H.264 MP4 (default) and ProRes 422 MOV. Fit defaults to
 letterbox/pillarbox; audio defaults to source plus bounded heartbeat mix, with
 source-only and heartbeat-only modes also available.
+
+Completed H.264 outputs can later open through Alpha Compose's owner-bound
+browser playback flow. ProRes outputs remain download-first files for desktop
+editors.
 
 Selected-source composition has one 45-minute deadline shared by FFmpeg,
 source streaming, overlay production, and the heartbeat-only fallback attempt.
@@ -498,6 +503,19 @@ the page in `X-CSRF-Token`. Automation should create a personal token and send
 it as `Authorization: Bearer TOKEN`; bearer requests do not use browser cookies.
 `POST /v1/tokens` returns the full token once, `GET /v1/tokens` lists metadata
 without secrets or hashes, and `POST /v1/tokens/{id}/revoke` revokes an owned
+
+## Project JSON
+
+The Compose UI can export and import `Project JSON`, a browser workflow
+envelope that is separate from the nested API `RenderRequest`. Project JSON can
+include private activity data, route drafts, and bounded embedded assets so a
+user can resume the same browser workflow later. The public API accepts only
+the nested `renderRequest`, not the outer Project JSON envelope.
+
+Alpha Compose does not automatically persist Project JSON. It exists only when
+the user explicitly downloads, copies, uploads, or pastes it. Credentials,
+CSRF values, signed URLs, recording-clock candidates, preview images, playback
+state, and job results are excluded from the envelope.
 token. These token-management writes require a browser session and CSRF token.
 Membership revocation immediately disables both sessions and personal tokens.
 
