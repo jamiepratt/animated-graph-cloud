@@ -746,6 +746,41 @@
      html
      (str "--window-size=" window-size))))
 
+(defn- persistent-timing-dock-browser-outcome [page window-size]
+  (let [fixture
+        (str
+         "<script>"
+         "window.__timingFullscreen=null;"
+         "Object.defineProperty(document,'fullscreenElement',{configurable:true,get(){return window.__timingFullscreen;}});"
+         "Element.prototype.requestFullscreen=function(){window.__timingFullscreen=this;document.dispatchEvent(new Event('fullscreenchange'));return Promise.resolve();};"
+         "document.exitFullscreen=function(){window.__timingFullscreen=null;document.dispatchEvent(new Event('fullscreenchange'));return Promise.resolve();};"
+         "</script>")
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "let outcome;try{"
+         "const workflow=document.getElementById('compose-workflow'),workspace=document.getElementById('video-player'),dock=document.getElementById('timing-dock'),timelineWrap=document.getElementById('video-timeline-wrap'),chrome=document.getElementById('video-chrome'),next=document.getElementById('wizard-next'),transparent=document.querySelector('input[name=\"wizard-outcome\"][value=\"transparent-overlay\"]'),finished=document.querySelector('input[name=\"wizard-outcome\"][value=\"finished-video\"]'),start=document.getElementById('section-start-at'),end=document.getElementById('section-end-at'),zone=document.getElementById('timezone'),camera=document.getElementById('camera-sync-at'),telemetrySync=document.getElementById('telemetry-sync-at'),timerStart=document.getElementById('timer-start-at'),timerEnd=document.getElementById('timer-end-at'),input=node=>node.dispatchEvent(new Event('input',{bubbles:true})),currentPanel=()=>[...document.querySelectorAll('[data-wizard-panel]')].find(panel=>!panel.hidden),before=(first,second)=>first.getBoundingClientRect().top<=second.getBoundingClientRect().top,visible=node=>!node.hidden&&getComputedStyle(node).display!=='none'&&node.getBoundingClientRect().height>0;"
+         "const initial={workspaceHidden:workspace.hidden,current:workflow.dataset.currentStep};transparent.click();const chosen={workspaceHidden:workspace.hidden,current:workflow.dataset.currentStep};next.click();const localOption=zone.options[0].textContent,overlay={workspaceHidden:workspace.hidden,current:workflow.dataset.currentStep,panel:currentPanel()?.dataset.stepId||null,beforePanel:before(workspace,currentPanel()),parents:[zone.closest('label').parentElement.id,start.closest('label').parentElement.id,end.closest('label').parentElement.id],localOption,browserZone:Intl.DateTimeFormat().resolvedOptions().timeZone};"
+         "start.value='2026-07-17T09:00:00';const keys=['ArrowLeft','ArrowRight','Home','End','PageUp','PageDown','f','F',' '],keyboard=keys.map(key=>{const event=new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key,code:key===' '?'Space':''});start.dispatchEvent(event);return {key,prevented:event.defaultPrevented,value:start.value};});"
+         "zone.value='UTC';input(zone);input(start);const incomplete={timelineHidden:timelineWrap.hidden,dockVisible:visible(dock)};end.value='2026-07-17T09:00:02';input(end);const ready={timelineHidden:timelineWrap.hidden,dockVisible:visible(dock),workspaceHidden:workspace.hidden};next.click();const activity={current:workflow.dataset.currentStep,workspaceHidden:workspace.hidden,beforePanel:before(workspace,currentPanel())};"
+         "document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-17T09:00:00Z,120';next.click();document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();next.click();const matching={current:workflow.dataset.currentStep,workspaceHidden:workspace.hidden,parent:camera.closest('#timing-dock')?.id||null,fieldsVisible:visible(camera)&&visible(telemetrySync)};camera.value='2026-07-17T09:00:01';telemetrySync.value='2026-07-17T10:00:01';input(camera);input(telemetrySync);next.click();document.getElementById('timer-enabled').click();next.click();const timer={current:workflow.dataset.currentStep,workspaceHidden:workspace.hidden,parent:timerStart.closest('#timing-dock')?.id||null,fieldsVisible:visible(timerStart)&&visible(timerEnd)};"
+         "const identities={start,timerStart,camera};document.getElementById('video-fullscreen').click();const fullscreen={element:document.fullscreenElement?.id||null,dockInside:chrome.contains(dock),sameInputs:identities.start===document.getElementById('section-start-at')&&identities.timerStart===document.getElementById('timer-start-at')&&identities.camera===document.getElementById('camera-sync-at'),scrollable:getComputedStyle(document.getElementById('video-controls-dock')).overflowY,fieldsVisible:visible(start)&&visible(timerStart)&&visible(camera)};start.focus();document.exitFullscreen();const exited={focusRestored:document.activeElement===start,sameInput:identities.start===document.getElementById('section-start-at')};"
+         "finished.click();const switched={current:workflow.dataset.currentStep,workspaceHidden:workspace.hidden};next.click();document.getElementById('source-video-file-id').value='drive-source';next.click();const sourceClock={current:workflow.dataset.currentStep,workspaceHidden:workspace.hidden,panel:currentPanel()?.dataset.stepId||null,beforePanel:before(workspace,currentPanel()),sameDock:dock===document.getElementById('timing-dock')};"
+         "outcome={viewportWidth:innerWidth,initial,chosen,overlay,keyboard,incomplete,ready,activity,matching,timer,fullscreen,exited,switched,sourceClock,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+         "}catch(error){outcome={error:error.message,stack:error.stack};}"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "<script>(function(){"
+                              (str fixture "<script>(function(){"))
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-persistent-timing-dock-browser-"
+     "Persistent timing dock regression requires Chrome or Chromium"
+     html
+     (str "--window-size=" window-size))))
+
 (defn- synchronization-mode-browser-outcome [page]
   (let [manual (assoc (fixture/render-request)
                       :synchronizationMode "manual-anchor")
@@ -787,16 +822,16 @@
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{const base=" (json/write-str base)
          ",restoredRequest=" (json/write-str restored)
-         ",raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),toggle=document.getElementById('timer-enabled'),start=document.getElementById('timer-start-at'),end=document.getElementById('timer-end-at'),startMarker=document.getElementById('timer-start-marker'),endMarker=document.getElementById('timer-end-marker'),workspace=document.getElementById('video-player'),chrome=document.getElementById('video-chrome'),stage=document.getElementById('video-stage'),transport=document.querySelector('.video-transport'),rangeStatus=document.getElementById('no-source-range-status'),timeline=document.getElementById('video-timeline'),syncMarker=document.getElementById('manual-sync-marker'),sectionStart=document.getElementById('section-start-at'),sectionEnd=document.getElementById('section-end-at'),generated=()=>JSON.parse(document.getElementById('render-request').value),input=node=>node.dispatchEvent(new Event('input',{bubbles:true}));"
-         "const initial={workspaceHidden:workspace.hidden,timelineHidden:chrome.hidden,sourceControlsHidden:document.getElementById('source-output-controls').hidden,summaryHidden:document.getElementById('no-source-output-summary').hidden};"
-         "document.getElementById('timezone').value='UTC';input(document.getElementById('timezone'));sectionStart.value='2026-07-17T09:00:00';input(sectionStart);const incomplete={timelineHidden:chrome.hidden,status:rangeStatus.textContent};"
-         "sectionEnd.value='2026-07-17T09:00:01.02';input(sectionEnd);const offFrame={timelineHidden:chrome.hidden,status:rangeStatus.textContent};"
-         "sectionEnd.value='2026-07-17T09:00:02';input(sectionEnd);const valid={timelineHidden:chrome.hidden,stageHidden:stage.hidden,transportHidden:transport.hidden,label:timeline.getAttribute('aria-label'),valueText:timeline.getAttribute('aria-valuetext'),ticks:document.getElementById('video-ticks').children.length,status:rangeStatus.textContent};"
+         ",raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),toggle=document.getElementById('timer-enabled'),start=document.getElementById('timer-start-at'),end=document.getElementById('timer-end-at'),startMarker=document.getElementById('timer-start-marker'),endMarker=document.getElementById('timer-end-marker'),workspace=document.getElementById('video-player'),timelineWrap=document.getElementById('video-timeline-wrap'),stage=document.getElementById('video-stage'),transport=document.querySelector('.video-transport'),rangeStatus=document.getElementById('no-source-range-status'),timeline=document.getElementById('video-timeline'),syncMarker=document.getElementById('manual-sync-marker'),sectionStart=document.getElementById('section-start-at'),sectionEnd=document.getElementById('section-end-at'),generated=()=>JSON.parse(document.getElementById('render-request').value),input=node=>node.dispatchEvent(new Event('input',{bubbles:true})),timelineHidden=()=>timelineWrap.hidden;"
+         "const initial={workspaceHidden:workspace.hidden,timelineHidden:timelineHidden(),sourceControlsHidden:document.getElementById('source-output-controls').hidden,summaryHidden:document.getElementById('no-source-output-summary').hidden};"
+         "document.getElementById('timezone').value='UTC';input(document.getElementById('timezone'));sectionStart.value='2026-07-17T09:00:00';input(sectionStart);const incomplete={timelineHidden:timelineHidden(),status:rangeStatus.textContent};"
+         "sectionEnd.value='2026-07-17T09:00:01.02';input(sectionEnd);const offFrame={timelineHidden:timelineHidden(),status:rangeStatus.textContent};"
+         "sectionEnd.value='2026-07-17T09:00:02';input(sectionEnd);const valid={timelineHidden:timelineHidden(),stageHidden:stage.hidden,transportHidden:transport.hidden,label:timeline.getAttribute('aria-label'),valueText:timeline.getAttribute('aria-valuetext'),ticks:document.getElementById('video-ticks').children.length,status:rangeStatus.textContent};"
          "document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();document.getElementById('camera-sync-at').value='2026-07-17T09:00:01';input(document.getElementById('camera-sync-at'));document.getElementById('telemetry-sync-at').value='2026-07-17T10:00:01';input(document.getElementById('telemetry-sync-at'));const manual={hidden:syncMarker.hidden,disabled:syncMarker.disabled,value:syncMarker.getAttribute('aria-valuenow'),valueText:syncMarker.getAttribute('aria-valuetext')};"
-         "raw.value=JSON.stringify(base);apply.click();const applied={enabled:toggle.checked,fields:[start.value,end.value],request:generated().timer||null,markers:[startMarker.hidden,endMarker.hidden],timelineHidden:chrome.hidden,sourceVideo:generated().sourceVideo||null,outputFormat:generated().outputFormat||null};"
+         "raw.value=JSON.stringify(base);apply.click();const applied={enabled:toggle.checked,fields:[start.value,end.value],request:generated().timer||null,markers:[startMarker.hidden,endMarker.hidden],timelineHidden:timelineHidden(),sourceVideo:generated().sourceVideo||null,outputFormat:generated().outputFormat||null};"
          "toggle.click();const timelineRect=timeline.getBoundingClientRect(),markerRects=[startMarker.getBoundingClientRect(),endMarker.getBoundingClientRect()],enabled={enabled:toggle.checked,fields:[start.value,end.value],request:generated().timer||null,markers:[startMarker.hidden,endMarker.hidden],fieldsHidden:document.getElementById('timer-fields').hidden,markersInside:markerRects.every(rect=>rect.left>=timelineRect.left-.5&&rect.right<=timelineRect.right+.5&&rect.top>=timelineRect.top-.5&&rect.bottom<=timelineRect.bottom+.5)};"
          "toggle.click();const disabled={enabled:toggle.checked,request:generated().timer||null,markers:[startMarker.hidden,endMarker.hidden]};"
-         "raw.value=JSON.stringify(restoredRequest);apply.click();const restored={enabled:toggle.checked,fields:[start.value,end.value],request:generated().timer||null,markers:[startMarker.hidden,startMarker.getAttribute('aria-valuenow'),endMarker.hidden,endMarker.getAttribute('aria-valuenow')],status:document.getElementById('json-status').textContent,timelineHidden:chrome.hidden};"
+         "raw.value=JSON.stringify(restoredRequest);apply.click();const restored={enabled:toggle.checked,fields:[start.value,end.value],request:generated().timer||null,markers:[startMarker.hidden,startMarker.getAttribute('aria-valuenow'),endMarker.hidden,endMarker.getAttribute('aria-valuenow')],status:document.getElementById('json-status').textContent,timelineHidden:timelineHidden()};"
          "outcome={initial,incomplete,offFrame,valid,manual,applied,enabled,disabled,restored,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
@@ -2049,6 +2084,75 @@
     (is (= 1280 (:viewportWidth (first outcomes))))
     (is (<= (:viewportWidth (second outcomes)) 500))))
 
+(deftest timeline-linked-fields-share-one-persistent-fullscreen-dock
+  (let [page (ui/page {:user {:email "member@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})]
+    (doseq [fragment ["id=\"video-player\""
+                      "data-timing-workspace"
+                      "id=\"video-recording-clock-step\""
+                      "id=\"timing-dock\""
+                      "id=\"video-timeline-wrap\""
+                      "@media(prefers-reduced-motion:reduce)"]]
+      (is (str/includes? page fragment) fragment))
+    (doseq [outcome [(persistent-timing-dock-browser-outcome page "1280,900")
+                     (persistent-timing-dock-browser-outcome page "390,844")]]
+      (is (nil? (:error outcome)) outcome)
+      (is (= {:workspaceHidden true :current "outcome"}
+             (:initial outcome)))
+      (is (= {:workspaceHidden true :current "outcome"}
+             (:chosen outcome)))
+      (is (= "overlay-timespan" (get-in outcome [:overlay :current])))
+      (is (false? (get-in outcome [:overlay :workspaceHidden])))
+      (is (true? (get-in outcome [:overlay :beforePanel])))
+      (is (= ["timing-dock" "timing-dock" "timing-dock"]
+             (get-in outcome [:overlay :parents])))
+      (is (= (str "My browser timezone ("
+                  (get-in outcome [:overlay :browserZone])
+                  ")")
+             (get-in outcome [:overlay :localOption])))
+      (is (every? (fn [{:keys [prevented value]}]
+                    (and (false? prevented)
+                         (= "2026-07-17T09:00" value)))
+                  (:keyboard outcome)))
+      (is (true? (get-in outcome [:incomplete :timelineHidden])))
+      (is (true? (get-in outcome [:incomplete :dockVisible])))
+      (is (false? (get-in outcome [:ready :timelineHidden])))
+      (is (true? (get-in outcome [:ready :dockVisible])))
+      (is (= {:current "activity-data"
+              :workspaceHidden false
+              :beforePanel true}
+             (:activity outcome)))
+      (is (= {:current "matching-moment"
+              :workspaceHidden false
+              :parent "timing-dock"
+              :fieldsVisible true}
+             (:matching outcome)))
+      (is (= {:current "timer-overlay"
+              :workspaceHidden false
+              :parent "timing-dock"
+              :fieldsVisible true}
+             (:timer outcome)))
+      (is (= {:element "video-chrome"
+              :dockInside true
+              :sameInputs true
+              :scrollable "auto"
+              :fieldsVisible true}
+             (:fullscreen outcome)))
+      (is (= {:focusRestored true :sameInput true}
+             (:exited outcome)))
+      (is (= {:current "outcome" :workspaceHidden true}
+             (:switched outcome)))
+      (is (= {:current "video-recording-clock"
+              :workspaceHidden false
+              :panel "video-recording-clock"
+              :beforePanel true
+              :sameDock true}
+             (:sourceClock outcome)))
+      (is (true? (:noHorizontalOverflow outcome))))))
+
 (deftest outcome-route-switches-project-only-active-data-and-restore-dormant-source
   (let [outcome
         (wizard-outcome-browser-outcome
@@ -2571,7 +2675,7 @@
     (doseq [outcome outcomes]
       (is (nil? (:error outcome)) outcome)
       (is (= {:workspaceHidden true
-              :timelineHidden true
+              :timelineHidden false
               :sourceControlsHidden true
               :summaryHidden false}
              (:initial outcome)))
