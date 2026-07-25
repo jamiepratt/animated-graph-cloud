@@ -46,9 +46,6 @@
   (when route
     (name route)))
 
-(defn- route-key [route]
-  (keyword route))
-
 (defn- ordered-visited-steps [state]
   (let [visited (:visited-steps state)
         active (wizard/active-steps state)

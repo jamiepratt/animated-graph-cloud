@@ -700,8 +700,7 @@
      "</div></body></html>")))
 
 (defn job-fragment
-  [{:keys [id state attempt failureCode stage status retryable elapsedMs timeoutMs
-           output]
+  [{:keys [id state output]
     :as job}]
   (let [path (str "/ui/jobs/" id)
         polling? (contains? #{"queued" "launching" "running"
@@ -740,7 +739,7 @@
                     (= "source_duration_too_short" (:reason job))
                     "The selected video ends before the requested section. Shorten the section or choose a longer video, then retry."
 
-                    (false? retryable)
+                    (false? retryable?)
                     "Check the selected video and current settings, then start another finished video."
 
                     :else
