@@ -643,7 +643,7 @@
          "const waitForStatus=node=>new Promise((resolve,reject)=>{const deadline=Date.now()+1500,check=()=>{if(node.classList.contains('success')||node.classList.contains('error'))resolve();else if(Date.now()>deadline)reject(new Error('Timed out waiting for activity-file status'));else setTimeout(check,5);};check();});"
          "const upload=async(target,file,statusNode)=>{const transfer=new DataTransfer();if(file)transfer.items.add(file);target.files=transfer.files;target.dispatchEvent(new Event('change',{bubbles:true}));const clearedImmediately=telemetry.value==='';if(file)await waitForStatus(statusNode);return {clearedImmediately,format:format.value,content:telemetry.value,status:statusNode.textContent,success:statusNode.classList.contains('success'),error:statusNode.classList.contains('error')};};"
          "const fitBytes=Uint8Array.from(atob(" (json/write-str fit-base64) "),character=>character.charCodeAt(0));"
-         "const fit=await upload(input,new File([fitBytes],'input.fit',{type:'application/octet-stream'}),status);fit.matches=fit.content===" (json/write-str fit-base64) ";"
+         "const fit=await upload(input,new File([fitBytes],'input.fit',{type:'application/octet-stream'}),status);fit.matches=fit.content===" (json/write-str fit-base64) ";fit.formValid=document.getElementById('render-form').checkValidity();fit.invalidIds=[...document.getElementById('render-form').querySelectorAll(':invalid')].map(node=>node.id||node.getAttribute('name')||node.tagName.toLowerCase());"
          "const polar=await upload(input,new File([" (json/write-str csv-text) "],'polar.csv',{type:'text/csv'}),status);polar.matches=polar.content===" (json/write-str csv-text) ";"
          "const alternate=await upload(input,new File([" (json/write-str alternate-polar-text) "],'alternate.csv',{type:'text/csv'}),status);alternate.matches=alternate.content===" (json/write-str alternate-polar-text) ";"
          "const cancelled=await upload(input,null,status);cancelled.inputFiles=input.files.length;cancelled.status=status.textContent;"
@@ -3881,6 +3881,8 @@
       (is (= "garmin-fit" (get-in outcome [:fit :format])))
       (is (true? (get-in outcome [:fit :matches])))
       (is (true? (get-in outcome [:fit :success])))
+      (is (true? (get-in outcome [:fit :formValid])))
+      (is (empty? (get-in outcome [:fit :invalidIds])))
       (is (str/includes? (get-in outcome [:fit :status])
                          "Detected Garmin FIT"))
       (doseq [result [:polar :alternate]]
