@@ -1,6 +1,7 @@
 (ns agg.api-ui-test
   (:require [agg.api.main :as api]
             [agg.auth.core :as auth]
+            [agg.browser-process :as browser-process]
             [agg.drive.core :as drive]
             [agg.http-test-support :as test-http]
             [agg.jobs-test :as fixture]
@@ -75,6 +76,8 @@
 (def form-content-type
   {"Content-Type" "application/x-www-form-urlencoded"})
 
+(def browser-fixture-timeout-ms 15000)
+
 (defn- javascript-valid? [source]
   (let [process (.start (ProcessBuilder. ["node" "--check" "-"]))]
     (with-open [writer (io/writer (.getOutputStream process))]
@@ -99,18 +102,31 @@
   (let [chrome (chrome-executable)]
     (is chrome requirement)
     (when chrome
-      (let [command (into [chrome "--headless=new" "--disable-gpu"
-                           "--no-sandbox" "--dump-dom"
-                           (str "--virtual-time-budget=" virtual-time-budget)]
-                          (concat browser-args [(str location)]))
-            builder (doto (ProcessBuilder. ^java.util.List command)
-                      (.redirectErrorStream true))
-            process (.start builder)
-            output (slurp (.getInputStream process))
-            exit (.waitFor process)
+      (let [{:keys [exit output cleanup]}
+            (browser-process/run!
+             {:executable chrome
+              :fixture requirement
+              :location location
+              :virtual-time-budget-ms virtual-time-budget
+              :timeout-ms browser-fixture-timeout-ms
+              :browser-args browser-args})
             encoded (second (re-find #"data-outcome=\"([^\"]+)\"" output))]
-        (is (= 0 exit) output)
-        (is encoded output)
+        (is (true? (:process-tree-terminated? cleanup))
+            (str requirement
+                 " [phase=cleanup, process-tree-terminated=false]"))
+        (is (true? (:profile-removed? cleanup))
+            (str requirement " [phase=cleanup, profile-removed=false]"))
+        (is (= 0 exit)
+            (str requirement
+                 " [phase=browser-exit, exit=" exit
+                 ", output-bytes="
+                 (alength (.getBytes ^String output StandardCharsets/UTF_8))
+                 "]"))
+        (is encoded
+            (str requirement
+                 " [phase=outcome-decode, output-bytes="
+                 (alength (.getBytes ^String output StandardCharsets/UTF_8))
+                 "]"))
         (when encoded
           (json/read-str
            (String. (.decode (Base64/getDecoder) ^String encoded)
@@ -163,9 +179,9 @@
              #"<script src=\"https://cdn\.jsdelivr\.net/npm/htmx\.org@2\.0\.10/dist/htmx\.min\.js\"[^>]*></script>"
              "<script src=\"/htmx.min.js\"></script>")
             (str/replace "</body>" (str scenario "</body>")))
-        port (available-port)
         server
-        (HttpServer/create (InetSocketAddress. "127.0.0.1" port) 0)]
+        (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)
+        port (.getPort (.getAddress server))]
     (.createContext
      server "/"
      (reify HttpHandler
@@ -1095,8 +1111,8 @@
                  (str/replace "<script>(function(){"
                               (str fixture "<script>(function(){"))
                  (str/replace "</body>" (str scenario "</body>")))
-        port (available-port)
-        server (HttpServer/create (InetSocketAddress. "127.0.0.1" port) 0)]
+        server (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)
+        port (.getPort (.getAddress server))]
     (.createContext
      server "/"
      (reify HttpHandler
