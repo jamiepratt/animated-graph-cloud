@@ -20,6 +20,19 @@ Alpha Compose is the public product. The `animated-graph-cloud` service accepts 
 - Logs exclude email addresses, Google subjects, filenames, tokens, telemetry values, Drive credentials, and signed URLs.
 - Safe structured observability events from the API and renderer are copied best-effort to the Firestore `observability-logs` collection for 30 days. Owner and admin sessions can inspect the latest 100 events at `/ui/admin/logs` with severity/component filters and formatted or raw JSON views.
 
+## Time authority
+
+For synchronization, the clock we trust is the one in the activity data. A
+watch or phone normally sets its time automatically from a network, a paired
+phone, location services, or satellite signals. A camera clock is easier to
+leave wrong and may drift.
+
+When Alpha Compose says only `time` or `current time`, it means activity-device
+time. A different clock must be named explicitly, such as `video time`,
+`video recording start`, `video timezone`, or `output clock`. The full-source
+player and rendered local clock are explicit video/output-clock views; they do
+not replace activity-data time as the synchronization authority.
+
 ## Error metadata and source locations
 
 Production application errors are raised through `agg.errors/raise!`. Every
