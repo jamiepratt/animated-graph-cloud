@@ -179,7 +179,16 @@ on a 25 fps frame. The marker may be before, within, or after the selected
 output interval while remaining inside the available source timeline. The
 anchor offset maps the camera section onto activity-data time.
 In `shared-clock` mode, activity timestamps align directly to `sectionStartAt`
-with no adjustment. Telemetry must cover both mapped boundaries. The selected
+with no adjustment.
+
+For synchronization, activity-data timestamps are the clock of record. In
+user-facing copy, an unqualified time means activity-device time because a
+watch or phone is normally set automatically, while a camera clock is easier to
+leave wrong or may drift. Video-specific values are named explicitly. The
+full-source player uses the confirmed video clock, and the rendered local clock
+uses the selected video/output timezone.
+
+Telemetry must cover both mapped boundaries. The selected
 preset supplies size, 25 fps, and maximum
 duration. Telemetry is limited to 10 MiB and the JSON envelope to 10 MiB plus
 64 KiB. Accepted Polar CSV uses comma or semicolon delimiters, an absolute
