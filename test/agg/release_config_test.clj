@@ -742,6 +742,10 @@
         openapi (slurp "docs/openapi.yaml")
         context (slurp "CONTEXT.md")
         context-map (slurp "CONTEXT-MAP.md")
+        project-adr (slurp
+                     "docs/adr/0019-canonical-wizard-state-and-project-boundary.md")
+        sizing-adr (slurp
+                    "docs/adr/0003-bounded-prores-rendering-and-cloud-run-sizing.md")
         clock-adr
         (str/replace
          (slurp "docs/adr/0017-confirm-source-video-recording-clock.md")
@@ -752,19 +756,35 @@
          #"\s+" " ")]
     (doseq [guidance
             ["Without a source video, the workspace identifies the output as a transparent ProRes 4444 overlay"
-             "A valid whole-frame output range reveals the same clock timeline"]]
+             "A valid whole-frame output range reveals the same clock timeline"
+             "Project JSON"
+             "browser playback flow"]]
       (testing guidance (is (str/includes? readme guidance))))
+    (is (not (str/includes? readme "sources above 2 GiB")))
     (is (str/includes?
          openapi
          "Without sourceVideo, the output is a transparent ProRes 4444 overlay."))
+    (is (str/includes? openapi "Project JSON"))
+    (is (str/includes? openapi "completed-output playback"))
+    (is (not (str/includes? openapi "at most\n            2 GiB")))
+    (is (not (str/includes? sizing-adr "capped at 2 GiB")))
     (doseq [fact
             ["Google Drive upload time is never recording-clock authority."
-             "Source recording-clock inspection and browser playback state are never persisted."]]
+             "Source recording-clock inspection and browser playback state are never persisted."
+             "Project JSON exists only after an explicit user download, copy, upload, or paste action;"]]
       (testing fact (is (str/includes? context fact))))
     (is (str/includes? context-map
                        "Recording-clock authority | `docs/adr/0017-confirm-source-video-recording-clock.md`"))
     (is (str/includes? context-map
                        "Frame-accurate source trimming | `docs/adr/0018-trim-non-seekable-source-on-frame-boundaries.md`"))
+    (is (str/includes? context-map
+                       "Completed-output playback privacy boundary | `docs/adr/0020-stream-completed-h264-output-for-browser-playback.md`"))
+    (doseq [decision ["Project JSON export and"
+                      "versioned representation only after a"
+                      "separate from the nested `RenderRequest`"
+                      "must exclude credentials, CSRF"
+                      "jobs, and results"]]
+      (testing decision (is (str/includes? project-adr decision))))
     (doseq [[decision adr]
             [["Drive `createdTime` is never requested or used" clock-adr]
              ["A fixed offset does not satisfy the timezone requirement" clock-adr]
