@@ -51,6 +51,18 @@ deterministic AAC-LC heartbeat audio. `prores_ks` receives
 `yuva444p10le`; FFmpeg decodes the resulting `ap4h` stream as
 `yuva444p12le`, the profile's decoder representation.
 
+Every delivered overlay and finished video also carries the same versioned,
+machine-readable timing contract in its MOV/MP4 container metadata. The
+metadata uses FFmpeg's `use_metadata_tags` MOV/MP4 representation and can be
+inspected with `ffprobe -show_entries format_tags`. Its fields are
+`com.alphacompose.timing.version` (`1`),
+`com.alphacompose.timing.start_utc`,
+`com.alphacompose.timing.end_utc`, and
+`com.alphacompose.timing.time_zone`. Start is the inclusive output instant;
+end is the exclusive instant immediately after the final output frame. The
+UTC values are ISO-8601 instants and remain the recording-clock authority;
+the IANA timezone is the display-zone label used by the burned-in clock.
+
 Run both bounded 10-second local cases and their media assertions:
 
 ```sh

@@ -4,6 +4,7 @@
             [clojure.string :as str])
   (:import (java.io ByteArrayInputStream IOException OutputStream RandomAccessFile)
            (java.nio.file Files OpenOption Path)
+           (java.time Instant)
            (java.util Arrays)
            (java.util.concurrent TimeUnit)
            (javax.imageio ImageIO)))
@@ -56,6 +57,21 @@
 (def ^:private process-stop-grace-ms 1000)
 (def ^:private timed-out (Object.))
 
+(defn timing-metadata
+  "Returns the versioned UTC timeline represented by a rendered artifact."
+  [{:keys [section-start-at duration-seconds display-time-zone]}]
+  (when (instance? Instant section-start-at)
+    {"com.alphacompose.timing.version" "1"
+     "com.alphacompose.timing.start_utc" (str section-start-at)
+     "com.alphacompose.timing.end_utc"
+     (str (.plusNanos ^Instant section-start-at
+                      (long (* duration-seconds 1000000000))))
+     "com.alphacompose.timing.time_zone" (str display-time-zone)}))
+
+(defn- timing-metadata-arguments [render-spec]
+  (when-let [metadata (timing-metadata render-spec)]
+    (mapcat (fn [[key value]] ["-metadata" (str key "=" value)]) metadata)))
+
 (defn- process-builder [command]
   (doto (ProcessBuilder. ^java.util.List command)
     (.redirectErrorStream true)))
@@ -87,31 +103,32 @@
 
 (defn- encode-with-ffmpeg! [ffmpeg render-spec audio-path output-path write-frames!]
   (let [{:keys [width height fps]} render-spec
-        command [ffmpeg
-                 "-hide_banner"
-                 "-nostdin"
-                 "-loglevel" "error"
-                 "-f" "rawvideo"
-                 "-pixel_format" "rgba"
-                 "-video_size" (str width "x" height)
-                 "-framerate" (str fps)
-                 "-i" "pipe:0"
-                 "-i" (str audio-path)
-                 "-map" "0:v:0"
-                 "-map" "1:a:0"
-                 "-c:v" (:encoder prores-4444-contract)
-                 "-profile:v" (str (:profile prores-4444-contract))
-                 "-pix_fmt" (:encoder-input-pixel-format prores-4444-contract)
-                 "-alpha_bits" (str (:alpha-bits prores-4444-contract))
-                 "-vendor" "apl0"
-                 "-c:a" (:encoder aac-lc-contract)
-                 "-profile:a" (:profile aac-lc-contract)
-                 "-ar" (str (:sample-rate aac-lc-contract))
-                 "-ac" (str (:channels aac-lc-contract))
-                 "-b:a" (:target-bitrate aac-lc-contract)
-                 "-shortest"
-                 "-y"
-                 (str output-path)]
+        command (into [ffmpeg
+                       "-hide_banner"
+                       "-nostdin"
+                       "-loglevel" "error"
+                       "-f" "rawvideo"
+                       "-pixel_format" "rgba"
+                       "-video_size" (str width "x" height)
+                       "-framerate" (str fps)
+                       "-i" "pipe:0"
+                       "-i" (str audio-path)
+                       "-map" "0:v:0"
+                       "-map" "1:a:0"
+                       "-c:v" (:encoder prores-4444-contract)
+                       "-profile:v" (str (:profile prores-4444-contract))
+                       "-pix_fmt" (:encoder-input-pixel-format prores-4444-contract)
+                       "-alpha_bits" (str (:alpha-bits prores-4444-contract))
+                       "-vendor" "apl0"
+                       "-c:a" (:encoder aac-lc-contract)
+                       "-profile:a" (:profile aac-lc-contract)
+                       "-ar" (str (:sample-rate aac-lc-contract))
+                       "-ac" (str (:channels aac-lc-contract))
+                       "-b:a" (:target-bitrate aac-lc-contract)
+                       "-shortest"
+                       "-movflags" "+use_metadata_tags"]
+                      (concat (timing-metadata-arguments render-spec)
+                              ["-y" (str output-path)]))
         process (.start (process-builder command))
         captured (capture-output (.getInputStream process))]
     (try
@@ -178,8 +195,8 @@
                       "-pix_fmt" (:pixel-format h264-mp4-contract)
                       "-preset" "fast"])
         format-args (if (= "prores-422-mov" output-format)
-                      ["-f" "mov"]
-                      ["-f" "mp4" "-movflags" "+faststart"])]
+                      ["-f" "mov" "-movflags" "+use_metadata_tags"]
+                      ["-f" "mp4" "-movflags" "+faststart+use_metadata_tags"])]
     (into [ffmpeg "-hide_banner" "-nostdin" "-loglevel" "error"
            "-i" "pipe:0"
            "-f" "rawvideo"
@@ -197,7 +214,8 @@
            "-ac" "2"
            "-c:a" "aac"
            "-b:a" (:target-bitrate aac-lc-contract)]
-          (concat video-args format-args ["-y" (str output-path)]))))
+          (concat video-args format-args (timing-metadata-arguments render-spec)
+                  ["-y" (str output-path)]))))
 
 (defn composite-gallery-command
   "Returns one bounded source-decode command for all selected output frames."
@@ -588,6 +606,15 @@
 (defn- approximately= [expected actual tolerance]
   (<= (Math/abs (- (double expected) (double actual))) tolerance))
 
+(defn- verified-timing-metadata? [render-spec format]
+  (let [expected (timing-metadata render-spec)
+        actual (into {}
+                     (map (fn [[key value]]
+                            [(if (keyword? key) (name key) (str key)) value]))
+                     (:tags format))]
+    (or (nil? expected)
+        (= expected (select-keys actual (keys expected))))))
+
 (defn- verified-media [render-spec probe atoms]
   (let [streams (:streams probe)
         video (first (filter #(= "video" (:codec_type %)) streams))
@@ -611,6 +638,7 @@
                    (or (nil? bitrate) (pos? bitrate))
                    (approximately= expected-duration duration (/ 1.0 (:fps render-spec)))
                    (str/includes? (:format_name format) "mov")
+                   (verified-timing-metadata? render-spec format)
                    (some #{"moov"} atoms)
                    (some #{"mdat"} atoms)
                    (not-any? #{"moof"} atoms))
@@ -636,6 +664,7 @@
                  :duration-seconds duration
                  :seekable true
                  :fragmented false}
+     :timing (timing-metadata render-spec)
      :ffprobe probe}))
 
 (defn- verified-composite-media [render-spec probe]
@@ -671,7 +700,8 @@
                    (= "48000" (:sample_rate audio))
                    (approximately= expected-duration duration
                                    (/ 1.0 (:fps render-spec)))
-                   (str/includes? (:format_name format) expected-container))
+                   (str/includes? (:format_name format) expected-container)
+                   (verified-timing-metadata? render-spec format))
       (throw (errors/raise! "Encoded composited media violates its contract"
                             {:type ::invalid-composited-media-contract})))
     {:video {:codec (:codec_name video)
@@ -690,6 +720,7 @@
                  :duration-seconds duration
                  :seekable true
                  :fragmented false}
+     :timing (timing-metadata render-spec)
      :ffprobe probe}))
 
 (defrecord FfmpegVideoEncoder [ffmpeg ffprobe]
@@ -702,6 +733,7 @@
                          "-v" "error"
                          "-show_entries"
                          (str "format=format_name,duration,size,probe_score:"
+                              "format_tags:"
                               "stream=index,codec_type,codec_name,profile,codec_tag_string,"
                               "width,height,pix_fmt,r_frame_rate,duration,sample_rate,channels,channel_layout,bit_rate")
                          "-of" "json"
@@ -719,6 +751,7 @@
                          "-v" "error"
                          "-show_entries"
                          (str "format=format_name,duration,size,probe_score:"
+                              "format_tags:"
                               "stream=index,codec_type,codec_name,profile,codec_tag_string,"
                               "width,height,pix_fmt,r_frame_rate,duration,sample_rate,channels,channel_layout,bit_rate")
                          "-of" "json"
