@@ -449,6 +449,47 @@
      html
      (str "--window-size=" (or window-size "1280,900")))))
 
+(defn- playback-preparation-failure-browser-outcome
+  [page {:keys [analysis-response session-response window-size]}]
+  (letfn [(response-js [{:keys [ok status body]}]
+            (str "{ok:" (json/write-str ok)
+                 ",status:" (long status)
+                 ",json:()=>Promise.resolve(" (json/write-str body) ")}"))]
+    (let [fixture
+          (str
+           "<script>"
+           "window.__prepFailureState={callback:null,loads:[],analysisRequests:[],sessionRequests:[]};"
+           "window.fetch=(path,options={})=>{if(path==='/v1/drive/playback-analyses'){window.__prepFailureState.analysisRequests.push(JSON.parse(options.body));return Promise.resolve("
+           (response-js analysis-response)
+           ");}if(path==='/v1/drive/playback-sessions'){window.__prepFailureState.sessionRequests.push(JSON.parse(options.body));return Promise.resolve("
+           (response-js session-response)
+           ");}if(path==='/v1/drive/recording-clock-inspections'){return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:'broken-source.mp4',status:'candidate',candidates:[{source:'movie',kind:'explicit-offset',value:'2026-07-26T08:54:33+02:00'}],recommendedIndex:0,ambiguous:false,durationSeconds:125.5,limits:{maxBytes:524288,maxRanges:2,timeoutMillis:3000}})});}return Promise.resolve({ok:true,status:204,json:()=>Promise.resolve({})});};"
+           "class PickerView{setMimeTypes(){return this;}setIncludeFolders(){return this;}setSelectFolderEnabled(){return this;}setMode(){return this;}setEnableDrives(){return this;}}"
+           "class UploadView extends PickerView{}"
+           "class PickerBuilder{addView(){return this;}setSelectableMimeTypes(){return this;}setOAuthToken(){return this;}setDeveloperKey(){return this;}setAppId(){return this;}setOrigin(){return this;}setCallback(callback){window.__prepFailureState.callback=callback;return this;}build(){return {setVisible(){}};}}"
+           "window.google={picker:{DocsView:PickerView,DocsUploadView:UploadView,PickerBuilder,DocsViewMode:{LIST:'list'},Action:{LOADED:'loaded',PICKED:'picked',CANCEL:'cancel'}}};"
+           "window.gapi={load(_module,handlers){window.__prepFailureState.loads.push(handlers);}};"
+           "Object.defineProperties(HTMLMediaElement.prototype,{duration:{configurable:true,get(){return this.__duration??42;}},currentTime:{configurable:true,get(){return this.__currentTime??0;},set(value){this.__currentTime=Number(value);this.dispatchEvent(new Event('timeupdate'));}},paused:{configurable:true,get(){return this.__paused!==false;}},buffered:{configurable:true,get(){return {length:0,start(){return 0;},end(){return 0;}};}}});"
+           "Object.defineProperty(window,'VideoDecoder',{configurable:true,value:undefined});HTMLMediaElement.prototype.canPlayType=function(){return 'probably';};HTMLMediaElement.prototype.load=function(){this.__duration=42;this.dispatchEvent(new Event('loadedmetadata'));};HTMLMediaElement.prototype.play=function(){this.__paused=false;this.dispatchEvent(new Event('play'));return Promise.resolve();};HTMLMediaElement.prototype.pause=function(){this.__paused=true;this.dispatchEvent(new Event('pause'));};"
+           "</script>")
+          scenario
+          (str
+           "<pre id=\"browser-result\">pending</pre><script>"
+           "(async()=>{let outcome;try{"
+           "const state=window.__prepFailureState;state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'broken-source',name:'broken.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();await new Promise(resolve=>setTimeout(resolve,0));const video=document.getElementById('source-video-player');outcome={selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,analysisRequests:state.analysisRequests,sessionRequests:state.sessionRequests,status:document.getElementById('video-player-status').textContent,stageHidden:document.getElementById('video-stage').hidden,transportHidden:document.querySelector('.video-transport').hidden,src:video.getAttribute('src'),viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+           "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
+           "</script>")
+          html (-> page
+                   (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                   (str/replace "<script>(function(){"
+                                (str fixture "<script>(function(){"))
+                   (str/replace "</body>" (str scenario "</body>")))]
+      (browser-outcome
+       "agg-playback-preparation-browser-"
+       "Browser-level playback preparation regression requires Chrome or Chromium"
+       html
+       (str "--window-size=" (or window-size "1280,900"))))))
+
 (defn- preview-status-browser-outcome [page]
   (let [terminal-fragment
         (ui/preview-operation-fragment
@@ -3167,6 +3208,83 @@
                 label)
             (is (true? (:stageHidden outcome)) label)
             (is (false? (:transportHidden outcome)) label)))))))
+
+(deftest selected-drive-playback-preparation-failures-expose-bounded-details
+  (let [page (ui/page {:user {:email "owner@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :picker-config {:access-token "access-test"
+                                       :api-key "key-test"
+                                       :app-id "app-test"
+                                       :csrf "csrf-test"}
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})
+        cases [{:label "analysis failure"
+                :analysis-response {:ok false
+                                    :status 503
+                                    :body {:error "drive_source_unavailable"
+                                           :retryable true}}
+                :session-response {:ok true
+                                   :status 201
+                                   :body {:playbackUrl "/v1/drive/playback/00000000-0000-0000-0000-000000000199"
+                                          :contentType "video/mp4"
+                                          :size 2048}}
+                :expected-status
+                (str "The selected video remains selected for rendering, but playback could not be prepared. "
+                     "Playback analysis failed (503, drive_source_unavailable).")
+                :expected-session-requests []}
+               {:label "session failure with guidance"
+                :analysis-response {:ok true
+                                    :status 200
+                                    :body {:fileName "broken-source.mp4"
+                                           :evidence {:container {:format "mp4" :majorBrand "isom"}
+                                                      :video {:codec "h264" :codecTag "avc1"
+                                                              :profile "High" :pixelFormat "yuv420p"}
+                                                      :audio {:codec "aac"}}}}
+                :session-response {:ok false
+                                   :status 422
+                                   :body {:error "selected_source_work_exceeded"
+                                          :reason "selected_source_processing"
+                                          :guidance "Shorten the range, choose another section, or optimize the video as a seekable MP4."}}
+                :expected-status
+                (str "The selected video remains selected for rendering, but playback could not be prepared. "
+                     "Playback session failed (422, selected_source_work_exceeded): "
+                     "Shorten the range, choose another section, or optimize the video as a seekable MP4.")
+                :expected-session-requests [{:fileId "broken-source"}]}
+               {:label "invalid playback session response"
+                :analysis-response {:ok true
+                                    :status 200
+                                    :body {:fileName "broken-source.mp4"
+                                           :evidence {:container {:format "mp4" :majorBrand "isom"}
+                                                      :video {:codec "h264" :codecTag "avc1"
+                                                              :profile "High" :pixelFormat "yuv420p"}
+                                                      :audio {:codec "aac"}}}}
+                :session-response {:ok true
+                                   :status 201
+                                   :body {:playbackUrl "/v1/not-drive-playback/invalid"
+                                          :contentType "video/mp4"
+                                          :size 2048}}
+                :expected-status
+                (str "The selected video remains selected for rendering, but playback could not be prepared. "
+                     "Playback session returned an invalid browser playback URL.")
+                :expected-session-requests [{:fileId "broken-source"}]}]]
+    (doseq [{:keys [label analysis-response session-response expected-status
+                    expected-session-requests]} cases]
+      (let [outcome (playback-preparation-failure-browser-outcome
+                     page
+                     {:window-size "1280,900"
+                      :analysis-response analysis-response
+                      :session-response session-response})]
+        (is (nil? (:error outcome)) label)
+        (is (= "broken.mp4" (:selection outcome)) label)
+        (is (= "broken-source" (:fileId outcome)) label)
+        (is (= [{:fileId "broken-source"}] (:analysisRequests outcome)) label)
+        (is (= expected-session-requests (:sessionRequests outcome)) label)
+        (is (= expected-status (:status outcome)) label)
+        (is (true? (:stageHidden outcome)) label)
+        (is (false? (:transportHidden outcome)) label)
+        (is (nil? (:src outcome)) label)
+        (is (true? (:noHorizontalOverflow outcome)) label)))))
 
 (deftest no-source-range-reveals-the-clock-timeline-and-marker-model
   (let [page (ui/page {:user {:email "member@example.com" :role :member}
