@@ -1586,7 +1586,7 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
-(deftest renderable-non-mp4-source-is-kept-but-not-opened-for-browser-playback
+(deftest selected-drive-playback-analysis-returns-normalized-evidence-without-a-session
   (let [port (available-port)
         {:keys [system session]} (auth-fixture)
         gateway
@@ -1598,25 +1598,96 @@
              :mimeType "video/quicktime"
              :size 100
              :trashed false})
-          (stream-source! [_ _ _ _] nil)
+          (stream-source! [_ _ _ _]
+            (throw (AssertionError. "Analysis must not download the source")))
           drive/PlaybackGateway
           (open-source-range! [_ _ _ _]
-            (throw (AssertionError. "Unsupported playback must not stream"))))
+            (throw (AssertionError. "Analysis gateway owns bounded source access")))
+          drive/PlaybackAnalysisGateway
+          (inspect-playback! [_ _ file-id metadata]
+            (is (= "renderable-private-mov" file-id))
+            (is (= "video/quicktime" (:mimeType metadata)))
+            {:container {:format "mov" :majorBrand "qt  "}
+             :video {:codec "hevc" :codecTag "hvc1"
+                     :profile "Main" :pixelFormat "yuv420p"}
+             :audio {:codec "aac"}}))
         auth-system (assoc system :drive gateway)
         csrf (auth/issue-csrf-token auth-system
                                     {:subject "google-subject-1"})
         server (start-api! port {:auth-system auth-system})]
     (try
       (let [response
-            (post! port "/v1/drive/playback-sessions"
+            (post! port "/v1/drive/playback-analyses"
                    {:fileId "renderable-private-mov"}
                    {"Content-Type" "application/json"
                     "Cookie" (str "agg_session=" session)
                     "X-CSRF-Token" csrf})]
-        (is (= 415 (.statusCode response)))
-        (is (= {"error" "browser_playback_not_supported"}
+        (is (= 200 (.statusCode response)))
+        (is (= {"fileName" "selected.mov"
+                "evidence" {"container" {"format" "mov" "majorBrand" "qt  "}
+                            "video" {"codec" "hevc" "codecTag" "hvc1"
+                                     "profile" "Main" "pixelFormat" "yuv420p"}
+                            "audio" {"codec" "aac"}}}
                (json/read-str (.body response))))
         (is (.isEmpty (.firstValue (.headers response) "Set-Cookie"))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest renderable-non-mp4-source-keeps-its-original-content-type-for-playback
+  (let [port (available-port)
+        {:keys [system session]} (auth-fixture)
+        source-bytes (.getBytes "0123456789abcdefghij"
+                                java.nio.charset.StandardCharsets/UTF_8)
+        gateway
+        (reify
+          drive/SourceGateway
+          (source-metadata! [_ access-token file-id]
+            (is (= "drive-access" access-token))
+            (is (= "renderable-private-mov" file-id))
+            {:id file-id
+             :name "selected.mov"
+             :mimeType "video/quicktime"
+             :size (alength source-bytes)
+             :trashed false})
+          (stream-source! [_ _ _ _]
+            (throw (AssertionError. "Playback must use ranged streaming")))
+          drive/PlaybackGateway
+          (open-source-range! [_ access-token file-id byte-range]
+            (is (= "drive-access" access-token))
+            (is (= "renderable-private-mov" file-id))
+            (is (= {:start 6 :end 10} byte-range))
+            {:status 206
+             :headers {"content-range" "bytes 6-10/20"
+                       "content-length" "5"}
+             :body (java.io.ByteArrayInputStream.
+                    (java.util.Arrays/copyOfRange source-bytes 6 11))}))
+        auth-system (assoc system :drive gateway)
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        server (start-api! port {:auth-system auth-system})]
+    (try
+      (let [created
+            (post! port "/v1/drive/playback-sessions"
+                   {:fileId "renderable-private-mov"}
+                   {"Content-Type" "application/json"
+                    "Cookie" (str "agg_session=" session)
+                    "X-CSRF-Token" csrf})
+            created-body (json/read-str (.body created))
+            playback-url (get created-body "playbackUrl")
+            set-cookie (or (last (.allValues (.headers created) "Set-Cookie")) "")
+            playback-cookie (first (.split set-cookie ";" 2))
+            streamed
+            (get! port playback-url
+                  {"Cookie" (str "agg_session=" session "; " playback-cookie)
+                   "Range" "bytes=6-10"})]
+        (is (= 201 (.statusCode created)))
+        (is (= "video/quicktime" (get created-body "contentType")))
+        (is (= 20 (get created-body "size")))
+        (is (str/starts-with? set-cookie "__session="))
+        (is (= 206 (.statusCode streamed)))
+        (is (= "video/quicktime"
+               (.orElse (.firstValue (.headers streamed) "Content-Type") "")))
+        (is (= "6789a" (.body streamed))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

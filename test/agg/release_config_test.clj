@@ -685,6 +685,7 @@
                   "/v1/drive/picker:"
                   "/v1/drive/picker/diagnostic:"
                   "/v1/drive/recording-clock-inspections:"
+                  "/v1/drive/playback-analyses:"
                   "/v1/drive/playback-sessions:"
                   "/v1/drive/playback/{playbackId}:"]]
       (testing path (is (str/includes? openapi path))))
@@ -706,6 +707,7 @@
                       "operationId: logoutBrowserSession"
                       "operationId: showGoogleDrivePicker"
                       "operationId: inspectDriveRecordingClock"
+                      "operationId: inspectDrivePlayback"
                       "operationId: createDrivePlaybackSession"
                       "operationId: streamDrivePlayback"
                       "operationId: createCompletedOutputPlaybackSession"
@@ -721,12 +723,15 @@
         context (slurp "CONTEXT.md")
         adr (slurp "docs/adr/0016-stream-selected-drive-video-for-browser-playback.md")]
     (doseq [contract ["browser_playback_not_supported"
+                      "operationId: inspectDrivePlayback"
+                      "/v1/drive/playback-analyses:"
                       "Range"
                       "Content-Range"
                       "Accept-Ranges"
                       "playback_range_not_satisfiable"
                       "Firebase-compatible `__session`"
-                      "video/mp4"]]
+                      "video/mp4"
+                      "video/quicktime"]]
       (testing contract (is (str/includes? openapi contract))))
     (doseq [decision ["owner-bound"
                       "one hour"

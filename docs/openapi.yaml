@@ -253,18 +253,91 @@ paths:
               schema: {$ref: "#/components/schemas/Error"}
         "401": {$ref: "#/components/responses/AuthenticationRequired"}
         "403": {$ref: "#/components/responses/CsrfRequired"}
+  /v1/drive/playback-analyses:
+    post:
+      operationId: inspectDrivePlayback
+      tags: [Browser authorization]
+      summary: Inspect one selected Drive source for browser playback evidence.
+      description: |
+        Revalidates authoritative Drive metadata, probes the original selected
+        source through a bounded read-only proxy, and returns normalized
+        container, video, and optional audio evidence for browser capability
+        checks. No playback session or cookie is created.
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [fileId]
+              properties:
+                fileId: {type: string, minLength: 1, maxLength: 256}
+      responses:
+        "200":
+          description: Normalized browser playback evidence for the selected source.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [fileName, evidence]
+                properties:
+                  fileName: {type: string}
+                  evidence:
+                    type: object
+                    additionalProperties: false
+                    required: [container, video]
+                    properties:
+                      container:
+                        type: object
+                        additionalProperties: false
+                        required: [format]
+                        properties:
+                          format: {type: string, enum: [mp4, mov, unknown]}
+                          majorBrand: {type: string}
+                      video:
+                        type: object
+                        additionalProperties: false
+                        required: [codec, codecTag]
+                        properties:
+                          codec: {type: string}
+                          codecTag: {type: string}
+                          profile: {type: string}
+                          pixelFormat: {type: string}
+                      audio:
+                        type: object
+                        additionalProperties: false
+                        required: [codec]
+                        properties:
+                          codec: {type: string}
+        "400":
+          description: Selected Drive metadata is invalid.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "403": {$ref: "#/components/responses/CsrfRequired"}
+        "503":
+          description: Restricted Drive access or source metadata is temporarily unavailable.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
   /v1/drive/playback-sessions:
     post:
       operationId: createDrivePlaybackSession
       tags: [Browser authorization]
-      summary: Prepare one selected Drive MP4 for private browser playback.
+      summary: Prepare one selected Drive source for private browser playback.
       description: |
-        Revalidates authoritative Drive metadata, accepts only `video/mp4` for
-        this non-transcoding player, and returns an opaque same-origin URL.
-        The Drive file ID and access token never enter that URL. One-hour,
-        owner- and URL-bound playback authority is signed into the
-        Firebase-compatible `__session` HttpOnly cookie while preserving the
-        authenticated browser session.
+        Revalidates authoritative Drive metadata, preserves the original source
+        MIME type, and returns an opaque same-origin URL. The Drive file ID and
+        access token never enter that URL. One-hour, owner- and URL-bound
+        playback authority is signed into the Firebase-compatible `__session`
+        HttpOnly cookie while preserving the authenticated browser session.
       security:
         - sessionCookie: []
       parameters:
@@ -298,7 +371,7 @@ paths:
                   playbackUrl:
                     type: string
                     pattern: "^/v1/drive/playback/[0-9a-f-]{36}$"
-                  contentType: {const: video/mp4}
+                  contentType: {type: string}
                   size: {type: integer, minimum: 1}
         "400":
           description: Selected Drive metadata is invalid.
@@ -307,16 +380,6 @@ paths:
               schema: {$ref: "#/components/schemas/Error"}
         "401": {$ref: "#/components/responses/AuthenticationRequired"}
         "403": {$ref: "#/components/responses/CsrfRequired"}
-        "415":
-          description: Source remains renderable but original browser playback is not supported.
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/Error"
-                  - type: object
-                    properties:
-                      error: {const: browser_playback_not_supported}
         "503":
           description: Restricted Drive access or source metadata is temporarily unavailable.
           content:
@@ -326,7 +389,7 @@ paths:
     get:
       operationId: streamDrivePlayback
       tags: [Browser authorization]
-      summary: Stream an owned selected Drive MP4 with browser Range semantics.
+      summary: Stream an owned selected Drive source with browser Range semantics.
       description: |
         Rechecks the active member session and signed owner/path binding on
         every request. One single `Range` is accepted. Open-ended and suffix
@@ -349,7 +412,7 @@ paths:
             examples: ["bytes=0-1048575", "bytes=1048576-", "bytes=-1048576"]
       responses:
         "200":
-          description: Complete MP4 returned when Range is omitted.
+          description: Complete source returned when Range is omitted.
           headers:
             Accept-Ranges:
               schema: {const: bytes}
@@ -357,6 +420,8 @@ paths:
               schema: {const: no-store}
           content:
             video/mp4:
+              schema: {type: string, contentEncoding: binary}
+            video/quicktime:
               schema: {type: string, contentEncoding: binary}
         "206":
           description: Requested single byte range.
@@ -369,6 +434,8 @@ paths:
               schema: {const: no-store}
           content:
             video/mp4:
+              schema: {type: string, contentEncoding: binary}
+            video/quicktime:
               schema: {type: string, contentEncoding: binary}
         "401":
           description: Authentication or owner-bound playback authority is invalid or expired.
