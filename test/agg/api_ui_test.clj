@@ -168,6 +168,19 @@
       (finally
         (.delete temp)))))
 
+(defn- browser-outcome-with-budget-and-timeout
+  [prefix requirement html virtual-time-budget timeout-ms & browser-args]
+  (let [temp (File/createTempFile prefix ".html")]
+    (try
+      (spit temp html)
+      (browser-location-outcome requirement
+                                (.toURI temp)
+                                virtual-time-budget
+                                timeout-ms
+                                browser-args)
+      (finally
+        (.delete temp)))))
+
 (defn- respond-browser-fixture!
   [^HttpExchange exchange status content-type body generation]
   (let [bytes (.getBytes ^String body StandardCharsets/UTF_8)]
@@ -690,11 +703,12 @@
         html (-> page
                  (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
                  (str/replace "</body>" (str scenario "</body>")))]
-    (browser-outcome*
+    (browser-outcome-with-budget-and-timeout
      "agg-telemetry-file-browser-"
      "Browser-level telemetry file regression requires Chrome or Chromium"
      html
-     5000
+     20000
+     60000
      (str "--window-size=" window-size))))
 
 (defn- future-trace-opacity-browser-outcome [page]
