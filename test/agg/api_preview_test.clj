@@ -927,7 +927,11 @@
         (is (= "unsupported_telemetry_columns"
                (:failureCode (first @events))))
         (is (= "telemetry" (:field (first @events))))
-        (is (not-any? #(str/includes? (str body @events) %)
+        (is (not-any? #(str/includes?
+                        (str (dissoc body :requestId)
+                             (mapv (fn [event] (dissoc event :requestId))
+                                   @events))
+                        %)
                       ["Maximum heart rate" "2026-07-17" "180"])))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
