@@ -1,0 +1,18 @@
+{
+  "hosting": {
+    "ignore": [
+      "firebase-debug.log",
+      "firebase-debug.*.log"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "run": {
+          "serviceId": "agg-api",
+          "region": "europe-central2",
+          "pinTag": true
+        }
+      }
+    ]
+  }
+}

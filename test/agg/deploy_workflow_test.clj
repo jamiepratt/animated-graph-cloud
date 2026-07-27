@@ -1,9 +1,11 @@
 (ns agg.deploy-workflow-test
-  (:require [clojure.string :as str]
+  (:require [clojure.data.json :as json]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is]]))
 
 (def ^:private workflow (slurp ".github/workflows/deploy.yml"))
 (def ^:private dockerfile (slurp "Dockerfile"))
+(def ^:private firebase-dev (slurp "firebase.dev.json"))
 (def ^:private terraform (slurp "infra/dev/main.tf"))
 (def ^:private terraform-variables (slurp "infra/dev/variables.tf"))
 (def ^:private cloud-spike (slurp "script/run_cloud_spike.sh"))
@@ -311,9 +313,24 @@
     (is (number? auth-index))
     (is (number? public-index))
     (is (< auth-index public-index))
-    (is (str/includes? workflow "AGG_PUBLIC_BASE_URL=$CLOUD_RUN_SERVICE_URL"))
+    (is (str/includes? workflow "PUBLIC_BASE_URL: https://dev.alphacompose.com"))
+    (is (str/includes? workflow "AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL"))
+    (is (str/includes? workflow "npx --yes firebase-tools@15.24.0 deploy"))
+    (is (str/includes? workflow "--config firebase.dev.json"))
+    (is (str/includes? workflow "$PUBLIC_BASE_URL/openapi.yaml"))
     (is (= 2 (count (re-seq #"AGG_OWNER_EMAIL=\$OWNER_EMAIL" workflow))))
     (is (str/includes? workflow "AGG_PICKER_APP_ID=$PROJECT_NUMBER"))))
+
+(deftest development-hosting-pins-the-dev-domain-to-agg-api
+  (let [{:keys [hosting]} (json/read-str firebase-dev :key-fn keyword)]
+    (is (= ["firebase-debug.log" "firebase-debug.*.log"] (:ignore hosting)))
+    (is (= [{:source "**"
+             :run {:serviceId "agg-api"
+                   :region "europe-central2"
+                   :pinTag true}}]
+           (:rewrites hosting)))
+    (is (re-find #"variable \"enable_firebase_hosting\"[\s\S]*default\s*=\s*true"
+                 terraform-variables))))
 
 (deftest cloud-stage-reports-survive-an-uberjar-build-and-support-resume
   (is (str/includes? cloud-spike ".spike/cloud/$run_id"))

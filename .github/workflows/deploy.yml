@@ -29,6 +29,7 @@ env:
   ADMIN_EMAILS: me@jamiep.org;bartoszjakubowiak@gmail.com
   EARLY_ACCESS_SENDER: Alpha Compose <early-access@alphacompose.com>
   EARLY_ACCESS_RECIPIENT: me@jamiep.org
+  PUBLIC_BASE_URL: https://dev.alphacompose.com
   DAILY_SUBMISSION_LIMIT: "100"
   MONTHLY_BUDGET_MINOR_UNITS: "40000"
   PREVIEW_RESERVATION_MINOR_UNITS: "125"
@@ -220,7 +221,7 @@ jobs:
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --remove-env-vars "AGG_MONTHLY_BUDGET_CENTS,AGG_PREVIEW_RESERVATION_CENTS,AGG_RENDER_RESERVATION_CENTS" \
-            --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=agg-renderer,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$CLOUD_RUN_SERVICE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_EARLY_ACCESS_SENDER=$EARLY_ACCESS_SENDER,AGG_EARLY_ACCESS_RECIPIENT=$EARLY_ACCESS_RECIPIENT,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
+            --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=agg-renderer,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_EARLY_ACCESS_SENDER=$EARLY_ACCESS_SENDER,AGG_EARLY_ACCESS_RECIPIENT=$EARLY_ACCESS_RECIPIENT,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
             --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest,AGG_RESEND_API_KEY=resend-api-key:latest" \
             --quiet
 
@@ -232,6 +233,14 @@ jobs:
             --member=allUsers \
             --role=roles/run.invoker \
             --quiet
+
+      - name: Publish pinned Firebase Hosting routes
+        run: >-
+          npx --yes firebase-tools@15.24.0 deploy
+          --only hosting
+          --config firebase.dev.json
+          --project "$PROJECT_ID"
+          --non-interactive
 
       - id: health-auth
         name: Mint private API identity token through WIF
@@ -279,3 +288,19 @@ jobs:
             if [ "$event" != "smoke_complete" ]; then sleep 5; fi
           done
           test "$event" = "smoke_complete"
+
+      - name: Verify public release
+        run: |
+          test "$(curl --fail --silent --show-error --retry 5 --retry-all-errors "$PUBLIC_BASE_URL/health")" = '{"status":"ok"}'
+          test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --data '{}' \
+            "$PUBLIC_BASE_URL/v1/overlay")" = 401
+          curl --fail --silent --show-error "$PUBLIC_BASE_URL/privacy" | grep -q 'Privacy policy'
+          curl --fail --silent --show-error "$PUBLIC_BASE_URL/terms" | grep -q 'Terms of service'
+          contract_headers="$RUNNER_TEMP/openapi.headers"
+          contract="$(curl --fail --silent --show-error --retry 5 --retry-all-errors \
+            --dump-header "$contract_headers" "$PUBLIC_BASE_URL/openapi.yaml")"
+          grep -q '^openapi: 3.1.0$' <<<"$contract"
+          grep -iq '^content-type: application/yaml; charset=utf-8' "$contract_headers"

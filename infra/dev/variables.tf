@@ -86,7 +86,7 @@ variable "import_api_service" {
 variable "enable_firebase_hosting" {
   description = "Enable Firebase APIs and grant the deployer Hosting administration."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "enable_observability_log_ttl" {
