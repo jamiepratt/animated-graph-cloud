@@ -1,6 +1,6 @@
 (ns agg.browser-process
   (:refer-clojure :exclude [run!])
-  (:import (java.io ByteArrayOutputStream InputStream)
+  (:import (java.io ByteArrayOutputStream IOException InputStream)
            (java.lang Process ProcessBuilder ProcessHandle Thread)
            (java.nio.charset StandardCharsets)
            (java.nio.file Files Path)
@@ -12,29 +12,38 @@
 (def ^:private cleanup-grace-ms 3000)
 (def ^:private outcome-pattern #"data-outcome=\"[^\"]+\"")
 
+(defn- benign-stream-close? [^Throwable error]
+  (and (instance? IOException error)
+       (= "Stream closed" (.getMessage ^IOException error))))
+
 (defn- read-output [^InputStream input completion]
   (let [buffer (byte-array 8192)
         output (ByteArrayOutputStream.)]
-    (loop [size 0]
-      (let [read (.read input buffer)]
-        (if (= -1 read)
-          (do
-            (deliver completion false)
-            (.toString output StandardCharsets/UTF_8))
-          (let [next-size (+ size read)]
-            (when (> next-size max-output-bytes)
-              (throw
-               (ex-info "Browser fixture output exceeded its safe limit"
-                        {:type ::output-limit
-                         :phase :reading-output
-                         :limit-bytes max-output-bytes})))
-            (.write output buffer 0 read)
-            (when (and (not (realized? completion))
-                       (re-find
-                        outcome-pattern
-                        (.toString output StandardCharsets/ISO_8859_1)))
-              (deliver completion true))
-            (recur next-size)))))))
+    (try
+      (loop [size 0]
+        (let [read (.read input buffer)]
+          (if (= -1 read)
+            (do
+              (deliver completion false)
+              (.toString output StandardCharsets/UTF_8))
+            (let [next-size (+ size read)]
+              (when (> next-size max-output-bytes)
+                (throw
+                 (ex-info "Browser fixture output exceeded its safe limit"
+                          {:type ::output-limit
+                           :phase :reading-output
+                           :limit-bytes max-output-bytes})))
+              (.write output buffer 0 read)
+              (when (and (not (realized? completion))
+                         (re-find
+                          outcome-pattern
+                          (.toString output StandardCharsets/ISO_8859_1)))
+                (deliver completion true))
+              (recur next-size)))))
+      (catch IOException error
+        (if (benign-stream-close? error)
+          (.toString output StandardCharsets/UTF_8)
+          (throw error))))))
 
 (defn- output-reader [^InputStream input]
   (let [completion (promise)
