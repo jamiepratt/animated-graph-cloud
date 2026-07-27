@@ -283,6 +283,46 @@
               :sample-rate (some-> (:sample_rate audio) str parse-long)
               :channels (:channels audio)}))))
 
+(defn- playback-container-format [format-tags format-name]
+  (let [major-brand (some-> (:major_brand format-tags) str/lower-case)]
+    (cond
+      (= "qt  " major-brand) "mov"
+      (contains? #{"isom" "iso2" "mp41" "mp42" "avc1" "dash"} major-brand) "mp4"
+      :else (or format-name "unknown"))))
+
+(defn inspect-browser-playback!
+  "Returns normalized codec evidence for direct browser playback decisions."
+  [ffprobe url]
+  (let [output (run-captured!
+                [ffprobe
+                 "-v" "error"
+                 "-protocol_whitelist" "http,tcp"
+                 "-analyzeduration" "10000000"
+                 "-probesize" "67108864"
+                 "-show_entries"
+                 (str "format=format_name:format_tags=major_brand,compatible_brands:"
+                      "stream=codec_type,codec_name,codec_tag_string,profile,pix_fmt")
+                 "-of" "json"
+                 url]
+                30000)
+        probe (json/read-str output :key-fn keyword)
+        format (:format probe)
+        video (first (filter #(= "video" (:codec_type %)) (:streams probe)))
+        audio (first (filter #(= "audio" (:codec_type %)) (:streams probe)))
+        tags (:tags format)]
+    (when-not (and (string? (:codec_name video))
+                   (string? (:codec_tag_string video)))
+      (throw (errors/raise! "Selected source inspection did not produce playback evidence"
+                            {:type ::invalid-source-inspection})))
+    (cond-> {:container {:format (playback-container-format tags (:format_name format))
+                         :majorBrand (:major_brand tags)}
+             :video {:codec (:codec_name video)
+                     :codecTag (:codec_tag_string video)
+                     :profile (:profile video)
+                     :pixelFormat (:pix_fmt video)}}
+      audio
+      (assoc :audio {:codec (:codec_name audio)}))))
+
 (defn composite-command
   "Returns the bounded FFmpeg command shape used by the compositing path."
   [ffmpeg render-spec heartbeat-path overlay-pipe output-path]

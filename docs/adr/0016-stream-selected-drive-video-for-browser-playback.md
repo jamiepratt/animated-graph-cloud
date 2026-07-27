@@ -18,9 +18,14 @@ and startup delay to this first editor slice.
 ## Decision
 
 An authenticated, CSRF-protected request revalidates selected-source metadata.
-Only an original `video/mp4` is admitted to browser playback. Other supported
-render inputs stay selected and receive a playback-only unsupported response.
-The player does not transcode.
+One read-only analysis request inspects the original source with bounded
+`ffprobe` evidence. The browser decides direct playback from normalized
+container and codec evidence using both `VideoDecoder.isConfigSupported()`
+when available and `<video>.canPlayType()`. Direct playback proceeds only when
+both checks agree playback is supported, or when WebCodecs is unavailable and
+`canPlayType()` still supports playback. Unsupported direct playback keeps the
+source selected, preserves timing state, and replaces the player with an
+in-place explanation plus compact technical evidence. The player does not transcode.
 
 The service creates a random playback UUID and signs an owner-bound envelope
 containing its purpose, Google subject, playback UUID, Drive file ID,
@@ -48,6 +53,8 @@ Firebase cookie boundary. Drive IDs and OAuth tokens stay out of media URLs,
 application logs, and browser JavaScript. Selecting a second video replaces
 the previous playback authority.
 
-The browser player initially supports MP4 as delivered. Codec incompatibility
-is detected by the browser and explained as a playback-only limitation.
-Transcoding, timeline markers, zoom, and pan remain outside this decision.
+The player can use additional original selected-source containers and codecs
+when the browser proves direct support. Unsupported codec or container
+combinations are explained as a playback-only limitation without clearing the
+render selection. Transcoding, timeline markers, zoom, and pan remain outside
+this decision.
