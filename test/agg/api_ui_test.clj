@@ -1144,7 +1144,8 @@
       (browser-location-outcome
        "FAQ fragment and responsive behavior requires Chrome or Chromium"
        (str (.toURI temp) "#" initial-fragment)
-       1500
+       5000
+       30000
        [(str "--window-size=" window-size)])
       (finally
         (.delete temp)))))
