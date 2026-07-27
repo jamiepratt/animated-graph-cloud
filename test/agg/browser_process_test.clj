@@ -3,7 +3,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]])
-  (:import (java.io File)
+  (:import (java.io File IOException InputStream)
            (java.lang ProcessHandle)
            (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
@@ -90,3 +90,29 @@
         (is (not= (:isolation-id failure-data) (:isolation-id retry))))
       (finally
         (delete-tree! root)))))
+
+(deftest cleanup-time-stream-close-keeps-captured-browser-output
+  (let [payload "<main data-outcome=\"e30=\"></main>\n"
+        bytes (.getBytes payload "UTF-8")
+        cursor (atom 0)
+        input (proxy [InputStream] []
+                (read
+                  ([] -1)
+                  ([buffer]
+                   (if (zero? @cursor)
+                     (do
+                       (System/arraycopy bytes 0 buffer 0 (alength bytes))
+                       (reset! cursor (alength bytes))
+                       (alength bytes))
+                     (throw (IOException. "Stream closed"))))
+                  ([buffer off len]
+                   (if (zero? @cursor)
+                     (let [size (min len (alength bytes))]
+                       (System/arraycopy bytes 0 buffer off size)
+                       (reset! cursor size)
+                       size)
+                     (throw (IOException. "Stream closed"))))))
+        completion (promise)
+        output (#'agg.browser-process/read-output input completion)]
+    (is (= payload output))
+    (is (true? @completion))))
