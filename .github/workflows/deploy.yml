@@ -296,7 +296,7 @@ jobs:
             --request POST \
             --header 'Content-Type: application/json' \
             --data '{}' \
-            "$PUBLIC_BASE_URL/v1/overlay")" = 401
+            "$PUBLIC_BASE_URL/v1/overlay")" = 404
           curl --fail --silent --show-error "$PUBLIC_BASE_URL/privacy" | grep -q 'Privacy policy'
           curl --fail --silent --show-error "$PUBLIC_BASE_URL/terms" | grep -q 'Terms of service'
           contract_headers="$RUNNER_TEMP/openapi.headers"
