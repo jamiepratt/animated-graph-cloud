@@ -1365,8 +1365,8 @@
     (apply str (map faq-category faq-categories))
     "</div>"
     "<script>(function(){"
-    "function openFaqTarget(){let fragment;try{fragment=decodeURIComponent(location.hash.slice(1));}catch(_){return;}const target=document.getElementById(fragment);if(!(target instanceof HTMLDetailsElement)||!target.classList.contains('faq-question'))return;target.open=true;requestAnimationFrame(()=>target.scrollIntoView({block:'start'}));}"
-    "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',openFaqTarget,{once:true});else openFaqTarget();window.addEventListener('hashchange',openFaqTarget);"
+    "function openFaqTarget(){let fragment;try{fragment=decodeURIComponent(location.hash.slice(1));}catch(_){return;}const target=document.getElementById(fragment);if(!(target instanceof HTMLDetailsElement)||!target.classList.contains('faq-question'))return;target.open=true;target.scrollIntoView({block:'start'});}"
+    "openFaqTarget();window.addEventListener('hashchange',openFaqTarget);"
     "})();</script>")
    :faq))
 
