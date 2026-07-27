@@ -1129,13 +1129,13 @@
   (let [scenario
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
-         "document.addEventListener('DOMContentLoaded',()=>{"
+         "const runFaqFixture=()=>{"
          "const snapshot=id=>{const target=document.getElementById(id),rect=target?.getBoundingClientRect();return {id,hash:location.hash,open:target?.open??null,inView:!!rect&&rect.bottom>0&&rect.top<window.innerHeight,top:rect?.top??null};};"
          "const record=outcome=>{if(document.getElementById('browser-result').dataset.outcome)return;const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));};"
          "setTimeout(()=>{const initial=snapshot('" initial-fragment "'),changedFragment='source-and-activity-data-retention';location.hash='#'+changedFragment;"
          "setTimeout(()=>{const changed=snapshot(changedFragment),initialStillOpen=document.getElementById('" initial-fragment "').open,summaryNodes=[...document.querySelectorAll('.faq-question>summary')],details=[...document.querySelectorAll('.faq-question')],permalinks=[...document.querySelectorAll('.faq-permalink a')],activeNavNode=document.querySelector('nav a[aria-current=\"page\"]'),activeNavStyle=activeNavNode?getComputedStyle(activeNavNode):null,base={initial,changed,initialStillOpen,summaryCount:summaryNodes.length,summariesKeyboardReachable:summaryNodes.every(node=>node.tabIndex>=0&&node.textContent.trim()),permalinksAccessible:permalinks.length===summaryNodes.length&&permalinks.every(link=>link.getAttribute('aria-label')?.includes(link.closest('details').querySelector('summary').textContent.trim())&&link.getAttribute('href')==='#'+link.closest('details').id),nestedDetails:document.querySelectorAll('details details').length,activeNav:activeNavNode?.getAttribute('href')||null,activeNavStyled:!!activeNavStyle&&parseInt(activeNavStyle.fontWeight,10)>=700&&activeNavStyle.textDecorationLine.includes('underline'),viewportWidth:window.innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth,detailsFit:details.every(node=>{const rect=node.getBoundingClientRect();return rect.left>=-.5&&rect.right<=window.innerWidth+.5;})};"
          "let recorded=false,attempts=0;const finish=()=>{if(recorded)return;const back=snapshot('" initial-fragment "');if(!back.inView&&attempts++<10){requestAnimationFrame(finish);return;}recorded=true;record({...base,back,changedStillOpen:document.getElementById(changedFragment).open});};window.addEventListener('hashchange',()=>requestAnimationFrame(finish),{once:true});history.back();setTimeout(finish,250);},80);},80);"
-         "},{once:true});"
+         "};if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',runFaqFixture,{once:true});}else{runFaqFixture();}"
          "</script>")
         html (str/replace page "</body>" (str scenario "</body>"))
         temp (File/createTempFile "agg-faq-browser-" ".html")]
