@@ -327,6 +327,36 @@
     (is (= "3" (second (drop-while #(not= "-frames:v" %) command))))
     (is (= "pipe:1" (last command)))))
 
+(deftest selected-source-gallery-stops-at-the-shared-render-deadline
+  (let [ffmpeg (executable-script! "#!/bin/sh\nexec sleep 5\n")
+        renderer (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
+        transparent (png-bytes 64 36 false)]
+    (try
+      (let [started (System/nanoTime)
+            cause
+            (try
+              (media/render-composite-gallery!
+               renderer
+               {:width 64 :height 36 :fps 25 :duration-seconds 1
+                :fit-mode "letterbox"
+                :timeout-ms 25
+                :source-video
+                {:trim-offset-seconds 0
+                 :input-url
+                 "http://127.0.0.1:32123/source/00000000-0000-0000-0000-000000000128"}}
+               (fn [& _]
+                 (throw (AssertionError. "seekable gallery opened source pipe")))
+               [{:frameIndex 0 :overlay transparent}]
+               (fn [& _]
+                 (throw (AssertionError. "timed-out gallery emitted a frame"))))
+              nil
+              (catch Throwable error error))
+            elapsed-ms (quot (- (System/nanoTime) started) 1000000)]
+        (is (= ::media/composite-timeout (:type (ex-data cause))))
+        (is (< elapsed-ms 1000)))
+      (finally
+        (Files/deleteIfExists ffmpeg)))))
+
 (deftest failed-selected-source-gallery-identifies-preview-decode-not-source-content
   (let [ffmpeg (executable-script! (short-source-reader-script 7))
         renderer (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
@@ -1013,6 +1043,42 @@
          joined
          "select='eq(n\\,26)+eq(n\\,50)+eq(n\\,51)'"))
     (is (not (some #{"-ss"} command)))))
+
+(deftest compositing-command-seeks-an-identity-free-loopback-source
+  (let [command (media/composite-command
+                 "ffmpeg"
+                 {:width 1920 :height 1080 :fps 25 :duration-seconds 26/25
+                  :source-video
+                  {:trim-offset-seconds 26/25
+                   :input-url
+                   "http://127.0.0.1:32123/source/00000000-0000-0000-0000-000000000128"}
+                  :output-format "h264-mp4"
+                  :fit-mode "letterbox"
+                  :audio-mode "source+heartbeat"}
+                 "/tmp/heartbeat.wav"
+                 "/tmp/overlay.pipe"
+                 "/tmp/output.mp4")
+        joined (str/join " " command)]
+    (is (not (some #{"pipe:0"} command)))
+    (is (some #{"http://127.0.0.1:32123/source/00000000-0000-0000-0000-000000000128"}
+              command))
+    (is (= ["-protocol_whitelist" "http,tcp"]
+           (->> (partition 2 1 command)
+                (some #(when (= "-protocol_whitelist" (first %)) %)))))
+    (is (= ["-ss" "1.04"]
+           (->> (partition 2 1 command)
+                (some #(when (= "-ss" (first %)) %)))))
+    (is (some #{"/tmp/overlay.pipe"} command))
+    (is (str/includes? joined
+                       "[0:v]trim=start=0.0,setpts=PTS-STARTPTS,scale="))
+    (is (str/includes? joined "[1:v]format=rgba"))
+    (is (str/includes?
+         joined
+         "[0:a]atrim=start=0.0,asetpts=PTS-STARTPTS,aformat="))
+    (is (str/includes? joined "force_original_aspect_ratio=decrease"))
+    (is (str/includes? joined "amix=inputs=2"))
+    (is (str/includes? joined "volume=0.5[src]"))
+    (is (str/includes? joined "volume=1.0[beat]"))))
 
 (deftest every-durable-format-and-audio-mode-shares-the-source-trim
   (doseq [output-format ["h264-mp4" "prores-422-mov"]

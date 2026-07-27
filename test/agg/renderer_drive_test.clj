@@ -1,6 +1,7 @@
 (ns agg.renderer-drive-test
   (:require [agg.auth.core :as auth]
             [agg.drive.core :as drive]
+            [agg.drive.range-proxy :as range-proxy]
             [agg.errors :as errors]
             [agg.jobs.lifecycle :as jobs]
             [agg.jobs-test :as fixture]
@@ -9,6 +10,109 @@
             [agg.renderer.main :as renderer]
             [clojure.test :refer [deftest is]])
   (:import (java.nio.file Files OpenOption)))
+
+(deftest selected-source-render-receives-only-a-task-local-loopback-url
+  (let [captured (atom nil)
+        closed? (atom false)
+        events (atom [])
+        proxy-url
+        "http://127.0.0.1:32123/source/00000000-0000-0000-0000-000000000128"
+        request
+        {:source-video
+         {:file-id "private-drive-file"
+          :metadata {:size (inc (* 100 1000 1000 1000))}}}
+        source-system
+        {:gateway
+         (reify drive/PlaybackGateway
+           (open-source-range! [_ _ _ _]
+             (throw (AssertionError. "render did not request source bytes"))))}]
+    (with-redefs
+     [observability/emit-event!
+      (fn [& arguments] (swap! events conj arguments))
+      range-proxy/start!
+      (fn [configuration]
+        (is (= "private-access-token" (:access-token configuration)))
+        (is (= "private-drive-file" (:file-id configuration)))
+        (is (= (inc (* 100 1000 1000 1000)) (:size configuration)))
+        (reify
+          java.io.Closeable
+          (close [_]
+            (reset! closed? true))
+          clojure.lang.ILookup
+          (valAt [_ key]
+            (case key
+              :url proxy-url
+              :stats (fn [] {:upstream-bytes 12
+                             :request-count 2
+                             :retry-count 1
+                             :cache-hit-count 3})
+              nil))
+          (valAt [_ key not-found]
+            (or (.valAt ^clojure.lang.ILookup _ key) not-found))))]
+      (renderer/with-source-range-proxy!
+        request source-system "private-access-token"
+        #(reset! captured %)))
+    (is (= proxy-url (get-in @captured [:source-video :input-url])))
+    (is (not (re-find #"private|drive|token"
+                      (get-in @captured [:source-video :input-url]))))
+    (is (= ["renderer" "source_range_proxy_complete"]
+           (take 2 (first @events))))
+    (is (= {:reason "complete"
+            :upstreamBytes 12
+            :upstreamRequests 2
+            :upstreamRetries 1
+            :cacheHits 3}
+           (dissoc (nth (first @events) 2) :elapsedMs)))
+    (is (nat-int? (:elapsedMs (nth (first @events) 2))))
+    (is @closed?)))
+
+(deftest authoritative-runtime-range-budget-fails-with-actionable-diagnostics
+  (let [closed? (atom false)
+        source-system
+        {:gateway
+         (reify drive/PlaybackGateway
+           (open-source-range! [_ _ _ _]))}
+        cause
+        (with-redefs
+         [range-proxy/start!
+          (fn [_]
+            (reify
+              java.io.Closeable
+              (close [_]
+                (reset! closed? true))
+              clojure.lang.ILookup
+              (valAt [_ key]
+                (case key
+                  :url
+                  "http://127.0.0.1:32123/source/00000000-0000-0000-0000-000000000128"
+                  :stats (fn [] {:upstream-bytes 1024
+                                 :request-count 2
+                                 :retry-count 0
+                                 :cache-hit-count 0
+                                 :failure-reason "work_budget_exhausted"})
+                  nil))
+              (valAt [_ key not-found]
+                (or (.valAt ^clojure.lang.ILookup _ key) not-found))))]
+          (try
+            (renderer/with-source-range-proxy!
+              {:source-video {:file-id "file" :metadata {:size 100}}}
+              source-system "access"
+              (fn [_]
+                (throw (ex-info "ffmpeg failed" {:type ::ffmpeg-failed}))))
+            nil
+            (catch clojure.lang.ExceptionInfo error error)))]
+    (is (= {:type ::renderer/source-work-exceeded
+            :failure-code "selected_source_work_exceeded"
+            :reason "selected_source_transfer_runtime"
+            :retryable false}
+           (select-keys (ex-data cause)
+                        [:type :failure-code :reason :retryable])))
+    (is (= {:failure-code "selected_source_work_exceeded"
+            :reason "selected_source_transfer_runtime"
+            :retryable false
+            :elapsed-ms 1}
+           (jobs/failure-diagnostics cause 1)))
+    (is @closed?)))
 
 (deftest cloud-render-delivers-the-local-mov-before-cleanup
   (let [delivered (atom [])

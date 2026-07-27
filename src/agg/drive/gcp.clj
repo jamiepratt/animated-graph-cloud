@@ -2,6 +2,9 @@
   (:require [agg.errors :as errors]
             [agg.auth.core :as auth]
             [agg.drive.core :as drive]
+            [agg.drive.limits :as drive-limits]
+            [agg.drive.range-proxy :as range-proxy]
+            [agg.render.media :as media]
             [clojure.data.json :as json]
             [clojure.string :as str])
   (:import (com.google.api.gax.rpc ApiException StatusCode$Code)
@@ -560,6 +563,20 @@
                                 {:type ::drive/invalid-playback-response
                                  :status (long (or (:status response) 0))
                                  :size (inc (- end start))}))))))
+  drive/SelectedWorkGateway
+  (inspect-selected-work!
+    [gateway access-token file-id metadata render-spec]
+    (with-open
+     [proxy
+      (range-proxy/start!
+        {:gateway gateway
+         :access-token access-token
+         :file-id file-id
+         :size (:size metadata)
+         :limits drive-limits/preflight-range-limits-v1})]
+      (media/inspect-selected-source!
+       "ffprobe"
+       (assoc-in render-spec [:source-video :input-url] (:url proxy)))))
   drive/PickerDiagnostics
   (picker-diagnostics! [_ access-token]
     (let [about (send! (authorized

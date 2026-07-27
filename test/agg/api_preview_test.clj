@@ -448,6 +448,7 @@
 
 (deftest selected-source-preview-downloads-and-batch-decodes-on-the-worker-once
   (let [metadata-count (atom 0)
+        preflight-count (atom 0)
         source-count (atom 0)
         decode-count (atom 0)
         decoded-frames (atom [])
@@ -456,9 +457,31 @@
           (source-metadata! [_ _ file-id]
             (swap! metadata-count inc)
             {:id file-id :name "private-name.mp4" :mimeType "video/mp4"
-             :size 1024 :trashed false})
+             :size (inc (* 100 1000 1000 1000)) :trashed false
+             :videoMediaMetadata {:durationMillis "2000"}})
           (stream-source! [_ _ _ _]
-            (throw (AssertionError. "API must not stream the source"))))
+            (throw (AssertionError. "API must not stream the source")))
+          drive/SelectedWorkGateway
+          (inspect-selected-work! [_ _ _ _ _]
+            (swap! preflight-count inc)
+            {:container "mp4"
+             :index-placement "front"
+             :video {:codec "h264"
+                     :profile "High"
+                     :pixel-format "yuv420p"
+                     :bit-depth 8
+                     :width 1920
+                     :height 1080
+                     :frame-rate 25
+                     :average-bitrate-bps 50000000
+                     :peak-bitrate-bps 75000000
+                     :max-gop-seconds 2}
+             :audio {:codec "aac"
+                     :sample-rate 48000
+                     :channels 2}
+             :selected-work {:max-upstream-bytes 120000000
+                             :max-request-count 16}
+             :evidence-version "authoritative-selected-range-v1"}))
         auth-system (auth-system source-gateway)
         session (auth/issue-session auth-system
                                     {:subject "google-subject-1"
@@ -506,7 +529,8 @@
                       "X-CSRF-Token" csrf})
             operation (json/read-str (.body started) :key-fn keyword)]
         (is (= 202 (.statusCode started)))
-        (is (= 0 @metadata-count))
+        (is (= 1 @metadata-count))
+        (is (= 1 @preflight-count))
         (is (= 0 @source-count))
         (jobs/dispatch-job! (:service system) (:id operation))
         (jobs/run-job! (:service system) (:id operation))
@@ -518,7 +542,7 @@
           (is (= 1 @source-count))
           (is (= 1 @decode-count))
           (is (= [0 13 38 49] @decoded-frames))
-          (is (= 0 @metadata-count))
+          (is (= 1 @metadata-count))
           (is (= 2 (:version result)))
           (is (= "final" (:mode result)))
           (is (= [0 13 38 49]
@@ -548,7 +572,39 @@
         (.close ^java.lang.AutoCloseable server)))))
 
 (deftest partial-selected-source-preview-is-a-successful-bounded-api-result
-  (let [auth-system (auth-system nil)
+  (let [source-gateway
+        (reify
+          drive/SourceGateway
+          (source-metadata! [_ _ file-id]
+            {:id file-id
+             :name "private-name.mp4"
+             :mimeType "video/mp4"
+             :size (inc (* 100 1000 1000 1000))
+             :trashed false
+             :videoMediaMetadata {:durationMillis "2000"}})
+          (stream-source! [_ _ _ _]
+            (throw (AssertionError. "API must not stream the source")))
+          drive/SelectedWorkGateway
+          (inspect-selected-work! [_ _ _ _ _]
+            {:container "mp4"
+             :index-placement "front"
+             :video {:codec "h264"
+                     :profile "High"
+                     :pixel-format "yuv420p"
+                     :bit-depth 8
+                     :width 1920
+                     :height 1080
+                     :frame-rate 25
+                     :average-bitrate-bps 50000000
+                     :peak-bitrate-bps 75000000
+                     :max-gop-seconds 2}
+             :audio {:codec "aac"
+                     :sample-rate 48000
+                     :channels 2}
+             :selected-work {:max-upstream-bytes 120000000
+                             :max-request-count 16}
+             :evidence-version "authoritative-selected-range-v1"}))
+        auth-system (auth-system source-gateway)
         session (auth/issue-session auth-system
                                     {:subject "google-subject-1"
                                      :email "owner@example.com"})

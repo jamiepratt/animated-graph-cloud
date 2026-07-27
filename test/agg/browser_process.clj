@@ -9,7 +9,7 @@
            (java.util.concurrent TimeUnit)))
 
 (def ^:private max-output-bytes (* 16 1024 1024))
-(def ^:private cleanup-grace-ms 1000)
+(def ^:private cleanup-grace-ms 3000)
 (def ^:private outcome-pattern #"data-outcome=\"[^\"]+\"")
 
 (defn- read-output [^InputStream input completion]

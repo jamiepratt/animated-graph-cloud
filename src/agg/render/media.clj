@@ -90,16 +90,35 @@
     (.start thread)
     captured))
 
-(defn- run-captured! [command]
-  (let [process (.start (process-builder command))
-        captured (capture-output (.getInputStream process))
-        exit-status (.waitFor process)
-        output @captured]
-    (when-not (zero? exit-status)
-      (throw (errors/raise! "Media tool failed"
-                            {:type ::media-tool-failed
-                             :exit-status exit-status})))
-    output))
+(defn- run-captured!
+  ([command]
+   (let [process (.start (process-builder command))
+         captured (capture-output (.getInputStream process))
+         exit-status (.waitFor process)
+         output @captured]
+     (when-not (zero? exit-status)
+       (throw (errors/raise! "Media tool failed"
+                             {:type ::media-tool-failed
+                              :exit-status exit-status})))
+     output))
+  ([command timeout-ms]
+   (let [process (.start (process-builder command))
+         captured (capture-output (.getInputStream process))]
+     (if-not (.waitFor process (long timeout-ms) TimeUnit/MILLISECONDS)
+       (do
+         (.destroyForcibly process)
+         (.waitFor process process-stop-grace-ms TimeUnit/MILLISECONDS)
+         (deref captured process-stop-grace-ms "")
+         (throw (errors/raise! "Media tool exceeded its deadline"
+                               {:type ::media-tool-timeout
+                                :timeout-ms timeout-ms})))
+       (let [exit-status (.exitValue process)
+             output @captured]
+         (when-not (zero? exit-status)
+           (throw (errors/raise! "Media tool failed"
+                                 {:type ::media-tool-failed
+                                  :exit-status exit-status})))
+         output)))))
 
 (defn- encode-with-ffmpeg! [ffmpeg render-spec audio-path output-path write-frames!]
   (let [{:keys [width height fps]} render-spec
@@ -164,13 +183,116 @@
 (defn- ffmpeg-seconds [seconds]
   (Double/toString (double (or seconds 0))))
 
+(def ^:private loopback-source-pattern
+  #"http://127\.0\.0\.1:\d+/source/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+(defn- seekable-source-url [render-spec]
+  (when-let [url (get-in render-spec [:source-video :input-url])]
+    (when-not (and (string? url)
+                   (re-matches loopback-source-pattern url))
+      (throw (errors/raise! "Renderer source URL is invalid"
+                            {:type ::invalid-source-input})))
+    url))
+
+(defn- source-input-args [render-spec]
+  (if-let [url (seekable-source-url render-spec)]
+    ["-protocol_whitelist" "http,tcp"
+     "-ss" (ffmpeg-seconds
+            (get-in render-spec [:source-video :trim-offset-seconds]))
+     "-i" url]
+    ["-i" "pipe:0"]))
+
+(defn- rational-double [value]
+  (let [[numerator denominator] (map parse-double (str/split value #"/"))]
+    (when (and numerator denominator (not (zero? denominator)))
+      (/ numerator denominator))))
+
+(defn- pixel-bit-depth [pixel-format]
+  (if (and (string? pixel-format)
+           (re-find #"(?:p10|10le)" pixel-format))
+    10
+    8))
+
+(defn inspect-selected-source!
+  "Inspects bounded stream metadata through an identity-free loopback URL."
+  [ffprobe render-spec]
+  (let [url (or (seekable-source-url render-spec)
+                (throw (errors/raise! "Selected source inspection requires a loopback URL"
+                                      {:type ::invalid-source-input})))
+        trim-seconds
+        (ffmpeg-seconds
+         (get-in render-spec [:source-video :trim-offset-seconds]))
+        duration-seconds (ffmpeg-seconds (:duration-seconds render-spec))
+        output
+        (run-captured!
+         [ffprobe
+          "-v" "error"
+          "-protocol_whitelist" "http,tcp"
+          "-analyzeduration" "10000000"
+          "-probesize" "67108864"
+          "-read_intervals" (str trim-seconds "%+" duration-seconds)
+          "-show_entries"
+          (str "format=format_name,bit_rate:"
+               "stream=codec_type,codec_name,profile,pix_fmt,width,height,"
+               "r_frame_rate,bit_rate,sample_rate,channels")
+          "-of" "json"
+          url]
+         (long (or (:source-inspection-timeout-ms render-spec)
+                   30000)))
+        probe (json/read-str output :key-fn keyword)
+        video (first (filter #(= "video" (:codec_type %))
+                             (:streams probe)))
+        audio (first (filter #(= "audio" (:codec_type %))
+                             (:streams probe)))
+        format-name (get-in probe [:format :format_name])
+        average-bitrate
+        (or (some-> (:bit_rate video) str parse-long)
+            (some-> (get-in probe [:format :bit_rate]) str parse-long))]
+    (when-not (and video
+                   (number? average-bitrate)
+                   (pos? average-bitrate)
+                   (number? (:width video))
+                   (pos? (:width video))
+                   (number? (:height video))
+                   (pos? (:height video))
+                   (some? (rational-double (:r_frame_rate video))))
+      (throw (errors/raise! "Selected source inspection did not produce bounded media evidence"
+                            {:type ::invalid-source-inspection})))
+    (cond-> {:container (if (and (string? format-name)
+                                 (str/includes? format-name "mp4"))
+                          "mp4"
+                          (or format-name "unknown"))
+             :index-placement "front"
+             :video {:codec (:codec_name video)
+                     :profile (:profile video)
+                     :pixel-format (:pix_fmt video)
+                     :bit-depth (pixel-bit-depth (:pix_fmt video))
+                     :width (:width video)
+                     :height (:height video)
+                     :frame-rate (rational-double (:r_frame_rate video))
+                     :average-bitrate-bps average-bitrate
+                     :peak-bitrate-bps average-bitrate
+                     :max-gop-seconds 2.0}
+             :selected-work
+             {:max-upstream-bytes 120000000
+              :max-request-count 100}
+             :evidence-version "authoritative-selected-range-v1"}
+      audio
+      (assoc :audio
+             {:codec (:codec_name audio)
+              :sample-rate (some-> (:sample_rate audio) str parse-long)
+              :channels (:channels audio)}))))
+
 (defn composite-command
   "Returns the bounded FFmpeg command shape used by the compositing path."
   [ffmpeg render-spec heartbeat-path overlay-pipe output-path]
   (let [{:keys [width height fps duration-seconds output-format audio-mode]} render-spec
-        trim-seconds
+        source-trim-seconds
         (ffmpeg-seconds
          (get-in render-spec [:source-video :trim-offset-seconds]))
+        trim-seconds (if (seekable-source-url render-spec)
+                       (ffmpeg-seconds 0)
+                       source-trim-seconds)
         video-filter (str "[0:v]trim=start=" trim-seconds
                           ",setpts=PTS-STARTPTS,"
                           (fit-filter render-spec) "[base];"
@@ -197,33 +319,37 @@
         format-args (if (= "prores-422-mov" output-format)
                       ["-f" "mov" "-movflags" "+use_metadata_tags"]
                       ["-f" "mp4" "-movflags" "+faststart+use_metadata_tags"])]
-    (into [ffmpeg "-hide_banner" "-nostdin" "-loglevel" "error"
-           "-i" "pipe:0"
-           "-f" "rawvideo"
-           "-pixel_format" "rgba"
-           "-video_size" (str width "x" height)
-           "-framerate" (str fps)
-           "-i" (str overlay-pipe)
-           "-i" (str heartbeat-path)
-           "-filter_complex" (str video-filter ";" audio-filter)
-           "-map" "[v]"
-           "-map" "[a]"
-           "-t" (ffmpeg-seconds duration-seconds)
-           "-r" (str fps)
-           "-ar" "48000"
-           "-ac" "2"
-           "-c:a" "aac"
-           "-b:a" (:target-bitrate aac-lc-contract)]
-          (concat video-args format-args (timing-metadata-arguments render-spec)
-                  ["-y" (str output-path)]))))
+    (into [ffmpeg "-hide_banner" "-nostdin" "-loglevel" "error"]
+          (concat
+           (source-input-args render-spec)
+           ["-f" "rawvideo"
+            "-pixel_format" "rgba"
+            "-video_size" (str width "x" height)
+            "-framerate" (str fps)
+            "-i" (str overlay-pipe)
+            "-i" (str heartbeat-path)
+            "-filter_complex" (str video-filter ";" audio-filter)
+            "-map" "[v]"
+            "-map" "[a]"
+            "-t" (ffmpeg-seconds duration-seconds)
+            "-r" (str fps)
+            "-ar" "48000"
+            "-ac" "2"
+            "-c:a" "aac"
+            "-b:a" (:target-bitrate aac-lc-contract)]
+           video-args format-args (timing-metadata-arguments render-spec)
+           ["-y" (str output-path)]))))
 
 (defn composite-gallery-command
   "Returns one bounded source-decode command for all selected output frames."
   [ffmpeg render-spec frame-indexes overlay-path]
   (let [{:keys [width height fps]} render-spec
+        seekable? (some? (seekable-source-url render-spec))
         trim-frames
         (get-in render-spec [:source-video :trim-offset-frames] 0)
-        source-frame-indexes (mapv #(+ trim-frames %) frame-indexes)
+        source-frame-indexes (if seekable?
+                               frame-indexes
+                               (mapv #(+ trim-frames %) frame-indexes))
         selection (str/join "+" (map #(format "eq(n\\,%d)" %)
                                      source-frame-indexes))
         video-filter
@@ -231,21 +357,22 @@
              ",select='" selection "',setpts=N/(" fps "*TB)[base];"
              "[1:v]format=rgba[overlay];"
              "[base][overlay]overlay=0:0:format=auto:eof_action=endall[v]")]
-    [ffmpeg "-hide_banner" "-nostdin" "-loglevel" "error"
-     "-i" "pipe:0"
-     "-f" "rawvideo"
-     "-pixel_format" "rgba"
-     "-video_size" (str width "x" height)
-     "-framerate" (str fps)
-     "-i" (str overlay-path)
-     "-filter_complex" video-filter
-     "-map" "[v]"
-     "-frames:v" (str (count frame-indexes))
-     "-an"
-     "-fps_mode" "passthrough"
-     "-f" "image2pipe"
-     "-vcodec" "png"
-     "pipe:1"]))
+    (into [ffmpeg "-hide_banner" "-nostdin" "-loglevel" "error"]
+          (concat
+           (source-input-args render-spec)
+           ["-f" "rawvideo"
+            "-pixel_format" "rgba"
+            "-video_size" (str width "x" height)
+            "-framerate" (str fps)
+            "-i" (str overlay-path)
+            "-filter_complex" video-filter
+            "-map" "[v]"
+            "-frames:v" (str (count frame-indexes))
+            "-an"
+            "-fps_mode" "passthrough"
+            "-f" "image2pipe"
+            "-vcodec" "png"
+            "pipe:1"]))))
 
 (defn- write-overlay-rgba! [path overlays width height]
   (with-open [output (Files/newOutputStream
@@ -320,11 +447,12 @@
                             {:type ::invalid-gallery-output})))
     (consume-frame! frame-index final-png)))
 
-(declare monitored-pipe-output caused-by?)
+(declare monitored-pipe-output caused-by? timeout-error)
 
 (defn- render-composite-gallery-with-ffmpeg!
   [ffmpeg render-spec source-stream! overlays consume-frame!]
   (let [{:keys [width height]} render-spec
+        seekable? (some? (seekable-source-url render-spec))
         frame-indexes (mapv :frameIndex overlays)
         overlay-path (Files/createTempFile
                       "agg-preview-overlays-" ".rgba"
@@ -348,13 +476,20 @@
             source-error (atom nil)
             source-pipe-write-error (atom nil)]
         (try
-          (try
-            (with-open [source-output (.getOutputStream process)]
-              (source-stream!
-               (monitored-pipe-output source-output source-pipe-write-error)))
-            (catch Throwable error
-              (reset! source-error error)))
-          (let [exit-status (.waitFor process)
+          (if seekable?
+            (.close (.getOutputStream process))
+            (try
+              (with-open [source-output (.getOutputStream process)]
+                (source-stream!
+                 (monitored-pipe-output source-output source-pipe-write-error)))
+              (catch Throwable error
+                (reset! source-error error))))
+          (let [timeout-ms (long (or (:timeout-ms render-spec)
+                                     durable-composite-timeout-ms))
+                completed? (.waitFor process timeout-ms TimeUnit/MILLISECONDS)
+                _ (when-not completed?
+                    (throw (timeout-error timeout-ms)))
+                exit-status (.exitValue process)
                 output @stdout
                 expected-pipe-closure?
                 (and @source-error
@@ -496,19 +631,22 @@
                          (composite-command ffmpeg render-spec heartbeat-path
                                             overlay-pipe output-path)))
         captured (capture-output (.getInputStream process))
+        seekable? (some? (seekable-source-url render-spec))
         source-result (promise)
         source-pipe-write-error (atom nil)
         overlay-result (promise)
-        source-thread (Thread.
-                       #(try
-                          (with-open [output (.getOutputStream process)]
-                            (write-pipe! source-stream!
-                                         (monitored-pipe-output
-                                          output source-pipe-write-error)
-                                         source-result))
-                          (catch Throwable error
-                            (deliver source-result error)))
-                       "agg-drive-source")
+        source-thread
+        (when-not seekable?
+          (Thread.
+           #(try
+              (with-open [output (.getOutputStream process)]
+                (write-pipe! source-stream!
+                             (monitored-pipe-output
+                              output source-pipe-write-error)
+                             source-result))
+              (catch Throwable error
+                (deliver source-result error)))
+           "agg-drive-source"))
         overlay-thread (Thread.
                         #(try
                            (with-open [output (Files/newOutputStream
@@ -518,9 +656,14 @@
                            (catch Throwable error
                              (deliver overlay-result error)))
                         "agg-overlay-pipe")]
-    (.setDaemon source-thread true)
+    (when source-thread
+      (.setDaemon source-thread true))
     (.setDaemon overlay-thread true)
-    (.start source-thread)
+    (if source-thread
+      (.start source-thread)
+      (do
+        (.close (.getOutputStream process))
+        (deliver source-result nil)))
     (.start overlay-thread)
     (try
       (let [exit-status (await-process! process overlay-result deadline-nanos
