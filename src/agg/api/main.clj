@@ -1370,9 +1370,9 @@
         prepared (contract/attach-source-selection-metadata
                   {:source-video {:file-id file-id}} metadata)
         {:keys [mimeType size]} (get-in prepared [:source-video :metadata])
-        _ (when-not (= "video/mp4" mimeType)
-            (throw (errors/raise! "Source cannot be played by this browser player"
-                                  {:type ::browser-playback-not-supported})))
+        _ (when-not (and (string? mimeType) (integer? size) (pos? size))
+            (throw (errors/raise! "Drive playback source metadata is invalid"
+                                  {:type ::invalid-playback-source})))
         playback-id (str (UUID/randomUUID))
         playback-path (str "/v1/drive/playback/" playback-id)
         playback-token (auth/issue-playback-token
@@ -1394,6 +1394,32 @@
                    {:playbackUrl playback-path
                     :contentType mimeType
                     :size size})))
+
+(defn- inspect-playback!
+  [^HttpExchange exchange auth-system]
+  (let [user (require-session-user! exchange auth-system)
+        _ (require-csrf! exchange auth-system user)
+        request (request-json exchange)
+        file-id (:fileId request)
+        _ (when-not (and (= #{:fileId} (set (keys request)))
+                         (string? file-id)
+                         (<= 1 (count file-id) 256))
+            (throw (errors/raise! "Drive playback source is invalid"
+                                  {:type ::invalid-playback-source})))
+        {:keys [access-token]} (auth/drive-access! auth-system (:subject user))
+        gateway (:drive auth-system)
+        _ (when-not (and (satisfies? drive/SourceGateway gateway)
+                         (satisfies? drive/PlaybackAnalysisGateway gateway))
+            (throw (errors/raise! "Drive playback analysis dependencies are incomplete"
+                                  {:type ::drive/source-unavailable})))
+        metadata (drive/source-metadata! gateway access-token file-id)
+        prepared (contract/attach-source-selection-metadata
+                  {:source-video {:file-id file-id}} metadata)
+        source-metadata (get-in prepared [:source-video :metadata])
+        evidence (drive/inspect-playback! gateway access-token file-id source-metadata)]
+    (respond-json! exchange 200
+                   {:fileName (:name source-metadata)
+                    :evidence evidence})))
 
 (defn- validate-project-source!
   [^HttpExchange exchange auth-system]
@@ -1836,6 +1862,10 @@
                                   (and auth-system (= "POST" method)
                                        (= "/v1/drive/playback-sessions" path))
                                   (create-playback-session! exchange auth-system)
+
+                                  (and auth-system (= "POST" method)
+                                       (= "/v1/drive/playback-analyses" path))
+                                  (inspect-playback! exchange auth-system)
 
                                   (and auth-system (= "POST" method)
                                        (= "/ui/project-source-validation" path))

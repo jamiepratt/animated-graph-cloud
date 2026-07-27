@@ -577,6 +577,17 @@
       (media/inspect-selected-source!
        "ffprobe"
        (assoc-in render-spec [:source-video :input-url] (:url proxy)))))
+  drive/PlaybackAnalysisGateway
+  (inspect-playback! [gateway access-token file-id metadata]
+    (with-open
+     [proxy
+      (range-proxy/start!
+        {:gateway gateway
+         :access-token access-token
+         :file-id file-id
+         :size (:size metadata)
+         :limits drive-limits/preflight-range-limits-v1})]
+      (media/inspect-browser-playback! "ffprobe" (:url proxy))))
   drive/PickerDiagnostics
   (picker-diagnostics! [_ access-token]
     (let [about (send! (authorized

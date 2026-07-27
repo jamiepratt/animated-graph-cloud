@@ -36,6 +36,9 @@
 (defprotocol PlaybackGateway
   (open-source-range! [gateway access-token file-id byte-range]))
 
+(defprotocol PlaybackAnalysisGateway
+  (inspect-playback! [gateway access-token file-id metadata]))
+
 (defprotocol SelectedWorkGateway
   (inspect-selected-work!
     [gateway access-token file-id metadata render-spec]))
