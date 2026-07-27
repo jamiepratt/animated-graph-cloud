@@ -712,9 +712,30 @@
                                  {:type ::drive/source-unavailable})))
          (let [file-id (get-in render-spec [:source-video :file-id])
                metadata (drive/source-metadata! gateway access-token file-id)
-               request (assoc request :sourceVideoServerMetadata metadata)]
+               attached (contract/attach-source-selection-metadata
+                         render-spec metadata)
+               inspection
+               (if (satisfies? drive/SelectedWorkGateway gateway)
+                 (drive/inspect-selected-work!
+                  gateway access-token file-id metadata attached)
+                 (throw (errors/raise! "Drive source dependencies are incomplete"
+                                       {:type ::drive/source-unavailable})))
+               preflight
+               (contract/preflight-selected-work attached inspection)
+               _ (observability/emit-event!
+                  "api" "selected_source_preflight"
+                  {:reason "accepted"
+                   :profileVersion (:profile-version preflight)
+                   :estimatedSourceBytes
+                   (:estimated-upstream-bytes preflight)
+                   :estimatedSourceRequests
+                   (:estimated-request-count preflight)
+                   :guaranteed (:guaranteed? preflight)})
+               request (assoc request
+                              :sourceVideoServerMetadata metadata
+                              :sourceVideoSelectedWorkPreflight preflight)]
            {:request request
-            :render-spec (contract/attach-source-metadata render-spec metadata)
+            :render-spec (assoc attached :source-preflight preflight)
             :source-stream!
             (fn [output]
               (drive/stream-source! gateway access-token file-id output))}))))))
@@ -756,6 +777,7 @@
         request (cond-> (assoc (dissoc request
                                        :previewOperation
                                        :sourceVideoServerMetadata
+                                       :sourceVideoSelectedWorkPreflight
                                        :requesterSubject
                                        :requesterEmail
                                        :requesterMembershipVersion)
@@ -775,12 +797,14 @@
     (preview/operation-resource job (Instant/now clock))))
 
 (defn- preview! [exchange preview-job-service auth-system user clock]
-  (respond-json! exchange 202
-                 (submit-preview-operation! preview-job-service auth-system user
-                                            (request-render-request exchange)
-                                            (some-> exchange .getRequestHeaders
-                                                    (.getFirst "Idempotency-Key"))
-                                            clock)))
+  (let [prepared
+        (durable-request! auth-system user (request-render-request exchange))]
+    (respond-json! exchange 202
+                   (submit-preview-operation! preview-job-service auth-system user
+                                              prepared
+                                              (some-> exchange .getRequestHeaders
+                                                      (.getFirst "Idempotency-Key"))
+                                              clock))))
 
 (defn- poll-preview! [exchange preview-job-service operation-id ^Clock clock]
   (if-let [operation
@@ -1343,7 +1367,7 @@
             (throw (errors/raise! "Drive playback dependencies are incomplete"
                                   {:type ::drive/source-unavailable})))
         metadata (drive/source-metadata! gateway access-token file-id)
-        prepared (contract/attach-source-metadata
+        prepared (contract/attach-source-selection-metadata
                   {:source-video {:file-id file-id}} metadata)
         {:keys [mimeType size]} (get-in prepared [:source-video :metadata])
         _ (when-not (= "video/mp4" mimeType)
@@ -1388,7 +1412,7 @@
             (throw (errors/raise! "Drive source dependencies are incomplete"
                                   {:type ::drive/source-unavailable})))
         metadata (drive/source-metadata! gateway access-token file-id)
-        prepared (contract/attach-source-metadata
+        prepared (contract/attach-source-selection-metadata
                   {:source-video {:file-id file-id}} metadata)
         {:keys [id name mimeType]} (get-in prepared [:source-video :metadata])]
     (respond-json! exchange 200
@@ -1416,7 +1440,7 @@
                     "Drive recording-clock inspection dependencies are incomplete"
                     {:type ::drive/source-unavailable})))
         metadata (drive/source-metadata! gateway access-token file-id)
-        _ (contract/attach-source-metadata
+        _ (contract/attach-source-selection-metadata
            {:source-video {:file-id file-id}} metadata)
         inspection
         (drive-gcp/inspect-recording-clock!
@@ -1623,9 +1647,10 @@
   (let [generation (preview-generation
                     (some-> exchange .getRequestHeaders
                             (.getFirst "X-Preview-Generation")))
+        prepared (durable-request! auth-system user (ui-render-request exchange))
         operation (submit-preview-operation!
                    preview-job-service auth-system user
-                   (ui-render-request exchange) generation clock)]
+                   prepared generation clock)]
     (.set (.getResponseHeaders exchange) "X-Preview-Generation" generation)
     (respond! exchange 202 "text/html; charset=utf-8"
               (ui/preview-operation-fragment operation generation))))
@@ -1659,6 +1684,8 @@
         {:keys [request]} (durable-request! auth-system user prepared)
         request (assoc (dissoc request
                                :previewOperation
+                               :sourceVideoServerMetadata
+                               :sourceVideoSelectedWorkPreflight
                                :requesterSubject
                                :requesterEmail
                                :requesterMembershipVersion)
@@ -2157,6 +2184,23 @@
                       :requestId request-id
                       :maxDurationSeconds max-synchronous-overlay-duration-seconds
                       :durableJobsPath "/v1/jobs"}))
+
+                  ::contract/selected-work-exceeds-envelope
+                  (let [{:keys [reason]} (ex-data error)]
+                    (emit-event! dependencies "admission_rejected"
+                                 {:severity "WARNING"
+                                  :reason (or reason
+                                              "selected_source_processing")})
+                    (respond-json!
+                     exchange 422
+                     {:error "selected_source_work_exceeded"
+                      :reason (or reason "selected_source_processing")
+                      :guidance
+                      (str "This range needs more source transfer or processing "
+                           "time than Alpha Compose can safely use. Shorten the "
+                           "range, choose another section, or optimize the video "
+                           "as a seekable MP4. The complete recording can stay "
+                           "in Drive.")}))
 
                   ::contract/source-too-large
                   (respond-json! exchange 413 {:error "source_video_too_large"

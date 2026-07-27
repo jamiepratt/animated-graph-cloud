@@ -36,6 +36,10 @@
 (defprotocol PlaybackGateway
   (open-source-range! [gateway access-token file-id byte-range]))
 
+(defprotocol SelectedWorkGateway
+  (inspect-selected-work!
+    [gateway access-token file-id metadata render-spec]))
+
 (defprotocol PickerDiagnostics
   (picker-diagnostics! [gateway access-token]))
 

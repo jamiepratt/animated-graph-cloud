@@ -617,6 +617,79 @@
              (catch clojure.lang.ExceptionInfo error
                (:type (ex-data error))))))))
 
+(deftest source-selection-metadata-does-not-admit-by-whole-file-size
+  (let [prepared (contract/prepare
+                  (assoc (valid-request)
+                         :sourceVideo {:fileId "drive-video-1"
+                                       :recordingStartAt "2026-07-17T09:00:00Z"
+                                       :timeZone "Europe/Warsaw"}))]
+    (doseq [size [(inc (* 2 1024 1024 1024))
+                  (inc (* 100 1000 1000 1000))
+                  (dec Long/MAX_VALUE)]]
+      (is (= size
+             (get-in
+              (contract/attach-source-selection-metadata
+               prepared
+               {:id "drive-video-1"
+                :name "server-name.mp4"
+                :mimeType "video/mp4"
+                :size size
+                :trashed false})
+              [:source-video :metadata :size]))
+          (str "whole-file size " size
+               " must not block selection or playback")))))
+
+(deftest selected-work-preflight-requires-authoritative-evidence
+  (is (= ::contract/selected-work-evidence-pending
+         (try
+           (contract/preflight-selected-work
+            {:duration-seconds 2}
+            {:container "mp4"
+             :index-placement "front"
+             :selected-work {:max-upstream-bytes 1024
+                             :max-request-count 1}})
+           nil
+           (catch clojure.lang.ExceptionInfo error
+             (:type (ex-data error)))))))
+
+(deftest selected-work-preflight-rejects-envelope-overruns
+  (doseq [[inspection expected-type]
+          [[{:evidence-version "authoritative-selected-range-v1"
+             :index-placement "front"
+             :selected-work
+             {:max-upstream-bytes (inc (:max-upstream-bytes
+                                        contract/selected-work-envelope))
+              :max-request-count 1}}
+            ::contract/selected-work-exceeds-envelope]
+           [{:evidence-version "authoritative-selected-range-v1"
+             :index-placement "end"
+             :selected-work
+             {:max-upstream-bytes 1
+              :max-request-count (inc (:max-request-count
+                                       contract/selected-work-envelope))}}
+            ::contract/selected-work-exceeds-envelope]]]
+    (is (= expected-type
+           (try
+             (contract/preflight-selected-work {:duration-seconds 2} inspection)
+             nil
+             (catch clojure.lang.ExceptionInfo error
+               (:type (ex-data error))))))))
+
+(deftest selected-work-preflight-accepts-authoritative-bounds-without-guarantee
+  (is (= {:status :accepted
+          :profile-version (:version contract/selected-source-profile)
+          :profile-status (:status contract/selected-source-profile)
+          :guaranteed? false
+          :selected-duration-seconds 2
+          :estimated-upstream-bytes 123456789
+          :estimated-request-count 8}
+         (contract/preflight-selected-work
+          {:duration-seconds 2}
+          {:evidence-version "authoritative-selected-range-v1"
+           :index-placement "front"
+           :selected-work {:max-upstream-bytes 123456789
+                           :max-request-count 8}}))))
+
 (deftest shared-source-video-mime-policy-is-server-authoritative
   (let [prepared (contract/prepare
                   (assoc (valid-request)

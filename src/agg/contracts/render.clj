@@ -1,5 +1,6 @@
 (ns agg.contracts.render
   (:require [agg.drive.core :as drive]
+            [agg.drive.limits :as drive-limits]
             [agg.errors :as errors]
             [agg.render.spec :as spec]
             [agg.render.watermark :as watermark]
@@ -13,7 +14,77 @@
 
 (def max-telemetry-bytes (* 10 1024 1024))
 
+(def selected-work-envelope
+  (select-keys drive-limits/renderer-range-limits-v1
+               [:max-upstream-bytes
+                :max-request-count
+                :max-range-bytes]))
+
+(def selected-source-profile
+  {:version "camera-profile-pending-evidence-v1"
+   :status :pending-evidence
+   :required-camera-families #{"GoPro" "DJI"}
+   :required-codecs #{"h264" "hevc"}
+   :required-bit-depths #{8 10}
+   :required-selection-points #{:start :middle :late}
+   :required-authoritative-measurements
+   #{:index-placement :max-upstream-bytes :max-request-count
+     :elapsed-ms :peak-memory-bytes :estimated-cost}})
+
 (def max-source-bytes (* 2 1024 1024 1024))
+
+(defn- authoritative-selected-work-estimate
+  [{:keys [evidence-version index-placement selected-work]}]
+  (let [{:keys [max-upstream-bytes max-request-count]} selected-work]
+    (when-not
+     (and (= "authoritative-selected-range-v1" evidence-version)
+          (contains? #{"front" "end"} index-placement)
+          (integer? max-upstream-bytes)
+          (pos? max-upstream-bytes)
+          (integer? max-request-count)
+          (pos? max-request-count))
+      (throw
+       (errors/raise!
+        "Selected source evidence is pending"
+        {:type ::selected-work-evidence-pending
+         :reason "selected_source_evidence_pending"})))
+    {:estimated-upstream-bytes max-upstream-bytes
+     :estimated-request-count max-request-count}))
+
+(defn preflight-selected-work
+  "Admits authoritative selected-range bounds without using whole-file size."
+  [{:keys [duration-seconds]} inspection]
+  (let [{:keys [estimated-upstream-bytes estimated-request-count] :as estimate}
+        (authoritative-selected-work-estimate inspection)]
+    (cond
+      (> estimated-upstream-bytes
+         (:max-upstream-bytes selected-work-envelope))
+      (throw (errors/raise!
+              "Selected source transfer exceeds the processing envelope"
+              {:type ::selected-work-exceeds-envelope
+               :reason "selected_source_transfer"
+               :guidance
+               (str "This range needs more source transfer or processing time "
+                    "than Alpha Compose can safely use. Shorten the range, "
+                    "choose another section, or optimize the video as a "
+                    "seekable MP4. The complete recording can stay in Drive.")}))
+
+      (> estimated-request-count
+         (:max-request-count selected-work-envelope))
+      (throw (errors/raise!
+              "Selected source request count exceeds the processing envelope"
+              {:type ::selected-work-exceeds-envelope
+               :reason "selected_source_requests"}))
+
+      :else
+      (merge {:status :accepted
+              :profile-version (:version selected-source-profile)
+              :profile-status (:status selected-source-profile)
+              :guaranteed? false
+              :selected-duration-seconds duration-seconds}
+             (-> estimate
+                 (update :estimated-upstream-bytes long)
+                 (update :estimated-request-count long))))))
 
 (defn- base64-characters [bytes]
   (* 4 (quot (+ bytes 2) 3)))
@@ -476,9 +547,9 @@
         watermark-image
         (assoc :watermark watermark-image)))))
 
-(defn attach-source-metadata
-  "Attaches metadata fetched from Drive; request-supplied metadata is ignored."
-  [render-spec {:keys [id name mimeType size trashed] :as metadata}]
+(defn- attach-source-metadata*
+  [render-spec {:keys [id name mimeType size trashed] :as metadata}
+   enforce-size-limit?]
   (let [file-id (get-in render-spec [:source-video :file-id])
         duration-millis
         (try
@@ -501,11 +572,12 @@
                    (not trashed))
               "Drive source metadata is invalid"
               {:type ::invalid-source-metadata})
-    (require! (<= size max-source-bytes)
-              "Drive source exceeds the size limit"
-              {:type ::source-too-large
-               :limit max-source-bytes
-               :size size})
+    (when enforce-size-limit?
+      (require! (<= size max-source-bytes)
+                "Drive source exceeds the size limit"
+                {:type ::source-too-large
+                 :limit max-source-bytes
+                 :size size}))
     (when (and duration-millis selected-end-millis
                (not (neg? duration-millis)))
       (require! (<= selected-end-millis duration-millis)
@@ -519,3 +591,15 @@
              (select-keys metadata
                           [:id :name :mimeType :size :trashed
                            :videoMediaMetadata])})))
+
+(defn attach-source-metadata
+  "Attaches metadata fetched from Drive for render admission.
+   Request-supplied metadata is ignored."
+  [render-spec metadata]
+  (attach-source-metadata* render-spec metadata true))
+
+(defn attach-source-selection-metadata
+  "Attaches metadata fetched from Drive for source selection, playback, and
+   recording-clock inspection without whole-file admission."
+  [render-spec metadata]
+  (attach-source-metadata* render-spec metadata false))

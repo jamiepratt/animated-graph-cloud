@@ -87,6 +87,7 @@
     "source_metadata_failed"
     "source_download_failed"
     "source_content_failed"
+    "selected_source_work_exceeded"
     "drive_grant_required"
     "overlay_render_failed"
     "composition_encode_failed"
@@ -121,7 +122,8 @@
 
 (def ^:private durable-failure-reasons
   #{"preview_decode_failed" "source_stream_failed"
-    "source_duration_too_short"})
+    "source_duration_too_short"
+    "selected_source_transfer_runtime"})
 
 (def ^:private preview-count-limit-keys
   [:requested-moment-count :generated-moment-count :omitted-moment-count

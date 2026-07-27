@@ -4,6 +4,7 @@
             [agg.auth.core :as auth]
             [agg.auth.gcp :as auth-gcp]
             [agg.drive.core :as drive]
+            [agg.drive.range-proxy :as range-proxy]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
             [agg.logs.core :as logs]
@@ -257,6 +258,72 @@
       (get options "--object-prefix")
       (assoc :object-prefix (get options "--object-prefix")))))
 
+(defn with-source-range-proxy!
+  "Runs selected-source work with a task-scoped loopback URL."
+  [render-spec source-system access-token render!]
+  (if-not (:source-video render-spec)
+    (render! render-spec)
+    (let [gateway (:gateway source-system)
+          file-id (get-in render-spec [:source-video :file-id])
+          size (get-in render-spec [:source-video :metadata :size])]
+      (when-not (and (satisfies? drive/PlaybackGateway gateway)
+                     (string? access-token)
+                     (string? file-id)
+                     (integer? size)
+                     (pos? size))
+        (throw (errors/raise!
+                "Drive range source dependencies are incomplete"
+                {:type ::missing-source-system})))
+      (with-open [proxy
+                  (range-proxy/start!
+                    {:gateway gateway
+                     :access-token access-token
+                     :file-id file-id
+                     :size size
+                     :limits range-proxy/renderer-limits-v1})]
+        (let [started (System/nanoTime)
+              outcome (atom "failed")]
+          (try
+            (let [result
+                  (render! (assoc-in render-spec
+                                     [:source-video :input-url]
+                                     (:url proxy)))]
+              (reset! outcome "complete")
+              result)
+            (catch Throwable error
+              (let [failure-reason
+                    (:failure-reason ((:stats proxy)))]
+                (if (contains? #{"work_budget_exhausted"
+                                 "lifetime_exhausted"}
+                               failure-reason)
+                  (do
+                    (reset! outcome "source-work-exceeded")
+                    (errors/raise!
+                     "Selected source runtime work exceeded its envelope"
+                     {:type ::source-work-exceeded
+                      :failure-code "selected_source_work_exceeded"
+                      :reason "selected_source_transfer_runtime"
+                      :retryable false}
+                     error))
+                  (do
+                    (reset! outcome
+                            (or (some-> error ex-data :type name)
+                                "failed"))
+                    (throw error)))))
+            (finally
+              (let [{:keys [upstream-bytes request-count retry-count
+                            cache-hit-count]}
+                    ((:stats proxy))]
+                (observability/emit-event!
+                 "renderer" "source_range_proxy_complete"
+                 {:reason @outcome
+                  :upstreamBytes (long (or upstream-bytes 0))
+                  :upstreamRequests (long (or request-count 0))
+                  :upstreamRetries (long (or retry-count 0))
+                  :cacheHits (long (or cache-hit-count 0))
+                  :elapsedMs
+                  (quot (- (System/nanoTime) started) 1000000)})))))))))
+
 (defn run-job!
   ([request]
    (run-job! request {}))
@@ -484,25 +551,22 @@
                 (if (and preview? source-video)
                   (jobs/with-durable-stage
                     "request_prepare"
-                    #(contract/attach-source-metadata
+                    #(contract/attach-source-selection-metadata
                       request
                       (drive/source-metadata! (:gateway source-system)
                                               access-token file-id)))
                   request)
-                source-stream!
-                (when source-video
-                  (fn [output]
-                    (jobs/with-durable-stage
-                      "source_content"
-                      #(drive/stream-source! (:gateway source-system)
-                                             access-token file-id output))))]
-            (if-let [operation-id (:preview-operation-id dependencies)]
-              (preview/render-gallery!
-               operation-id request (gcp/request-store bucket)
-               frames/java2d-frame-renderer (media/ffmpeg-video-encoder)
-               source-stream!)
-              (run-job! request
-                        (assoc dependencies :source-stream! source-stream!)))))]
+                render-selected!
+                (fn [request]
+                  (if-let [operation-id (:preview-operation-id dependencies)]
+                    (preview/render-gallery!
+                     operation-id request (gcp/request-store bucket)
+                     frames/java2d-frame-renderer (media/ffmpeg-video-encoder)
+                     nil)
+                    (run-job! request
+                              (assoc dependencies :source-stream! nil))))]
+            (with-source-range-proxy!
+              request source-system access-token render-selected!)))]
     (require-cloud-success!
      (jobs/run-job-attempt!
       (gcp/renderer-job-service

@@ -1321,6 +1321,7 @@
 (deftest selected-drive-video-opens-ranged-browser-playback
   (let [port (available-port)
         {:keys [system session]} (auth-fixture)
+        source-size (inc (* 3 1024 1024 1024))
         source-bytes (.getBytes "0123456789abcdefghij"
                                 java.nio.charset.StandardCharsets/UTF_8)
         source-gateway
@@ -1331,7 +1332,7 @@
             {:id file-id
              :name "selected.mp4"
              :mimeType "video/mp4"
-             :size (alength source-bytes)
+             :size source-size
              :trashed false})
           (stream-source! [_ _ _ _]
             (throw (AssertionError. "Playback must use ranged streaming")))
@@ -1341,7 +1342,7 @@
             (is (= "private-drive-file" file-id))
             (is (= {:start 6 :end 10} byte-range))
             {:status 206
-             :headers {"content-range" "bytes 6-10/20"
+             :headers {"content-range" (str "bytes 6-10/" source-size)
                        "content-length" "5"}
              :body (java.io.ByteArrayInputStream.
                     (java.util.Arrays/copyOfRange source-bytes 6 11))}))
@@ -1367,11 +1368,12 @@
         (is (= 201 (.statusCode created)))
         (is (re-matches #"/v1/drive/playback/[0-9a-f-]{36}" playback-url))
         (is (not (str/includes? playback-url "private-drive-file")))
+        (is (= source-size (get created-body "size")))
         (is (str/starts-with? set-cookie "__session="))
         (is (str/includes? set-cookie "HttpOnly"))
         (is (str/includes? set-cookie "Path=/"))
         (is (= 206 (.statusCode streamed)))
-        (is (= "bytes 6-10/20"
+        (is (= (str "bytes 6-10/" source-size)
                (.orElse (.firstValue (.headers streamed) "Content-Range") "")))
         (is (= "bytes"
                (.orElse (.firstValue (.headers streamed) "Accept-Ranges") "")))
@@ -1385,6 +1387,7 @@
   (let [port (available-port)
         {:keys [system session]} (auth-fixture)
         ranges (atom [])
+        source-size (inc (* 3 1024 1024 1024))
         source-bytes
         (.getBytes
          "movie mvhd 2026-07-23T14:30:15+02:00"
@@ -1398,7 +1401,7 @@
             {:id file-id
              :name "authoritative-name.mp4"
              :mimeType "video/mp4"
-             :size (alength source-bytes)
+             :size source-size
              :trashed false
              :videoMediaMetadata {:durationMillis "125500"
                                   :width 1920
@@ -1428,7 +1431,10 @@
         (is (= "2026-07-23T14:30:15+02:00"
                (get-in body [:candidates 0 :value])))
         (is (= [{:start 0
-                 :end (dec (alength source-bytes))
+                 :end 262143
+                 :timeout-ms 3000}
+                {:start (- source-size 262144)
+                 :end (dec source-size)
                  :timeout-ms 3000}]
                @ranges))
         (is (= 401
@@ -1446,6 +1452,43 @@
                        {:fileId "private-drive-file"
                         :createdTime "never-authoritative"}
                        headers)))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest project-source-validation-allows-large-drive-videos
+  (let [port (available-port)
+        {:keys [system session]} (auth-fixture)
+        source-size (inc (* 3 1024 1024 1024))
+        gateway
+        (reify
+          drive/SourceGateway
+          (source-metadata! [_ access-token file-id]
+            (is (= "drive-access" access-token))
+            (is (= "private-drive-file" file-id))
+            {:id file-id
+             :name "selected.mp4"
+             :mimeType "video/mp4"
+             :size source-size
+             :trashed false})
+          (stream-source! [_ _ _ _]
+            (throw (AssertionError. "Validation must not stream the source"))))
+        auth-system (assoc system :drive gateway)
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        server (start-api! port {:auth-system auth-system})]
+    (try
+      (let [response
+            (post! port "/ui/project-source-validation"
+                   {:fileId "private-drive-file"}
+                   {"Content-Type" "application/json"
+                    "Cookie" (str "agg_session=" session)
+                    "X-CSRF-Token" csrf})
+            body (json/read-str (.body response))]
+        (is (= 200 (.statusCode response)))
+        (is (= {"fileId" "private-drive-file"
+                "fileName" "selected.mp4"
+                "mimeType" "video/mp4"}
+               body)))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
