@@ -201,6 +201,65 @@
     (is (= "Bearer access"
            (get-in (first @stream-requests) [:headers "Authorization"])))))
 
+(deftest fixed-folder-listing-pages-through-supported-videos
+  (let [requests (atom [])
+        responses (atom [{:status 200
+                          :body (json/write-str
+                                 {:nextPageToken "page-2"
+                                  :files [{:id "video-b"
+                                           :name "beta.mp4"
+                                           :mimeType "video/mp4"
+                                           :size "4096"
+                                           :videoMediaMetadata
+                                           {:durationMillis "61000"
+                                            :width 1920
+                                            :height 1080}}]})}
+                         {:status 200
+                          :body (json/write-str
+                                 {:files [{:id "video-a"
+                                           :name "alpha.mov"
+                                           :mimeType "video/quicktime"
+                                           :size "2048"
+                                           :videoMediaMetadata
+                                           {:durationMillis "42000"
+                                            :width 1280
+                                            :height 720}}]})}])
+        gateway
+        (gcp/->RestDriveGateway
+         (fn [request]
+           (swap! requests conj request)
+           (let [response (first @responses)]
+             (swap! responses subvec 1)
+             response))
+         (* 8 1024 1024))
+        listed (drive/list-folder-sources! gateway "access" "folder-123")]
+    (is (= [{:id "video-b"
+             :name "beta.mp4"
+             :mimeType "video/mp4"
+             :size 4096
+             :videoMediaMetadata {:durationMillis "61000"
+                                  :width 1920
+                                  :height 1080}}
+            {:id "video-a"
+             :name "alpha.mov"
+             :mimeType "video/quicktime"
+             :size 2048
+             :videoMediaMetadata {:durationMillis "42000"
+                                  :width 1280
+                                  :height 720}}]
+           listed))
+    (testing "fixed folder query stays drive.file bounded"
+      (is (str/includes? (:url (first @requests))
+                         "%27folder-123%27+in+parents"))
+      (is (str/includes? (:url (first @requests))
+                         "supportsAllDrives=true"))
+      (is (str/includes? (:url (first @requests))
+                         "includeItemsFromAllDrives=true"))
+      (is (str/includes? (:url (first @requests))
+                         "mimeType+%3D+%27video%2Fmp4%27"))
+      (is (str/includes? (:url (second @requests))
+                         "pageToken=page-2")))))
+
 (deftest playback-range-forwards-authentication-and-validates-drive-headers
   (let [requests (atom [])
         gateway

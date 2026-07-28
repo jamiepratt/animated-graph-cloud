@@ -39,6 +39,9 @@
 (defprotocol PlaybackAnalysisGateway
   (inspect-playback! [gateway access-token file-id metadata]))
 
+(defprotocol FolderSourceListingGateway
+  (list-folder-sources! [gateway access-token folder-id]))
+
 (defprotocol SelectedWorkGateway
   (inspect-selected-work!
     [gateway access-token file-id metadata render-spec]))

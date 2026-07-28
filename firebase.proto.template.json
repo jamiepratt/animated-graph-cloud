@@ -1,0 +1,19 @@
+{
+  "hosting": {
+    "site": "__PROTO_FIREBASE_SITE__",
+    "ignore": [
+      "firebase-debug.log",
+      "firebase-debug.*.log"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "run": {
+          "serviceId": "agg-proto",
+          "region": "europe-central2",
+          "pinTag": true
+        }
+      }
+    ]
+  }
+}
