@@ -89,22 +89,16 @@ variable "enable_firebase_hosting" {
   default     = false
 }
 
-variable "enable_proto_service" {
-  description = "Manage the separate proto Cloud Run service in this environment."
-  type        = bool
-  default     = true
-}
-
 variable "enable_observability_log_ttl" {
   description = "Manage the expireAt TTL policy for observability-log documents."
   type        = bool
   default     = true
 }
 
-variable "github_subjects" {
-  description = "Optional exact GitHub OIDC subjects, used to bind deployments to specific refs or environments."
-  type        = list(string)
-  default     = []
+variable "github_subject" {
+  description = "Optional exact GitHub OIDC subject, used to bind a deployment to a specific ref or environment."
+  type        = string
+  default     = ""
 }
 
 variable "enable_terraform_deployments" {

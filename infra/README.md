@@ -10,6 +10,12 @@ containers are shared configuration; payloads and OAuth clients are always
 environment-specific. Follow `docs/production-runbook.md`; Firebase activation,
 DNS, OAuth publication, and initial production bootstraps are owner checkpoints.
 
+Proto is isolated in `infra/proto`, with state in the production state bucket
+under prefix `proto`. It owns only the `agg-proto` service, its public invoker
+binding, the `proto-alphacompose` Hosting site, and a branch-bound deployer and
+WIF provider. It is intentionally kept on the `proto` branch and must not be
+merged into `main`. Follow `docs/proto-runbook.md` for the one-time import.
+
 After its one-time Terraform-permission bootstrap, every production deployment
 plans and applies `infra/prod` before promoting application code. It reads the
 currently promoted renderer digest and Cloud Run origin so an infrastructure
@@ -89,4 +95,6 @@ terraform -chdir=infra/dev init -backend=false -input=false
 terraform -chdir=infra/dev validate
 terraform -chdir=infra/prod init -backend=false -input=false
 terraform -chdir=infra/prod validate
+terraform -chdir=infra/proto init -backend=false -input=false
+terraform -chdir=infra/proto validate
 ```

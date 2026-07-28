@@ -284,57 +284,12 @@ resource "google_cloud_run_v2_service" "api" {
   depends_on = [google_project_service.required["run.googleapis.com"]]
 }
 
-resource "google_cloud_run_v2_service" "proto" {
-  count               = var.enable_proto_service ? 1 : 0
-  project             = var.project_id
-  location            = var.region
-  name                = "agg-proto"
-  deletion_protection = var.environment_name == "production"
-  ingress             = "INGRESS_TRAFFIC_ALL"
-
-  scaling {
-    min_instance_count = 0
-    max_instance_count = 2
-  }
-
-  template {
-    max_instance_request_concurrency = 16
-    service_account                  = google_service_account.api.email
-    timeout                          = "300s"
-
-    containers {
-      image = var.renderer_image
-
-      env {
-        name  = "AGG_SERVICE_PROFILE"
-        value = "proto"
-      }
-
-      ports {
-        name           = "http1"
-        container_port = 8080
-      }
-
-      resources {
-        limits = {
-          cpu    = "1"
-          memory = "512Mi"
-        }
-        cpu_idle          = true
-        startup_cpu_boost = true
-      }
-    }
-  }
+removed {
+  from = google_cloud_run_v2_service.proto
 
   lifecycle {
-    ignore_changes = [
-      client,
-      client_version,
-      template[0].containers[0].env,
-    ]
+    destroy = false
   }
-
-  depends_on = [google_project_service.required["run.googleapis.com"]]
 }
 
 import {
@@ -1228,7 +1183,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "attribute.ref"        = "assertion.ref"
   }
 
-  attribute_condition = length(var.github_subjects) == 0 ? "assertion.repository == '${var.github_repository}'" : "assertion.repository == '${var.github_repository}' && (${join(" || ", [for subject in var.github_subjects : "assertion.sub == '${subject}'"])})"
+  attribute_condition = var.github_subject == "" ? "assertion.repository == '${var.github_repository}'" : "assertion.repository == '${var.github_repository}' && assertion.sub == '${var.github_subject}'"
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"

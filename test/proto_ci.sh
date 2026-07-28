@@ -11,4 +11,8 @@ clj-kondo --lint \
   test/agg/proto_source_test.clj \
   test/agg/proto_ui_test.clj
 
+terraform -chdir=infra/proto fmt -check
+terraform -chdir=infra/proto init -backend=false -input=false
+terraform -chdir=infra/proto validate
+
 clojure -M:proto-test

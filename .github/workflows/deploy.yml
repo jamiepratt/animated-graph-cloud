@@ -19,7 +19,6 @@ env:
   REGION: europe-central2
   REPOSITORY: containers
   SERVICE: agg-api
-  PROTO_SERVICE: agg-proto
   DURABLE_JOB: agg-renderer
   SMOKE_JOB: agg-renderer-smoke
   IMAGE: europe-central2-docker.pkg.dev/animated-graph-cloud-jp/containers/animated-graph-cloud:${{ github.sha }}
@@ -133,24 +132,6 @@ jobs:
             --no-traffic \
             --quiet
 
-      - name: Deploy private proto service
-        env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
-        run: |
-          gcloud run deploy "$PROTO_SERVICE" \
-            --project "$PROJECT_ID" \
-            --region "$REGION" \
-            --image "$IMAGE_DIGEST" \
-            --service-account "$API_SERVICE_ACCOUNT" \
-            --port 8080 \
-            --cpu 1 \
-            --memory 512Mi \
-            --concurrency 16 \
-            --min 0 \
-            --max 2 \
-            --no-allow-unauthenticated \
-            --quiet
-
       - id: durable-promotion
         name: Promote durable renderer
         env:
@@ -233,19 +214,9 @@ jobs:
             --format 'value(status.url)')"
           echo "url=$service_url" >>"$GITHUB_OUTPUT"
 
-      - id: proto-service-url
-        name: Discover private proto audience
-        run: |
-          service_url="$(gcloud run services describe "$PROTO_SERVICE" \
-            --project "$PROJECT_ID" \
-            --region "$REGION" \
-            --format 'value(status.url)')"
-          echo "url=$service_url" >>"$GITHUB_OUTPUT"
-
       - name: Enable authenticated durable job lifecycle
         env:
           CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
-          PROTO_RUN_SERVICE_URL: ${{ steps.proto-service-url.outputs.url }}
         run: |
           gcloud run services update "$SERVICE" \
             --project "$PROJECT_ID" \
@@ -254,14 +225,6 @@ jobs:
             --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=agg-renderer,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$CLOUD_RUN_SERVICE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_EARLY_ACCESS_SENDER=$EARLY_ACCESS_SENDER,AGG_EARLY_ACCESS_RECIPIENT=$EARLY_ACCESS_RECIPIENT,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
             --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest,AGG_RESEND_API_KEY=resend-api-key:latest" \
             --quiet
-          gcloud run services update "$PROTO_SERVICE" \
-            --project "$PROJECT_ID" \
-            --region "$REGION" \
-            --remove-env-vars "AGG_MONTHLY_BUDGET_CENTS,AGG_PREVIEW_RESERVATION_CENTS,AGG_RENDER_RESERVATION_CENTS" \
-            --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_SERVICE_PROFILE=proto,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=agg-renderer,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PROTO_RUN_SERVICE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
-            --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
-            --quiet
-
       - name: Open ingress after application authentication is configured
         run: |
           gcloud run services add-iam-policy-binding "$SERVICE" \
@@ -270,13 +233,6 @@ jobs:
             --member=allUsers \
             --role=roles/run.invoker \
             --quiet
-          gcloud run services add-iam-policy-binding "$PROTO_SERVICE" \
-            --project "$PROJECT_ID" \
-            --region "$REGION" \
-            --member=allUsers \
-            --role=roles/run.invoker \
-            --quiet
-
       - id: health-auth
         name: Mint private API identity token through WIF
         uses: google-github-actions/auth@v3

@@ -24,11 +24,11 @@
     (is (re-find #"project_id\s*=\s*\"animated-graph-cloud-prod-jp\"" production))
     (is (re-find #"environment_name\s*=\s*\"production\"" production))
     (is (re-find #"import_default_firestore\s*=\s*false" production))
-    (is (re-find #"github_subjects\s*=\s*\[" production))
+    (is (re-find #"github_subject\s*=\s*\"repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/main\""
+                 production))
     (is (str/includes? production
                        "repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/main"))
-    (is (str/includes? production
-                       "repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/proto"))
+    (is (not (str/includes? production "refs/heads/proto")))
     (is (str/includes? backend
                        "bucket = \"animated-graph-cloud-prod-jp-tfstate\""))
     (is (str/includes? backend "prefix = \"prod\""))
@@ -38,9 +38,8 @@
                        "for_each = var.import_default_firestore ? toset([var.project_id]) : toset([])"))
     (is (str/includes? shared "id = \"projects/${each.value}/databases/(default)\""))
     (is (str/includes? shared "count = var.api_service_url == \"\" ? 0 : 1"))
-    (is (str/includes? shared-variables "variable \"github_subjects\""))
-    (is (str/includes? shared "length(var.github_subjects) == 0"))
-    (is (str/includes? shared "assertion.sub == '"))))
+    (is (str/includes? shared-variables "variable \"github_subject\""))
+    (is (str/includes? shared "assertion.sub == '${var.github_subject}'"))))
 
 (deftest production-enables-observability-log-ttl-after-bootstrap
   (let [production (slurp "infra/prod/main.tf")
@@ -381,7 +380,7 @@
                       "AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS"]]
       (testing contract
         (is (str/includes? workflow contract))))
-    (is (= 3 (count (re-seq
+    (is (= 2 (count (re-seq
                      #"AGG_PREVIEW_RESERVATION_MINOR_UNITS=\$PREVIEW_RESERVATION_MINOR_UNITS"
                      workflow)))
         "every production Cloud Run profile receives the Preview policy")
@@ -599,7 +598,7 @@
                        "-target=module.application.google_cloud_run_v2_service.overlay"))
     (is (str/includes? workflow
                        "-target=module.application.google_cloud_run_v2_job.renderer"))
-    (is (= 3 (count (re-seq #"--member=allUsers" workflow))))
+    (is (= 2 (count (re-seq #"--member=allUsers" workflow))))
     (doseq [position [terraform-init api-deploy overlay-deploy
                       private-verification terraform-apply
                       reconciled-verification public-ingress firebase-deploy]]
@@ -819,15 +818,17 @@
     (is (not (str/includes? evidence "\"status\": \"passed\"")))))
 
 (deftest production-runbook-has-safe-bootstrap-rollback-and-oauth-checkpoints
-  (let [runbook (slurp "docs/production-runbook.md")]
+  (let [runbook (slurp "docs/production-runbook.md")
+        proto-runbook (slurp "docs/proto-runbook.md")]
     (doseq [checkpoint ["cannot be undone" "Firebase Terms" "protected\n`main`"
                         "https://alphacompose.com/privacy"
                         "https://alphacompose.com/v1/auth/login/callback"
-                        "https://proto.alphacompose.com/v1/auth/login/callback"
                         "remove the former `https://alphacompose.com/v1/auth/drive/callback`"
                         "drive.file" "AGG_ADMIN_EMAILS" "Rollback" "Secret Manager"
                         "animated-graph-cloud-prod-jp" "animated-graph-cloud-jp"]]
       (testing checkpoint (is (str/includes? runbook checkpoint))))
+    (is (str/includes? proto-runbook
+                       "https://proto.alphacompose.com/v1/auth/login/callback"))
     (is (str/includes? runbook "gcloud secrets versions add"))
     (is (str/includes? runbook "--data-file=-"))
     (is (str/includes? runbook

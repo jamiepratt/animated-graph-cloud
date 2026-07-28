@@ -6,6 +6,7 @@
 | Local development and verification | `README.md` |
 | Development infrastructure | `infra/dev/` |
 | Production infrastructure | `infra/prod/` |
+| Proto-only infrastructure and operations | `infra/proto/`, `docs/proto-runbook.md` on branch `proto` |
 | Delivery scope and dependencies | GitHub Issues |
 | API contract | `docs/openapi.yaml` |
 | Production operation and release evidence | `docs/production-runbook.md`, `docs/release-acceptance.md` |

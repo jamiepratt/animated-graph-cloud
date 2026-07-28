@@ -4,10 +4,7 @@ module "application" {
   project_id                   = "animated-graph-cloud-prod-jp"
   region                       = "europe-central2"
   github_repository            = "jamiepratt/animated-graph-cloud"
-  github_subjects = [
-    "repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/main",
-    "repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/proto",
-  ]
+  github_subject               = "repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/main"
   renderer_image               = var.renderer_image
   api_service_url              = var.api_service_url
   monthly_budget_pln           = var.monthly_budget_pln
@@ -16,7 +13,6 @@ module "application" {
   import_default_firestore     = false
   import_api_service           = false
   enable_firebase_hosting      = true
-  enable_proto_service         = false
   enable_observability_log_ttl = true
   enable_terraform_deployments = true
   terraform_state_bucket       = "animated-graph-cloud-prod-jp-tfstate"

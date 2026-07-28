@@ -1,0 +1,94 @@
+name: Bootstrap proto Terraform
+
+on:
+  push:
+    tags:
+      - "proto-terraform-bootstrap-*"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: proto-terraform-bootstrap
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: animated-graph-cloud-prod-jp
+  PROJECT_NUMBER: "488013150738"
+  REGION: europe-central2
+  SERVICE: agg-api
+  PROTO_SERVICE: agg-proto
+  DEPLOYER_SERVICE_ACCOUNT: agg-proto-github-deployer@animated-graph-cloud-prod-jp.iam.gserviceaccount.com
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify guarded bootstrap tag
+        run: |
+          set -euo pipefail
+          expected_tag="proto-terraform-bootstrap-${GITHUB_SHA}"
+          test "$GITHUB_REF_NAME" = "$expected_tag"
+          git fetch origin proto --no-tags
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/proto
+
+      - name: Authenticate through proto-only WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud-proto
+          service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: ">= 541.0.0"
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - id: context
+        name: Discover existing proto resources
+        run: |
+          set -euo pipefail
+          proto_image="$(gcloud run services describe "$PROTO_SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(spec.template.spec.containers[0].image)')"
+          api_service_url="$(gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(status.url)')"
+          test -n "$proto_image"
+          test -n "$api_service_url"
+          echo "proto_image=$proto_image" >>"$GITHUB_OUTPUT"
+          echo "api_service_url=$api_service_url" >>"$GITHUB_OUTPUT"
+
+      - name: Import and apply proto Terraform
+        env:
+          TF_VAR_api_service_url: ${{ steps.context.outputs.api_service_url }}
+          TF_VAR_proto_image: ${{ steps.context.outputs.proto_image }}
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/proto init -input=false
+          plan_path="$RUNNER_TEMP/proto-bootstrap.tfplan"
+          plan_json="$RUNNER_TEMP/proto-bootstrap.tfplan.json"
+          terraform -chdir=infra/proto plan \
+            -input=false \
+            -lock-timeout=5m \
+            -out="$plan_path"
+          terraform -chdir=infra/proto show -json "$plan_path" >"$plan_json"
+
+          destructive="$(jq '[.resource_changes[]? | select(.change.actions | index("delete"))] | length' "$plan_json")"
+          if [ "$destructive" -gt 0 ]; then
+            echo "::error title=Destructive proto bootstrap blocked::Delete or replace actions are forbidden. Do not delete the existing agg-proto service or Firebase site."
+            exit 1
+          fi
+
+          terraform -chdir=infra/proto apply -input=false "$plan_path"
