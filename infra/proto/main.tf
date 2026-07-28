@@ -72,7 +72,7 @@ resource "google_iam_workload_identity_pool_provider" "proto" {
   project                            = local.project_id
   workload_identity_pool_id          = local.github_pool_id
   workload_identity_pool_provider_id = local.github_provider_id
-  display_name                       = "animated-graph-cloud proto branch"
+  display_name                       = "Alpha Compose proto GitHub"
 
   attribute_mapping = {
     "google.subject"       = "assertion.sub"

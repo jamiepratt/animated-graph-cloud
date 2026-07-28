@@ -80,6 +80,10 @@
     (is (str/includes? proto-bootstrap "PROTO_BOOTSTRAP_CONFIRM"))
     (is (str/includes? proto-bootstrap "agg-proto-github-deployer"))
     (is (str/includes? proto-bootstrap "animated-graph-cloud-proto"))
+    (doseq [configuration [proto-infra proto-bootstrap]]
+      (is (str/includes? configuration "Alpha Compose proto GitHub"))
+      (is (not (str/includes? configuration
+                              "animated-graph-cloud proto branch"))))
     (is (not (str/includes? proto-bootstrap "service-account key")))
     (is (str/includes? proto-smoke "clojure.main -m agg.proto.main"))
     (is (str/includes? proto-smoke "Proto API server started"))

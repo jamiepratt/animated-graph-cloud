@@ -57,7 +57,7 @@ else
     --project="$project_id" \
     --location=global \
     --workload-identity-pool="$pool_id" \
-    --display-name="animated-graph-cloud proto branch" \
+    --display-name="Alpha Compose proto GitHub" \
     --issuer-uri="https://token.actions.githubusercontent.com" \
     --attribute-mapping="$attribute_mapping" \
     --attribute-condition="$attribute_condition"
