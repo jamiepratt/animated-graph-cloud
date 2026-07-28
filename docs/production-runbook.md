@@ -112,7 +112,8 @@ In Google Auth Platform for `animated-graph-cloud-prod-jp`:
 - set privacy policy `https://alphacompose.com/privacy`;
 - set terms `https://alphacompose.com/terms`;
 - verify `alphacompose.com` as an authorized domain;
-- publish exactly `openid email profile drive.file` for the combined flow;
+- publish exactly `openid email profile drive.file` for the main app flow;
+- publish exactly `openid email profile drive.file https://www.googleapis.com/auth/drive.readonly` for the proto flow;
 - create a production Web application client with the exact redirects
   `https://alphacompose.com/v1/auth/login/callback` and
   `https://proto.alphacompose.com/v1/auth/login/callback`;
@@ -132,7 +133,7 @@ the explicit **Continue with Google** action may force consent.
 
 Callback failures return bounded JSON error codes. `drive_grant_required`
 means the owner should use the explicit recovery action; `invalid_drive_scopes`
-means the flow must be restarted with exactly `openid email profile drive.file`;
+means the flow must be restarted with the exact scope set for that surface;
 `oauth_exchange_failed`, `drive_unavailable`, `kms_unavailable`, and
 `grant_persistence_failed` are retryable service failures. The API emits one
 `oauth_callback_failed` event

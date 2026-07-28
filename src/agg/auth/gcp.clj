@@ -101,6 +101,12 @@
                        :granted-scopes (into #{}
                                              (remove str/blank?)
                                              (str/split (or scope "") #"\s+"))})
+        :proto-login (merge (verify-identity id_token)
+                            {:access-token access_token
+                             :refresh-token refresh_token
+                             :granted-scopes (into #{}
+                                                   (remove str/blank?)
+                                                   (str/split (or scope "") #"\s+"))})
         (throw (errors/raise! "Unknown OAuth flow" {:type ::auth/invalid-flow})))))
   auth/DriveTokenClient
   (refresh-drive-token! [_ refresh-token]

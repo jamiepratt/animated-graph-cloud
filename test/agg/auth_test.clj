@@ -7,20 +7,23 @@
 (def fixed-clock
   (Clock/fixed (Instant/parse "2026-07-17T12:00:00Z") ZoneOffset/UTC))
 
-(defn fake-oauth [exchanges]
-  (reify auth/OAuthClient
-    (exchange-code! [_ flow code verifier redirect-uri]
-      (swap! exchanges conj {:flow flow
-                             :code code
-                             :verifier verifier
-                             :redirect-uri redirect-uri})
-      (is (= :login flow))
-      {:subject "google-subject-1"
-       :email "owner@example.com"
-       :email-verified? true
-       :access-token "drive-access-token"
-       :refresh-token "drive-refresh-token"
-       :granted-scopes (set auth/approved-scopes)})))
+(defn fake-oauth
+  ([exchanges]
+   (fake-oauth exchanges :login auth/approved-scopes))
+  ([exchanges expected-flow granted-scopes]
+   (reify auth/OAuthClient
+     (exchange-code! [_ flow code verifier redirect-uri]
+       (swap! exchanges conj {:flow flow
+                              :code code
+                              :verifier verifier
+                              :redirect-uri redirect-uri})
+       (is (= expected-flow flow))
+       {:subject "google-subject-1"
+        :email "owner@example.com"
+        :email-verified? true
+        :access-token "drive-access-token"
+        :refresh-token "drive-refresh-token"
+        :granted-scopes (set granted-scopes)}))))
 
 (defn drive-fixture []
   (let [grants (atom {})
@@ -81,6 +84,20 @@
              nil
              (catch clojure.lang.ExceptionInfo error
                (:type (ex-data error))))))))
+
+(deftest proto-login-adds-folder-readable-drive-scope-with-the-same-callback
+  (let [{:keys [system]} (drive-fixture)
+        routine (auth/begin-flow! system :proto-login nil)
+        recovery (auth/begin-flow! system :proto-login nil true)]
+    (is (= (set auth/proto-approved-scopes) (set (:scopes routine))))
+    (is (= "S256" (:codeChallengeMethod routine)))
+    (is (re-find #"drive.file" (:authorizationUrl routine)))
+    (is (re-find #"drive.readonly" (:authorizationUrl routine)))
+    (is (re-find
+         #"redirect_uri=https%3A%2F%2Fapp.example.com%2Fv1%2Fauth%2Flogin%2Fcallback"
+         (:authorizationUrl routine)))
+    (is (not (re-find #"prompt=consent" (:authorizationUrl routine))))
+    (is (re-find #"prompt=consent" (:authorizationUrl recovery)))))
 
 (deftest firebase-browser-cookie-bundles-session-and-oauth-state
   (let [system (auth/system {:client-id "client-id"
@@ -165,6 +182,20 @@
         (is (= "google-subject-1" (get-in result [:user :subject])))
         (is (string? (:session result)))
         (is (= :login (:flow (first @exchanges))))))))
+
+(deftest proto-login-callback-preserves-proto-flow-scope-validation
+  (let [exchanges (atom [])
+        system (assoc (:system (drive-fixture))
+                      :oauth (fake-oauth exchanges
+                                         :proto-login
+                                         auth/proto-approved-scopes))
+        flow (auth/begin-flow! system :proto-login nil)
+        result (auth/finish-login! system {:code "code"
+                                           :state (:state flow)
+                                           :state-cookie (:stateCookie flow)})]
+    (is (= "owner@example.com" (get-in result [:user :email])))
+    (is (= :proto-login (:flow result)))
+    (is (= :proto-login (:flow (first @exchanges))))))
 
 (deftest verified-nonmember-login-returns-a-private-denial-without-drive-effects
   (let [{:keys [system grants encrypted folders]} (drive-fixture)

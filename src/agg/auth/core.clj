@@ -42,13 +42,52 @@
 (def ^:private drive-file-scope
   "https://www.googleapis.com/auth/drive.file")
 
-(def ^:private accepted-returned-scopes
-  (into (set approved-scopes)
-        ["https://www.googleapis.com/auth/userinfo.email"
-         "https://www.googleapis.com/auth/userinfo.profile"]))
+(def ^:private drive-readonly-scope
+  "https://www.googleapis.com/auth/drive.readonly")
 
-(defn- required-scopes-granted? [granted-scopes]
-  (let [granted (set granted-scopes)]
+(def proto-approved-scopes
+  (conj (vec approved-scopes) drive-readonly-scope))
+
+(def ^:private userinfo-returned-scopes
+  ["https://www.googleapis.com/auth/userinfo.email"
+   "https://www.googleapis.com/auth/userinfo.profile"])
+
+(def ^:private flow-configs
+  {:login {:scopes approved-scopes
+           :required-scopes #{drive-file-scope}
+           :accepted-returned-scopes
+           (into (set approved-scopes) userinfo-returned-scopes)
+           :callback-path "login"
+           :start-path "/v1/auth/login/start"}
+   :proto-login {:scopes proto-approved-scopes
+                 :required-scopes #{drive-file-scope drive-readonly-scope}
+                 :accepted-returned-scopes
+                 (into (set proto-approved-scopes) userinfo-returned-scopes)
+                 :callback-path "login"
+                 :start-path "/v1/auth/proto-login/start"}})
+
+(declare verify-json)
+
+(defn- flow-config [flow]
+  (or (get flow-configs flow)
+      (throw (errors/raise! "Unknown OAuth flow" {:type ::invalid-flow}))))
+
+(defn oauth-start-path [flow]
+  (:start-path (flow-config flow)))
+
+(defn oauth-recovery-path [flow]
+  (str (oauth-start-path flow) "?recovery=true"))
+
+(defn oauth-flow [system state-cookie]
+  (try
+    (some-> (verify-json (:session-key system) state-cookie ::invalid-state)
+            :flow
+            keyword)
+    (catch Throwable _ nil)))
+
+(defn- required-scopes-granted? [flow granted-scopes]
+  (let [granted (set granted-scopes)
+        required-scopes (:required-scopes (flow-config flow))]
     (and (contains? granted "openid")
          (or (contains? granted "email")
              (contains? granted
@@ -56,10 +95,10 @@
          (or (contains? granted "profile")
              (contains? granted
                         "https://www.googleapis.com/auth/userinfo.profile"))
-         (contains? granted drive-file-scope))))
+         (every? granted required-scopes))))
 
-(defn- only-accepted-scopes-granted? [granted-scopes]
-  (every? accepted-returned-scopes granted-scopes))
+(defn- only-accepted-scopes-granted? [flow granted-scopes]
+  (every? (:accepted-returned-scopes (flow-config flow)) granted-scopes))
 
 (def ^:private flow-seconds (* 10 60))
 (def ^:private session-seconds (* 12 60 60))
@@ -89,12 +128,10 @@
        (str/join "&")))
 
 (defn- redirect-uri [{:keys [base-url]} flow]
-  (str base-url "/v1/auth/" (name flow) "/callback"))
+  (str base-url "/v1/auth/" (:callback-path (flow-config flow)) "/callback"))
 
 (defn- scopes [flow]
-  (case flow
-    :login approved-scopes
-    (throw (errors/raise! "Unknown OAuth flow" {:type ::invalid-flow}))))
+  (:scopes (flow-config flow)))
 
 (defn- authorization-url [{:keys [client-id authorization-endpoint] :as system}
                           flow state verifier recovery?]
@@ -457,7 +494,7 @@
         flow (some-> flow keyword)]
     (when-not (and (not-empty state)
                    (= state stored-state)
-                   (= expected-flow flow)
+                   (or (nil? expected-flow) (= expected-flow flow))
                    (not (str/blank? verifier))
                    (number? exp)
                    (> (long exp) (.getEpochSecond (Instant/now clock))))
@@ -537,21 +574,21 @@
                           {:type ::drive-not-configured})))
   (when (str/blank? code)
     (throw (errors/raise! "OAuth code is required" {:type ::invalid-code})))
-  (let [{:keys [verifier]} (consume-flow! system :login state state-cookie)
+  (let [{:keys [flow verifier]} (consume-flow! system nil state state-cookie)
         {:keys [subject email email-verified? access-token refresh-token
                 granted-scopes]
          :as identity}
-        (exchange-code! oauth :login code verifier (redirect-uri system :login))
+        (exchange-code! oauth flow code verifier (redirect-uri system flow))
         email (some-> email str/lower-case)]
     (when-not (and email-verified?
                    (not (str/blank? subject))
                    (not (str/blank? email)))
       (throw (errors/raise! "Google identity is not allowlisted"
                             {:type ::not-allowlisted})))
-    (when-not (required-scopes-granted? granted-scopes)
+    (when-not (required-scopes-granted? flow granted-scopes)
       (throw (errors/raise! "Google grant is missing required scopes"
                             {:type ::missing-required-scopes})))
-    (when-not (only-accepted-scopes-granted? granted-scopes)
+    (when-not (only-accepted-scopes-granted? flow granted-scopes)
       (throw (errors/raise! "Google grant has unexpected scopes"
                             {:type ::unexpected-scopes})))
     (when (str/blank? access-token)
@@ -622,6 +659,7 @@
             {:user (select-keys user [:subject :email :role :membership-version])
              :identity (select-keys identity
                                     [:subject :email :email-verified?])
+             :flow flow
              :folderId folder-id
              :session (issue-session system user)}))))))
 

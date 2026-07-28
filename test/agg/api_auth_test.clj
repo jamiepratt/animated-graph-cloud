@@ -198,6 +198,54 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest proto-login-start-requests-folder-readable-drive-scope
+  (let [port (available-port)
+        system (assoc (:system (drive-callback-fixture (valid-drive-oauth)))
+                      :base-url (str "http://127.0.0.1:" port))
+        server (start-api! port {:auth-system system
+                                 :service-profile "proto"})]
+    (try
+      (let [response (get! port "/v1/auth/proto-login/start" {})
+            location (.orElse (.firstValue (.headers response) "Location") "")]
+        (is (= 302 (.statusCode response)))
+        (is (re-find #"scope=.*drive.file" location))
+        (is (re-find #"scope=.*drive.readonly" location))
+        (is (re-find
+             #"redirect_uri=http%3A%2F%2F127.0.0.1%3A\d+%2Fv1%2Fauth%2Flogin%2Fcallback"
+             location)))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest proto-login-callback-recovery-points-back-to-proto-start
+  (let [port (available-port)
+        oauth (reify auth/OAuthClient
+                (exchange-code! [_ flow _ _ _]
+                  (is (= :proto-login flow))
+                  {:access-token "drive-access"
+                   :subject "google-subject-1"
+                   :email "owner@example.com"
+                   :email-verified? true
+                   :refresh-token nil
+                   :granted-scopes (set auth/proto-approved-scopes)}))
+        system (assoc (:system (drive-callback-fixture oauth))
+                      :base-url (str "http://127.0.0.1:" port))
+        flow (auth/begin-flow! system :proto-login nil)
+        browser-cookie (auth/issue-browser-cookie
+                        system {:oauth (:stateCookie flow)})
+        server (start-api! port {:auth-system system
+                                 :service-profile "proto"})]
+    (try
+      (let [response (get! port
+                           (str "/v1/auth/login/callback?code=code&state="
+                                (:state flow))
+                           {"Cookie" (str "__session=" browser-cookie)
+                            "Accept" "text/html"})]
+        (is (= 401 (.statusCode response)))
+        (is (re-find #"href=\"/v1/auth/proto-login/start\?recovery=true\""
+                     (.body response))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest authenticated-user-can-log-out
   (let [port (available-port)
         {:keys [system session]} (auth-fixture)
@@ -598,7 +646,7 @@
                            "<meta name=\"color-scheme\" content=\"dark\">"))
         (is (re-find #"Alpha Compose" body))
         (is (re-find #"Google Drive access could not be established" body))
-        (is (re-find #"drive\.file" body))
+        (is (re-find #"Drive permissions Alpha Compose requires" body))
         (is (re-find #"/v1/auth/login/start\?recovery=true" body))
         (is (nil? (:session retry-cookie)))
         (is (auth/drive-recovery-token? system (:oauth retry-cookie)))

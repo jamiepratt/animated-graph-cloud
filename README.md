@@ -473,6 +473,12 @@ metadata and media streaming use the all-drives Drive API parameters, while
 completed outputs continue to the user's Alpha Compose folder in My Drive. If
 the Drive view is empty, the
 Picker offers a privacy-safe diagnostic report that records only bounded status
+
+The proto playback harness uses a separate start route,
+`GET /v1/auth/proto-login/start`, which reuses the same
+`/v1/auth/login/callback` callback path but requests
+`openid email profile drive.file https://www.googleapis.com/auth/drive.readonly`
+so the fixed folder can be enumerated directly.
 categories (token refresh, account binding, MIME selection, and Drive
 indexing probe), never tokens, account values, or filenames.
 

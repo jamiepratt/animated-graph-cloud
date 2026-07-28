@@ -44,6 +44,28 @@
                 @requests))
     (is (every? #(nil? (get (:form %) "scope")) @requests))))
 
+(deftest google-oauth-exchanges-proto-login-with-broader-drive-scope
+  (let [client (gcp/->GoogleOAuthClient
+                (fn [_]
+                  {:status 200
+                   :body (json/write-str
+                          {:id_token "login-jwt"
+                           :access_token "drive-access"
+                           :refresh_token "drive-refresh"
+                           :scope (str/join " " auth/proto-approved-scopes)})})
+                "client-id" "client-secret"
+                (fn [token]
+                  (is (= "login-jwt" token))
+                  {:subject "subject-1"
+                   :email "owner@example.com"
+                   :email-verified? true})
+                "https://oauth2.googleapis.test/token")
+        combined (auth/exchange-code! client :proto-login "login-code"
+                                      "verifier-1"
+                                      "https://proto/login/callback")]
+    (is (= "owner@example.com" (:email combined)))
+    (is (= (set auth/proto-approved-scopes) (:granted-scopes combined)))))
+
 (deftest revoked-refresh-token-becomes-a-bounded-domain-error
   (let [client (gcp/->GoogleOAuthClient
                 (fn [_]

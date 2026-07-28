@@ -224,6 +224,7 @@
                                         proto-sources)})]
     (try
       (let [page (request! port :get "/" nil {"Cookie" owner-cookie})
+            anonymous (request! port :get "/" nil {})
             listing (request! port :get "/v1/proto/sources" nil
                               {"Cookie" owner-cookie})]
         (is (= 200 (.statusCode page)))
@@ -232,6 +233,8 @@
         (is (.contains ^String (.body page)
                        "proto.alphacompose.com"))
         (is (not (.contains ^String (.body page) "Create finished video")))
+        (is (= 200 (.statusCode anonymous)))
+        (is (.contains ^String (.body anonymous) "/v1/auth/proto-login/start"))
         (is (= 200 (.statusCode listing)))
         (is (= proto-sources
                (json/read-str (.body listing) :key-fn keyword))))

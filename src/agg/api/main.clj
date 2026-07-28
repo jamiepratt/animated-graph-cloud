@@ -297,80 +297,81 @@
                                :requestId request-id
                                :retryable true}))
 
-(defn- oauth-callback-failure [type]
-  (case type
-    ::auth/drive-grant-required
-    {:category "invalid_grant"
-     :status 401
-     :body {:error "drive_grant_required"
-            :recoveryPath "/v1/auth/login/start?recovery=true"}}
+(defn- oauth-callback-failure [type retry-path]
+  (let [retry-path (or retry-path (auth/oauth-recovery-path :login))]
+    (case type
+      ::auth/drive-grant-required
+      {:category "invalid_grant"
+       :status 401
+       :body {:error "drive_grant_required"
+              :recoveryPath retry-path}}
 
-    ::auth/revoked-grant
-    {:category "invalid_grant"
-     :status 401
-     :body {:error "drive_grant_required"
-            :recoveryPath "/v1/auth/login/start?recovery=true"}}
+      ::auth/revoked-grant
+      {:category "invalid_grant"
+       :status 401
+       :body {:error "drive_grant_required"
+              :recoveryPath retry-path}}
 
-    ::auth/missing-refresh-token
-    {:category "missing_refresh_token"
-     :status 401
-     :retry-path "/v1/auth/login/start?recovery=true"
-     :body {:error "drive_grant_required"
-            :recoveryPath "/v1/auth/login/start?recovery=true"}}
+      ::auth/missing-refresh-token
+      {:category "missing_refresh_token"
+       :status 401
+       :retry-path retry-path
+       :body {:error "drive_grant_required"
+              :recoveryPath retry-path}}
 
-    ::auth/missing-required-scopes
-    {:category "missing_required_scopes"
-     :status 400
-     :retry-path "/v1/auth/login/start?recovery=true"
-     :body {:error "invalid_drive_scopes"}}
+      ::auth/missing-required-scopes
+      {:category "missing_required_scopes"
+       :status 400
+       :retry-path retry-path
+       :body {:error "invalid_drive_scopes"}}
 
-    ::auth/unexpected-scopes
-    {:category "unexpected_scopes"
-     :status 400
-     :retry-path "/v1/auth/login/start?recovery=true"
-     :body {:error "invalid_drive_scopes"}}
+      ::auth/unexpected-scopes
+      {:category "unexpected_scopes"
+       :status 400
+       :retry-path retry-path
+       :body {:error "invalid_drive_scopes"}}
 
-    ::auth/invalid-code
-    {:category "invalid_code"
-     :status 400
-     :body {:error "invalid_oauth_code"}}
+      ::auth/invalid-code
+      {:category "invalid_code"
+       :status 400
+       :body {:error "invalid_oauth_code"}}
 
-    ::auth/not-allowlisted
-    {:category "not_allowlisted"
-     :status 403
-     :body {:error "not_allowlisted"}}
+      ::auth/not-allowlisted
+      {:category "not_allowlisted"
+       :status 403
+       :body {:error "not_allowlisted"}}
 
-    ::auth/invalid-state
-    {:category "invalid_state"
-     :status 400
-     :body {:error "invalid_oauth_state"}}
+      ::auth/invalid-state
+      {:category "invalid_state"
+       :status 400
+       :body {:error "invalid_oauth_state"}}
 
-    ::auth/oauth-exchange-failed
-    {:category "oauth_exchange"
-     :status 502
-     :body {:error "oauth_exchange_failed" :retryable true}}
+      ::auth/oauth-exchange-failed
+      {:category "oauth_exchange"
+       :status 502
+       :body {:error "oauth_exchange_failed" :retryable true}}
 
-    ::auth/missing-access-token
-    {:category "oauth_exchange"
-     :status 502
-     :body {:error "oauth_exchange_failed" :retryable true}}
+      ::auth/missing-access-token
+      {:category "oauth_exchange"
+       :status 502
+       :body {:error "oauth_exchange_failed" :retryable true}}
 
-    ::auth/drive-unavailable
-    {:category "drive"
-     :status 502
-     :body {:error "drive_unavailable" :retryable true}}
+      ::auth/drive-unavailable
+      {:category "drive"
+       :status 502
+       :body {:error "drive_unavailable" :retryable true}}
 
-    ::auth/kms-unavailable
-    {:category "kms"
-     :status 503
-     :body {:error "kms_unavailable" :retryable true}}
+      ::auth/kms-unavailable
+      {:category "kms"
+       :status 503
+       :body {:error "kms_unavailable" :retryable true}}
 
-    ::auth/grant-persistence-failed
-    {:category "grant_persistence"
-     :status 503
-     :body {:error "grant_persistence_failed" :retryable true}}
+      ::auth/grant-persistence-failed
+      {:category "grant_persistence"
+       :status 503
+       :body {:error "grant_persistence_failed" :retryable true}}
 
-    nil))
+      nil)))
 
 (def ^:private unexpected-oauth-callback-failure
   {:category "unexpected"
@@ -449,10 +450,10 @@
           "missing_required_scopes"
           {:title "Google Drive access could not be established"
            :explanation
-           (str "Google did not return the restricted <code>drive.file</code> "
-                "permission required to select inputs and deliver renders. "
-                "Alpha Compose cannot tell from this response whether Drive is "
-                "disabled, unavailable, denied, or restricted by a Workspace administrator.")
+           (str "Google did not return the Drive permissions Alpha Compose "
+                "requires for this flow. Alpha Compose cannot tell from this "
+                "response whether Drive is disabled, unavailable, denied, or "
+                "restricted by a Workspace administrator.")
            :next-step
            "Check that Drive is available for the intended account, then try again and approve the requested access."}
           "unexpected_scopes"
@@ -617,8 +618,8 @@
 (defn- clear-legacy-session-cookie []
   "agg_session=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax")
 
-(def ^:private drive-recovery-path
-  "/v1/auth/login/start?recovery=true")
+(defn- drive-recovery-path [flow]
+  (auth/oauth-recovery-path (or flow :login)))
 
 (defn- clear-browser-session! [^HttpExchange exchange]
   (.add (.getResponseHeaders exchange) "Set-Cookie" (clear-session-cookie)))
@@ -629,21 +630,23 @@
     (.add (.getResponseHeaders exchange) "Set-Cookie"
           (browser-cookie-header browser))))
 
-(defn- respond-drive-recovery! [exchange path]
+(defn- respond-drive-recovery! [exchange path recovery-path]
   (cond
     (= "/" path)
-    (respond! exchange 401 "text/html; charset=utf-8" ui/drive-recovery-page)
+    (respond! exchange 401 "text/html; charset=utf-8"
+              (ui/drive-recovery-page recovery-path))
 
     (.startsWith ^String path "/ui/")
     (respond! exchange 200 "text/html; charset=utf-8"
-              ui/drive-recovery-fragment)
+              (ui/drive-recovery-fragment recovery-path))
 
     (= "/v1/drive/picker" path)
-    (respond! exchange 401 "text/html; charset=utf-8" ui/drive-recovery-page)
+    (respond! exchange 401 "text/html; charset=utf-8"
+              (ui/drive-recovery-page recovery-path))
 
     :else
     (respond-json! exchange 401 {:error "drive_grant_required"
-                                 :recoveryPath drive-recovery-path})))
+                                 :recoveryPath recovery-path})))
 
 (defn- clear-legacy-oauth-cookie []
   "agg_oauth_state=; Max-Age=0; Path=/v1/auth; Secure; HttpOnly; SameSite=Lax")
@@ -980,13 +983,13 @@
       (respond-json! exchange 200 {:repairedJobs repaired-jobs
                                    :releasedLeases released-leases}))))
 
-(defn- begin-auth! [exchange auth-system]
+(defn- begin-auth! [exchange auth-system flow]
   (let [recovery-requested? (contains? #{"1" "true"}
                                        (get (query-params exchange) "recovery"))
         recovery? (and recovery-requested?
                        (auth/drive-recovery-token?
                         auth-system (oauth-state-token exchange auth-system)))
-        started (auth/begin-flow! auth-system :login nil recovery?)
+        started (auth/begin-flow! auth-system flow nil recovery?)
         cookie (auth/issue-browser-cookie
                 auth-system
                 {:oauth (:stateCookie started)})]
@@ -1002,7 +1005,9 @@
                                     :state-cookie (oauth-state-token
                                                    exchange auth-system)})]
     (if (= :not-allowlisted (:outcome result))
-      (let [failure (oauth-callback-failure ::auth/not-allowlisted)]
+      (let [failure (oauth-callback-failure
+                     ::auth/not-allowlisted
+                     (drive-recovery-path (:flow result)))]
         (clear-browser-session! exchange)
         (log-oauth-callback-failure! dependencies request-id failure)
         (if (and (browser-html-request? exchange) early-access-system)
@@ -1860,6 +1865,12 @@
                                   (and (= "proto" service-profile)
                                        auth-system
                                        (= "GET" method)
+                                       (= "/v1/auth/proto-login/start" path))
+                                  (begin-auth! exchange auth-system :proto-login)
+
+                                  (and (= "proto" service-profile)
+                                       auth-system
+                                       (= "GET" method)
                                        (= "/v1/proto/sources" path))
                                   (proto-sources! exchange auth-system dependencies)
 
@@ -1878,7 +1889,7 @@
 
                                   (and auth-system (= "GET" method)
                                        (= "/v1/auth/login/start" path))
-                                  (begin-auth! exchange auth-system)
+                                  (begin-auth! exchange auth-system :login)
 
                                   (and auth-system (= "GET" method)
                                        (= "/v1/auth/login/callback" path))
@@ -2152,6 +2163,18 @@
           (catch clojure.lang.ExceptionInfo error
             (let [error-type (:type (ex-data error))
                   callback? (= "/v1/auth/login/callback" path)
+                  callback-flow (when callback?
+                                  (or (auth/oauth-flow
+                                       auth-system
+                                       (oauth-state-token exchange auth-system))
+                                      :login))
+                  recovery-path (drive-recovery-path
+                                 (if (and (= "proto" service-profile)
+                                          (or callback?
+                                              (= "/" path)
+                                              (= "/v1/proto/sources" path)))
+                                   (or callback-flow :proto-login)
+                                   :login))
                   recovery-error? (contains? #{::auth/drive-grant-required
                                                ::auth/revoked-grant
                                                ::auth/missing-refresh-token
@@ -2165,7 +2188,8 @@
                   callback-reason (when callback?
                                     (safe-oauth-callback-reason error))
                   failure (when callback?
-                            (cond-> (or (oauth-callback-failure error-type)
+                            (cond-> (or (oauth-callback-failure
+                                         error-type recovery-path)
                                         unexpected-oauth-callback-failure)
                               callback-reason
                               (assoc :reason callback-reason)))]
@@ -2221,7 +2245,7 @@
                   (do
                     (when (session-token exchange auth-system)
                       (set-drive-recovery-cookie! exchange auth-system))
-                    (respond-drive-recovery! exchange path))
+                    (respond-drive-recovery! exchange path recovery-path))
 
                   ::picker-not-configured
                   (respond-json! exchange 503 {:error "picker_not_configured"})

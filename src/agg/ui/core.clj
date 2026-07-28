@@ -1442,23 +1442,27 @@
     "})();</script>")
    :faq))
 
-(def drive-recovery-fragment
-  (str "<section class=\"notice\" role=\"alert\"><h2>Google Drive access needs renewal</h2>"
-       "<p>Your session was cleared because Alpha Compose could no longer use its restricted "
-       "<code>drive.file</code> grant. No render was submitted.</p>"
-       "<p><a class=\"button primary\" href=\"/v1/auth/login/start?recovery=true\">"
-       "Continue with Google</a></p></section>"))
+(defn drive-recovery-fragment
+  ([] (drive-recovery-fragment "/v1/auth/login/start?recovery=true"))
+  ([recovery-path]
+   (str "<section class=\"notice\" role=\"alert\"><h2>Google Drive access needs renewal</h2>"
+        "<p>Your session was cleared because Alpha Compose could no longer use its approved "
+        "Google Drive grant. No render was submitted.</p>"
+        "<p><a class=\"button primary\" href=\"" recovery-path "\">"
+        "Continue with Google</a></p></section>")))
 
-(def drive-recovery-page
-  (public-page
-   "Google Drive access needs renewal"
-   (str "<section class=\"hero\"><div class=\"hero-copy\"><div class=\"eyebrow\">Authorization required</div>"
-        "<h1>Reconnect Google to continue.</h1>"
-        "<p class=\"muted\">Alpha Compose cleared your browser session because its restricted "
-        "<code>drive.file</code> grant is missing, expired, or revoked. Continue explicitly to "
-        "restore identity, file selection, and Drive delivery access. No render was submitted.</p>"
-        "<div class=\"actions\"><a class=\"cta\" href=\"/v1/auth/login/start?recovery=true\">"
-        "Continue with Google</a></div></div></section>")))
+(defn drive-recovery-page
+  ([] (drive-recovery-page "/v1/auth/login/start?recovery=true"))
+  ([recovery-path]
+   (public-page
+    "Google Drive access needs renewal"
+    (str "<section class=\"hero\"><div class=\"hero-copy\"><div class=\"eyebrow\">Authorization required</div>"
+         "<h1>Reconnect Google to continue.</h1>"
+         "<p class=\"muted\">Alpha Compose cleared your browser session because its required "
+         "Google Drive access is missing, expired, or revoked. Continue explicitly to restore "
+         "identity and Drive-backed features. No render was submitted.</p>"
+         "<div class=\"actions\"><a class=\"cta\" href=\"" recovery-path "\">"
+         "Continue with Google</a></div></div></section>"))))
 
 (defn early-access-page
   [{:keys [email proof instagram message feedback request-id]}]
