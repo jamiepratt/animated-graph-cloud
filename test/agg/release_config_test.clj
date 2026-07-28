@@ -373,10 +373,10 @@
                       "AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS"]]
       (testing contract
         (is (str/includes? workflow contract))))
-    (is (= 3 (count (re-seq
+    (is (= 2 (count (re-seq
                      #"AGG_PREVIEW_RESERVATION_MINOR_UNITS=\$PREVIEW_RESERVATION_MINOR_UNITS"
                      workflow)))
-        "every production Cloud Run profile receives the Preview policy")
+        "every main-promoted production Cloud Run profile receives the Preview policy")
     (doseq [approval ["exactly one Preview and one Submit"
                       "Preview reservation: PLN 1.25"
                       "durable Submit reservation: PLN 1.25"
@@ -587,11 +587,17 @@
                        "-var=\"api_service_url=$CLOUD_RUN_SERVICE_URL\""))
     (is (str/includes? workflow
                        "-target=module.application.google_cloud_run_v2_service.api"))
+    (is (not (str/includes? workflow
+                            "-target=module.application.google_cloud_run_v2_service.proto")))
     (is (str/includes? workflow
                        "-target=module.application.google_cloud_run_v2_service.overlay"))
     (is (str/includes? workflow
                        "-target=module.application.google_cloud_run_v2_job.renderer"))
-    (is (= 3 (count (re-seq #"--member=allUsers" workflow))))
+    (is (not (str/includes? workflow "Deploy private proto candidate")))
+    (is (not (str/includes? workflow "Discover private proto origin")))
+    (is (not (str/includes? workflow "Mint proto origin identity token through WIF")))
+    (is (not (str/includes? workflow "Publish pinned proto Firebase Hosting routes")))
+    (is (= 2 (count (re-seq #"--member=allUsers" workflow))))
     (doseq [position [terraform-init api-deploy overlay-deploy
                       private-verification terraform-apply
                       reconciled-verification public-ingress firebase-deploy]]
