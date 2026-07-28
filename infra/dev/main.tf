@@ -284,6 +284,58 @@ resource "google_cloud_run_v2_service" "api" {
   depends_on = [google_project_service.required["run.googleapis.com"]]
 }
 
+resource "google_cloud_run_v2_service" "proto" {
+  project             = var.project_id
+  location            = var.region
+  name                = "agg-proto"
+  deletion_protection = var.environment_name == "production"
+  ingress             = "INGRESS_TRAFFIC_ALL"
+
+  scaling {
+    min_instance_count = 0
+    max_instance_count = 2
+  }
+
+  template {
+    max_instance_request_concurrency = 16
+    service_account                  = google_service_account.api.email
+    timeout                          = "300s"
+
+    containers {
+      image = var.renderer_image
+
+      env {
+        name  = "AGG_SERVICE_PROFILE"
+        value = "proto"
+      }
+
+      ports {
+        name           = "http1"
+        container_port = 8080
+      }
+
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "512Mi"
+        }
+        cpu_idle          = true
+        startup_cpu_boost = true
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      client,
+      client_version,
+      template[0].containers[0].env,
+    ]
+  }
+
+  depends_on = [google_project_service.required["run.googleapis.com"]]
+}
+
 import {
   for_each = var.import_api_service ? toset([var.project_id]) : toset([])
 

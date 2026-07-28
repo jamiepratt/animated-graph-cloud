@@ -11,6 +11,7 @@
             [agg.logs.core :as logs]
             [agg.observability :as observability]
             [agg.preview.core :as preview]
+            [agg.proto.core :as proto]
             [agg.render.frames :as frames]
             [agg.render.media :as media]
             [agg.renderer.main :as renderer]
@@ -29,7 +30,7 @@
 
 (def ^:private health-body "{\"status\":\"ok\"}")
 
-(def ^:private service-profiles #{"api" "overlay"})
+(def ^:private service-profiles #{"api" "overlay" "proto"})
 
 (def ^:private picker-diagnostic-phases
   #{"opened" "loaded" "empty" "selected" "cancelled" "error"})
@@ -1191,6 +1192,29 @@
               "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")))
     (respond! exchange 200 "text/html; charset=utf-8" body)))
 
+(defn- proto-landing! [^HttpExchange exchange auth-system]
+  (let [user (when-let [_session (session-token exchange auth-system)]
+               (require-user! exchange auth-system))
+        csrf (when user (auth/issue-csrf-token auth-system user))
+        body (if user
+               (proto/page {:user user
+                            :csrf csrf
+                            :folder-id proto/fixed-folder-id})
+               proto/signed-out-page)]
+    (doto (.getResponseHeaders exchange)
+      (.set "Cache-Control" "no-store")
+      (.set "Referrer-Policy" "no-referrer")
+      (.set "Content-Security-Policy"
+            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"))
+    (respond! exchange 200 "text/html; charset=utf-8" body)))
+
+(defn- proto-sources! [^HttpExchange exchange auth-system dependencies]
+  (let [user (require-session-user! exchange auth-system)]
+    (respond-json! exchange 200
+                   (proto/list-sources! (assoc dependencies
+                                               :auth-system auth-system)
+                                        user))))
+
 (defn- picker! [^HttpExchange exchange auth-system picker-api-key picker-app-id]
   (let [user (require-session-user! exchange auth-system)
         {:keys [access-token]} (auth/drive-access! auth-system (:subject user))]
@@ -1846,6 +1870,18 @@
                                   (let [[resource content-type] (get public-assets path)]
                                     (respond-asset! exchange resource content-type))
 
+                                  (and (= "proto" service-profile)
+                                       auth-system
+                                       (= "GET" method)
+                                       (= "/" path))
+                                  (proto-landing! exchange auth-system)
+
+                                  (and (= "proto" service-profile)
+                                       auth-system
+                                       (= "GET" method)
+                                       (= "/v1/proto/sources" path))
+                                  (proto-sources! exchange auth-system dependencies)
+
                                   (and auth-system (= "GET" method) (= "/" path))
                                   (landing! exchange auth-system token-service admin-service
                                             log-store picker-api-key picker-app-id)
@@ -2405,7 +2441,7 @@
                              {:preview-job-service preview-job-service})
          _ (when-not (contains? service-profiles (:service-profile dependencies))
              (throw (IllegalArgumentException.
-                     "service-profile must be api or overlay")))
+                     "service-profile must be api, overlay, or proto")))
          server (HttpServer/create (InetSocketAddress. (int port)) 0)]
      (.createContext server "/" (route-handler dependencies))
      (.start server)

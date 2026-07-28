@@ -588,6 +588,45 @@
          :size (:size metadata)
          :limits drive-limits/preflight-range-limits-v1})]
       (media/inspect-browser-playback! "ffprobe" (:url proxy))))
+  drive/FolderSourceListingGateway
+  (list-folder-sources! [_ access-token folder-id]
+    (loop [page-token nil
+           results []]
+      (let [query (cond-> (str "pageSize=100"
+                               "&fields=nextPageToken,files(id,name,mimeType,size,"
+                               "videoMediaMetadata(durationMillis,width,height))"
+                               "&supportsAllDrives=true"
+                               "&includeItemsFromAllDrives=true"
+                               "&orderBy=name_natural"
+                               "&q="
+                               (urlencode
+                                (str "trashed = false and '"
+                                     folder-id
+                                     "' in parents and ("
+                                     (str/join
+                                      " or "
+                                      (map #(str "mimeType = '" % "'")
+                                           drive/supported-source-video-mime-types))
+                                     ")")))
+                    page-token (str "&pageToken=" (urlencode page-token)))
+            {:keys [status body]}
+            (send! (authorized
+                    {:method :get
+                     :url (drive-url "files" query)
+                     :headers {}}
+                    access-token))]
+        (if (<= 200 status 299)
+          (let [parsed (parse-json body)
+                files (mapv #(assoc % :size (some-> (:size %) str parse-long))
+                            (:files parsed))
+                collected (into results files)
+                next-token (:nextPageToken parsed)]
+            (if (str/blank? next-token)
+              collected
+              (recur next-token collected)))
+          (throw (errors/raise! "Google Drive fixed-folder listing failed"
+                                {:type ::folder-listing-failed
+                                 :status status}))))))
   drive/PickerDiagnostics
   (picker-diagnostics! [_ access-token]
     (let [about (send! (authorized

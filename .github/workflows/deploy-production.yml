@@ -28,6 +28,7 @@ env:
   REGION: europe-central2
   REPOSITORY: containers
   SERVICE: agg-api
+  PROTO_SERVICE: agg-proto
   OVERLAY_SERVICE: agg-overlay
   DURABLE_JOB: agg-renderer
   SMOKE_JOB: agg-renderer-smoke
@@ -39,6 +40,8 @@ env:
   EARLY_ACCESS_SENDER: Alpha Compose <early-access@alphacompose.com>
   EARLY_ACCESS_RECIPIENT: me@jamiep.org
   PUBLIC_BASE_URL: https://alphacompose.com
+  PROTO_PUBLIC_BASE_URL: https://proto.alphacompose.com
+  PROTO_FIREBASE_SITE: proto-alphacompose-com
   DAILY_SUBMISSION_LIMIT: "100"
   MONTHLY_BUDGET_MINOR_UNITS: "40000"
   PREVIEW_RESERVATION_MINOR_UNITS: "125"
@@ -314,6 +317,26 @@ jobs:
             --no-allow-unauthenticated \
             --quiet
 
+      - name: Deploy private proto candidate
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+        run: |
+          gcloud run deploy "$PROTO_SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE_DIGEST" \
+            --service-account "$API_SERVICE_ACCOUNT" \
+            --port 8080 \
+            --cpu 1 \
+            --memory 512Mi \
+            --concurrency 16 \
+            --timeout 300 \
+            --cpu-boost \
+            --min 0 \
+            --max 2 \
+            --no-allow-unauthenticated \
+            --quiet
+
       - name: Deploy private overlay candidate
         env:
           IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
@@ -376,9 +399,20 @@ jobs:
           test -n "$service_url"
           echo "url=$service_url" >>"$GITHUB_OUTPUT"
 
+      - id: proto-service-url
+        name: Discover private proto origin
+        run: |
+          service_url="$(gcloud run services describe "$PROTO_SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(status.url)')"
+          test -n "$service_url"
+          echo "url=$service_url" >>"$GITHUB_OUTPUT"
+
       - name: Configure API and overlay production runtimes
         env:
           CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
+          PROTO_RUN_SERVICE_URL: ${{ steps.proto-service-url.outputs.url }}
         run: |
           gcloud run services update "$SERVICE" \
             --project "$PROJECT_ID" \
@@ -393,6 +427,13 @@ jobs:
             --remove-env-vars "AGG_MONTHLY_BUDGET_CENTS,AGG_PREVIEW_RESERVATION_CENTS,AGG_RENDER_RESERVATION_CENTS" \
             --update-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGG_SERVICE_PROFILE=overlay,AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=$DURABLE_JOB,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
             --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
+            --quiet
+          gcloud run services update "$PROTO_SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --remove-env-vars "AGG_MONTHLY_BUDGET_CENTS,AGG_PREVIEW_RESERVATION_CENTS,AGG_RENDER_RESERVATION_CENTS" \
+            --update-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGG_SERVICE_PROFILE=proto,AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=$DURABLE_JOB,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PROTO_PUBLIC_BASE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
+            --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
             --quiet
 
       - id: api-health-auth
@@ -417,10 +458,23 @@ jobs:
           id_token_audience: ${{ steps.overlay-service-url.outputs.url }}
           id_token_include_email: true
 
+      - id: proto-health-auth
+        name: Mint proto origin identity token through WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud
+          service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.proto-service-url.outputs.url }}
+          id_token_include_email: true
+
       - name: Verify private API and overlay candidates
         env:
           CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
           CLOUD_RUN_ID_TOKEN: ${{ steps.api-health-auth.outputs.id_token }}
+          PROTO_RUN_SERVICE_URL: ${{ steps.proto-service-url.outputs.url }}
+          PROTO_RUN_ID_TOKEN: ${{ steps.proto-health-auth.outputs.id_token }}
           OVERLAY_RUN_SERVICE_URL: ${{ steps.overlay-service-url.outputs.url }}
           OVERLAY_RUN_ID_TOKEN: ${{ steps.overlay-health-auth.outputs.id_token }}
         run: |
@@ -434,12 +488,20 @@ jobs:
             --header "Authorization: Bearer $OVERLAY_RUN_ID_TOKEN" \
             "$OVERLAY_RUN_SERVICE_URL/health")"
           test "$overlay_health" = '{"status":"ok"}'
+          proto_health="$(curl --fail --silent --show-error \
+            --retry 5 --retry-all-errors \
+            --header "Authorization: Bearer $PROTO_RUN_ID_TOKEN" \
+            "$PROTO_RUN_SERVICE_URL/health")"
+          test "$proto_health" = '{"status":"ok"}'
           test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
             --request POST \
             --header "Authorization: Bearer $CLOUD_RUN_ID_TOKEN" \
             --header 'Content-Type: application/json' \
             --data '{}' \
             "$CLOUD_RUN_SERVICE_URL/v1/overlay")" = 404
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer $PROTO_RUN_ID_TOKEN" \
+            "$PROTO_RUN_SERVICE_URL/" | grep -q 'Timing workspace playback prototype'
           test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
             --header "Authorization: Bearer $OVERLAY_RUN_ID_TOKEN" \
             "$OVERLAY_RUN_SERVICE_URL/privacy")" = 404
@@ -466,6 +528,7 @@ jobs:
             -var="renderer_image=$IMAGE_DIGEST" \
             -var="api_service_url=$CLOUD_RUN_SERVICE_URL" \
             -target=module.application.google_cloud_run_v2_service.api \
+            -target=module.application.google_cloud_run_v2_service.proto \
             -target=module.application.google_cloud_run_v2_service.overlay \
             -target=module.application.google_cloud_run_v2_job.renderer \
             -out="$RUNNER_TEMP/prod-runtime.tfplan"
@@ -476,6 +539,8 @@ jobs:
         env:
           CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
           CLOUD_RUN_ID_TOKEN: ${{ steps.api-health-auth.outputs.id_token }}
+          PROTO_RUN_SERVICE_URL: ${{ steps.proto-service-url.outputs.url }}
+          PROTO_RUN_ID_TOKEN: ${{ steps.proto-health-auth.outputs.id_token }}
           OVERLAY_RUN_SERVICE_URL: ${{ steps.overlay-service-url.outputs.url }}
           OVERLAY_RUN_ID_TOKEN: ${{ steps.overlay-health-auth.outputs.id_token }}
         run: |
@@ -483,6 +548,10 @@ jobs:
             --retry 5 --retry-all-errors \
             --header "X-Serverless-Authorization: Bearer $CLOUD_RUN_ID_TOKEN" \
             "$CLOUD_RUN_SERVICE_URL/health")" = '{"status":"ok"}'
+          test "$(curl --fail --silent --show-error \
+            --retry 5 --retry-all-errors \
+            --header "X-Serverless-Authorization: Bearer $PROTO_RUN_ID_TOKEN" \
+            "$PROTO_RUN_SERVICE_URL/health")" = '{"status":"ok"}'
           test "$(curl --fail --silent --show-error \
             --retry 5 --retry-all-errors \
             --header "X-Serverless-Authorization: Bearer $OVERLAY_RUN_ID_TOKEN" \
@@ -517,6 +586,12 @@ jobs:
             --member=allUsers \
             --role=roles/run.invoker \
             --quiet
+          gcloud run services add-iam-policy-binding "$PROTO_SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --member=allUsers \
+            --role=roles/run.invoker \
+            --quiet
 
       - name: Publish pinned Firebase Hosting routes
         run: >-
@@ -524,6 +599,17 @@ jobs:
           --only hosting
           --project "$PROJECT_ID"
           --non-interactive
+
+      - name: Publish pinned proto Firebase Hosting routes
+        run: |
+          proto_config="$RUNNER_TEMP/firebase.proto.json"
+          sed "s/__PROTO_FIREBASE_SITE__/$PROTO_FIREBASE_SITE/g" \
+            firebase.proto.template.json >"$proto_config"
+          npx --yes firebase-tools@15.24.0 deploy \
+            --only hosting \
+            --config "$proto_config" \
+            --project "$PROJECT_ID" \
+            --non-interactive
 
       - name: Verify public release
         run: |
@@ -540,6 +626,8 @@ jobs:
             --dump-header "$contract_headers" "$PUBLIC_BASE_URL/openapi.yaml")"
           grep -q '^openapi: 3.1.0$' <<<"$contract"
           grep -iq '^content-type: application/yaml; charset=utf-8' "$contract_headers"
+          test "$(curl --fail --silent --show-error --retry 5 --retry-all-errors "$PROTO_PUBLIC_BASE_URL/health")" = '{"status":"ok"}'
+          curl --fail --silent --show-error "$PROTO_PUBLIC_BASE_URL/" | grep -q 'Timing workspace playback prototype'
 
       - name: Record release summary
         env:
