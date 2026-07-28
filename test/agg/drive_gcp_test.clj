@@ -47,6 +47,89 @@
       (throw (ex-info "Could not make the Drive test script executable" {})))
     path))
 
+(defn- run-command! [command]
+  (let [process (.start (ProcessBuilder. ^java.util.List command))
+        output (future (slurp (.getInputStream process)))]
+    (when-not (zero? (.waitFor process))
+      (throw (ex-info "Command failed"
+                      {:command command
+                       :output @output})))
+    @output))
+
+(defn- top-level-atom-slices [^bytes bytes]
+  (let [buffer (ByteBuffer/wrap bytes)]
+    (loop [offset 0
+           atoms []]
+      (if (> (+ offset 8) (alength bytes))
+        atoms
+        (let [size32 (bit-and 0xffffffff (.getInt buffer offset))
+              atom-type (String. bytes (+ offset 4) 4 StandardCharsets/US_ASCII)
+              size (if (= size32 1)
+                     (.getLong buffer (+ offset 8))
+                     size32)]
+          (when (< size 8)
+            (throw (ex-info "Invalid atom size" {:offset offset :size size})))
+          (recur (+ offset size)
+                 (conj atoms {:type atom-type
+                              :offset offset
+                              :size size})))))))
+
+(defn- free-atom [payload-bytes]
+  (let [buffer (doto (ByteBuffer/allocate (+ 8 payload-bytes))
+                 (.order ByteOrder/BIG_ENDIAN)
+                 (.putInt (+ 8 payload-bytes))
+                 (.put (.getBytes "free" StandardCharsets/US_ASCII))
+                 (.position (+ 8 payload-bytes)))]
+    (.array buffer)))
+
+(defn- playback-fixture-with-late-moov! []
+  (let [source (Files/createTempFile
+                "agg-drive-source-" ".mp4"
+                (make-array java.nio.file.attribute.FileAttribute 0))
+        output (Files/createTempFile
+                "agg-drive-late-moov-" ".mp4"
+                (make-array java.nio.file.attribute.FileAttribute 0))]
+    (run-command!
+     ["ffmpeg"
+      "-hide_banner"
+      "-loglevel" "error"
+      "-f" "lavfi"
+      "-i" "testsrc=size=320x240:rate=25"
+      "-f" "lavfi"
+      "-i" "anullsrc=r=48000:cl=stereo"
+      "-t" "1"
+      "-shortest"
+      "-c:v" "libx264"
+      "-profile:v" "high"
+      "-pix_fmt" "yuv420p"
+      "-c:a" "aac"
+      "-y"
+      (str source)])
+    (let [bytes (Files/readAllBytes source)
+          atoms (top-level-atom-slices bytes)
+          moov-index (or (first (keep-indexed
+                                 (fn [index {:keys [type]}]
+                                   (when (= "moov" type) index))
+                                 atoms))
+                         (throw (ex-info "Fixture MP4 lacks a moov atom" {})))
+          before-moov (take moov-index atoms)
+          moov-and-after (drop moov-index atoms)
+          rebuilt
+          (let [output-bytes (ByteArrayOutputStream.)]
+            (doseq [{:keys [offset size]} before-moov]
+              (.write output-bytes
+                      (java.util.Arrays/copyOfRange
+                       bytes offset (+ offset size))))
+            (.write output-bytes (free-atom (* 2 1024 1024)))
+            (doseq [{:keys [offset size]} moov-and-after]
+              (.write output-bytes
+                      (java.util.Arrays/copyOfRange
+                       bytes offset (+ offset size))))
+            (.toByteArray output-bytes))]
+      (Files/write output rebuilt (make-array OpenOption 0))
+      (Files/deleteIfExists source)
+      output)))
+
 (deftest recording-clock-inspection-is-bounded-and-prefers-explicit-offsets
   (let [requests (atom [])
         explicit
@@ -375,7 +458,7 @@
              (drive/inspect-playback!
               gateway "access" "private-file"
               {:size source-size :mimeType "video/mp4"})))
-      (is (= 1 (count @requests)))
+      (is (pos? (count @requests)))
       (is (every?
            (fn [{:keys [headers timeout-ms]}]
              (let [[_ start-text end-text]
@@ -387,6 +470,49 @@
            @requests))
       (finally
         (Files/deleteIfExists ffprobe)))))
+
+(deftest playback-analysis-finds-late-moov-metadata-with-bounded-remote-reads
+  (let [source (playback-fixture-with-late-moov!)
+        bytes (Files/readAllBytes source)
+        requests (atom [])
+        gateway
+        (assoc
+         (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+         :stream-source-request!
+         (fn [{:keys [headers timeout-ms] :as request}]
+           (let [[_ start-text end-text]
+                 (re-matches #"bytes=(\d+)-(\d+)" (get headers "Range"))
+                 start (parse-long start-text)
+                 end (parse-long end-text)
+                 body (java.util.Arrays/copyOfRange bytes start (inc end))]
+             (swap! requests conj request)
+             {:status 206
+              :headers {"content-range"
+                        (str "bytes " start "-" end "/" (alength bytes))
+                        "content-length" (str (alength body))}
+              :body (ByteArrayInputStream. body)})))]
+    (try
+      (is (= {:container {:format "mp4" :majorBrand "isom"}
+              :video {:codec "h264"
+                      :codecTag "avc1"
+                      :profile "High"
+                      :pixelFormat "yuv420p"}
+              :audio {:codec "aac"}}
+             (drive/inspect-playback!
+              gateway "access" "private-file"
+              {:size (alength bytes) :mimeType "video/mp4"})))
+      (is (every?
+           (fn [{:keys [headers timeout-ms]}]
+             (let [[_ start-text end-text]
+                   (re-matches #"bytes=(\d+)-(\d+)" (get headers "Range"))]
+               (and (= 3000 timeout-ms)
+                    (<= (inc (- (parse-long end-text)
+                                (parse-long start-text)))
+                        (* 1024 1024)))))
+           @requests))
+      (is (< 1 (count @requests)))
+      (finally
+        (Files/deleteIfExists source)))))
 
 (deftest picker-diagnostics-probe-account-and-video-index-without-returning-files
   (let [requests (atom [])

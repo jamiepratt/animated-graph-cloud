@@ -9,20 +9,21 @@
             [clojure.string :as str])
   (:import (com.google.api.gax.rpc ApiException StatusCode$Code)
            (com.google.cloud.firestore Firestore)
-           (java.io InputStream)
+           (java.io ByteArrayOutputStream InputStream)
            (java.net URI URLEncoder)
            (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
                           HttpResponse$BodyHandlers)
            (java.nio ByteBuffer ByteOrder)
            (java.nio.channels FileChannel)
            (java.nio.charset StandardCharsets)
-           (java.nio.file OpenOption Path StandardOpenOption)
+           (java.nio.file Files OpenOption Path StandardOpenOption)
            (java.time Duration Instant LocalDateTime OffsetDateTime ZoneOffset)
            (java.util.concurrent ExecutionException Future)))
 
 (def ^:private folder-mime-type "application/vnd.google-apps.folder")
 (def ^:private recording-clock-range-bytes (* 256 1024))
 (def ^:private recording-clock-timeout-ms 3000)
+(def ^:private playback-analysis-range-bytes (* 1024 1024))
 (def ^:private quicktime-to-unix-seconds 2082844800)
 (def ^:private recording-clock-limits
   {:maxBytes (* 2 recording-clock-range-bytes)
@@ -307,6 +308,127 @@
         (catch Throwable _
           manual)))))
 
+(defn- playback-analysis-ranges [size]
+  (let [size (long size)
+        head {:start 0
+              :end (dec (min size playback-analysis-range-bytes))
+              :timeout-ms recording-clock-timeout-ms}
+        tail {:start (max 0 (- size playback-analysis-range-bytes))
+              :end (dec size)
+              :timeout-ms recording-clock-timeout-ms}]
+    (if (= (select-keys head [:start :end])
+           (select-keys tail [:start :end]))
+      [head]
+      [head tail])))
+
+(defn- complete-head-atoms [^bytes bytes]
+  (let [buffer (doto (ByteBuffer/wrap bytes)
+                 (.order ByteOrder/BIG_ENDIAN))
+        length (alength bytes)]
+    (loop [offset 0
+           atoms []]
+      (if (> (+ offset 8) length)
+        atoms
+        (let [size32 (unsigned-int (doto buffer (.position offset)))
+              size (cond
+                     (= size32 1)
+                     (when (<= (+ offset 16) length)
+                       (.getLong (doto buffer (.position (+ offset 8)))))
+
+                     (zero? size32)
+                     (- length offset)
+
+                     :else size32)]
+          (if (or (nil? size)
+                  (< size 8)
+                  (> (+ offset size) length))
+            atoms
+            (recur (+ offset size)
+                   (conj atoms {:type (String. bytes (+ offset 4) 4
+                                               StandardCharsets/US_ASCII)
+                                :bytes (java.util.Arrays/copyOfRange
+                                        bytes offset (+ offset size))}))))))))
+
+(defn- find-contained-atom [^bytes bytes atom-type]
+  (let [type-bytes (.getBytes ^String atom-type StandardCharsets/US_ASCII)
+        buffer (doto (ByteBuffer/wrap bytes)
+                 (.order ByteOrder/BIG_ENDIAN))
+        length (alength bytes)
+        limit (- length 8)]
+    (loop [index 0
+           found nil]
+      (if (> index limit)
+        found
+        (let [candidate?
+              (every? true?
+                      (map-indexed
+                       (fn [offset expected]
+                         (= expected (aget bytes (+ index 4 offset))))
+                       type-bytes))
+              size
+              (when candidate?
+                (let [size32 (unsigned-int (doto buffer (.position index)))]
+                  (cond
+                    (= size32 1)
+                    (when (<= (+ index 16) length)
+                      (.getLong (doto buffer (.position (+ index 8)))))
+
+                    (zero? size32)
+                    (- length index)
+
+                    :else size32)))
+              valid?
+              (and candidate?
+                   size
+                   (<= 8 size)
+                   (<= (+ index size) length))]
+          (recur (inc index)
+                 (if valid?
+                   {:type atom-type
+                    :bytes (java.util.Arrays/copyOfRange
+                            bytes index (+ index size))}
+                   found)))))))
+
+(defn- playback-fixture-path!
+  [gateway access-token file-id {:keys [size]}]
+  (let [segments (mapv #(read-inspection-range! gateway access-token file-id %)
+                       (playback-analysis-ranges size))
+        head-atoms (complete-head-atoms (first segments))
+        head-moov-index (first (keep-indexed
+                                (fn [index {:keys [type]}]
+                                  (when (= "moov" type) index))
+                                head-atoms))
+        ftyp-bytes (:bytes (first (filter #(= "ftyp" (:type %)) head-atoms)))
+        moov-bytes (or (some-> head-moov-index (nth head-atoms) :bytes)
+                       (:bytes (find-contained-atom (last segments) "moov")))]
+    (when (and ftyp-bytes moov-bytes)
+      (let [path (Files/createTempFile
+                  "agg-playback-analysis-" ".mp4"
+                  (make-array java.nio.file.attribute.FileAttribute 0))
+            output (ByteArrayOutputStream.)]
+        (doseq [{:keys [bytes]}
+                (if head-moov-index
+                  (take (inc head-moov-index) head-atoms)
+                  head-atoms)]
+          (.write output ^bytes bytes))
+        (when-not head-moov-index
+          (.write output ^bytes moov-bytes))
+        (Files/write path (.toByteArray output)
+                     (make-array OpenOption 0))
+        path))))
+
+(defn- inspect-playback-via-proxy!
+  [gateway access-token file-id metadata ffprobe]
+  (with-open
+   [proxy
+    (range-proxy/start!
+      {:gateway gateway
+       :access-token access-token
+       :file-id file-id
+       :size (:size metadata)
+       :limits drive-limits/playback-analysis-range-limits-v1})]
+    (media/inspect-browser-playback! ffprobe (:url proxy))))
+
 (defn- drive-url [path query]
   (str "https://www.googleapis.com/drive/v3/" path "?" query))
 
@@ -579,17 +701,17 @@
        (assoc-in render-spec [:source-video :input-url] (:url proxy)))))
   drive/PlaybackAnalysisGateway
   (inspect-playback! [gateway access-token file-id metadata]
-    (with-open
-     [proxy
-      (range-proxy/start!
-        {:gateway gateway
-         :access-token access-token
-         :file-id file-id
-         :size (:size metadata)
-         :limits drive-limits/playback-analysis-range-limits-v1})]
-      (media/inspect-browser-playback!
-       (or (:playback-ffprobe gateway) "ffprobe")
-       (:url proxy))))
+    (let [ffprobe (or (:playback-ffprobe gateway) "ffprobe")
+          fixture-path
+          (when (contains? #{"video/mp4" "video/quicktime"} (:mimeType metadata))
+            (playback-fixture-path! gateway access-token file-id metadata))]
+      (if fixture-path
+        (try
+          (media/inspect-browser-playback-file! ffprobe fixture-path)
+          (finally
+            (Files/deleteIfExists fixture-path)))
+        (inspect-playback-via-proxy!
+         gateway access-token file-id metadata ffprobe))))
   drive/FolderSourceListingGateway
   (list-folder-sources! [_ access-token folder-id]
     (loop [page-token nil
