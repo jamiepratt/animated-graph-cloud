@@ -154,11 +154,11 @@
          "function recordOutcome(outcome){const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.body.dataset.outcome=btoa(String.fromCharCode(...bytes));}"
          "function delay(ms){return new Promise(resolve=>setTimeout(resolve,ms));}"
          "async function waitFor(label,predicate,attempts){for(let index=0;index<attempts;index+=1){const value=predicate();if(value)return value;await delay(25);}throw new Error('Timed out waiting for '+label);}"
-         "async function runScenario(){try{const first=await waitFor('source button',()=>document.querySelector('#source-list button'),200);first.click();await waitFor('selected title',()=>document.getElementById('selected-title').textContent==='timing-ride.mp4',200);"
+         "async function runScenario(){try{const select=await waitFor('source select',()=>document.getElementById('source-select'),200);await waitFor('source option',()=>select.options.length>1&&select.options[1].value==='timing-source-1',200);select.value='timing-source-1';select.dispatchEvent(new Event('change',{bubbles:true}));await waitFor('selected title',()=>document.getElementById('selected-title').textContent==='timing-ride.mp4',200);"
          (if supported?
            "await waitFor('preparation debug',()=>{const text=document.getElementById('prep-debug').textContent;return text&&text.includes('\"support\"')&&text.includes('\"session\"');},200);await waitFor('prepared player status',()=>document.getElementById('player-status').textContent.includes('Private playback prepared'),200);const video=document.getElementById('proto-player');video.__bufferedRanges=[[0,30],[60,90]];video.dispatchEvent(new Event('progress'));"
            "await waitFor('preparation debug',()=>{const text=document.getElementById('prep-debug').textContent;return text&&text.includes('\"support\"');},200);await waitFor('unsupported player status',()=>document.getElementById('player-status').textContent.includes('could not prove direct playback support'),200);")
-         "recordOutcome({sourceStatus:document.getElementById('source-status').textContent,playerStatus:document.getElementById('player-status').textContent,selectedTitle:document.getElementById('selected-title').textContent,summary:{listing:document.getElementById('summary-listing').textContent,file:document.getElementById('summary-file').textContent,mime:document.getElementById('summary-mime').textContent,duration:document.getElementById('summary-duration').textContent,frameSize:document.getElementById('summary-size').textContent},timing:{start:document.getElementById('timing-start').textContent,end:document.getElementById('timing-end').textContent,state:document.getElementById('timing-state').textContent,confidence:document.getElementById('timing-confidence').textContent},prep:JSON.parse(document.getElementById('prep-debug').textContent),range:JSON.parse(document.getElementById('range-debug').textContent),requests:window.__protoState});}catch(error){recordOutcome({error:error.message});}}"
+         "recordOutcome({sourceStatus:document.getElementById('source-status').textContent,playerStatus:document.getElementById('player-status').textContent,selectedTitle:document.getElementById('selected-title').textContent,sourceSelect:{disabled:select.disabled,value:select.value,labels:Array.from(select.options).map(option=>option.textContent)},summary:{listing:document.getElementById('summary-listing').textContent,file:document.getElementById('summary-file').textContent,mime:document.getElementById('summary-mime').textContent,duration:document.getElementById('summary-duration').textContent,frameSize:document.getElementById('summary-size').textContent},timing:{start:document.getElementById('timing-start').textContent,end:document.getElementById('timing-end').textContent,state:document.getElementById('timing-state').textContent,confidence:document.getElementById('timing-confidence').textContent},prep:JSON.parse(document.getElementById('prep-debug').textContent),range:JSON.parse(document.getElementById('range-debug').textContent),requests:window.__protoState});}catch(error){recordOutcome({error:error.message});}}"
          "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',()=>{setTimeout(runScenario,0);},{once:true});}else{setTimeout(runScenario,0);}"
          "</script>")
         html (-> page
@@ -256,6 +256,10 @@
                                              :timeoutMillis 3000}}})]
     (is (nil? (:error outcome)))
     (is (= "timing-ride.mp4" (:selectedTitle outcome)))
+    (is (= false (get-in outcome [:sourceSelect :disabled])))
+    (is (= "timing-source-1" (get-in outcome [:sourceSelect :value])))
+    (is (= ["Choose a file from the folder" "timing-ride.mp4"]
+           (get-in outcome [:sourceSelect :labels])))
     (is (str/includes? (:playerStatus outcome) "Private playback prepared"))
     (is (= "folder-enumeration" (get-in outcome [:summary :listing])))
     (is (= "timing-ride.mp4" (get-in outcome [:summary :file])))
@@ -284,6 +288,7 @@
                                              :maxRanges 2
                                              :timeoutMillis 3000}}})]
     (is (nil? (:error outcome)))
+    (is (= "timing-source-1" (get-in outcome [:sourceSelect :value])))
     (is (str/includes? (:playerStatus outcome)
                        "could not prove direct playback support"))
     (is (= false (get-in outcome [:prep :support :supported])))
