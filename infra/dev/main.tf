@@ -285,6 +285,7 @@ resource "google_cloud_run_v2_service" "api" {
 }
 
 resource "google_cloud_run_v2_service" "proto" {
+  count               = var.enable_proto_service ? 1 : 0
   project             = var.project_id
   location            = var.region
   name                = "agg-proto"

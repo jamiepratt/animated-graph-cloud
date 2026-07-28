@@ -25,6 +25,9 @@
     (is (re-find #"import_default_firestore\s*=\s*false" production))
     (is (re-find #"github_subject\s*=\s*\"repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/main\""
                  production))
+    (is (re-find #"enable_proto_service\s*=\s*false" production))
+    (is (re-find #"(?s)removed\s*\{\s*from\s*=\s*module\.application\.google_cloud_run_v2_service\.proto\s*lifecycle\s*\{\s*destroy\s*=\s*false\s*\}\s*\}"
+                 production))
     (is (str/includes? backend
                        "bucket = \"animated-graph-cloud-prod-jp-tfstate\""))
     (is (str/includes? backend "prefix = \"prod\""))
@@ -33,7 +36,11 @@
     (is (str/includes? shared
                        "for_each = var.import_default_firestore ? toset([var.project_id]) : toset([])"))
     (is (str/includes? shared "id = \"projects/${each.value}/databases/(default)\""))
-    (is (str/includes? shared "count = var.api_service_url == \"\" ? 0 : 1"))))
+    (is (str/includes? shared "count = var.api_service_url == \"\" ? 0 : 1"))
+    (is (re-find #"(?s)variable \"enable_proto_service\".*?default\s*=\s*true"
+                 (slurp "infra/dev/variables.tf")))
+    (is (re-find #"(?s)resource \"google_cloud_run_v2_service\" \"proto\".*?count\s*=\s*var\.enable_proto_service \? 1 : 0"
+                 shared))))
 
 (deftest production-enables-observability-log-ttl-after-bootstrap
   (let [production (slurp "infra/prod/main.tf")

@@ -89,6 +89,12 @@ variable "enable_firebase_hosting" {
   default     = false
 }
 
+variable "enable_proto_service" {
+  description = "Manage the separate proto Cloud Run service in this environment."
+  type        = bool
+  default     = true
+}
+
 variable "enable_observability_log_ttl" {
   description = "Manage the expireAt TTL policy for observability-log documents."
   type        = bool
