@@ -14,6 +14,13 @@
                  (.build))
              (HttpResponse$BodyHandlers/ofByteArray))))
 
+(defn- get-source [url]
+  (-> (HttpClient/newHttpClient)
+      (.send (-> (HttpRequest/newBuilder (URI/create url))
+                 (.GET)
+                 (.build))
+             (HttpResponse$BodyHandlers/ofByteArray))))
+
 (defn- limits
   ([] (limits {}))
   ([overrides]
@@ -96,6 +103,31 @@
               ((:stats proxy))
               [:upstream-bytes :request-count
                :retry-count :cache-hit-count]))))))
+
+(deftest plain-get-without-range-serves-the-initial-bounded-window
+  (let [upstream-ranges (atom [])
+        gateway
+        (reify drive/PlaybackGateway
+          (open-source-range! [_ _ _ {:keys [start end] :as byte-range}]
+            (swap! upstream-ranges conj byte-range)
+            {:status 206
+             :headers {"content-range" (str "bytes " start "-" end "/100")
+                       "content-length" (str (inc (- end start)))}
+             :body (ByteArrayInputStream.
+                    (byte-array (repeat (inc (- end start)) 7)))}))]
+    (with-open [proxy (range-proxy/start!
+                        {:gateway gateway
+                         :access-token "access"
+                         :file-id "file"
+                         :size 100
+                         :limits (limits)})]
+      (let [response (get-source (:url proxy))]
+        (is (= 206 (.statusCode response)))
+        (is (= "bytes 0-15/100"
+               (.orElse (.firstValue (.headers response) "Content-Range") "")))
+        (is (= 16 (alength ^bytes (.body response))))
+        (is (= [{:start 0 :end 15 :timeout-ms 1000}]
+               @upstream-ranges))))))
 
 (deftest malformed-drive-range-and-early-eof-fail-closed
   (doseq [response

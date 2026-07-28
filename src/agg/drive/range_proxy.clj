@@ -48,29 +48,31 @@
                         {:type ::invalid-range :size size})))
 
 (defn- requested-range [header size max-range-bytes]
-  (let [[_ start-text end-text]
-        (when header
-          (re-matches #"(?i)bytes=(\d*)-(\d*)" header))]
-    (when-not (and (or (not (str/blank? start-text))
-                       (not (str/blank? end-text)))
-                   (not (str/includes? header ",")))
-      (invalid-range! size))
-    (if (str/blank? start-text)
-      (let [suffix (parse-long end-text)]
-        (when-not (and suffix (pos? suffix))
-          (invalid-range! size))
-        (let [length (min size suffix max-range-bytes)]
-          {:start (- size length) :end (dec size)}))
-      (let [start (parse-long start-text)
-            end (if (str/blank? end-text)
-                  (dec size)
-                  (parse-long end-text))]
-        (when-not (and start end (< start size) (<= start end))
-          (invalid-range! size))
-        {:start start
-         :end (min (dec size)
-                   end
-                   (dec (+ start max-range-bytes)))}))))
+  (if (str/blank? header)
+    {:start 0
+     :end (dec (min size max-range-bytes))}
+    (let [[_ start-text end-text]
+          (re-matches #"(?i)bytes=(\d*)-(\d*)" header)]
+      (when-not (and (or (not (str/blank? start-text))
+                         (not (str/blank? end-text)))
+                     (not (str/includes? header ",")))
+        (invalid-range! size))
+      (if (str/blank? start-text)
+        (let [suffix (parse-long end-text)]
+          (when-not (and suffix (pos? suffix))
+            (invalid-range! size))
+          (let [length (min size suffix max-range-bytes)]
+            {:start (- size length) :end (dec size)}))
+        (let [start (parse-long start-text)
+              end (if (str/blank? end-text)
+                    (dec size)
+                    (parse-long end-text))]
+          (when-not (and start end (< start size) (<= start end))
+            (invalid-range! size))
+          {:start start
+           :end (min (dec size)
+                     end
+                     (dec (+ start max-range-bytes)))})))))
 
 (defn- write-response!
   [^HttpExchange exchange status headers ^bytes body]

@@ -511,6 +511,60 @@
       (finally
         (Files/deleteIfExists ffprobe)))))
 
+(deftest playback-analysis-succeeds-when-the-probe-uses-a-plain-get
+  (let [ffprobe
+        (executable-script!
+         (str "#!/bin/sh\n"
+              "for argument in \"$@\"; do url=\"$argument\"; done\n"
+              "curl --fail --silent --show-error \"$url\" >/dev/null\n"
+              "printf '%s\\n' "
+              "'{\"streams\":[{\"codec_type\":\"video\","
+              "\"codec_name\":\"h264\",\"codec_tag_string\":\"avc1\","
+              "\"profile\":\"High\",\"pix_fmt\":\"yuv420p\"}],"
+              "\"format\":{\"format_name\":\"mov,mp4,m4a,3gp,3g2,mj2\","
+              "\"tags\":{\"major_brand\":\"isom\"}}}'\n"))
+        requests (atom [])
+        gateway
+        (assoc
+         (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+         :playback-ffprobe (str ffprobe)
+         :stream-source-request!
+         (fn [{:keys [headers] :as request}]
+           (let [[_ start-text end-text]
+                 (re-matches #"bytes=(\d+)-(\d+)" (get headers "Range"))
+                 start (parse-long start-text)
+                 end (parse-long end-text)
+                 length (inc (- end start))]
+             (swap! requests conj request)
+             {:status 206
+              :headers {"content-range"
+                        (str "bytes " start "-" end "/100")
+                        "content-length" (str length)}
+              :body (ByteArrayInputStream. (byte-array length))})))]
+    (try
+      (is (= {:container {:format "mp4" :majorBrand "isom"}
+              :video {:codec "h264"
+                      :codecTag "avc1"
+                      :profile "High"
+                      :pixelFormat "yuv420p"}}
+             (drive/inspect-playback!
+              gateway "access" "private-file"
+              {:size 100 :mimeType "video/mp4"})))
+      (is (seq @requests))
+      (is (= "bytes=0-15" (get-in (first @requests) [:headers "Range"])))
+      (is (every?
+           (fn [request]
+             (let [[_ start-text end-text]
+                   (re-matches #"bytes=(\d+)-(\d+)"
+                               (get-in request [:headers "Range"]))]
+               (and start-text
+                    end-text
+                    (<= (parse-long start-text) (parse-long end-text))
+                    (< (parse-long end-text) 100))))
+           @requests))
+      (finally
+        (Files/deleteIfExists ffprobe)))))
+
 (deftest playback-analysis-finds-late-moov-metadata-with-bounded-remote-reads
   (let [source (playback-fixture-with-late-moov!)
         bytes (Files/readAllBytes source)
