@@ -18,6 +18,8 @@ Alpha Compose is the public product. The `animated-graph-cloud` service accepts 
 - Compose wizard state and dormant route drafts remain browser-memory-only.
 - Project JSON exists only after an explicit user download, copy, upload, or paste action; it may include private activity data and bounded embedded assets, but excludes credentials, CSRF values, signed URLs, recording-clock candidates, previews, playback state, jobs, and results.
 - Only the active projected `RenderRequest` is sent to preview or render APIs.
+- Transparent compose uses an implicit shared-clock/output-clock route with no user synchronization choice; finished-video compose explicitly chooses shared-clock vs one matching moment before output-timespan.
+- The timing workspace appears only on `matching-moment`, `output-timespan`, and `timer-overlay`; visible markers outside their owning step are read-only.
 - Every durable submission preflights its Drive delivery grant before job creation, including transparent overlay jobs without a source video.
 - Rendering emits a standard seekable MOV with ProRes 4444 alpha, 25 fps, and heartbeat audio.
 - Logs exclude email addresses, Google subjects, filenames, tokens, telemetry values, Drive credentials, and signed URLs.
@@ -34,9 +36,10 @@ When Alpha Compose says only `time` or `current time`, it means activity-device
 time. A different clock must be named explicitly, such as `video time`,
 `video recording start`, `video timezone`, or `output clock`. The full-source
 player shows elapsed time before a manual match, then derived synced recording
-time; the shared-clock route shows confirmed recording time. These explicit
-video/output-clock views and the rendered local clock do not replace
-activity-data time as the synchronization authority.
+time; the shared-clock finished-video route shows confirmed recording time; the
+transparent route shows only the output clock. These explicit video or
+output-clock views and the rendered local clock do not replace activity-data
+time as the synchronization authority.
 
 ## Error metadata and source locations
 

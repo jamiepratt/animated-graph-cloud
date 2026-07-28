@@ -24,6 +24,20 @@ request. The DOM is an input and presentation adapter for this state, not a
 second workflow model. Existing preview, durable job, and renderer endpoints
 continue to receive the unchanged `RenderRequest` contract.
 
+The step graph is route-specific. Transparent overlays now follow `outcome ->
+activity-data -> output-timespan -> optional-overlays -> conditional overlay
+steps -> output-settings -> review`. Finished videos follow `outcome ->
+source-video -> activity-data -> synchronization-decision ->
+confirm-video-clock|matching-moment -> output-timespan -> optional-overlays ->
+conditional overlay steps -> output-settings -> review`.
+
+Transparent overlays still project the same `RenderRequest` contract, but the
+browser workflow now treats them as implicit `shared-clock` output-clock work
+with no user-facing synchronization choice. The timing workspace appears only
+on `matching-moment`, `output-timespan`, and `timer-overlay`; non-owning
+markers may remain visible there, but they are read-only outside their owning
+step.
+
 Wizard state is memory-only. It is not written automatically to browser
 storage, cookies, Firestore, or another server store. Project JSON export and
 import use an explicitly allowlisted, versioned representation only after a
