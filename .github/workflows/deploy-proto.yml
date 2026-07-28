@@ -46,8 +46,10 @@ jobs:
         with:
           cli: 1.12.5.1654
           clj-kondo: 2026.05.25
-      - run: clj-kondo --lint src/agg/proto test/agg/proto_test_runner.clj test/agg/proto_release_test.clj test/agg/proto_source_test.clj test/agg/proto_ui_test.clj
-      - run: clojure -M:proto-test
+      # Proto pushes stay on the proto-only gate in test/proto_ci.sh:
+      # clojure -M:proto-test, not the broader main-branch suite.
+      - name: Run proto-only validation gate
+        run: test/proto_ci.sh
 
   deploy:
     needs: proto-tests
