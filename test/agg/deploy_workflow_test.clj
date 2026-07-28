@@ -237,9 +237,9 @@
   (is (str/includes? workflow
                      "AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS"))
   (is (not (str/includes? terraform-variables "monthly_budget_usd")))
-  (is (= 1 (count (re-seq #"AGG_MONTHLY_BUDGET_CENTS" workflow))))
-  (is (= 1 (count (re-seq #"AGG_PREVIEW_RESERVATION_CENTS" workflow))))
-  (is (= 1 (count (re-seq #"AGG_RENDER_RESERVATION_CENTS" workflow))))
+  (is (= 2 (count (re-seq #"AGG_MONTHLY_BUDGET_CENTS" workflow))))
+  (is (= 2 (count (re-seq #"AGG_PREVIEW_RESERVATION_CENTS" workflow))))
+  (is (= 2 (count (re-seq #"AGG_RENDER_RESERVATION_CENTS" workflow))))
   (is (not (str/includes? workflow "--set-env-vars"))))
 
 (deftest logs-metrics-dashboard-and-alerts-cover-the-operating-envelope
@@ -300,7 +300,7 @@
   (is (str/includes? workflow "AGG_PICKER_API_KEY=picker-api-key:latest"))
   (is (str/includes? workflow
                      "AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest"))
-  (is (= 2 (count (re-seq #"AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest"
+  (is (= 3 (count (re-seq #"AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest"
                           workflow))))
   (is (str/includes? terraform
                      "resource \"google_secret_manager_secret_iam_member\" \"api_token_hash_access\"")))
@@ -312,7 +312,7 @@
     (is (number? public-index))
     (is (< auth-index public-index))
     (is (str/includes? workflow "AGG_PUBLIC_BASE_URL=$CLOUD_RUN_SERVICE_URL"))
-    (is (= 2 (count (re-seq #"AGG_OWNER_EMAIL=\$OWNER_EMAIL" workflow))))
+    (is (= 3 (count (re-seq #"AGG_OWNER_EMAIL=\$OWNER_EMAIL" workflow))))
     (is (str/includes? workflow "AGG_PICKER_APP_ID=$PROJECT_NUMBER"))))
 
 (deftest cloud-stage-reports-survive-an-uberjar-build-and-support-resume
