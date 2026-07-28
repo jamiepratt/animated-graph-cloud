@@ -1,8 +1,8 @@
-name: Deploy proto smoke path
+name: Deploy smoke path
 
 on:
   push:
-    branches: [codex/issue-161-proto-only]
+    branches: [main, dev]
   workflow_dispatch:
 
 permissions:
@@ -10,7 +10,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: development-proto-deployment
+  group: development-deployment
   cancel-in-progress: false
 
 env:
@@ -18,12 +18,17 @@ env:
   PROJECT_NUMBER: "891643499444"
   REGION: europe-central2
   REPOSITORY: containers
-  PROTO_SERVICE: agg-proto
+  SERVICE: agg-api
+  DURABLE_JOB: agg-renderer
+  SMOKE_JOB: agg-renderer-smoke
   IMAGE: europe-central2-docker.pkg.dev/animated-graph-cloud-jp/containers/animated-graph-cloud:${{ github.sha }}
   DEPLOYER_SERVICE_ACCOUNT: agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com
   API_SERVICE_ACCOUNT: agg-api@animated-graph-cloud-jp.iam.gserviceaccount.com
+  RENDERER_SERVICE_ACCOUNT: agg-renderer@animated-graph-cloud-jp.iam.gserviceaccount.com
   OWNER_EMAIL: me@jamiep.org
   ADMIN_EMAILS: me@jamiep.org;bartoszjakubowiak@gmail.com
+  EARLY_ACCESS_SENDER: Alpha Compose <early-access@alphacompose.com>
+  EARLY_ACCESS_RECIPIENT: me@jamiep.org
   DAILY_SUBMISSION_LIMIT: "100"
   MONTHLY_BUDGET_MINOR_UNITS: "40000"
   PREVIEW_RESERVATION_MINOR_UNITS: "125"
@@ -34,31 +39,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
 
       - name: Build image
         run: docker build --tag "$IMAGE" .
 
-      - name: Verify proto container health locally
-        run: |
-          set -euo pipefail
-          health_file="$(mktemp)"
-          container_id="$(docker run --rm -d -p 127.0.0.1::8080 -e AGG_SERVICE_PROFILE=proto "$IMAGE")"
-          cleanup() {
-            docker rm -f "$container_id" >/dev/null 2>&1 || true
-            rm -f "$health_file"
-          }
-          trap cleanup EXIT INT TERM
-          host_port="$(docker port "$container_id" 8080/tcp | sed -n 's/.*://p' | tail -1)"
-          attempt=0
-          while [ "$attempt" -lt 50 ]; do
-            if curl --fail --silent --show-error \
-              "http://127.0.0.1:$host_port/health" >"$health_file" 2>/dev/null; then
-              break
-            fi
-            attempt=$((attempt + 1))
-            sleep 0.2
-          done
-          test "$(cat "$health_file")" = '{"status":"ok"}'
+      - name: Test image entry points
+        run: test/container_smoke.sh "$IMAGE"
 
       - name: Scan image
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
@@ -82,10 +70,20 @@ jobs:
         with:
           version: ">= 541.0.0"
 
+      - name: Verify enabled development Resend secret version
+        run: |
+          set -euo pipefail
+          if ! resend_secret_state="$(gcloud secrets versions describe latest \
+            --project="$PROJECT_ID" \
+            --secret=resend-api-key \
+            --format='value(state)')" || [ "$resend_secret_state" != "ENABLED" ]; then
+            echo "::error title=Resend bootstrap required::Apply the issue #103 Terraform secret bootstrap, add an enabled development resend-api-key version, then rerun this workflow through workflow_dispatch."
+            exit 1
+          fi
+
       - id: image
         name: Push and resolve immutable image digest
         run: |
-          set -euo pipefail
           gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
           docker push "$IMAGE"
           digest="$(gcloud artifacts docker images describe "$IMAGE" \
@@ -93,23 +91,32 @@ jobs:
           test -n "$digest"
           echo "uri=$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/animated-graph-cloud@$digest" >>"$GITHUB_OUTPUT"
 
-      - id: api-service-url
-        name: Discover existing development API URL
+      - id: previous-release
+        name: Capture current API and renderer release
         run: |
           set -euo pipefail
-          service_url="$(gcloud run services describe agg-api \
+          service_json="$(gcloud run services describe "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
-            --format 'value(status.url)')"
-          test -n "$service_url"
-          echo "url=$service_url" >>"$GITHUB_OUTPUT"
+            --format=json)"
+          api_revision="$(jq -r \
+            '[.status.traffic[]? | select(.percent == 100 and .revisionName != null)] | if length == 1 then .[0].revisionName else empty end' \
+            <<<"$service_json")"
+          renderer_image="$(gcloud run jobs describe "$DURABLE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(spec.template.spec.template.spec.containers[0].image)')"
+          test -n "$api_revision"
+          test -n "$renderer_image"
+          echo "api_revision=$api_revision" >>"$GITHUB_OUTPUT"
+          echo "renderer_image=$renderer_image" >>"$GITHUB_OUTPUT"
 
-      - name: Deploy proto service
+      - id: api-candidate
+        name: Deploy private API service
         env:
           IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
-          API_SERVICE_URL: ${{ steps.api-service-url.outputs.url }}
         run: |
-          gcloud run deploy "$PROTO_SERVICE" \
+          gcloud run deploy "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --image "$IMAGE_DIGEST" \
@@ -117,53 +124,160 @@ jobs:
             --port 8080 \
             --cpu 1 \
             --memory 512Mi \
-            --concurrency 16 \
             --min 0 \
             --max 2 \
+            --update-env-vars "AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_EARLY_ACCESS_SENDER=$EARLY_ACCESS_SENDER,AGG_EARLY_ACCESS_RECIPIENT=$EARLY_ACCESS_RECIPIENT" \
+            --update-secrets "AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest,AGG_RESEND_API_KEY=resend-api-key:latest" \
             --no-allow-unauthenticated \
-            --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_SERVICE_PROFILE=proto,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=agg-renderer,AGG_DISPATCHER_URL=$API_SERVICE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
-            --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
+            --no-traffic \
             --quiet
 
-      - id: proto-service-url
-        name: Discover private proto audience
+      - id: durable-promotion
+        name: Promote durable renderer
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
         run: |
-          service_url="$(gcloud run services describe "$PROTO_SERVICE" \
+          gcloud run jobs update "$DURABLE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE_DIGEST" \
+            --quiet
+
+      - id: image-parity
+        name: Verify API and durable renderer image parity
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+        run: |
+          service_image="$(gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(spec.template.spec.containers[0].image)')"
+          durable_image="$(gcloud run jobs describe "$DURABLE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(spec.template.spec.template.spec.containers[0].image)')"
+          test "$service_image" = "$durable_image"
+          test "$service_image" = "$IMAGE_DIGEST"
+
+      - id: api-activation
+        name: Activate verified API revision
+        run: |
+          gcloud run services update-traffic "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --to-latest \
+            --quiet
+
+      - name: Restore matched previous API and renderer release
+        if: ${{ failure() && steps.durable-promotion.outcome != 'skipped' && steps.api-activation.outcome != 'success' }}
+        run: |
+          rollback_failed=0
+          gcloud run jobs update "$DURABLE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "${{ steps.previous-release.outputs.renderer_image }}" \
+            --quiet || rollback_failed=1
+          gcloud run services update-traffic "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --to-revisions "${{ steps.previous-release.outputs.api_revision }}=100" \
+            --quiet || rollback_failed=1
+          test "$rollback_failed" = 0
+
+      - name: Deploy and execute renderer smoke job
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+        run: |
+          gcloud run jobs deploy "$SMOKE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE_DIGEST" \
+            --service-account "$RENDERER_SERVICE_ACCOUNT" \
+            --args clojure.main,-m,agg.renderer.main \
+            --tasks 1 \
+            --max-retries 0 \
+            --task-timeout 5m \
+            --cpu 1 \
+            --memory 512Mi \
+            --quiet
+          gcloud run jobs execute "$SMOKE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --wait
+
+      - id: service-url
+        name: Discover private API audience
+        run: |
+          service_url="$(gcloud run services describe "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --format 'value(status.url)')"
           echo "url=$service_url" >>"$GITHUB_OUTPUT"
 
-      - name: Set proto public base URL
+      - name: Enable authenticated durable job lifecycle
         env:
-          PROTO_RUN_SERVICE_URL: ${{ steps.proto-service-url.outputs.url }}
+          CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
         run: |
-          gcloud run services update "$PROTO_SERVICE" \
+          gcloud run services update "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
-            --update-env-vars "AGG_PUBLIC_BASE_URL=$PROTO_RUN_SERVICE_URL" \
+            --remove-env-vars "AGG_MONTHLY_BUDGET_CENTS,AGG_PREVIEW_RESERVATION_CENTS,AGG_RENDER_RESERVATION_CENTS" \
+            --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=agg-renderer,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$CLOUD_RUN_SERVICE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_EARLY_ACCESS_SENDER=$EARLY_ACCESS_SENDER,AGG_EARLY_ACCESS_RECIPIENT=$EARLY_ACCESS_RECIPIENT,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
+            --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest,AGG_RESEND_API_KEY=resend-api-key:latest" \
             --quiet
 
-      - name: Open proto ingress
+      - name: Open ingress after application authentication is configured
         run: |
-          gcloud run services add-iam-policy-binding "$PROTO_SERVICE" \
+          gcloud run services add-iam-policy-binding "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --member=allUsers \
             --role=roles/run.invoker \
             --quiet
 
-      - name: Verify proto health and identity
+      - id: health-auth
+        name: Mint private API identity token through WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud
+          service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service-url.outputs.url }}
+          id_token_include_email: true
+
+      - name: Verify health, identities, and structured log
         env:
-          PROTO_RUN_SERVICE_URL: ${{ steps.proto-service-url.outputs.url }}
+          CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
+          CLOUD_RUN_ID_TOKEN: ${{ steps.health-auth.outputs.id_token }}
         run: |
-          set -euo pipefail
           health="$(curl --fail --silent --show-error \
             --retry 5 --retry-all-errors \
-            "$PROTO_RUN_SERVICE_URL/health")"
+            --header "Authorization: Bearer $CLOUD_RUN_ID_TOKEN" \
+            "$CLOUD_RUN_SERVICE_URL/health")"
           test "$health" = '{"status":"ok"}'
-          service_identity="$(gcloud run services describe "$PROTO_SERVICE" \
+
+          service_identity="$(gcloud run services describe "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --format 'value(spec.template.spec.serviceAccountName)')"
+          job_identity="$(gcloud run jobs describe "$SMOKE_JOB" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format 'value(spec.template.spec.template.spec.serviceAccountName)')"
           test "$service_identity" = "$API_SERVICE_ACCOUNT"
+          test "$job_identity" = "$RENDERER_SERVICE_ACCOUNT"
+
+          attempt=0
+          event=""
+          while [ "$attempt" -lt 12 ] && [ "$event" != "smoke_complete" ]; do
+            event="$(gcloud logging read \
+              'resource.type="cloud_run_job" AND resource.labels.job_name="agg-renderer-smoke" AND jsonPayload.event="smoke_complete"' \
+              --project "$PROJECT_ID" \
+              --freshness 10m \
+              --limit 1 \
+              --format 'value(jsonPayload.event)')"
+            attempt=$((attempt + 1))
+            if [ "$event" != "smoke_complete" ]; then sleep 5; fi
+          done
+          test "$event" = "smoke_complete"

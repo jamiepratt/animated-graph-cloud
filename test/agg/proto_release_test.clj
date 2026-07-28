@@ -22,12 +22,16 @@
     (is (str/includes? shared-infra "resource \"google_cloud_run_v2_service\" \"proto\""))
     (is (str/includes? shared-infra "name                = \"agg-proto\""))
     (is (str/includes? shared-infra "value = \"proto\""))
-    (testing "development workflow is proto-only"
-      (is (str/includes? dev-workflow "PROTO_SERVICE: agg-proto"))
-      (is (str/includes? dev-workflow "gcloud run deploy \"$PROTO_SERVICE\""))
-      (is (str/includes? dev-workflow "AGG_SERVICE_PROFILE=proto"))
-      (is (not (str/includes? dev-workflow "Deploy private API service")))
-      (is (not (str/includes? dev-workflow "Promote durable renderer"))))
+    (testing "development workflow deploys the dev server from main and dev"
+      (is (str/includes? dev-workflow
+                         "branches: [main, dev]"))
+      (is (str/includes? dev-workflow "ref: ${{ github.sha }}"))
+      (is (str/includes? dev-workflow "SERVICE: agg-api"))
+      (is (str/includes? dev-workflow "DURABLE_JOB: agg-renderer"))
+      (is (str/includes? dev-workflow "Deploy private API service"))
+      (is (str/includes? dev-workflow "Promote durable renderer"))
+      (is (not (str/includes? dev-workflow "PROTO_SERVICE: agg-proto")))
+      (is (not (str/includes? dev-workflow "AGG_SERVICE_PROFILE=proto"))))
     (testing "production workflow still deploys and configures agg-proto"
       (is (str/includes? prod-workflow "PROTO_SERVICE: agg-proto"))
       (is (str/includes? prod-workflow "gcloud run deploy \"$PROTO_SERVICE\""))

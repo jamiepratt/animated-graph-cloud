@@ -12,7 +12,6 @@
             [agg.api-ui-test]
             [agg.contracts-test]
             [agg.deploy-workflow-test]
-            [agg.development-gate-test]
             [agg.errors-test]
             [agg.garmin-test]
             [agg.drive-test]
@@ -53,7 +52,6 @@
                                              'agg.auth-test
                                              'agg.browser-process-test
                                              'agg.deploy-workflow-test
-                                             'agg.development-gate-test
                                              'agg.errors-test
                                              'agg.garmin-test
                                              'agg.drive-test
