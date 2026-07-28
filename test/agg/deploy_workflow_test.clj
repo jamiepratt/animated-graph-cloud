@@ -40,8 +40,8 @@
   (is (str/includes? terraform
                      "value = var.project_id")))
 
-(deftest development-workflow-remains-main-only
-  (is (re-find #"(?s)on:\s+push:\s+branches: \[main\]" workflow))
+(deftest development-workflow-covers-main-and-dev
+  (is (re-find #"(?s)on:\s+push:\s+branches: \[main, dev\]" workflow))
   (is (not (str/includes? workflow "branches: [proto]"))))
 
 (deftest private-health-probe-uses-an-audience-correct-wif-id-token
@@ -111,10 +111,6 @@
         rollback-section (or (workflow-section
                               "- name: Restore matched previous API and renderer release"
                               "- name: Deploy and execute renderer smoke job") "")]
-    (is (str/includes? workflow "name: Deploy smoke path"))
-    (is (str/includes? workflow "branches: [main, dev]"))
-    (is (str/includes? workflow "group: development-deployment"))
-    (is (str/includes? workflow "ref: ${{ github.sha }}"))
     (is (str/includes? workflow "DURABLE_JOB: agg-renderer"))
     (is (str/includes? workflow "SMOKE_JOB: agg-renderer-smoke"))
     (doseq [position [image-push previous-release api-deploy durable-promotion

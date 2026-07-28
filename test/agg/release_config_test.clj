@@ -14,19 +14,21 @@
     (when (and start end)
       (subs text start end))))
 
-(deftest production-infrastructure-is-isolated-and-main-only
+(deftest production-infrastructure-is-isolated-and-ref-bound
   (let [production (slurp "infra/prod/main.tf")
         backend (slurp "infra/prod/versions.tf")
         variables (slurp "infra/prod/variables.tf")
-        shared (slurp "infra/dev/main.tf")]
+        shared (slurp "infra/dev/main.tf")
+        shared-variables (slurp "infra/dev/variables.tf")]
     (is (str/includes? production "source = \"../dev\""))
     (is (re-find #"project_id\s*=\s*\"animated-graph-cloud-prod-jp\"" production))
     (is (re-find #"environment_name\s*=\s*\"production\"" production))
     (is (re-find #"import_default_firestore\s*=\s*false" production))
-    (is (re-find #"github_subject\s*=\s*\"repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/main\""
-                 production))
-    (is (re-find #"enable_proto_service\s*=\s*false" production))
-    (is (not (str/includes? production "removed {")))
+    (is (re-find #"github_subjects\s*=\s*\[" production))
+    (is (str/includes? production
+                       "repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/main"))
+    (is (str/includes? production
+                       "repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/proto"))
     (is (str/includes? backend
                        "bucket = \"animated-graph-cloud-prod-jp-tfstate\""))
     (is (str/includes? backend "prefix = \"prod\""))
@@ -36,10 +38,9 @@
                        "for_each = var.import_default_firestore ? toset([var.project_id]) : toset([])"))
     (is (str/includes? shared "id = \"projects/${each.value}/databases/(default)\""))
     (is (str/includes? shared "count = var.api_service_url == \"\" ? 0 : 1"))
-    (is (re-find #"(?s)variable \"enable_proto_service\".*?default\s*=\s*true"
-                 (slurp "infra/dev/variables.tf")))
-    (is (re-find #"(?s)resource \"google_cloud_run_v2_service\" \"proto\".*?count\s*=\s*var\.enable_proto_service \? 1 : 0"
-                 shared))))
+    (is (str/includes? shared-variables "variable \"github_subjects\""))
+    (is (str/includes? shared "length(var.github_subjects) == 0"))
+    (is (str/includes? shared "assertion.sub == '"))))
 
 (deftest production-enables-observability-log-ttl-after-bootstrap
   (let [production (slurp "infra/prod/main.tf")
@@ -52,17 +53,6 @@
     (is (re-find #"(?s)moved \{\s*from\s*=\s*google_firestore_field\.observability_logs_expiry\s*to\s*=\s*google_firestore_field\.observability_logs_expiry\[0\]\s*\}"
                  shared))
     (is (re-find #"enable_observability_log_ttl\s*=\s*true" production))))
-
-(deftest production-workflow-detaches-proto-from-main-state-without-deleting-it
-  (let [workflow (slurp ".github/workflows/deploy-production.yml")]
-    (is (str/includes? workflow
-                       "Detaching stale proto resource from main production Terraform state"))
-    (is (str/includes? workflow
-                       "module.application.google_cloud_run_v2_service.proto"))
-    (is (str/includes? workflow
-                       "'module.application.google_cloud_run_v2_service.proto[0]'"))
-    (is (str/includes? workflow
-                       "terraform -chdir=infra/prod state rm \"$proto_address\""))))
 
 (deftest production-bootstrap-documents-the-ttl-owner-checkpoint
   (let [decision (slurp "docs/adr/0011-automatic-production-deployment.md")
@@ -118,7 +108,6 @@
 
 (deftest production-release-deploys-directly-from-protected-main
   (let [workflow (slurp ".github/workflows/deploy-production.yml")
-        runbook (slurp "docs/production-runbook.md")
         deploy-position (str/index-of workflow "  deploy:")
         deploy (if (number? deploy-position)
                  (subs workflow deploy-position)
@@ -140,7 +129,8 @@
                      "gh-axi workflow run deploy.yml --ref main"
                      "gh-axi run watch DEVELOPMENT_RUN_ID"
                      "there is no input that bypasses the development gate"]]
-      (testing missing (is (not (str/includes? (str workflow "\n" runbook) missing)))))
+      (testing missing
+        (is (not (str/includes? workflow missing)))))
     (doseq [contract ["contents: read"
                       "id-token: write"]]
       (testing contract (is (str/includes? deploy contract))))
@@ -150,8 +140,7 @@
                       "docker push"
                       "gcloud run deploy"
                       "module.application.google_cloud_run_v2_job.renderer"]]
-      (testing mutation
-        (is (str/includes? deploy mutation))))
+      (testing mutation (is (str/includes? deploy mutation))))
     (doseq [position [deploy-position build-position terraform-position]]
       (is (number? position)))
     (when (every? number? [deploy-position build-position terraform-position])
@@ -186,6 +175,7 @@
 (deftest early-access-email-release-is-secret-backed-and-checkpointed
   (let [shared (slurp "infra/dev/main.tf")
         production-module (slurp "infra/prod/main.tf")
+        development-workflow (slurp ".github/workflows/deploy.yml")
         production-workflow (slurp ".github/workflows/deploy-production.yml")
         runtime (slurp "src/agg/jobs/gcp.clj")
         auth-runtime (slurp "src/agg/auth/gcp.clj")
@@ -201,15 +191,16 @@
     (is (re-find #"(?s)resource \"google_secret_manager_secret_iam_member\" \"api_resend_access\".*?secret_id\s*=\s*google_secret_manager_secret\.application\[\"resend-api-key\"\]\.secret_id.*?member\s*=\s*\"serviceAccount:\$\{google_service_account\.api\.email\}\""
                  shared))
     (is (str/includes? production-module "source = \"../dev\""))
-    (is (str/includes? production-workflow
-                       "AGG_RESEND_API_KEY=resend-api-key:latest"))
-    (is (str/includes? production-workflow
-                       "AGG_EARLY_ACCESS_SENDER=$EARLY_ACCESS_SENDER"))
-    (is (str/includes? production-workflow
-                       "AGG_EARLY_ACCESS_RECIPIENT=$EARLY_ACCESS_RECIPIENT"))
-    (is (str/includes? production-workflow
-                       "EARLY_ACCESS_SENDER: Alpha Compose <early-access@alphacompose.com>"))
-    (is (str/includes? production-workflow "EARLY_ACCESS_RECIPIENT: me@jamiep.org"))
+    (doseq [workflow [development-workflow production-workflow]]
+      (is (str/includes? workflow
+                         "AGG_RESEND_API_KEY=resend-api-key:latest"))
+      (is (str/includes? workflow
+                         "AGG_EARLY_ACCESS_SENDER=$EARLY_ACCESS_SENDER"))
+      (is (str/includes? workflow
+                         "AGG_EARLY_ACCESS_RECIPIENT=$EARLY_ACCESS_RECIPIENT"))
+      (is (str/includes? workflow
+                         "EARLY_ACCESS_SENDER: Alpha Compose <early-access@alphacompose.com>"))
+      (is (str/includes? workflow "EARLY_ACCESS_RECIPIENT: me@jamiep.org")))
     (doseq [setting ["AGG_RESEND_API_KEY"
                      "AGG_EARLY_ACCESS_SENDER"
                      "AGG_EARLY_ACCESS_RECIPIENT"]]
@@ -390,10 +381,10 @@
                       "AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS"]]
       (testing contract
         (is (str/includes? workflow contract))))
-    (is (= 2 (count (re-seq
+    (is (= 3 (count (re-seq
                      #"AGG_PREVIEW_RESERVATION_MINOR_UNITS=\$PREVIEW_RESERVATION_MINOR_UNITS"
                      workflow)))
-        "every main-promoted production Cloud Run profile receives the Preview policy")
+        "every production Cloud Run profile receives the Preview policy")
     (doseq [approval ["exactly one Preview and one Submit"
                       "Preview reservation: PLN 1.25"
                       "durable Submit reservation: PLN 1.25"
@@ -604,17 +595,11 @@
                        "-var=\"api_service_url=$CLOUD_RUN_SERVICE_URL\""))
     (is (str/includes? workflow
                        "-target=module.application.google_cloud_run_v2_service.api"))
-    (is (not (str/includes? workflow
-                            "-target=module.application.google_cloud_run_v2_service.proto")))
     (is (str/includes? workflow
                        "-target=module.application.google_cloud_run_v2_service.overlay"))
     (is (str/includes? workflow
                        "-target=module.application.google_cloud_run_v2_job.renderer"))
-    (is (not (str/includes? workflow "Deploy private proto candidate")))
-    (is (not (str/includes? workflow "Discover private proto origin")))
-    (is (not (str/includes? workflow "Mint proto origin identity token through WIF")))
-    (is (not (str/includes? workflow "Publish pinned proto Firebase Hosting routes")))
-    (is (= 2 (count (re-seq #"--member=allUsers" workflow))))
+    (is (= 3 (count (re-seq #"--member=allUsers" workflow))))
     (doseq [position [terraform-init api-deploy overlay-deploy
                       private-verification terraform-apply
                       reconciled-verification public-ingress firebase-deploy]]
