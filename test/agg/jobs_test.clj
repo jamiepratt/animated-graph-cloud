@@ -63,6 +63,28 @@
               (millis [] (.toEpochMilli ^Instant @now))))]
     (clock-for ZoneOffset/UTC)))
 
+(deftest job-domain-transitions-preserve-admission-retry-and-cancellation-rules
+  (let [now (Instant/parse "2026-07-28T12:00:00Z")
+        cancelled (:job (jobs/cancel-transition {:state :queued :attempt 1} now))
+        retried (jobs/retry-transition cancelled now 125)]
+    (is (= {:submitted 2 :reserved 250}
+           (jobs/admit-submission! {:active-leases 0 :submitted 1 :daily-limit 100
+                                    :reserved 125 :reservation 125
+                                    :monthly-budget-minor-units 40000})))
+    (is (= {:state :cancelled :attempt 1} (select-keys cancelled [:state :attempt])))
+    (is (= {:state :queued :attempt 2 :reservation-kind :render
+            :reservation-minor-units 125}
+           (select-keys retried [:state :attempt :reservation-kind
+                                 :reservation-minor-units])))
+    (is (= ::jobs/capacity-exhausted
+           (exception-type #(jobs/admit-submission!
+                             {:active-leases jobs/max-active-leases
+                              :submitted 0 :daily-limit 100 :reserved 0
+                              :reservation 125 :monthly-budget-minor-units 40000}))))
+    (is (= ::jobs/invalid-transition
+           (exception-type #(jobs/retry-transition {:state :succeeded :attempt 1}
+                                                   now 125))))))
+
 (deftest daily-admission-accepts-exactly-one-hundred-unique-submissions
   (let [service (:service (jobs/in-memory-system))
         request (render-request)]

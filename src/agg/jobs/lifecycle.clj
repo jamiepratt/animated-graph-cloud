@@ -335,6 +335,55 @@
     (or cancelled?
         (and failed? (not (false? failure-retryable))))))
 
+(declare cancelled-job)
+
+(defn admit-submission!
+  "Applies the durable job admission policy to an adapter-provided snapshot."
+  [{:keys [active-leases submitted daily-limit reserved reservation
+           monthly-budget-minor-units]}]
+  (when (>= active-leases max-active-leases)
+    (throw (errors/raise! "All render leases are held"
+                          {:type ::capacity-exhausted})))
+  (when (>= submitted daily-limit)
+    (throw (errors/raise! "Daily submission limit is exhausted"
+                          {:type ::daily-submission-limit-exhausted})))
+  (when (> (+ reserved reservation) monthly-budget-minor-units)
+    (throw (errors/raise! "Monthly compute budget is exhausted"
+                          {:type ::monthly-budget-exhausted})))
+  {:submitted (inc submitted)
+   :reserved (+ reserved reservation)})
+
+(defn cancel-transition
+  "Returns the next durable job state and any execution needing cancellation."
+  [job now]
+  (case (:state job)
+    :cancelled {:job job}
+    :queued {:job (cancelled-job job now)}
+    (:launching :running)
+    {:job (assoc job :state :cancellation-requested :updated-at now)
+     :execution (:execution job)}
+    :cancellation-requested {:job job}
+    (throw (errors/raise! "Terminal job cannot be cancelled"
+                          {:type ::invalid-transition
+                           :state (:state job)}))))
+
+(defn retry-transition
+  "Creates the next attempt after adapter-level membership and budget admission."
+  [job now reservation]
+  (when-not (retry-eligible? job)
+    (throw (errors/raise! "Job is not eligible for retry"
+                          {:type ::invalid-transition
+                           :state (:state job)})))
+  (-> job
+      (assoc :state :queued
+             :attempt (inc (:attempt job))
+             :reservation-kind (if (= :preview (:operation-kind job))
+                                 :preview :render)
+             :reservation-minor-units reservation
+             :updated-at now)
+      (dissoc :lease :lease-token :lease-expires-at :execution :failure
+              :failure-diagnostics :output)))
+
 (defn- active-lease? [now job]
   (when-let [expires-at (get-in job [:lease :expires-at])]
     (.isAfter ^Instant expires-at now)))
@@ -449,18 +498,13 @@
                       reservation (reservation-minor-units
                                    request preview-reservation-minor-units
                                    render-reservation-minor-units)
-                      _ (when (>= (count (filter #(active-lease? now %)
-                                                 (vals (:jobs @state))))
-                                  max-active-leases)
-                          (throw (errors/raise! "All render leases are held"
-                                                {:type ::capacity-exhausted})))
-                      _ (when (>= submitted daily-limit)
-                          (throw (errors/raise! "Daily submission limit is exhausted"
-                                                {:type ::daily-submission-limit-exhausted})))
-                      _ (when (> (+ reserved reservation)
-                                 monthly-budget-minor-units)
-                          (throw (errors/raise! "Monthly compute budget is exhausted"
-                                                {:type ::monthly-budget-exhausted})))
+                      admission (admit-submission!
+                                 {:active-leases (count (filter #(active-lease? now %)
+                                                                (vals (:jobs @state))))
+                                  :submitted submitted :daily-limit daily-limit
+                                  :reserved reserved :reservation reservation
+                                  :monthly-budget-minor-units
+                                  monthly-budget-minor-units})
                       job (cond-> {:id job-id
                                    :state :queued
                                    :attempt 1
@@ -481,9 +525,9 @@
                                                {:job-id job-id
                                                 :digest request-digest})
                                      (assoc-in [:admission :daily day]
-                                               (inc submitted))
+                                               (:submitted admission))
                                      (assoc-in [:admission :monthly month]
-                                               (+ reserved reservation)))))
+                                               (:reserved admission)))))
                   {:created? true :job job}))))
           result (with-member-action member-directory
                    (member-identity request)
@@ -574,25 +618,10 @@
             (let [job (get-in @state [:jobs job-id])]
               (when-not job
                 (throw (errors/raise! "Job does not exist" {:type ::job-not-found})))
-              (case (:state job)
-                :cancelled {:job job}
-                :queued (let [updated (cancelled-job job now)]
-                          (swap! state assoc-in [:jobs job-id] updated)
-                          {:job updated})
-                :launching (let [updated (assoc job
-                                                :state :cancellation-requested
-                                                :updated-at now)]
-                             (swap! state assoc-in [:jobs job-id] updated)
-                             {:job updated})
-                :running (let [updated (assoc job
-                                              :state :cancellation-requested
-                                              :updated-at now)]
-                           (swap! state assoc-in [:jobs job-id] updated)
-                           {:job updated :execution (:execution job)})
-                :cancellation-requested {:job job}
-                (throw (errors/raise! "Terminal job cannot be cancelled"
-                                      {:type ::invalid-transition
-                                       :state (:state job)})))))]
+              (let [transition (cancel-transition job now)]
+                (when (not= job (:job transition))
+                  (swap! state assoc-in [:jobs job-id] (:job transition)))
+                transition)))]
       (if-let [execution (:execution result)]
         (do
           (request-execution-cancellation! launcher execution)
@@ -633,17 +662,7 @@
                                    monthly-budget-minor-units)
                             (throw (errors/raise! "Monthly compute budget is exhausted"
                                                   {:type ::monthly-budget-exhausted})))
-                        updated (-> job
-                                    (assoc :state :queued
-                                           :attempt (inc (:attempt job))
-                                           :reservation-kind
-                                           (if (= :preview (:operation-kind job))
-                                             :preview
-                                             :render)
-                                           :reservation-minor-units reservation
-                                           :updated-at now)
-                                    (dissoc :lease :execution :failure
-                                            :failure-diagnostics :output))]
+                        updated (retry-transition job now reservation)]
                     (swap! state
                            (fn [current]
                              (-> current

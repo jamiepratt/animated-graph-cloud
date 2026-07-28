@@ -764,35 +764,29 @@
                                    0))]
                      (require-transaction-member!
                       member-directory transaction (member-identity request))
-                     (when (>= (count (capacity-leases capacity now))
-                               lifecycle/max-active-leases)
-                       (throw (errors/raise! "All render leases are held"
-                                             {:type ::lifecycle/capacity-exhausted})))
-                     (when (>= submitted daily-limit)
-                       (throw (errors/raise!
-                               "Daily submission limit is exhausted"
-                               {:type
-                                ::lifecycle/daily-submission-limit-exhausted})))
-                     (when (> (+ reserved reservation-minor-units)
-                              monthly-budget-minor-units)
-                       (throw (errors/raise! "Monthly compute budget is exhausted"
-                                             {:type
-                                              ::lifecycle/monthly-budget-exhausted})))
-                     (.set ^Transaction transaction (.document jobs job-id)
-                           (job-doc candidate))
-                     (.set ^Transaction transaction idempotency-ref
-                           {"jobId" job-id "requestDigest" digest})
-                     (.set ^Transaction transaction day-ref
-                           {"day" day
-                            "submissionCount" (inc submitted)
-                            "updatedAt" now})
-                     (.set ^Transaction transaction budget-ref
-                           (budget-data
-                            month (+ reserved reservation-minor-units)
-                            monthly-budget-minor-units
-                            preview-reservation-minor-units
-                            render-reservation-minor-units now))
-                     {:created? true :job candidate})))))
+                     (let [admission
+                           (lifecycle/admit-submission!
+                            {:active-leases (count (capacity-leases capacity now))
+                             :submitted submitted :daily-limit daily-limit
+                             :reserved reserved
+                             :reservation reservation-minor-units
+                             :monthly-budget-minor-units
+                             monthly-budget-minor-units})]
+                       (.set ^Transaction transaction (.document jobs job-id)
+                             (job-doc candidate))
+                       (.set ^Transaction transaction idempotency-ref
+                             {"jobId" job-id "requestDigest" digest})
+                       (.set ^Transaction transaction day-ref
+                             {"day" day
+                              "submissionCount" (:submitted admission)
+                              "updatedAt" now})
+                       (.set ^Transaction transaction budget-ref
+                             (budget-data
+                              month (:reserved admission)
+                              monthly-budget-minor-units
+                              preview-reservation-minor-units
+                              render-reservation-minor-units now))
+                       {:created? true :job candidate}))))))
             (catch Throwable error
               (rethrow-transaction-contention!
                member-directory (member-identity request) error)))]
@@ -897,18 +891,11 @@
                    now (now-ms clock)]
                (when-not job
                  (throw (errors/raise! "Job does not exist" {:type ::lifecycle/job-not-found})))
-               (case (:state job)
-                 :cancelled job
-                 :queued (let [updated (terminal-job job :cancelled now)]
-                           (.set ^Transaction transaction job-ref (job-doc updated))
-                           updated)
-                 (:launching :running :cancellation-requested)
-                 (let [updated (assoc job :state :cancellation-requested
-                                      :updated-at now)]
-                   (.set ^Transaction transaction job-ref (job-doc updated))
-                   updated)
-                 (throw (errors/raise! "Terminal job cannot be cancelled"
-                                       {:type ::lifecycle/invalid-transition}))))))]
+               (let [transition (lifecycle/cancel-transition job now)
+                     updated (:job transition)]
+                 (when (not= job updated)
+                   (.set ^Transaction transaction job-ref (job-doc updated)))
+                 updated))))]
       (if-let [execution (:execution requested)]
         (do
           (lifecycle/request-execution-cancellation! launcher execution)
@@ -963,19 +950,8 @@
                      (throw (errors/raise! "Monthly compute budget is exhausted"
                                            {:type
                                             ::lifecycle/monthly-budget-exhausted})))
-                   (let [updated (-> job
-                                     (assoc :state :queued
-                                            :attempt (inc (:attempt job))
-                                            :reservation-kind
-                                            (if (= :preview (:operation-kind job))
-                                              :preview
-                                              :render)
-                                            :reservation-minor-units
-                                            reservation-minor-units
-                                            :updated-at now)
-                                     (dissoc :failure :failure-diagnostics
-                                             :output :execution
-                                             :lease-token :lease-expires-at))]
+                   (let [updated (lifecycle/retry-transition
+                                  job now reservation-minor-units)]
                      (.set ^Transaction transaction job-ref (job-doc updated))
                      (.set ^Transaction transaction budget-ref
                            (budget-data
