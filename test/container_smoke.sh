@@ -60,9 +60,12 @@ docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -
 
 docker run --rm "$image" clojure.main -e '
 (require (quote [agg.render.audio :as audio])
+         (quote [agg.drive.core :as drive])
+         (quote [agg.drive.range-proxy :as range-proxy])
          (quote [agg.render.media :as media])
          (quote [agg.renderer.main :as renderer]))
 (import (quote java.awt.image.BufferedImage)
+        (quote java.io.ByteArrayInputStream)
         (quote java.io.ByteArrayOutputStream)
         (quote java.nio.file.Files)
         (quote java.nio.file.OpenOption)
@@ -108,6 +111,33 @@ docker run --rm "$image" clojure.main -e '
                      (.inheritIO)))]
       (when-not (zero? (.waitFor process))
         (throw (ex-info "short source fixture generation failed" {}))))
+    (let [source-bytes (Files/readAllBytes source-path)
+          source-size (alength source-bytes)
+          gateway
+          (reify drive/PlaybackGateway
+            (open-source-range! [_ _ _ {:keys [start end]}]
+              (let [body (java.util.Arrays/copyOfRange
+                          source-bytes (int start) (int (inc end)))]
+                {:status 206
+                 :headers {"content-range"
+                           (str "bytes " start "-" end "/" source-size)
+                           "content-length" (str (alength body))}
+                 :body (ByteArrayInputStream. body)})))]
+      (with-open [proxy
+                  (range-proxy/start!
+                   {:gateway gateway
+                    :access-token "smoke-access"
+                    :file-id "smoke-fixture"
+                    :size source-size
+                    :limits range-proxy/renderer-limits-v1})]
+        (let [analysis
+              (media/inspect-browser-playback! "ffprobe" (:url proxy))]
+          (when-not (and (= "mp4" (get-in analysis [:container :format]))
+                         (= "h264" (get-in analysis [:video :codec]))
+                         (= "aac" (get-in analysis [:audio :codec])))
+            (throw (ex-info "bounded playback analysis smoke failed"
+                            {:analysis analysis
+                             :proxy-stats ((:stats proxy))}))))))
     (ImageIO/write image "png" overlay-output)
     (let [frames (atom [])
           result

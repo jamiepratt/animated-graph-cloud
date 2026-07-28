@@ -6,6 +6,14 @@ image="${1:-animated-graph-cloud:proto-smoke}"
 expected_health='{"status":"ok"}'
 expected_startup='"message":"Proto API server started"'
 health_file="$(mktemp)"
+ffprobe_protocols="$(docker run --rm --entrypoint ffprobe "$image" \
+  -hide_banner -protocols 2>&1)"
+for protocol in http tcp; do
+  if ! printf '%s\n' "$ffprobe_protocols" | grep -q "^  $protocol\$"; then
+    echo "proto image ffprobe lacks the $protocol protocol" >&2
+    exit 1
+  fi
+done
 proto_container_id="$(docker run --rm -d -p 127.0.0.1::8080 "$image" clojure.main -m agg.proto.main)"
 
 cleanup() {

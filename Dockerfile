@@ -38,7 +38,6 @@ RUN curl --fail --location --silent --show-error \
        --disable-debug \
        --disable-doc \
        --disable-everything \
-       --disable-network \
        --disable-shared \
        --enable-static \
        --enable-gpl \
@@ -51,7 +50,7 @@ RUN curl --fail --location --silent --show-error \
        --enable-avformat \
        --enable-swresample \
        --enable-swscale \
-       --enable-protocol=file,pipe \
+       --enable-protocol=file,pipe,http,tcp \
        --enable-demuxers \
        --enable-muxer=image2pipe,mov,mp4 \
        --enable-decoders \
