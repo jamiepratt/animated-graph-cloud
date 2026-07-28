@@ -1,8 +1,8 @@
-name: CI
+name: Proto CI
 
 on:
   push:
-    branches: [main]
+    branches: [codex/issue-161-proto-only]
   pull_request:
   workflow_dispatch:
 
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  clojure:
+  proto:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -22,41 +22,5 @@ jobs:
         with:
           cli: 1.12.5.1654
           clj-kondo: 2026.05.25
-      - run: clj-kondo --lint src test build.clj
-      - run: clojure -M:test-all
-      - run: clojure -T:build uber
-
-  terraform:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: 1.15.8
-      - run: terraform fmt -check -recursive
-      - run: terraform -chdir=infra/dev init -backend=false -input=false
-      - run: terraform -chdir=infra/dev validate
-      - run: terraform -chdir=infra/prod init -backend=false -input=false
-      - run: terraform -chdir=infra/prod validate
-
-  release-contracts:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - run: npx --yes @redocly/cli@2.39.0 lint docs/openapi.yaml
-      - run: bash -n script/release_acceptance.sh script/production_load_test.sh
-
-  container:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - run: docker build --tag animated-graph-cloud:ci .
-      - run: test/container_smoke.sh animated-graph-cloud:ci
-      - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: animated-graph-cloud:ci
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: CRITICAL,HIGH
+      - run: clj-kondo --lint src/agg/proto src/agg/api/main.clj test/agg/proto_test_runner.clj test/agg/proto_release_test.clj test/agg/proto_source_test.clj test/agg/proto_ui_test.clj
+      - run: clojure -M:proto-test

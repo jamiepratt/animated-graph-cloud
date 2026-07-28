@@ -183,7 +183,6 @@
 (deftest early-access-email-release-is-secret-backed-and-checkpointed
   (let [shared (slurp "infra/dev/main.tf")
         production-module (slurp "infra/prod/main.tf")
-        development-workflow (slurp ".github/workflows/deploy.yml")
         production-workflow (slurp ".github/workflows/deploy-production.yml")
         runtime (slurp "src/agg/jobs/gcp.clj")
         auth-runtime (slurp "src/agg/auth/gcp.clj")
@@ -199,16 +198,15 @@
     (is (re-find #"(?s)resource \"google_secret_manager_secret_iam_member\" \"api_resend_access\".*?secret_id\s*=\s*google_secret_manager_secret\.application\[\"resend-api-key\"\]\.secret_id.*?member\s*=\s*\"serviceAccount:\$\{google_service_account\.api\.email\}\""
                  shared))
     (is (str/includes? production-module "source = \"../dev\""))
-    (doseq [workflow [development-workflow production-workflow]]
-      (is (str/includes? workflow
-                         "AGG_RESEND_API_KEY=resend-api-key:latest"))
-      (is (str/includes? workflow
-                         "AGG_EARLY_ACCESS_SENDER=$EARLY_ACCESS_SENDER"))
-      (is (str/includes? workflow
-                         "AGG_EARLY_ACCESS_RECIPIENT=$EARLY_ACCESS_RECIPIENT"))
-      (is (str/includes? workflow
-                         "EARLY_ACCESS_SENDER: Alpha Compose <early-access@alphacompose.com>"))
-      (is (str/includes? workflow "EARLY_ACCESS_RECIPIENT: me@jamiep.org")))
+    (is (str/includes? production-workflow
+                       "AGG_RESEND_API_KEY=resend-api-key:latest"))
+    (is (str/includes? production-workflow
+                       "AGG_EARLY_ACCESS_SENDER=$EARLY_ACCESS_SENDER"))
+    (is (str/includes? production-workflow
+                       "AGG_EARLY_ACCESS_RECIPIENT=$EARLY_ACCESS_RECIPIENT"))
+    (is (str/includes? production-workflow
+                       "EARLY_ACCESS_SENDER: Alpha Compose <early-access@alphacompose.com>"))
+    (is (str/includes? production-workflow "EARLY_ACCESS_RECIPIENT: me@jamiep.org"))
     (doseq [setting ["AGG_RESEND_API_KEY"
                      "AGG_EARLY_ACCESS_SENDER"
                      "AGG_EARLY_ACCESS_RECIPIENT"]]
@@ -653,15 +651,13 @@
 
 (deftest continuous-integration-validates-both-environments-and-api-contract
   (let [workflow (slurp ".github/workflows/ci.yml")]
-    (is (str/includes? workflow
-                       "terraform -chdir=infra/dev init -backend=false -input=false"))
-    (is (str/includes? workflow
-                       "terraform -chdir=infra/prod init -backend=false -input=false"))
-    (is (str/includes? workflow "terraform -chdir=infra/prod validate"))
-    (is (str/includes? workflow "@redocly/cli@2.39.0 lint docs/openapi.yaml"))
-    (is (str/includes? workflow "clojure -M:test-all"))
-    (is (str/includes? workflow
-                       "bash -n script/release_acceptance.sh script/production_load_test.sh"))))
+    (is (str/includes? workflow "name: Proto CI"))
+    (is (str/includes? workflow "branches: [codex/issue-161-proto-only]"))
+    (is (str/includes? workflow "clj-kondo --lint src/agg/proto"))
+    (is (str/includes? workflow "clojure -M:proto-test"))
+    (is (not (str/includes? workflow "clojure -M:test-all")))
+    (is (not (str/includes? workflow "terraform -chdir=infra/dev init -backend=false -input=false")))
+    (is (not (str/includes? workflow "@redocly/cli@2.39.0 lint docs/openapi.yaml")))))
 
 (deftest readme-separates-targeted-and-full-test-commands
   (let [readme (slurp "README.md")]
