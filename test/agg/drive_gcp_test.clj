@@ -130,6 +130,46 @@
       (Files/deleteIfExists source)
       output)))
 
+(defn- playback-fixture-with-large-late-moov! []
+  (let [source (playback-fixture-with-late-moov!)
+        bytes (Files/readAllBytes source)
+        atoms (top-level-atom-slices bytes)
+        moov (or (first (filter #(= "moov" (:type %)) atoms))
+                 (throw (ex-info "Fixture MP4 lacks a moov atom" {})))
+        padding (free-atom (* 2 1024 1024))
+        moov-size (+ (:size moov) (alength padding))
+        output (Files/createTempFile
+                "agg-drive-large-late-moov-" ".mp4"
+                (make-array java.nio.file.attribute.FileAttribute 0))
+        rebuilt (ByteArrayOutputStream.)]
+    (.write rebuilt bytes 0 (:offset moov))
+    (.write rebuilt
+            (.array
+             (doto (ByteBuffer/allocate 8)
+               (.order ByteOrder/BIG_ENDIAN)
+               (.putInt moov-size)
+               (.put (.getBytes "moov" StandardCharsets/US_ASCII)))))
+    (.write rebuilt bytes (+ (:offset moov) 8) (- (:size moov) 8))
+    (.write rebuilt padding)
+    (Files/write output (.toByteArray rebuilt) (make-array OpenOption 0))
+    (Files/deleteIfExists source)
+    output))
+
+(defn- virtual-range-bytes [segments start end]
+  (let [result (byte-array (int (inc (- end start))))]
+    (doseq [{segment-start :start segment-bytes :bytes} segments
+            :let [segment-end (dec (+ segment-start (alength ^bytes segment-bytes)))
+                  overlap-start (max start segment-start)
+                  overlap-end (min end segment-end)]
+            :when (<= overlap-start overlap-end)]
+      (System/arraycopy
+       ^bytes segment-bytes
+       (int (- overlap-start segment-start))
+       result
+       (int (- overlap-start start))
+       (int (inc (- overlap-end overlap-start)))))
+    result))
+
 (deftest recording-clock-inspection-is-bounded-and-prefers-explicit-offsets
   (let [requests (atom [])
         explicit
@@ -437,7 +477,7 @@
          (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
          :playback-ffprobe (str ffprobe)
          :stream-source-request!
-         (fn [{:keys [headers timeout-ms] :as request}]
+         (fn [{:keys [headers] :as request}]
            (let [[_ start-text end-text]
                  (re-matches #"bytes=(\d+)-(\d+)" (get headers "Range"))
                  start (parse-long start-text)
@@ -479,7 +519,7 @@
         (assoc
          (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
          :stream-source-request!
-         (fn [{:keys [headers timeout-ms] :as request}]
+         (fn [{:keys [headers] :as request}]
            (let [[_ start-text end-text]
                  (re-matches #"bytes=(\d+)-(\d+)" (get headers "Range"))
                  start (parse-long start-text)
@@ -511,6 +551,71 @@
                         (* 1024 1024)))))
            @requests))
       (is (< 1 (count @requests)))
+      (finally
+        (Files/deleteIfExists source)))))
+
+(deftest playback-analysis-finds-metadata-in-a-large-late-moov
+  (let [source (playback-fixture-with-large-late-moov!)
+        bytes (Files/readAllBytes source)
+        atoms (top-level-atom-slices bytes)
+        atom-bytes
+        (fn [{:keys [offset size]}]
+          (java.util.Arrays/copyOfRange bytes offset (+ offset size)))
+        ftyp (atom-bytes (first (filter #(= "ftyp" (:type %)) atoms)))
+        source-mdat
+        (atom-bytes (first (filter #(= "mdat" (:type %)) atoms)))
+        mdat-payload
+        (java.util.Arrays/copyOfRange
+         source-mdat 8 (alength source-mdat))
+        moov (atom-bytes (first (filter #(= "moov" (:type %)) atoms)))
+        mdat-size (* 1024 1024 1024)
+        mdat-header
+        (.array
+         (doto (ByteBuffer/allocate 8)
+           (.order ByteOrder/BIG_ENDIAN)
+           (.putInt mdat-size)
+           (.put (.getBytes "mdat" StandardCharsets/US_ASCII))))
+        moov-start (+ (alength ftyp) mdat-size)
+        source-size (+ moov-start (alength moov))
+        segments [{:start 0 :bytes ftyp}
+                  {:start (alength ftyp) :bytes mdat-header}
+                  {:start (+ (alength ftyp) 8) :bytes mdat-payload}
+                  {:start moov-start :bytes moov}]
+        requests (atom [])
+        gateway
+        (assoc
+         (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+         :stream-source-request!
+         (fn [{:keys [headers] :as request}]
+           (let [[_ start-text end-text]
+                 (re-matches #"bytes=(\d+)-(\d+)" (get headers "Range"))
+                 start (parse-long start-text)
+                 end (parse-long end-text)
+                 body (virtual-range-bytes segments start end)]
+             (swap! requests conj request)
+             {:status 206
+              :headers {"content-range"
+                        (str "bytes " start "-" end "/" source-size)
+                        "content-length" (str (alength body))}
+              :body (ByteArrayInputStream. body)})))]
+    (try
+      (let [evidence
+            (drive/inspect-playback!
+             gateway "access" "private-file"
+             {:size source-size :mimeType "video/mp4"})]
+        (is (= {:container {:format "mp4" :majorBrand "isom"}
+                :video {:codec "h264" :codecTag "avc1"}
+                :audio {:codec "aac"}}
+               (update evidence :video select-keys [:codec :codecTag]))))
+      (is (every?
+           (fn [{:keys [headers timeout-ms]}]
+             (let [[_ start-text end-text]
+                   (re-matches #"bytes=(\d+)-(\d+)" (get headers "Range"))]
+               (and (= 3000 timeout-ms)
+                    (<= (inc (- (parse-long end-text)
+                                (parse-long start-text)))
+                        (* 1024 1024)))))
+           @requests))
       (finally
         (Files/deleteIfExists source)))))
 

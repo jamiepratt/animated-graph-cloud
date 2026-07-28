@@ -24,6 +24,8 @@
 (def ^:private recording-clock-range-bytes (* 256 1024))
 (def ^:private recording-clock-timeout-ms 3000)
 (def ^:private playback-analysis-range-bytes (* 1024 1024))
+(def ^:private playback-analysis-max-metadata-bytes (* 8 1024 1024))
+(def ^:private playback-analysis-max-top-level-atoms 128)
 (def ^:private quicktime-to-unix-seconds 2082844800)
 (def ^:private recording-clock-limits
   {:maxBytes (* 2 recording-clock-range-bytes)
@@ -308,114 +310,121 @@
         (catch Throwable _
           manual)))))
 
-(defn- playback-analysis-ranges [size]
-  (let [size (long size)
-        head {:start 0
-              :end (dec (min size playback-analysis-range-bytes))
-              :timeout-ms recording-clock-timeout-ms}
-        tail {:start (max 0 (- size playback-analysis-range-bytes))
-              :end (dec size)
-              :timeout-ms recording-clock-timeout-ms}]
-    (if (= (select-keys head [:start :end])
-           (select-keys tail [:start :end]))
-      [head]
-      [head tail])))
+(defn- playback-atom-header
+  [^bytes bytes offset source-size]
+  (when (<= 8 (alength bytes))
+    (let [buffer (doto (ByteBuffer/wrap bytes)
+                   (.order ByteOrder/BIG_ENDIAN))
+          size32 (unsigned-int buffer)
+          type (String. bytes 4 4 StandardCharsets/US_ASCII)
+          extended? (= size32 1)
+          size (cond
+                 extended? (when (<= 16 (alength bytes))
+                             (.getLong (doto buffer (.position 8))))
+                 (zero? size32) (- source-size offset)
+                 :else size32)
+          header-size (if extended? 16 8)]
+      (when (and size
+                 (<= header-size size)
+                 (<= size (- source-size offset)))
+        {:offset offset
+         :size size
+         :type type
+         :extended? extended?
+         :header-size header-size}))))
 
-(defn- complete-head-atoms [^bytes bytes]
-  (let [buffer (doto (ByteBuffer/wrap bytes)
-                 (.order ByteOrder/BIG_ENDIAN))
-        length (alength bytes)]
-    (loop [offset 0
-           atoms []]
-      (if (> (+ offset 8) length)
-        atoms
-        (let [size32 (unsigned-int (doto buffer (.position offset)))
-              size (cond
-                     (= size32 1)
-                     (when (<= (+ offset 16) length)
-                       (.getLong (doto buffer (.position (+ offset 8)))))
+(defn- read-playback-bytes!
+  [gateway access-token file-id start size]
+  (let [output (ByteArrayOutputStream. (int size))]
+    (loop [offset start
+           remaining size]
+      (when (pos? remaining)
+        (let [length (min remaining playback-analysis-range-bytes)]
+          (.write
+           output
+           ^bytes
+           (read-inspection-range!
+            gateway access-token file-id
+            {:start offset
+             :end (dec (+ offset length))
+             :timeout-ms recording-clock-timeout-ms}))
+          (recur (+ offset length) (- remaining length)))))
+    (.toByteArray output)))
 
-                     (zero? size32)
-                     (- length offset)
+(defn- playback-metadata-atoms!
+  [gateway access-token file-id source-size]
+  (loop [offset 0
+         atom-count 0
+         ftyp? false
+         mdat nil
+         moov nil]
+    (when (and (< atom-count playback-analysis-max-top-level-atoms)
+               (<= (+ offset 8) source-size))
+      (let [header-length (min 16 (- source-size offset))
+            header
+            (playback-atom-header
+             (read-playback-bytes!
+              gateway access-token file-id offset header-length)
+             offset
+             source-size)]
+        (when header
+          (let [{:keys [size type]} header
+                next-offset (+ offset size)
+                next-ftyp? (or ftyp? (= "ftyp" type))
+                next-mdat (or mdat (when (= "mdat" type) header))
+                next-moov
+                (or moov
+                    (when (and (= "moov" type)
+                               (<= size playback-analysis-max-metadata-bytes))
+                      {:header header
+                       :bytes
+                       (read-playback-bytes!
+                        gateway access-token file-id offset size)}))]
+            (if (and next-ftyp? next-mdat next-moov)
+              {:mdat next-mdat
+               :moov next-moov}
+              (recur next-offset
+                     (inc atom-count)
+                     next-ftyp?
+                     next-mdat
+                     next-moov))))))))
 
-                     :else size32)]
-          (if (or (nil? size)
-                  (< size 8)
-                  (> (+ offset size) length))
-            atoms
-            (recur (+ offset size)
-                   (conj atoms {:type (String. bytes (+ offset 4) 4
-                                               StandardCharsets/US_ASCII)
-                                :bytes (java.util.Arrays/copyOfRange
-                                        bytes offset (+ offset size))}))))))))
-
-(defn- find-contained-atom [^bytes bytes atom-type]
-  (let [type-bytes (.getBytes ^String atom-type StandardCharsets/US_ASCII)
-        buffer (doto (ByteBuffer/wrap bytes)
-                 (.order ByteOrder/BIG_ENDIAN))
-        length (alength bytes)
-        limit (- length 8)]
-    (loop [index 0
-           found nil]
-      (if (> index limit)
-        found
-        (let [candidate?
-              (every? true?
-                      (map-indexed
-                       (fn [offset expected]
-                         (= expected (aget bytes (+ index 4 offset))))
-                       type-bytes))
-              size
-              (when candidate?
-                (let [size32 (unsigned-int (doto buffer (.position index)))]
-                  (cond
-                    (= size32 1)
-                    (when (<= (+ index 16) length)
-                      (.getLong (doto buffer (.position (+ index 8)))))
-
-                    (zero? size32)
-                    (- length index)
-
-                    :else size32)))
-              valid?
-              (and candidate?
-                   size
-                   (<= 8 size)
-                   (<= (+ index size) length))]
-          (recur (inc index)
-                 (if valid?
-                   {:type atom-type
-                    :bytes (java.util.Arrays/copyOfRange
-                            bytes index (+ index size))}
-                   found)))))))
+(defn- truncate-mdat!
+  [^bytes prefix {:keys [offset extended? header-size]}]
+  (let [new-size (- (alength prefix) offset)
+        buffer (doto (ByteBuffer/wrap prefix)
+                 (.order ByteOrder/BIG_ENDIAN))]
+    (when (<= header-size new-size)
+      (if extended?
+        (.putLong buffer (+ offset 8) new-size)
+        (.putInt buffer offset (int new-size)))
+      prefix)))
 
 (defn- playback-fixture-path!
   [gateway access-token file-id {:keys [size]}]
-  (let [segments (mapv #(read-inspection-range! gateway access-token file-id %)
-                       (playback-analysis-ranges size))
-        head-atoms (complete-head-atoms (first segments))
-        head-moov-index (first (keep-indexed
-                                (fn [index {:keys [type]}]
-                                  (when (= "moov" type) index))
-                                head-atoms))
-        ftyp-bytes (:bytes (first (filter #(= "ftyp" (:type %)) head-atoms)))
-        moov-bytes (or (some-> head-moov-index (nth head-atoms) :bytes)
-                       (:bytes (find-contained-atom (last segments) "moov")))]
-    (when (and ftyp-bytes moov-bytes)
-      (let [path (Files/createTempFile
-                  "agg-playback-analysis-" ".mp4"
-                  (make-array java.nio.file.attribute.FileAttribute 0))
-            output (ByteArrayOutputStream.)]
-        (doseq [{:keys [bytes]}
-                (if head-moov-index
-                  (take (inc head-moov-index) head-atoms)
-                  head-atoms)]
-          (.write output ^bytes bytes))
-        (when-not head-moov-index
-          (.write output ^bytes moov-bytes))
-        (Files/write path (.toByteArray output)
-                     (make-array OpenOption 0))
-        path))))
+  (when-let [{:keys [mdat moov]}
+             (playback-metadata-atoms!
+              gateway access-token file-id (long size))]
+    (when (< (:offset mdat) playback-analysis-range-bytes)
+      (let [prefix-size
+            (min (long size)
+                 (+ (:offset mdat) playback-analysis-range-bytes))
+            prefix
+            (truncate-mdat!
+             (read-playback-bytes!
+              gateway access-token file-id 0 prefix-size)
+             mdat)]
+        (when prefix
+          (let [path (Files/createTempFile
+                      "agg-playback-analysis-" ".mp4"
+                      (make-array java.nio.file.attribute.FileAttribute 0))
+                output (ByteArrayOutputStream.)]
+            (.write output ^bytes prefix)
+            (when (>= (get-in moov [:header :offset]) prefix-size)
+              (.write output ^bytes (:bytes moov)))
+            (Files/write path (.toByteArray output)
+                         (make-array OpenOption 0))
+            path))))))
 
 (defn- inspect-playback-via-proxy!
   [gateway access-token file-id metadata ffprobe]
