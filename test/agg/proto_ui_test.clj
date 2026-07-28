@@ -291,6 +291,7 @@
     (is (= "video/mp4" (get-in outcome [:summary :mime])))
     (is (= "Candidate" (get-in outcome [:timing :state])))
     (is (= "2026-07-27T22:00:00+02:00" (get-in outcome [:timing :start])))
+    (is (= "2026-07-27T22:02:05.500+02:00" (get-in outcome [:timing :end])))
     (is (= true (get-in outcome [:prep :support :supported])))
     (is (= "/v1/drive/playback/00000000-0000-0000-0000-000000000115"
            (get-in outcome [:prep :session :playbackUrl])))
