@@ -35,7 +35,7 @@ jobs:
           expected_tag="proto-terraform-bootstrap-${GITHUB_SHA}"
           test "$GITHUB_REF_NAME" = "$expected_tag"
           git fetch origin proto --no-tags
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/proto
+          git merge-base --is-ancestor origin/proto "$GITHUB_SHA"
 
       - name: Authenticate through proto-only WIF
         uses: google-github-actions/auth@v3

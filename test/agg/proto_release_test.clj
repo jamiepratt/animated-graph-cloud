@@ -74,6 +74,10 @@
     (is (str/includes? proto-bootstrap-workflow
                        "proto-terraform-bootstrap-${GITHUB_SHA}"))
     (is (str/includes? proto-bootstrap-workflow
+                       "git merge-base --is-ancestor origin/proto \"$GITHUB_SHA\""))
+    (is (not (str/includes? proto-bootstrap-workflow
+                            "git merge-base --is-ancestor \"$GITHUB_SHA\" origin/proto")))
+    (is (str/includes? proto-bootstrap-workflow
                        "providers/animated-graph-cloud-proto"))
     (is (str/includes? proto-bootstrap-workflow
                        "terraform -chdir=infra/proto apply"))

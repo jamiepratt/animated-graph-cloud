@@ -50,7 +50,8 @@ script/bootstrap_proto_terraform.sh
 
 The script creates or reconciles only the dedicated deployer, provider, and
 bootstrap IAM. It creates no service-account key and does not push. Review its
-output, then create the exact lightweight tag it prints:
+output, then create and push the exact lightweight tag it prints before pushing
+the `proto` branch:
 
 ```sh
 commit="$(git rev-parse HEAD)"
@@ -59,9 +60,10 @@ git push origin "proto-terraform-bootstrap-${commit}"
 ```
 
 `.github/workflows/bootstrap-proto-terraform.yml` rejects a tag whose suffix is
-not its exact commit or whose commit is not on remote `proto`. It reads the live
-service image and production API origin, uses declarative import blocks, blocks
-every delete or replacement, and applies the reviewed proto root.
+not its exact commit or whose commit does not descend from the current remote
+`proto` tip. It reads the live service image and production API origin, uses
+declarative import blocks, blocks every delete or replacement, and applies the
+reviewed proto root.
 
 Before proceeding, inspect the workflow plan summary and state:
 
