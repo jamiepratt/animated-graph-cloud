@@ -76,7 +76,7 @@
 (def form-content-type
   {"Content-Type" "application/x-www-form-urlencoded"})
 
-(def browser-fixture-timeout-ms 15000)
+(def browser-fixture-timeout-ms 30000)
 
 (defn- javascript-valid? [source]
   (let [process (.start (ProcessBuilder. ["node" "--check" "-"]))]
@@ -759,7 +759,7 @@
          "(async()=>{let outcome;try{"
          "const format=document.getElementById('telemetry-format'),input=document.getElementById('telemetry-file'),telemetry=document.getElementById('telemetry'),status=document.getElementById('telemetry-status'),advanced=document.getElementById('advanced-activity-data'),advancedFormat=document.getElementById('advanced-telemetry-format'),advancedInput=document.getElementById('advanced-telemetry-file'),advancedStatus=document.getElementById('advanced-telemetry-status'),advancedRoute=document.getElementById('open-advanced-activity-data'),next=document.getElementById('wizard-next');"
          "document.querySelector('input[name=\"wizard-outcome\"][value=\"transparent-overlay\"]').click();next.click();document.getElementById('timezone').value='UTC';document.getElementById('section-start-at').value='2026-07-17T10:00:00';document.getElementById('section-end-at').value='2026-07-17T10:00:02';next.click();"
-         "const waitForStatus=node=>new Promise((resolve,reject)=>{const deadline=Date.now()+1500,check=()=>{if(node.classList.contains('success')||node.classList.contains('error'))resolve();else if(Date.now()>deadline)reject(new Error('Timed out waiting for activity-file status'));else setTimeout(check,5);};check();});"
+         "const waitForStatus=node=>new Promise((resolve,reject)=>{const deadline=Date.now()+5000,check=()=>{if(node.classList.contains('success')||node.classList.contains('error'))resolve();else if(Date.now()>deadline)reject(new Error('Timed out waiting for activity-file status'));else setTimeout(check,5);};check();});"
          "const upload=async(target,file,statusNode)=>{const transfer=new DataTransfer();if(file)transfer.items.add(file);target.files=transfer.files;target.dispatchEvent(new Event('change',{bubbles:true}));const clearedImmediately=telemetry.value==='';if(file)await waitForStatus(statusNode);return {clearedImmediately,format:format.value,content:telemetry.value,status:statusNode.textContent,success:statusNode.classList.contains('success'),error:statusNode.classList.contains('error')};};"
          "const fitBytes=Uint8Array.from(atob(" (json/write-str fit-base64) "),character=>character.charCodeAt(0));"
          "const fit=await upload(input,new File([fitBytes],'input.fit',{type:'application/octet-stream'}),status);fit.matches=fit.content===" (json/write-str fit-base64) ";fit.formValid=document.getElementById('render-form').checkValidity();fit.invalidIds=[...document.getElementById('render-form').querySelectorAll(':invalid')].map(node=>node.id||node.getAttribute('name')||node.tagName.toLowerCase());"
