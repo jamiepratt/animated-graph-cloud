@@ -1,5 +1,6 @@
 (ns agg.ui-wizard-test
   (:require [agg.ui.wizard :as wizard]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is]]))
 
 (def ^:private overlay-combinations
@@ -28,10 +29,14 @@
               (some #{:source-video} steps))))
       (is (not (some #{:video-recording-clock} steps)))
       (is (= (= route :transparent-overlay)
-             (boolean (some #{:overlay-timespan} steps))))
-      (is (= (and (= route :transparent-overlay)
+             (not (boolean (some #{:synchronization-decision} steps)))))
+      (is (some #{:output-timespan} steps))
+      (is (= (and (= route :finished-video)
                   (= synchronization-mode :manual-anchor))
              (boolean (some #{:matching-moment} steps))))
+      (is (= (and (= route :finished-video)
+                  (= synchronization-mode :shared-clock))
+             (boolean (some #{:confirm-video-clock} steps))))
       (doseq [[overlay step] [[:timer :timer-overlay]
                               [:spo2 :spo2-overlay]
                               [:watermark :watermark-overlay]]]
@@ -57,6 +62,22 @@
                      (assoc primary :time-zone "+02:00")]]
       (is (thrown? clojure.lang.ExceptionInfo
                    (wizard/derive-manual-sync invalid))))))
+
+(deftest transparent-route-enforces-its-implicit-shared-clock
+  (let [chosen (wizard/choose-route
+                (wizard/initial-state)
+                :transparent-overlay)
+        attempted-manual (wizard/choose-synchronization
+                          chosen
+                          :manual-anchor)]
+    (is (= :shared-clock
+           (get-in chosen [:decisions :synchronization-mode])))
+    (is (= :shared-clock
+           (get-in attempted-manual
+                   [:decisions :synchronization-mode])))
+    (is (= "shared-clock"
+           (:synchronizationMode
+            (wizard/project-render-request attempted-manual))))))
 
 (deftest manual-video-sync-projects-only-stable-renderer-fields
   (let [state (-> (wizard/initial-state)
@@ -176,7 +197,8 @@
         at-activity (wizard/go-to-step source-complete :activity-data)
         downstream-complete (-> at-activity
                                 (wizard/complete-step :activity-data)
-                                (wizard/complete-step :synchronization))
+                                (wizard/complete-step
+                                 :synchronization-decision))
         invalidated (wizard/invalidate-after downstream-complete
                                              :activity-data)]
     (is (wizard/step-complete? chosen :outcome))
@@ -185,10 +207,37 @@
     (is (= :source-video (:current-step at-source)))
     (is (wizard/navigation-eligible? source-complete
                                      :activity-data))
-    (is (= #{:synchronization}
+    (is (= #{:synchronization-decision}
            (get-in invalidated [:validation :invalidated-steps])))
-    (is (not (wizard/step-complete? invalidated :synchronization)))
+    (is (not (wizard/step-complete?
+              invalidated
+              :synchronization-decision)))
     (is (= :activity-data (:current-step invalidated)))))
+
+(deftest synchronization-change-invalidates-finished-video-downstream-state
+  (let [shared (-> (wizard/initial-state)
+                   (wizard/choose-route :finished-video)
+                   (wizard/choose-synchronization :shared-clock)
+                   (assoc :current-step :confirm-video-clock
+                          :visited-steps
+                          #{:outcome :source-video :activity-data
+                            :synchronization-decision
+                            :confirm-video-clock})
+                   (update-in
+                    [:completion :completed-steps]
+                    into
+                    #{:source-video :activity-data
+                      :synchronization-decision
+                      :confirm-video-clock}))
+        manual (wizard/choose-synchronization shared :manual-anchor)]
+    (is (= :synchronization-decision (:current-step manual)))
+    (is (= #{:confirm-video-clock}
+           (get-in manual [:validation :invalidated-steps])))
+    (is (not (wizard/step-complete?
+              manual
+              :confirm-video-clock)))
+    (is (some #{:matching-moment}
+              (wizard/active-steps manual)))))
 
 (deftest completion-requires-every-active-input-step-but-not-review
   (doseq [route [:transparent-overlay :finished-video]]
@@ -204,6 +253,23 @@
       (is (wizard/complete? completed))
       (is (= (wizard/project-render-request completed)
              (wizard/submit-ready-request completed))))))
+
+(deftest browser-runtime-exposes-the-canonical-workflow-boundary
+  (let [state-script (wizard/browser-state-script)
+        request-script (wizard/browser-request-script)
+        navigation-script (wizard/browser-navigation-script)]
+    (is (str/includes? state-script
+                       "function activeWizardSteps()"))
+    (is (str/includes? state-script
+                       "function captureWizardState("))
+    (is (str/includes? request-script
+                       "function buildRequest()"))
+    (is (str/includes? request-script
+                       "function validateRequest("))
+    (is (str/includes? navigation-script
+                       "function validateWizardStep("))
+    (is (str/includes? navigation-script
+                       "function completeCurrentWizardStep()"))))
 
 (deftest canonical-state-is-memory-only-and-excludes-operation-state
   (let [state (wizard/initial-state)]

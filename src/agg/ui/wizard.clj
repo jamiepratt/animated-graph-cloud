@@ -16,8 +16,13 @@
   #{:timer :spo2 :watermark})
 
 (def ^:private route-prefix
-  {:transparent-overlay [:outcome :overlay-timespan]
-   :finished-video [:outcome :source-video]})
+  {:transparent-overlay [:outcome :activity-data :output-timespan]
+   :finished-video [:outcome :source-video :activity-data
+                    :synchronization-decision]})
+
+(def ^:private synchronization-step
+  {:shared-clock :confirm-video-clock
+   :manual-anchor :matching-moment})
 
 (def ^:private overlay-step
   {:timer :timer-overlay
@@ -33,19 +38,22 @@
     :description "Choose the kind of video workflow you want to complete."}
    :source-video
    {:title "Choose your source video"
-    :description "Choose exactly one video from Google Drive."}
-   :overlay-timespan
-   {:title "Choose the overlay timespan"
-    :description "Set the start, end, and timezone for the transparent overlay."}
+    :description "Pick one Google Drive video, then review its detected recording-clock hint."}
    :activity-data
    {:title "Choose your heart-rate file"
     :description "Provide the activity data used to draw the heart-rate trace."}
-   :synchronization
-   {:title "Synchronize video and activity data"
-    :description "Confirm a shared clock or match one video frame to activity time."}
+   :synchronization-decision
+   {:title "Compare the camera and activity clocks"
+    :description "Choose whether the source video already follows the activity-device clock or whether you need to match one moment."}
+   :confirm-video-clock
+   {:title "Confirm the video recording clock"
+    :description "Check or correct the recording start and timezone before setting the output range."}
    :matching-moment
    {:title "Match one moment"
-    :description "Enter one recognizable moment on both device clocks."}
+    :description "Move to one recognizable source-video frame and enter the same instant from the activity data."}
+   :output-timespan
+   {:title "Choose the output timespan"
+    :description "Set the display timezone plus the start and end instants for the output range."}
    :optional-overlays
    {:title "Choose optional overlays"
     :description "Add only the supporting overlays you want."}
@@ -134,10 +142,12 @@
           selected-overlays (:optional-overlays decisions)]
       (into (get route-prefix active-route)
             (concat
-             [:activity-data :synchronization]
-             (when (and (= :transparent-overlay active-route)
-                        (= :manual-anchor synchronization-mode))
-               [:matching-moment])
+             (when (= :finished-video active-route)
+               (concat
+                (when-let [step (get synchronization-step
+                                     synchronization-mode)]
+                  [step])
+                [:output-timespan]))
              [:optional-overlays]
              (keep #(when (contains? selected-overlays %)
                       (get overlay-step %))
@@ -189,6 +199,9 @@
         (assoc :active-route route
                :current-step :outcome)
         (update :visited-steps conj :outcome)
+        (cond-> (= :transparent-overlay route)
+          (assoc-in [:decisions :synchronization-mode]
+                    :shared-clock))
         (complete-step :outcome))))
 
 (defn choose-synchronization
@@ -197,11 +210,16 @@
                        synchronization-mode)
     (throw (ex-info "Unknown synchronization mode."
                     {:synchronization-mode synchronization-mode})))
-  (let [changed? (not= synchronization-mode
+  (let [synchronization-mode
+        (if (= :transparent-overlay (:active-route state))
+          :shared-clock
+          synchronization-mode)
+        changed? (not= synchronization-mode
                        (get-in state [:decisions :synchronization-mode]))
         state (if (and changed?
-                       (some #{:synchronization} (active-steps state)))
-                (invalidate-after state :synchronization)
+                       (some #{:synchronization-decision}
+                             (active-steps state)))
+                (invalidate-after state :synchronization-decision)
                 state)]
     (assoc-in state [:decisions :synchronization-mode]
               synchronization-mode)))
@@ -345,6 +363,11 @@
    (into {} (map (fn [[overlay step]]
                    [(name overlay) (name step)]))
          overlay-step)
+   "synchronizationSteps"
+   (into {}
+         (map (fn [[mode step]]
+                [(name mode) (name step)]))
+         synchronization-step)
    "overlayOrder" (mapv name overlay-order)
    "tail" ["output-settings" "review"]
    "copy"
@@ -354,3 +377,35 @@
                  {"title" title
                   "description" description}]))
          step-copy)})
+
+(defn browser-state-script []
+  (str
+   "const wizardStepCopy=wizardStepModel.copy;"
+   "function activeSynchronizationMode(){return wizardState.activeRoute==='transparent-overlay'?'shared-clock':(selectedSynchronizationMode()||wizardState.decisions.synchronizationMode||'');}"
+   "function activeWizardSteps(){if(!wizardState.activeRoute)return ['outcome'];const steps=[...(wizardStepModel.routePrefixes[wizardState.activeRoute]||[])];if(wizardState.activeRoute==='finished-video'){const synchronizationStep=wizardStepModel.synchronizationSteps[activeSynchronizationMode()];if(synchronizationStep)steps.push(synchronizationStep);steps.push('output-timespan');}steps.push('optional-overlays');for(const overlay of wizardStepModel.overlayOrder){if(wizardState.decisions.optionalOverlays.includes(overlay))steps.push(wizardStepModel.overlaySteps[overlay]);}return [...steps,...wizardStepModel.tail];}"
+   "function routeDraftSnapshot(route){const draft={sectionStartAt:value('section-start-at'),sectionEndAt:value('section-end-at')};if(route==='finished-video'){draft.sourceVideo={fileId:value('source-video-file-id'),recordingStartAt:videoRecordingStartAt,timeZone:videoTimeZone.value.trim()};draft.manualSync={sourceSeconds:Number(value('manual-sync-source-seconds')||manualSyncSeconds||0),activityInstant:manualActivityInstant(),timeZone:activeZone(),derivedRecordingStartAt:videoClockSource==='manual-anchor'?videoRecordingStartAt:null};draft.outputFormat=value('output-format');draft.fitMode=value('fit-mode');draft.audioMode=value('audio-mode');}return draft;}"
+   "function restoreRouteDraft(route){const draft=wizardState.routeDrafts[route];if(!draft||!Object.keys(draft).length)return;[['sectionStartAt','section-start-at'],['sectionEndAt','section-end-at'],['outputFormat','output-format'],['fitMode','fit-mode'],['audioMode','audio-mode']].forEach(([key,id])=>{if(draft[key]!==undefined&&byId(id))byId(id).value=draft[key];});if(route==='finished-video'&&draft.sourceVideo){byId('source-video-file-id').value=draft.sourceVideo.fileId||'';videoRecordingStartAt=draft.sourceVideo.recordingStartAt||videoRecordingStartAt;if(draft.sourceVideo.timeZone)videoTimeZone.value=draft.sourceVideo.timeZone;}if(route==='finished-video'&&draft.manualSync){manualSyncSeconds=Number(draft.manualSync.sourceSeconds)||0;byId('manual-sync-source-seconds').value=String(manualSyncSeconds);byId('manual-sync-elapsed').textContent=playbackTime(manualSyncSeconds);if(draft.manualSync.activityInstant)byId('telemetry-sync-at').value=isoToZoneLocal(draft.manualSync.activityInstant,draft.manualSync.timeZone||activeZone());}}"
+   "function captureWizardState(request,errorMessage=''){const route=wizardState.activeRoute;if(route)wizardState.routeDrafts[route]=routeDraftSnapshot(route);wizardState.sharedInput={telemetryFormat:value('telemetry-format'),telemetry:contentValue('telemetry'),preset:value('preset'),displayTimeZone:activeZone(),futureTraceOpacityPercent:value('future-trace-opacity-percent')};wizardState.decisions.synchronizationMode=activeSynchronizationMode()||null;wizardState.decisions.optionalOverlays=[['timer',byId('timer-enabled').checked],['spo2',byId('spo2-enabled').checked],['watermark',byId('watermark-enabled').checked]].filter(([_name,selected])=>selected).map(([name])=>name);wizardState.optionalOverlayDrafts.timer={startAt:value('timer-start-at'),endAt:value('timer-end-at')};wizardState.optionalOverlayDrafts.spo2={format:'oxiwear-spo2-csv',telemetry:contentValue('spo2-telemetry')};wizardState.optionalOverlayDrafts.watermark={contentBase64:contentValue('watermark-content')};wizardState.renderRequest=request?JSON.parse(JSON.stringify(request)):null;wizardState.validation.errors=errorMessage?{[wizardState.currentStep]:errorMessage}:{};wizardState.completion.complete=!!request;composeWorkflow.dataset.activeRoute=route||'';composeWorkflow.dataset.currentStep=wizardState.currentStep;}"
+   "function chooseWizardOutcome(route,announce=true){if(!['transparent-overlay','finished-video'].includes(route))return;if(wizardState.activeRoute&&wizardState.activeRoute!==route)captureWizardState(wizardState.renderRequest);const changed=wizardState.activeRoute!==route;wizardState.activeRoute=route;restoreRouteDraft(route);if(changed){wizardState.currentStep='outcome';wizardState.visitedStepIds=['outcome'];wizardState.completion.completedStepIds=['outcome'];wizardState.validation.invalidatedStepIds=activeWizardSteps().filter(step=>step!=='outcome');}wizardState.completion.complete=false;wizardState.renderRequest=null;wizardOutcomeInputs.forEach(input=>{input.checked=input.value===route;});composeWorkflow.hidden=false;setComposeSourceMode(route==='finished-video'&&!!value('source-video-file-id'));if(route==='transparent-overlay')refreshNoSourceTimeline();invalidatePreview();syncRequest(false);captureWizardState(wizardState.renderRequest);renderWizardStep(false);if(announce)show(wizardOutcomeStatus,route==='finished-video'?'Finished video selected. Choose your source video next.':'Transparent overlay selected. Choose your heart-rate file next.','success');}"))
+
+(defn browser-request-script []
+  (str
+   "function buildRequest(){const synchronizationMode=activeSynchronizationMode();if(!synchronizationMode)throw new Error('Choose whether the camera and activity devices used the same clock or different clocks.');if(finishedManualSynchronization()&&!deriveManualSynchronization(false))throw new Error('Choose a source-video frame and enter the matching activity-data time.');const request={telemetryFormat:required('telemetry-format','Heart-rate data format'),telemetry:required('telemetry','Heart-rate data'),preset:required('preset','Render preset'),displayTimeZone:activeZone(),futureTraceOpacityPercent:boundedNumber('future-trace-opacity-percent','Future trace opacity',0,100),synchronizationMode,sectionStartAt:localToIso('section-start-at'),sectionEndAt:localToIso('section-end-at')};if(synchronizationMode==='manual-anchor'){request.telemetrySyncAt=localToIso('telemetry-sync-at');request.cameraSyncAt=localToIso('camera-sync-at');}const source=value('source-video-file-id');if(source&&wizardState.activeRoute!=='transparent-overlay'){if(!videoClockConfirmed||!videoRecordingStartAt)throw new Error(synchronizationMode==='manual-anchor'?'Complete the video and activity-data match before preview or creation.':'Confirm the shared video recording clock before preview or creation.');request.sourceVideo={fileId:source,recordingStartAt:videoRecordingStartAt,timeZone:videoTimeZone.value.trim()};request.outputFormat=value('output-format');request.fitMode=value('fit-mode');request.audioMode=value('audio-mode');}if(byId('spo2-enabled').checked){request.spo2={format:'oxiwear-spo2-csv',telemetry:required('spo2-telemetry','Oxygen-saturation data (SpO2)')};}if(byId('timer-enabled').checked){request.timer={startAt:localToIso('timer-start-at'),endAt:localToIso('timer-end-at')};}if(byId('watermark-enabled').checked){request.watermark={contentBase64:required('watermark-content','Watermark file')};}return request;}"
+   "function validateRequest(request){const errors=[];if(!isObject(request))return ['Request must be a JSON object.'];unknownFields(request,requestFields,'Request',errors);requiredRequestFields.forEach(key=>requiredString(request,key,'Request',errors));if(typeof request.telemetryFormat==='string'&&request.telemetryFormat&&!['polar-csv','garmin-fit','oxiwear-hr-csv'].includes(request.telemetryFormat))errors.push('Request.telemetryFormat must be polar-csv, garmin-fit, or oxiwear-hr-csv.');if(typeof request.preset==='string'&&request.preset&&!['1080p25','2.7k25'].includes(request.preset))errors.push('Request.preset must be 1080p25 or 2.7k25.');if(has(request,'futureTraceOpacityPercent')&&(typeof request.futureTraceOpacityPercent!=='number'||!Number.isFinite(request.futureTraceOpacityPercent)||request.futureTraceOpacityPercent<0||request.futureTraceOpacityPercent>100))errors.push('Request.futureTraceOpacityPercent must be a number from 0 through 100.');if(typeof request.telemetry==='string'&&request.telemetry){const limit=request.telemetryFormat==='garmin-fit'?13981016:10485760;if(utf8Length(request.telemetry)>limit)errors.push('Request.telemetry exceeds its encoded size limit.');}['telemetrySyncAt','cameraSyncAt','sectionStartAt','sectionEndAt'].forEach(key=>{if(has(request,key)&&typeof request[key]==='string'&&request[key]&&!instantValue(request[key]))errors.push('Request.'+key+' must be an ISO-8601 instant with Z or an explicit UTC offset.');});const sectionTimes=['cameraSyncAt','sectionStartAt','sectionEndAt'].map(key=>Date.parse(request[key]));if(sectionTimes.every(time=>!Number.isNaN(time))&&!(sectionTimes[0]<=sectionTimes[1]&&sectionTimes[1]<sectionTimes[2]))errors.push('Request timestamps must satisfy cameraSyncAt <= sectionStartAt < sectionEndAt.');if(has(request,'spo2')){const value=request.spo2;if(!isObject(value))errors.push('Request.spo2 must be an object.');else{unknownFields(value,['format','telemetry'],'Request.spo2',errors);requiredString(value,'format','Request.spo2',errors);requiredString(value,'telemetry','Request.spo2',errors);if(typeof value.format==='string'&&value.format&&value.format!=='oxiwear-spo2-csv')errors.push('Request.spo2.format must be oxiwear-spo2-csv.');if(typeof value.telemetry==='string'&&value.telemetry&&utf8Length(value.telemetry)>10485760)errors.push('Request.spo2.telemetry exceeds the 10 MiB limit.');}}if(has(request,'timer')){const value=request.timer;if(!isObject(value))errors.push('Request.timer must be an object.');else{unknownFields(value,['startAt','endAt'],'Request.timer',errors);const startValid=validateInstant(value,'startAt','Request.timer',errors),endValid=validateInstant(value,'endAt','Request.timer',errors);if(startValid&&endValid){const start=Date.parse(value.startAt),end=Date.parse(value.endAt),sectionStart=Date.parse(request.sectionStartAt),sectionEnd=Date.parse(request.sectionEndAt);if(!Number.isNaN(sectionStart)&&!Number.isNaN(sectionEnd)&&!(sectionStart<=start&&start<end&&end<=sectionEnd))errors.push('Request.timer must satisfy sectionStartAt <= startAt < endAt <= sectionEndAt.');}}}if(has(request,'watermark')){const value=request.watermark;if(!isObject(value))errors.push('Request.watermark must be an object.');else{unknownFields(value,['contentBase64'],'Request.watermark',errors);if(requiredString(value,'contentBase64','Request.watermark',errors)&&(!/^[A-Za-z0-9+/]*={0,2}$/.test(value.contentBase64)||value.contentBase64.length%4===1))errors.push('Request.watermark.contentBase64 must be base64 text.');if(typeof value.contentBase64==='string'&&value.contentBase64.length>2796204)errors.push('Request.watermark.contentBase64 exceeds the 2 MiB PNG limit.');}}if(has(request,'sourceVideo')){const value=request.sourceVideo;if(!isObject(value))errors.push('Request.sourceVideo must be an object.');else{unknownFields(value,['fileId','recordingStartAt','timeZone','name','mimeType'],'Request.sourceVideo',errors);requiredString(value,'fileId','Request.sourceVideo',errors);validateInstant(value,'recordingStartAt','Request.sourceVideo',errors);requiredString(value,'timeZone','Request.sourceVideo',errors);['name','mimeType'].forEach(key=>{if(has(value,key)&&typeof value[key]!=='string')errors.push('Request.sourceVideo.'+key+' must be a string.');});}}[['outputFormat',['h264-mp4','prores-422-mov']],['fitMode',['letterbox','pillarbox','crop']],['audioMode',['source+heartbeat','source-only','heartbeat-only']]].forEach(([key,allowed])=>{if(has(request,key)){if(typeof request[key]!=='string')errors.push('Request.'+key+' must be a string.');else if(!allowed.includes(request[key]))errors.push('Request.'+key+' has an unsupported value.');if(!has(request,'sourceVideo'))errors.push('Request.'+key+' requires sourceVideo.fileId.');}});return errors;}"))
+
+(defn browser-navigation-script []
+  (str
+   "function wizardPanelForStep(step){const panels={outcome:'wizard-outcome-step','source-video':'drive-source-step','activity-data':'activity-data-step','synchronization-decision':'synchronization-decision-step','confirm-video-clock':'confirm-video-clock-step','matching-moment':'matching-moment-step','output-timespan':'output-timespan-step','optional-overlays':'optional-overlays-step','timer-overlay':'optional-overlays-step','spo2-overlay':'optional-overlays-step','watermark-overlay':'optional-overlays-step','output-settings':'output-settings-step',review:'review-step'};return byId(panels[step]);}"
+   "function timingWorkspaceAvailable(step){return ['matching-moment','output-timespan','timer-overlay'].includes(step)&&(wizardState.activeRoute==='transparent-overlay'||hasSourceVideo());}"
+   "function showOnlyWizardSections(step){setComposeSourceMode(hasSourceVideo());const timingAvailable=timingWorkspaceAvailable(step),finished=wizardState.activeRoute==='finished-video'&&hasSourceVideo(),manual=activeSynchronizationMode()==='manual-anchor'&&finished;videoPlayer.hidden=!timingAvailable;videoFullscreen.disabled=!timingAvailable;byId('display-time-zone-field').hidden=!timingAvailable;byId('output-start-field').hidden=!timingAvailable;byId('output-end-field').hidden=!timingAvailable;noSourceRangeStatus.hidden=!timingAvailable||wizardState.activeRoute!=='transparent-overlay';byId('synchronization-options').hidden=step!=='synchronization-decision';videoClockConfirmation.hidden=step!=='confirm-video-clock';manualSynchronizationFields.style.display=timingAvailable&&manual?'':'none';manualSynchronizationFields.hidden=!(timingAvailable&&manual);byId('camera-sync-at').type=finished?'hidden':'datetime-local';manualSyncElapsed.hidden=!finished;byId('section-start-at').readOnly=step!=='output-timespan';byId('section-end-at').readOnly=step!=='output-timespan';byId('timezone').disabled=!timingAvailable||step!=='output-timespan';byId('telemetry-sync-at').readOnly=step!=='matching-moment';byId('timer-start-at').readOnly=step!=='timer-overlay';byId('timer-end-at').readOnly=step!=='timer-overlay';byId('timer-fields').hidden=!(timingAvailable&&byId('timer-enabled').checked);const optionalStep=step==='optional-overlays';[['timer-option','timer-overlay'],['spo2-option','spo2-overlay'],['watermark-option','watermark-overlay']].forEach(([id,configStep])=>{byId(id).hidden=!(optionalStep||step===configStep);});if(optionalStep){refreshOptional('timer-enabled','timer-fields');refreshOptional('spo2-enabled','spo2-fields');refreshOptional('watermark-enabled','watermark-fields');}}"
+   "function selectedText(id){const control=byId(id);return control?.selectedOptions?.[0]?.textContent?.trim()||value(id);}"
+   "function reviewSummary(step){const selected=wizardState.decisions.optionalOverlays||[],names={timer:'Timer',spo2:'OxiWear SpO2',watermark:'PNG watermark'};if(step==='outcome')return wizardState.activeRoute==='finished-video'?'Finished video with overlay':'Transparent overlay for a video editor';if(step==='source-video')return 'One Google Drive source video selected';if(step==='activity-data')return ({'garmin-fit':'Garmin FIT','polar-csv':'Polar CSV','oxiwear-hr-csv':'OxiWear heart-rate CSV'}[value('telemetry-format')]||'Heart-rate file')+' selected';if(step==='synchronization-decision')return activeSynchronizationMode()==='manual-anchor'?'Different camera and activity clocks':'Shared camera and activity clock';if(step==='confirm-video-clock')return (videoRecordingStartAt||'recording start confirmed')+' · '+(videoTimeZone.value.trim()||activeZone());if(step==='matching-moment')return 'Source '+playbackTime(manualSyncSeconds)+' matches '+(manualActivityInstant()||'activity time required');if(step==='output-timespan')return value('section-start-at')+' to '+value('section-end-at')+' · '+activeZone();if(step==='optional-overlays')return selected.length?selected.map(name=>names[name]).join(', '):'No optional overlays';if(step==='timer-overlay')return value('timer-start-at')+' to '+value('timer-end-at');if(step==='spo2-overlay')return 'OxiWear oxygen-saturation CSV selected';if(step==='watermark-overlay')return 'PNG watermark selected';if(step==='output-settings'){const preset=selectedText('preset'),opacity='Future trace opacity '+value('future-trace-opacity-percent')+'%';if(wizardState.activeRoute==='transparent-overlay')return 'ProRes 4444 MOV · Transparent background · '+preset+' · '+opacity;return selectedText('output-format')+' · '+selectedText('fit-mode')+' · '+selectedText('audio-mode')+' · '+preset+' · '+opacity;}return '';}"
+   "function renderReview(){const container=byId('review-sections');if(!container)return;container.replaceChildren();for(const step of activeWizardSteps().filter(stepId=>stepId!=='review')){const copy=wizardStepCopy[step]||{title:step},section=document.createElement('section'),body=document.createElement('div'),heading=document.createElement('h3'),summary=document.createElement('p'),edit=document.createElement('button');section.className='review-section';section.dataset.reviewStep=step;heading.textContent=copy.title;summary.textContent=reviewSummary(step);edit.type='button';edit.dataset.editStep=step;edit.textContent='Edit';edit.setAttribute('aria-label','Edit '+copy.title);edit.addEventListener('click',()=>navigateWizardStep(step,{push:true,focus:true}));body.append(heading,summary);section.append(body,edit);container.append(section);}}"
+   "function renderWizardStep(focusHeading=false){const steps=activeWizardSteps();if(!steps.includes(wizardState.currentStep)){wizardState.currentStep=[...steps].reverse().find(stepId=>wizardState.visitedStepIds.includes(stepId))||'outcome';const state=history.state&&typeof history.state==='object'?history.state:{};history.replaceState({...state,wizardStep:wizardState.currentStep},'',location.href);}const step=wizardState.currentStep,index=steps.indexOf(step),copy=wizardStepCopy[step]||{title:step,description:''};wizardPanels.forEach(panel=>{panel.hidden=true;});const panel=wizardPanelForStep(step);if(panel){panel.hidden=false;panel.dataset.stepId=step;}showOnlyWizardSections(step);if(step==='review')renderReview();wizardHeading.textContent=copy.title;wizardDescription.textContent=copy.description;wizardProgress.textContent='Step '+(index+1)+' of '+steps.length;wizardOverview.hidden=!wizardState.activeRoute;wizardStepList.replaceChildren();if(wizardState.activeRoute){steps.forEach((stepId,stepIndex)=>{const item=document.createElement('li'),button=document.createElement('button'),stepCopy=wizardStepCopy[stepId]||{title:stepId};button.type='button';button.dataset.stepId=stepId;button.textContent=(stepIndex+1)+'. '+stepCopy.title;button.disabled=stepId!==step&&!wizardState.visitedStepIds.includes(stepId);if(stepId===step)button.setAttribute('aria-current','step');button.addEventListener('click',()=>navigateWizardStep(stepId,{push:true,focus:true}));item.append(button);wizardStepList.append(item);});}wizardBack.disabled=index<=0;wizardNext.textContent=step==='output-settings'?'Finish':'Next';wizardNext.hidden=step==='review';composeWorkflow.dataset.activeRoute=wizardState.activeRoute||'';composeWorkflow.dataset.currentStep=step;if(focusHeading)wizardHeader.focus();}"
+   "function showWizardError(message){wizardState.validation.errors={[wizardState.currentStep]:message};wizardErrorSummary.textContent=message;wizardErrorSummary.hidden=false;wizardErrorSummary.focus();}"
+   "function clearWizardError(){wizardState.validation.errors={};wizardErrorSummary.textContent='';wizardErrorSummary.hidden=true;}"
+   "function validateWizardStep(step){if(step==='outcome'){if(!wizardState.activeRoute)throw new Error('Choose an output before continuing.');return;}if(step==='source-video'){if(!value('source-video-file-id'))throw new Error('Choose a source video before continuing.');return;}if(step==='activity-data'){required('telemetry-format','Heart-rate data format');required('telemetry','Heart-rate data');return;}if(step==='synchronization-decision'){if(!selectedSynchronizationMode())throw new Error('Choose whether the camera and activity devices used the same clock or different clocks.');return;}if(step==='confirm-video-clock'){if(!videoClockConfirmed||videoClockSource!=='shared-clock')throw new Error('Confirm the shared video recording clock before continuing.');return;}if(step==='matching-moment'){if(!deriveManualSynchronization(false))throw new Error('Choose a source-video frame and enter the matching activity-data time.');return;}if(step==='output-timespan'){if(hasSourceVideo()){localToIso('section-start-at');localToIso('section-end-at');return;}noSourceRange();return;}if(step==='timer-overlay'){localTextToIso(value('timer-start-at'),activeZone(),'Timer start');localTextToIso(value('timer-end-at'),activeZone(),'Timer end');return;}if(step==='spo2-overlay'){required('spo2-telemetry','Oxygen-saturation data (SpO2)');return;}if(step==='watermark-overlay'){required('watermark-content','Watermark file');return;}if(step==='output-settings'){required('preset','Render preset');boundedNumber('future-trace-opacity-percent','Future trace opacity',0,100);return;}if(step==='review')buildRequest();}"
+   "const validateWizardStepWithLegacyActivityFields=validateWizardStep;validateWizardStep=function(step){if(step==='activity-data'){required('telemetry','Heart-rate file');if(!value('telemetry-format'))throw new Error('Choose a compatible Garmin FIT, Polar CSV, or Advanced OxiWear heart-rate file.');return;}return validateWizardStepWithLegacyActivityFields(step);};"
+   "function navigateWizardStep(step,{push=true,focus=true}={}){const steps=activeWizardSteps();if(!steps.includes(step))return false;wizardState.currentStep=step;if(!wizardState.visitedStepIds.includes(step))wizardState.visitedStepIds.push(step);clearWizardError();if(push){const state=history.state&&typeof history.state==='object'?history.state:{};history.pushState({...state,wizardStep:step},'',location.href);}renderWizardStep(focus);return true;}"
+   "function completeCurrentWizardStep(){const step=wizardState.currentStep;try{validateWizardStep(step);}catch(error){showWizardError(error.message);return;}if(!wizardState.completion.completedStepIds.includes(step))wizardState.completion.completedStepIds.push(step);captureWizardState(wizardState.renderRequest);const steps=activeWizardSteps(),index=steps.indexOf(step),nextStep=steps[index+1];if(nextStep)navigateWizardStep(nextStep,{push:true,focus:true});}"
+   "function acceptWizardSourceSelection(){if(wizardState.activeRoute!=='finished-video')chooseWizardOutcome('finished-video',false);for(const step of ['outcome','source-video'])if(!wizardState.completion.completedStepIds.includes(step))wizardState.completion.completedStepIds.push(step);navigateWizardStep('activity-data',{push:true,focus:true});}"))

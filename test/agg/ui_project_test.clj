@@ -1,6 +1,7 @@
 (ns agg.ui-project-test
   (:require [agg.ui.project :as project]
             [agg.ui.wizard :as wizard]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]))
 
 (defn- complete-transparent-state []
@@ -23,13 +24,13 @@
        {:startAt "2026-07-17T09:00:00.400Z"
         :endAt "2026-07-17T09:00:01.600Z"})
       (assoc :current-step :review
-             :visited-steps #{:outcome :overlay-timespan :activity-data
-                              :synchronization :optional-overlays
+             :visited-steps #{:outcome :activity-data :output-timespan
+                              :optional-overlays
                               :timer-overlay :output-settings :review})
       (update-in [:completion :completed-steps]
                  into
-                 #{:outcome :overlay-timespan :activity-data
-                   :synchronization :optional-overlays
+                 #{:outcome :activity-data :output-timespan
+                   :optional-overlays
                    :timer-overlay :output-settings})))
 
 (deftest export-project-json-keeps-canonical-state-and-complete-request
@@ -38,8 +39,8 @@
     (is (= project/schema-version (:schemaVersion envelope)))
     (is (= "transparent-overlay" (:activeRoute envelope)))
     (is (= "review" (:currentStepId envelope)))
-    (is (= ["outcome" "overlay-timespan" "activity-data"
-            "synchronization" "optional-overlays"
+    (is (= ["outcome" "activity-data" "output-timespan"
+            "optional-overlays"
             "timer-overlay" "output-settings" "review"]
            (:visitedStepIds envelope)))
     (is (= ["timer"] (get-in envelope [:decisions :optionalOverlays])))
@@ -139,3 +140,10 @@
                 errors))
       (is (some #{"Project.renderRequest.sectionStartAt must be an ISO-8601 instant with Z or an explicit UTC offset."}
                 errors)))))
+
+(deftest browser-project-runtime-owns-export-import-and-validation
+  (let [script (project/browser-runtime-script)]
+    (is (str/includes? script "function projectText()"))
+    (is (str/includes? script "function validateProject("))
+    (is (str/includes? script "function restoreProject("))
+    (is (str/includes? script "function applyProjectText("))))
