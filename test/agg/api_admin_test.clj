@@ -54,15 +54,24 @@
         (let [owner-page (request! port :get "/" nil {"Cookie" owner-cookie})
               admin-page (request! port :get "/" nil {"Cookie" admin-cookie})
               member-page (request! port :get "/" nil {"Cookie" member-cookie})
+              admin-ui (request! port :get "/ui/admin/members" nil
+                                 {"Cookie" owner-cookie})
               owner-list (request! port :get "/v1/admin/members" nil
                                    {"Cookie" owner-cookie})
               admin-list (request! port :get "/v1/admin/members" nil
                                    {"Cookie" admin-cookie})
               member-list (request! port :get "/v1/admin/members" nil
                                     {"Cookie" member-cookie})]
-          (is (str/includes? (.body owner-page) "Member administration"))
-          (is (str/includes? (.body admin-page) "Member administration"))
-          (is (not (str/includes? (.body member-page) "Member administration")))
+          (is (str/includes? (.body owner-page) "Member admin"))
+          (is (str/includes? (.body admin-page) "Member admin"))
+          (is (not (str/includes? (.body owner-page) "View operation logs")))
+          (is (not (str/includes? (.body admin-page) "View operation logs")))
+          (is (not (str/includes? (.body member-page) "Member admin")))
+          (is (not (str/includes? (.body member-page) "View operation logs")))
+          (is (= 200 (.statusCode admin-ui)))
+          (is (str/includes? (.body admin-ui) "<header class=\"product-header\">"))
+          (is (str/includes? (.body admin-ui) "Member administration"))
+          (is (str/includes? (.body admin-ui) "Signed in as owner@example.com"))
           (is (= 200 (.statusCode owner-list)))
           (is (= 200 (.statusCode admin-list)))
           (is (= 403 (.statusCode member-list)))
@@ -163,7 +172,7 @@
                           nil {"Cookie" owner-cookie})
             member-response (request! port :get "/ui/admin/logs"
                                       nil {"Cookie" member-cookie})]
-        (is (str/includes? (.body landing) "View operational logs"))
+        (is (str/includes? (.body landing) "View operation logs"))
         (is (= 200 (.statusCode formatted)))
         (is (str/includes? (.body formatted)
                            "<header class=\"product-header\">"))

@@ -1369,6 +1369,29 @@
     (is (str/includes? page
                        "<input type=\"hidden\" name=\"csrf\" value=\"csrf-test\">"))))
 
+(deftest token-and-member-admin-pages-keep-product-navigation-and-htmx-account-controls
+  (doseq [[label page heading action]
+          [["token"
+            (ui/token-page {:user {:email "owner@example.com"}
+                            :csrf "csrf-test"
+                            :tokens []})
+            "Personal API tokens"
+            "hx-post=\"/ui/tokens\""]
+           ["member admin"
+            (ui/member-admin-page {:user {:email "owner@example.com"}
+                                   :csrf "csrf-test"
+                                   :members []})
+            "Member admin"
+            "hx-post=\"/ui/admin/members\""]]]
+    (testing label
+      (is (= 1 (count (re-seq #"class=\"product-header\"" page))))
+      (is (str/includes? page heading))
+      (is (str/includes? page "Signed in as owner@example.com"))
+      (is (str/includes? page "<form method=\"post\" action=\"/v1/auth/logout\">"))
+      (is (str/includes? page "htmx.org@2.0.10"))
+      (is (str/includes? page "hx-headers=\"{&quot;X-CSRF-Token&quot;:&quot;csrf-test&quot;}\""))
+      (is (str/includes? page action)))))
+
 (deftest public-pages-use-one-product-navigation-with-the-current-page-marked
   (let [pages
         {"anonymous home" [ui/anonymous-page nil]
@@ -4422,7 +4445,8 @@
                                 "window.open('/v1/drive/picker'")))
         (is (not (str/includes? (.body landing)
                                 "addEventListener('message'")))
-        (is (str/includes? (.body landing) "hx-post=\"/ui/tokens\""))
+        (is (str/includes? (.body landing) "href=\"/ui/tokens\""))
+        (is (not (str/includes? (.body landing) "hx-post=\"/ui/tokens\"")))
         (is (str/includes? (.body landing) "X-CSRF-Token")))
       (testing "preview submission returns an async HTML fragment"
         (let [preview (request! port :post "/ui/preview"
@@ -4498,6 +4522,10 @@
         (is (str/includes? (.body created) "&lt;script&gt;alert(1)&lt;/script&gt;"))
         (is (not (str/includes? (.body created) "<script>alert(1)</script>")))
         (is (= 200 (.statusCode listed)))
+        (is (str/includes? (.body listed) "<header class=\"product-header\">"))
+        (is (str/includes? (.body listed) "Signed in as owner@example.com"))
+        (is (str/includes? (.body listed) "htmx.org@2.0.10"))
+        (is (str/includes? (.body listed) "hx-post=\"/ui/tokens\""))
         (is (str/includes? (.body listed) "&lt;script&gt;alert(1)&lt;/script&gt;"))
         (is (not (str/includes? (.body listed) raw-token)))
         (is (not (str/includes? (.body listed) "hash"))))
