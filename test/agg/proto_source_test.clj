@@ -86,3 +86,58 @@
              :width 1920
              :height 1080}]
            (:sources listing)))))
+
+(deftest default-source-listing-falls-back-to-fixed-bootstrap-when-folder-is-empty
+  (let [listed? (atom false)
+        loaded (atom [])
+        gateway
+        (reify drive/FolderSourceListingGateway
+          (list-folder-sources! [_ _ _]
+            (reset! listed? true)
+            [])
+          drive/SourceGateway
+          (source-metadata! [_ _ file-id]
+            (swap! loaded conj file-id)
+            (case file-id
+              "video-b" {:id "video-b"
+                         :name "beta.mp4"
+                         :mimeType "video/mp4"
+                         :size 4096
+                         :trashed false
+                         :videoMediaMetadata {:durationMillis "61000"
+                                              :width 1920
+                                              :height 1080}}
+              "video-a" {:id "video-a"
+                         :name "alpha.mov"
+                         :mimeType "video/quicktime"
+                         :size 2048
+                         :trashed false
+                         :videoMediaMetadata {:durationMillis "42000"
+                                              :width 1280
+                                              :height 720}}))
+          (stream-source! [_ _ _ _]
+            (throw (UnsupportedOperationException.))))
+        listing (proto/default-source-listing
+                 (auth-system gateway)
+                 "owner-subject"
+                 proto/fixed-folder-id
+                 ["video-b" "video-a"])]
+    (is @listed?)
+    (is (= ["video-b" "video-a"] @loaded))
+    (is (= "fixed-bootstrap" (:listingMode listing)))
+    (is (= proto/fixed-folder-id (:folderId listing)))
+    (is (= [{:fileId "video-a"
+             :fileName "alpha.mov"
+             :mimeType "video/quicktime"
+             :size 2048
+             :durationSeconds 42.0
+             :width 1280
+             :height 720}
+            {:fileId "video-b"
+             :fileName "beta.mp4"
+             :mimeType "video/mp4"
+             :size 4096
+             :durationSeconds 61.0
+             :width 1920
+             :height 1080}]
+           (:sources listing)))))
