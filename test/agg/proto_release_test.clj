@@ -45,6 +45,8 @@
       (is (str/includes? proto-workflow "AGG_SERVICE_PROFILE=proto"))
       (is (str/includes? proto-workflow "clojure -M:proto-test"))
       (is (str/includes? proto-workflow "test/proto_container_smoke.sh"))
+      (is (not (str/includes? proto-workflow "clojure -M:test-all")))
+      (is (not (str/includes? proto-workflow "clj-kondo --lint src test build.clj")))
       (is (str/includes? proto-workflow "PROJECT_ID: animated-graph-cloud-prod-jp"))
       (is (str/includes? proto-workflow "PROJECT_NUMBER: \"488013150738\""))
       (is (str/includes? proto-workflow "PROTO_PUBLIC_BASE_URL: https://proto.alphacompose.com"))

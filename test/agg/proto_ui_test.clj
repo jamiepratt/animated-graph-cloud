@@ -54,7 +54,7 @@
      :owner owner
      :owner-cookie (str "agg_session=" (auth/issue-session auth-system owner))}))
 
-(def browser-fixture-timeout-ms 15000)
+(def browser-fixture-timeout-ms 30000)
 
 (defn- chrome-executable []
   (some (fn [candidate]
@@ -111,14 +111,14 @@
       (spit temp html)
       (browser-location-outcome requirement
                                 (.toURI temp)
-                                1000
+                                3000
                                 browser-fixture-timeout-ms
                                 [])
       (finally
         (.delete temp)))))
 
 (defn- proto-page-browser-outcome
-  [{:keys [can-play-type webcodecs? timing-response]}]
+  [{:keys [can-play-type webcodecs? timing-response supported?]}]
   (let [page (proto/page {:user {:email "owner@example.com"}
                           :csrf "csrf-token"
                           :folder-id proto/fixed-folder-id})
@@ -152,7 +152,14 @@
         (str
          "<script>"
          "function recordOutcome(outcome){const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.body.dataset.outcome=btoa(String.fromCharCode(...bytes));}"
-         "window.addEventListener('load',()=>{setTimeout(async()=>{try{const first=document.querySelector('#source-list button');first.click();await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));const video=document.getElementById('proto-player');video.__bufferedRanges=[[0,30],[60,90]];video.dispatchEvent(new Event('progress'));recordOutcome({sourceStatus:document.getElementById('source-status').textContent,playerStatus:document.getElementById('player-status').textContent,selectedTitle:document.getElementById('selected-title').textContent,summary:{listing:document.getElementById('summary-listing').textContent,file:document.getElementById('summary-file').textContent,mime:document.getElementById('summary-mime').textContent,duration:document.getElementById('summary-duration').textContent,frameSize:document.getElementById('summary-size').textContent},timing:{start:document.getElementById('timing-start').textContent,end:document.getElementById('timing-end').textContent,state:document.getElementById('timing-state').textContent,confidence:document.getElementById('timing-confidence').textContent},prep:JSON.parse(document.getElementById('prep-debug').textContent),range:JSON.parse(document.getElementById('range-debug').textContent),requests:window.__protoState});}catch(error){recordOutcome({error:error.message});}},0);},{once:true});"
+         "function delay(ms){return new Promise(resolve=>setTimeout(resolve,ms));}"
+         "async function waitFor(label,predicate,attempts){for(let index=0;index<attempts;index+=1){const value=predicate();if(value)return value;await delay(25);}throw new Error('Timed out waiting for '+label);}"
+         "async function runScenario(){try{const first=await waitFor('source button',()=>document.querySelector('#source-list button'),200);first.click();await waitFor('selected title',()=>document.getElementById('selected-title').textContent==='timing-ride.mp4',200);"
+         (if supported?
+           "await waitFor('preparation debug',()=>{const text=document.getElementById('prep-debug').textContent;return text&&text.includes('\"support\"')&&text.includes('\"session\"');},200);await waitFor('prepared player status',()=>document.getElementById('player-status').textContent.includes('Private playback prepared'),200);const video=document.getElementById('proto-player');video.__bufferedRanges=[[0,30],[60,90]];video.dispatchEvent(new Event('progress'));"
+           "await waitFor('preparation debug',()=>{const text=document.getElementById('prep-debug').textContent;return text&&text.includes('\"support\"');},200);await waitFor('unsupported player status',()=>document.getElementById('player-status').textContent.includes('could not prove direct playback support'),200);")
+         "recordOutcome({sourceStatus:document.getElementById('source-status').textContent,playerStatus:document.getElementById('player-status').textContent,selectedTitle:document.getElementById('selected-title').textContent,summary:{listing:document.getElementById('summary-listing').textContent,file:document.getElementById('summary-file').textContent,mime:document.getElementById('summary-mime').textContent,duration:document.getElementById('summary-duration').textContent,frameSize:document.getElementById('summary-size').textContent},timing:{start:document.getElementById('timing-start').textContent,end:document.getElementById('timing-end').textContent,state:document.getElementById('timing-state').textContent,confidence:document.getElementById('timing-confidence').textContent},prep:JSON.parse(document.getElementById('prep-debug').textContent),range:JSON.parse(document.getElementById('range-debug').textContent),requests:window.__protoState});}catch(error){recordOutcome({error:error.message});}}"
+         "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',()=>{setTimeout(runScenario,0);},{once:true});}else{setTimeout(runScenario,0);}"
          "</script>")
         html (-> page
                  (str/replace "</head>" (str bootstrap "</head>"))
@@ -235,6 +242,7 @@
   (let [outcome (proto-page-browser-outcome
                  {:can-play-type "probably"
                   :webcodecs? false
+                  :supported? true
                   :timing-response {:fileName "timing-ride.mp4"
                                     :status "candidate"
                                     :candidates [{:source "movie"
@@ -265,6 +273,7 @@
   (let [outcome (proto-page-browser-outcome
                  {:can-play-type ""
                   :webcodecs? false
+                  :supported? false
                   :timing-response {:fileName "timing-ride.mp4"
                                     :status "manual"
                                     :candidates []
