@@ -26,8 +26,7 @@
     (is (re-find #"github_subject\s*=\s*\"repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/main\""
                  production))
     (is (re-find #"enable_proto_service\s*=\s*false" production))
-    (is (re-find #"(?s)removed\s*\{\s*from\s*=\s*module\.application\.google_cloud_run_v2_service\.proto\s*lifecycle\s*\{\s*destroy\s*=\s*false\s*\}\s*\}"
-                 production))
+    (is (not (str/includes? production "removed {")))
     (is (str/includes? backend
                        "bucket = \"animated-graph-cloud-prod-jp-tfstate\""))
     (is (str/includes? backend "prefix = \"prod\""))
@@ -53,6 +52,17 @@
     (is (re-find #"(?s)moved \{\s*from\s*=\s*google_firestore_field\.observability_logs_expiry\s*to\s*=\s*google_firestore_field\.observability_logs_expiry\[0\]\s*\}"
                  shared))
     (is (re-find #"enable_observability_log_ttl\s*=\s*true" production))))
+
+(deftest production-workflow-detaches-proto-from-main-state-without-deleting-it
+  (let [workflow (slurp ".github/workflows/deploy-production.yml")]
+    (is (str/includes? workflow
+                       "Detaching stale proto resource from main production Terraform state"))
+    (is (str/includes? workflow
+                       "module.application.google_cloud_run_v2_service.proto"))
+    (is (str/includes? workflow
+                       "'module.application.google_cloud_run_v2_service.proto[0]'"))
+    (is (str/includes? workflow
+                       "terraform -chdir=infra/prod state rm \"$proto_address\""))))
 
 (deftest production-bootstrap-documents-the-ttl-owner-checkpoint
   (let [decision (slurp "docs/adr/0011-automatic-production-deployment.md")

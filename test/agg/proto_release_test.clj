@@ -39,5 +39,8 @@
       (is (not (str/includes? prod-workflow "PROTO_FIREBASE_SITE")))
       (is (not (str/includes? prod-workflow "firebase.proto.template.json")))
       (is (str/includes? prod-infra "enable_proto_service         = false"))
-      (is (str/includes? prod-infra "from = module.application.google_cloud_run_v2_service.proto"))
-      (is (str/includes? prod-infra "destroy = false")))))
+      (is (not (str/includes? prod-infra "removed {")))
+      (is (str/includes? prod-workflow
+                         "Detaching stale proto resource from main production Terraform state"))
+      (is (str/includes? prod-workflow
+                         "terraform -chdir=infra/prod state rm \"$proto_address\"")))))

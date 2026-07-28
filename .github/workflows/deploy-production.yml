@@ -128,6 +128,15 @@ jobs:
           terraform -chdir=infra/prod init -input=false
 
           state_resources="$(terraform -chdir=infra/prod state list)"
+          for proto_address in \
+            module.application.google_cloud_run_v2_service.proto \
+            'module.application.google_cloud_run_v2_service.proto[0]'; do
+            if grep -Fxq "$proto_address" <<<"$state_resources"; then
+              echo "Detaching stale proto resource from main production Terraform state: $proto_address"
+              terraform -chdir=infra/prod state rm "$proto_address"
+            fi
+          done
+          state_resources="$(terraform -chdir=infra/prod state list)"
           firestore_address='module.application.google_firestore_database.default'
           if ! grep -Fxq "$firestore_address" <<<"$state_resources"; then
             firestore_error="$RUNNER_TEMP/firestore-describe-error"

@@ -19,14 +19,6 @@ module "application" {
   terraform_state_bucket       = "animated-graph-cloud-prod-jp-tfstate"
 }
 
-removed {
-  from = module.application.google_cloud_run_v2_service.proto
-
-  lifecycle {
-    destroy = false
-  }
-}
-
 import {
   to = module.application.google_cloud_run_v2_service.api
   id = "projects/animated-graph-cloud-prod-jp/locations/europe-central2/services/agg-api"
