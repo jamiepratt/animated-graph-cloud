@@ -586,8 +586,10 @@
          :access-token access-token
          :file-id file-id
          :size (:size metadata)
-         :limits drive-limits/preflight-range-limits-v1})]
-      (media/inspect-browser-playback! "ffprobe" (:url proxy))))
+         :limits drive-limits/playback-analysis-range-limits-v1})]
+      (media/inspect-browser-playback!
+       (or (:playback-ffprobe gateway) "ffprobe")
+       (:url proxy))))
   drive/FolderSourceListingGateway
   (list-folder-sources! [_ access-token folder-id]
     (loop [page-token nil

@@ -76,3 +76,12 @@
 
 (def renderer-range-limits-v1 (:renderer configured-limits))
 (def preflight-range-limits-v1 (:preflight configured-limits))
+
+(def playback-analysis-range-limits-v1
+  (let [maximum-read-bytes
+        (min (* 1024 1024)
+             (:max-range-bytes preflight-range-limits-v1)
+             (:max-cache-bytes preflight-range-limits-v1))]
+    (assoc preflight-range-limits-v1
+           :max-range-bytes maximum-read-bytes
+           :max-cache-bytes maximum-read-bytes)))

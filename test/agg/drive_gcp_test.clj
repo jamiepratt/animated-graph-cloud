@@ -38,6 +38,15 @@
       (.write output ^bytes chunk))
     (.toByteArray output)))
 
+(defn- executable-script! [contents]
+  (let [path (Files/createTempFile
+              "agg-drive-test-" ".sh"
+              (make-array java.nio.file.attribute.FileAttribute 0))]
+    (Files/writeString path contents (make-array OpenOption 0))
+    (when-not (.setExecutable (.toFile path) true)
+      (throw (ex-info "Could not make the Drive test script executable" {})))
+    path))
+
 (deftest recording-clock-inspection-is-bounded-and-prefers-explicit-offsets
   (let [requests (atom [])
         explicit
@@ -325,6 +334,59 @@
                (catch clojure.lang.ExceptionInfo error
                  (:type (ex-data error))))))
       (is @closed?))))
+
+(deftest playback-analysis-keeps-each-remote-read-small
+  (let [ffprobe
+        (executable-script!
+         (str "#!/bin/sh\n"
+              "for argument in \"$@\"; do url=\"$argument\"; done\n"
+              "curl --fail --silent --show-error --range 0- \"$url\" >/dev/null\n"
+              "printf '%s\\n' "
+              "'{\"streams\":[{\"codec_type\":\"video\","
+              "\"codec_name\":\"h264\",\"codec_tag_string\":\"avc1\","
+              "\"profile\":\"High\",\"pix_fmt\":\"yuv420p\"}],"
+              "\"format\":{\"format_name\":\"mov,mp4,m4a,3gp,3g2,mj2\","
+              "\"tags\":{\"major_brand\":\"isom\"}}}'\n"))
+        source-size (* 1024 1024 1024)
+        requests (atom [])
+        gateway
+        (assoc
+         (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+         :playback-ffprobe (str ffprobe)
+         :stream-source-request!
+         (fn [{:keys [headers timeout-ms] :as request}]
+           (let [[_ start-text end-text]
+                 (re-matches #"bytes=(\d+)-(\d+)" (get headers "Range"))
+                 start (parse-long start-text)
+                 end (parse-long end-text)
+                 length (inc (- end start))]
+             (swap! requests conj request)
+             {:status 206
+              :headers {"content-range"
+                        (str "bytes " start "-" end "/" source-size)
+                        "content-length" (str length)}
+              :body (ByteArrayInputStream. (byte-array length))})))]
+    (try
+      (is (= {:container {:format "mp4" :majorBrand "isom"}
+              :video {:codec "h264"
+                      :codecTag "avc1"
+                      :profile "High"
+                      :pixelFormat "yuv420p"}}
+             (drive/inspect-playback!
+              gateway "access" "private-file"
+              {:size source-size :mimeType "video/mp4"})))
+      (is (= 1 (count @requests)))
+      (is (every?
+           (fn [{:keys [headers timeout-ms]}]
+             (let [[_ start-text end-text]
+                   (re-matches #"bytes=(\d+)-(\d+)" (get headers "Range"))]
+               (and (= 3000 timeout-ms)
+                    (<= (inc (- (parse-long end-text)
+                                (parse-long start-text)))
+                        (* 1024 1024)))))
+           @requests))
+      (finally
+        (Files/deleteIfExists ffprobe)))))
 
 (deftest picker-diagnostics-probe-account-and-video-index-without-returning-files
   (let [requests (atom [])
