@@ -40,6 +40,10 @@
   (is (str/includes? terraform
                      "value = var.project_id")))
 
+(deftest development-workflow-remains-main-only
+  (is (re-find #"(?s)on:\s+push:\s+branches: \[main\]" workflow))
+  (is (not (str/includes? workflow "branches: [proto]"))))
+
 (deftest private-health-probe-uses-an-audience-correct-wif-id-token
   (is (str/includes? workflow "token_format: id_token"))
   (is (str/includes? workflow

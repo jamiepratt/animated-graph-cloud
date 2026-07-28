@@ -1,0 +1,166 @@
+name: Deploy proto app
+
+on:
+  push:
+    branches: [proto]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: proto-development-deployment
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: animated-graph-cloud-jp
+  PROJECT_NUMBER: "891643499444"
+  REGION: europe-central2
+  REPOSITORY: containers
+  SERVICE: agg-api
+  PROTO_SERVICE: agg-proto
+  DURABLE_JOB: agg-renderer
+  IMAGE: europe-central2-docker.pkg.dev/animated-graph-cloud-jp/containers/animated-graph-cloud:${{ github.sha }}
+  DEPLOYER_SERVICE_ACCOUNT: agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com
+  API_SERVICE_ACCOUNT: agg-api@animated-graph-cloud-jp.iam.gserviceaccount.com
+  OWNER_EMAIL: me@jamiep.org
+  ADMIN_EMAILS: me@jamiep.org;bartoszjakubowiak@gmail.com
+  DAILY_SUBMISSION_LIMIT: "100"
+  MONTHLY_BUDGET_MINOR_UNITS: "40000"
+  PREVIEW_RESERVATION_MINOR_UNITS: "125"
+  RENDER_RESERVATION_MINOR_UNITS: "125"
+
+jobs:
+  proto-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          cli: 1.12.5.1654
+          clj-kondo: 2026.05.25
+      - run: clj-kondo --lint src/agg/proto test/agg/proto_test_runner.clj test/agg/proto_release_test.clj test/agg/proto_source_test.clj test/agg/proto_ui_test.clj
+      - run: clojure -M:proto-test
+
+  deploy:
+    needs: proto-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build proto image
+        run: docker build --tag "$IMAGE" .
+
+      - name: Smoke proto container
+        run: test/proto_container_smoke.sh "$IMAGE"
+
+      - name: Scan proto image
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - id: auth
+        name: Authenticate to Google Cloud without a key
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud
+          service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: ">= 541.0.0"
+
+      - id: service-url
+        name: Discover current API dispatcher audience
+        run: |
+          service_url="$(gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format 'value(status.url)')"
+          test -n "$service_url"
+          echo "url=$service_url" >>"$GITHUB_OUTPUT"
+
+      - id: image
+        name: Push and resolve immutable image digest
+        run: |
+          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+          docker push "$IMAGE"
+          digest="$(gcloud artifacts docker images describe "$IMAGE" \
+            --format='value(image_summary.digest)')"
+          test -n "$digest"
+          echo "uri=$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/animated-graph-cloud@$digest" >>"$GITHUB_OUTPUT"
+
+      - name: Deploy private proto service
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
+        run: |
+          gcloud run deploy "$PROTO_SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE_DIGEST" \
+            --service-account "$API_SERVICE_ACCOUNT" \
+            --port 8080 \
+            --cpu 1 \
+            --memory 512Mi \
+            --concurrency 16 \
+            --min 0 \
+            --max 2 \
+            --no-allow-unauthenticated \
+            --quiet
+
+      - id: proto-service-url
+        name: Discover private proto audience
+        run: |
+          service_url="$(gcloud run services describe "$PROTO_SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format 'value(status.url)')"
+          test -n "$service_url"
+          echo "url=$service_url" >>"$GITHUB_OUTPUT"
+
+      - name: Enable authenticated proto runtime
+        env:
+          CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
+          PROTO_RUN_SERVICE_URL: ${{ steps.proto-service-url.outputs.url }}
+        run: |
+          gcloud run services update "$PROTO_SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --remove-env-vars "AGG_MONTHLY_BUDGET_CENTS,AGG_PREVIEW_RESERVATION_CENTS,AGG_RENDER_RESERVATION_CENTS" \
+            --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_SERVICE_PROFILE=proto,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=$DURABLE_JOB,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PROTO_RUN_SERVICE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
+            --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest" \
+            --quiet
+
+      - id: proto-health-auth
+        name: Mint proto origin identity token through WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud
+          service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.proto-service-url.outputs.url }}
+
+      - name: Verify proto health and landing page
+        env:
+          PROTO_RUN_SERVICE_URL: ${{ steps.proto-service-url.outputs.url }}
+          PROTO_RUN_ID_TOKEN: ${{ steps.proto-health-auth.outputs.id_token }}
+        run: |
+          proto_health="$(curl --fail --silent --show-error \
+            --header "Authorization: Bearer $PROTO_RUN_ID_TOKEN" \
+            "$PROTO_RUN_SERVICE_URL/health")"
+          test "$proto_health" = '{"status":"ok"}'
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer $PROTO_RUN_ID_TOKEN" \
+            "$PROTO_RUN_SERVICE_URL/" | grep -q 'Timing workspace playback prototype'
