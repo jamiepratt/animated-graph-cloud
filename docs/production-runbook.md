@@ -113,8 +113,9 @@ In Google Auth Platform for `animated-graph-cloud-prod-jp`:
 - set terms `https://alphacompose.com/terms`;
 - verify `alphacompose.com` as an authorized domain;
 - publish exactly `openid email profile drive.file` for the combined flow;
-- create a production Web application client with the exact redirect
-  `https://alphacompose.com/v1/auth/login/callback`;
+- create a production Web application client with the exact redirects
+  `https://alphacompose.com/v1/auth/login/callback` and
+  `https://proto.alphacompose.com/v1/auth/login/callback`;
 - configure the intended `AGG_ADMIN_EMAILS` set; the release bootstraps those
   administrators but does not add ordinary allowlisted members.
 
@@ -140,7 +141,7 @@ with only `requestId`, `category`, `status`, and severity. Use the response
 email addresses, filenames, or request bodies to an issue or log.
 
 Before releasing the combined flow, confirm the production client authorizes
-the combined callback and the published scope set is exact. After deployment,
+both combined callbacks and the published scope set is exact. After deployment,
 remove the former `https://alphacompose.com/v1/auth/drive/callback` redirect
 immediately. OAuth transactions using that old route will fail and must be
 restarted. Complete issue #48 publication/verification and run the combined
@@ -261,6 +262,11 @@ openssl rand -base64 48 | tr -d '\n' | gcloud secrets versions add session-key \
   --project=animated-graph-cloud-prod-jp --data-file=-
 openssl rand -base64 48 | tr -d '\n' | gcloud secrets versions add token-hash-pepper \
   --project=animated-graph-cloud-prod-jp --data-file=-
+
+# The checked-in JSON must keep exactly these combined login callbacks:
+# https://alphacompose.com/v1/auth/login/callback
+# https://proto.alphacompose.com/v1/auth/login/callback
+# Remove the old https://alphacompose.com/v1/auth/drive/callback entry.
 ```
 
 Create the Picker API key in the production project, restrict it only to

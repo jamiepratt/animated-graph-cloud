@@ -60,8 +60,11 @@ monthly ceiling is exhausted; the deployment workflow keeps those two values
 aligned.
 
 Google OAuth runtime values are operator-managed Secret Manager versions:
-`oauth-client-secret` contains the downloaded web-client JSON, `session-key`
-contains at least 32 random bytes, and `picker-api-key` contains a Google API key
+`oauth-client-secret` contains the downloaded web-client JSON with exactly the
+`https://alphacompose.com/v1/auth/login/callback` and
+`https://proto.alphacompose.com/v1/auth/login/callback` redirects and without
+the retired Drive callback, `session-key` contains at least 32 random bytes,
+and `picker-api-key` contains a Google API key
 API-restricted solely to `picker.googleapis.com`. A browser-referrer
 restriction is not compatible with Picker because Google validates the
 developer key from the `docs.google.com` iframe. The Secret Manager payload is

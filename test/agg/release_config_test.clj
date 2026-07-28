@@ -835,6 +835,7 @@
     (doseq [checkpoint ["cannot be undone" "Firebase Terms" "protected\n`main`"
                         "https://alphacompose.com/privacy"
                         "https://alphacompose.com/v1/auth/login/callback"
+                        "https://proto.alphacompose.com/v1/auth/login/callback"
                         "remove the former `https://alphacompose.com/v1/auth/drive/callback`"
                         "drive.file" "AGG_ADMIN_EMAILS" "Rollback" "Secret Manager"
                         "animated-graph-cloud-prod-jp" "animated-graph-cloud-jp"]]
