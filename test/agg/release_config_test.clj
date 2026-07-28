@@ -727,6 +727,9 @@
         context (slurp "CONTEXT.md")
         adr (slurp "docs/adr/0016-stream-selected-drive-video-for-browser-playback.md")]
     (doseq [contract ["browser_playback_not_supported"
+                      "playback_analysis_timeout"
+                      "playback_analysis_failed"
+                      "playback_evidence_unavailable"
                       "operationId: inspectDrivePlayback"
                       "/v1/drive/playback-analyses:"
                       "Range"

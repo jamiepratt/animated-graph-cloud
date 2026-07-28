@@ -1453,6 +1453,25 @@
                    {:fileName (:name source-metadata)
                     :evidence evidence})))
 
+(defn- respond-playback-analysis-failure!
+  [dependencies exchange path error-type status error-code retryable]
+  (if (= "/v1/drive/playback-analyses" path)
+    (do
+      (emit-event! dependencies "request_failed"
+                   {:severity "WARNING"
+                    :reason error-code
+                    :errorType (str error-type)})
+      (respond-json! exchange status
+                     {:error error-code
+                      :retryable retryable}))
+    (do
+      (emit-event! dependencies "request_failed"
+                   {:severity "ERROR"
+                    :reason "unexpected_application_error"
+                    :errorType (str error-type)})
+      (respond! exchange 500 "application/json; charset=utf-8"
+                "{\"error\":\"render_failed\"}"))))
+
 (defn- validate-project-source!
   [^HttpExchange exchange auth-system]
   (let [user (require-session-user! exchange auth-system)
@@ -2273,6 +2292,21 @@
                   (respond-json! exchange 502
                                  {:error "drive_playback_unavailable"
                                   :retryable true})
+
+                  ::media/media-tool-timeout
+                  (respond-playback-analysis-failure!
+                   dependencies exchange path error-type 504
+                   "playback_analysis_timeout" true)
+
+                  ::media/media-tool-failed
+                  (respond-playback-analysis-failure!
+                   dependencies exchange path error-type 502
+                   "playback_analysis_failed" true)
+
+                  ::media/invalid-source-inspection
+                  (respond-playback-analysis-failure!
+                   dependencies exchange path error-type 422
+                   "playback_evidence_unavailable" false)
 
                   ::compositing-not-supported
                   (respond-json! exchange 400 {:error "compositing_requires_durable_job"})

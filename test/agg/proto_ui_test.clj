@@ -118,8 +118,20 @@
         (.delete temp)))))
 
 (defn- proto-page-browser-outcome
-  [{:keys [can-play-type webcodecs? timing-response supported?]}]
-  (let [page (proto/page {:user {:email "owner@example.com"}
+  [{:keys [analysis-failure? analysis-response can-play-type webcodecs?
+           timing-response supported?]}]
+  (let [analysis-response
+        (or analysis-response
+            {:ok true
+             :status 200
+             :body
+             {:fileName "timing-ride.mp4"
+              :evidence
+              {:container {:format "mp4" :majorBrand "isom"}
+               :video {:codec "h264" :codecTag "avc1"
+                       :profile "High" :pixelFormat "yuv420p"}
+               :audio {:codec "aac"}}}})
+        page (proto/page {:user {:email "owner@example.com"}
                           :csrf "csrf-token"
                           :folder-id proto/fixed-folder-id})
         bootstrap
@@ -130,7 +142,11 @@
          "if(path==='/v1/proto/sources'){return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({listingMode:'folder-enumeration',folderId:'"
          proto/fixed-folder-id
          "',sources:[{fileId:'timing-source-1',fileName:'timing-ride.mp4',mimeType:'video/mp4',size:8192,durationSeconds:125.5,width:1920,height:1080}]})});}"
-         "if(path==='/v1/drive/playback-analyses'){window.__protoState.analysisRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:'timing-ride.mp4',evidence:{container:{format:'mp4',majorBrand:'isom'},video:{codec:'h264',codecTag:'avc1',profile:'High',pixelFormat:'yuv420p'},audio:{codec:'aac'}}})});}"
+         "if(path==='/v1/drive/playback-analyses'){window.__protoState.analysisRequests.push(JSON.parse(options.body));return Promise.resolve({ok:"
+         (json/write-str (:ok analysis-response))
+         ",status:" (:status analysis-response)
+         ",json:()=>Promise.resolve(" (json/write-str (:body analysis-response))
+         ")});}"
          "if(path==='/v1/drive/recording-clock-inspections'){window.__protoState.timingRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve("
          (json/write-str timing-response)
          ")});}"
@@ -155,8 +171,14 @@
          "function delay(ms){return new Promise(resolve=>setTimeout(resolve,ms));}"
          "async function waitFor(label,predicate,attempts){for(let index=0;index<attempts;index+=1){const value=predicate();if(value)return value;await delay(25);}throw new Error('Timed out waiting for '+label);}"
          "async function runScenario(){try{const select=await waitFor('source select',()=>document.getElementById('source-select'),200);await waitFor('source option',()=>select.options.length>1&&select.options[1].value==='timing-source-1',200);select.value='timing-source-1';select.dispatchEvent(new Event('change',{bubbles:true}));await waitFor('selected title',()=>document.getElementById('selected-title').textContent==='timing-ride.mp4',200);"
-         (if supported?
+         (cond
+           analysis-failure?
+           "await waitFor('analysis failure status',()=>document.getElementById('player-status').textContent.includes('playback_analysis_timeout'),200);"
+
+           supported?
            "await waitFor('preparation debug',()=>{const text=document.getElementById('prep-debug').textContent;return text&&text.includes('\"support\"')&&text.includes('\"session\"');},200);await waitFor('prepared player status',()=>document.getElementById('player-status').textContent.includes('Private playback prepared'),200);const video=document.getElementById('proto-player');video.__bufferedRanges=[[0,30],[60,90]];video.dispatchEvent(new Event('progress'));"
+
+           :else
            "await waitFor('preparation debug',()=>{const text=document.getElementById('prep-debug').textContent;return text&&text.includes('\"support\"');},200);await waitFor('unsupported player status',()=>document.getElementById('player-status').textContent.includes('could not prove direct playback support'),200);")
          "recordOutcome({sourceStatus:document.getElementById('source-status').textContent,playerStatus:document.getElementById('player-status').textContent,selectedTitle:document.getElementById('selected-title').textContent,sourceSelect:{disabled:select.disabled,value:select.value,labels:Array.from(select.options).map(option=>option.textContent)},summary:{listing:document.getElementById('summary-listing').textContent,file:document.getElementById('summary-file').textContent,mime:document.getElementById('summary-mime').textContent,duration:document.getElementById('summary-duration').textContent,frameSize:document.getElementById('summary-size').textContent},timing:{start:document.getElementById('timing-start').textContent,end:document.getElementById('timing-end').textContent,state:document.getElementById('timing-state').textContent,confidence:document.getElementById('timing-confidence').textContent},prep:JSON.parse(document.getElementById('prep-debug').textContent),range:JSON.parse(document.getElementById('range-debug').textContent),requests:window.__protoState});}catch(error){recordOutcome({error:error.message});}}"
          "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',()=>{setTimeout(runScenario,0);},{once:true});}else{setTimeout(runScenario,0);}"
@@ -275,6 +297,34 @@
     (is (= ["bytes=0-4095"] (get-in outcome [:requests :rangeRequests])))
     (is (= "bytes 0-4095/8192" (get-in outcome [:range :rangeProbe :contentRange])))
     (is (= [[0 30] [60 90]] (get-in outcome [:range :media :buffered])))))
+
+(deftest proto-page-exposes-playback-analysis-status-and-error-code
+  (let [outcome
+        (proto-page-browser-outcome
+         {:analysis-failure? true
+          :analysis-response {:ok false
+                              :status 504
+                              :body {:error "playback_analysis_timeout"
+                                     :retryable true}}
+          :can-play-type "probably"
+          :webcodecs? false
+          :timing-response {:fileName "timing-ride.mp4"
+                            :status "candidate"
+                            :candidates []
+                            :recommendedIndex nil
+                            :ambiguous false
+                            :durationSeconds 125.5
+                            :limits {:maxBytes 524288
+                                     :maxRanges 2
+                                     :timeoutMillis 3000}}})]
+    (is (nil? (:error outcome)))
+    (is (= "Playback analysis failed (504, playback_analysis_timeout)"
+           (:playerStatus outcome)))
+    (is (= {:status 504
+            :error "playback_analysis_timeout"
+            :retryable true}
+           (get-in outcome [:prep :analysisFailure])))
+    (is (= [] (get-in outcome [:requests :sessionRequests])))))
 
 (deftest proto-page-keeps-unsupported-sources-listed-with-explicit-evidence
   (let [outcome (proto-page-browser-outcome

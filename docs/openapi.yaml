@@ -322,8 +322,23 @@ paths:
               schema: {$ref: "#/components/schemas/Error"}
         "401": {$ref: "#/components/responses/AuthenticationRequired"}
         "403": {$ref: "#/components/responses/CsrfRequired"}
+        "422":
+          description: The bounded inspection completed without usable browser playback evidence.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "502":
+          description: The bounded playback analysis process failed and may be retried.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
         "503":
           description: Restricted Drive access or source metadata is temporarily unavailable.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "504":
+          description: The bounded playback analysis exceeded its deadline and may be retried.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Error"}
@@ -1580,6 +1595,9 @@ components:
             - playback_session_invalid
             - playback_range_not_satisfiable
             - drive_playback_unavailable
+            - playback_analysis_timeout
+            - playback_analysis_failed
+            - playback_evidence_unavailable
             - compositing_requires_durable_job
             - synchronous_overlay_duration_exceeded
             - source_video_too_large

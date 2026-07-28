@@ -8,6 +8,7 @@
             [agg.http-test-support :as test-http]
             [agg.jobs-test :as fixture]
             [agg.jobs.lifecycle :as jobs]
+            [agg.render.media :as media]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]))
@@ -1680,6 +1681,95 @@
         (is (.isEmpty (.firstValue (.headers response) "Set-Cookie"))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
+
+(deftest selected-drive-playback-analysis-timeout-is-a-structured-gateway-timeout
+  (let [port (available-port)
+        {:keys [system session]} (auth-fixture)
+        events (atom [])
+        gateway
+        (reify
+          drive/SourceGateway
+          (source-metadata! [_ _ file-id]
+            {:id file-id
+             :name "selected.mov"
+             :mimeType "video/quicktime"
+             :size 100
+             :trashed false})
+          (stream-source! [_ _ _ _]
+            (throw (AssertionError. "Analysis must not download the source")))
+          drive/PlaybackAnalysisGateway
+          (inspect-playback! [_ _ _ _]
+            (throw (errors/raise! "Media tool exceeded its deadline"
+                                  {:type ::media/media-tool-timeout
+                                   :timeout-ms 30000}))))
+        auth-system (assoc system :drive gateway)
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        server (start-api! port {:auth-system auth-system
+                                 :event-sink
+                                 (fn [event fields]
+                                   (swap! events conj [event fields]))})]
+    (try
+      (let [response
+            (post! port "/v1/drive/playback-analyses"
+                   {:fileId "renderable-private-mov"}
+                   {"Content-Type" "application/json"
+                    "Cookie" (str "agg_session=" session)
+                    "X-CSRF-Token" csrf})]
+        (is (= 504 (.statusCode response)))
+        (is (= {"error" "playback_analysis_timeout"
+                "retryable" true}
+               (json/read-str (.body response))))
+        (is (= [["request_failed"
+                 {:severity "WARNING"
+                  :reason "playback_analysis_timeout"
+                  :errorType ":agg.render.media/media-tool-timeout"}]]
+               @events)))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest selected-drive-playback-analysis-bounded-failures-are-structured
+  (doseq [{:keys [failure-type expected-status expected-body]}
+          [{:failure-type ::media/media-tool-failed
+            :expected-status 502
+            :expected-body {"error" "playback_analysis_failed"
+                            "retryable" true}}
+           {:failure-type ::media/invalid-source-inspection
+            :expected-status 422
+            :expected-body {"error" "playback_evidence_unavailable"
+                            "retryable" false}}]]
+    (let [port (available-port)
+          {:keys [system session]} (auth-fixture)
+          gateway
+          (reify
+            drive/SourceGateway
+            (source-metadata! [_ _ file-id]
+              {:id file-id
+               :name "selected.mov"
+               :mimeType "video/quicktime"
+               :size 100
+               :trashed false})
+            (stream-source! [_ _ _ _]
+              (throw (AssertionError. "Analysis must not download the source")))
+            drive/PlaybackAnalysisGateway
+            (inspect-playback! [_ _ _ _]
+              (throw (errors/raise! "Playback evidence unavailable"
+                                    {:type failure-type}))))
+          auth-system (assoc system :drive gateway)
+          csrf (auth/issue-csrf-token auth-system
+                                      {:subject "google-subject-1"})
+          server (start-api! port {:auth-system auth-system})]
+      (try
+        (let [response
+              (post! port "/v1/drive/playback-analyses"
+                     {:fileId "renderable-private-mov"}
+                     {"Content-Type" "application/json"
+                      "Cookie" (str "agg_session=" session)
+                      "X-CSRF-Token" csrf})]
+          (is (= expected-status (.statusCode response)))
+          (is (= expected-body (json/read-str (.body response)))))
+        (finally
+          (.close ^java.lang.AutoCloseable server))))))
 
 (deftest renderable-non-mp4-source-keeps-its-original-content-type-for-playback
   (let [port (available-port)
