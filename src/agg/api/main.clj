@@ -16,6 +16,9 @@
             [agg.render.media :as media]
             [agg.renderer.main :as renderer]
             [agg.tokens.core :as tokens]
+            [agg.api.admin-routes :as admin-routes]
+            [agg.api.token-routes :as token-routes]
+            [agg.api.routes :as routes]
             [agg.ui.core :as ui]
             [clojure.data.json :as json]
             [clojure.java.io :as io]
@@ -1662,29 +1665,6 @@
         :uploadUrl (jobs/signed-upload upload-signer object-name
                                        contentType 900)}))))
 
-(defn- create-personal-token! [exchange token-service user]
-  (let [{:keys [name]} (request-json exchange)]
-    (respond-json! exchange 201 (tokens/create-token! token-service user name))))
-
-(defn- list-personal-tokens! [exchange token-service user]
-  (respond-json! exchange 200
-                 (tokens/list-tokens token-service (:subject user))))
-
-(defn- revoke-personal-token! [exchange token-service user token-id]
-  (respond-json! exchange 200
-                 (tokens/revoke-token! token-service (:subject user) token-id)))
-
-(defn- list-members! [exchange admin-service user]
-  (respond-json! exchange 200 (admin/list-members admin-service user)))
-
-(defn- add-member! [exchange admin-service user]
-  (let [{:keys [email]} (request-json exchange)]
-    (respond-json! exchange 201 (admin/add-member! admin-service user email))))
-
-(defn- revoke-member! [exchange admin-service user]
-  (let [{:keys [email]} (request-json exchange)]
-    (respond-json! exchange 200 (admin/revoke-member! admin-service user email))))
-
 (defn- preview-generation [value]
   (if (and (string? value)
            (<= 1 (count value) 80)
@@ -1846,6 +1826,7 @@
     (handle [_ exchange]
       (let [method (.getRequestMethod exchange)
             path (some-> exchange .getRequestURI .getPath)
+            feature (routes/feature-for {:method method :path path})
             request-id (str (UUID/randomUUID))]
         (.set (.getResponseHeaders exchange) "X-Request-Id" request-id)
         (try
@@ -2062,40 +2043,49 @@
                                      exchange preview-job-service preview-asset-store
                                      operation-id asset-id size clock))
 
-                                  (and auth-system token-service (= "POST" method)
+                                  (and (= :tokens feature) auth-system token-service (= "POST" method)
                                        (= "/v1/tokens" path))
                                   (let [user (require-session-user! exchange auth-system)]
                                     (require-csrf! exchange auth-system user)
-                                    (create-personal-token! exchange token-service user))
+                                    (token-routes/create! {:request-json request-json
+                                                           :respond-json respond-json!}
+                                                          exchange token-service user))
 
-                                  (and auth-system token-service (= "GET" method)
+                                  (and (= :tokens feature) auth-system token-service (= "GET" method)
                                        (= "/v1/tokens" path))
-                                  (list-personal-tokens! exchange token-service
-                                                         (require-session-user! exchange auth-system))
+                                  (token-routes/list! {:respond-json respond-json!}
+                                                      exchange token-service
+                                                      (require-session-user! exchange auth-system))
 
-                                  (and auth-system token-service (= "POST" method)
+                                  (and (= :tokens feature) auth-system token-service (= "POST" method)
                                        (re-matches #"/v1/tokens/[^/]+/revoke" path))
                                   (let [user (require-session-user! exchange auth-system)
                                         token-id (nth (.split path "/") 3)]
                                     (require-csrf! exchange auth-system user)
-                                    (revoke-personal-token! exchange token-service user token-id))
+                                    (token-routes/revoke! {:respond-json respond-json!}
+                                                          exchange token-service user token-id))
 
-                                  (and auth-system admin-service (= "GET" method)
+                                  (and (= :admin feature) auth-system admin-service (= "GET" method)
                                        (= "/v1/admin/members" path))
-                                  (list-members! exchange admin-service
-                                                 (require-session-user! exchange auth-system))
+                                  (admin-routes/list! {:respond-json respond-json!}
+                                                      exchange admin-service
+                                                      (require-session-user! exchange auth-system))
 
-                                  (and auth-system admin-service (= "POST" method)
+                                  (and (= :admin feature) auth-system admin-service (= "POST" method)
                                        (= "/v1/admin/members" path))
                                   (let [user (require-session-user! exchange auth-system)]
                                     (require-csrf! exchange auth-system user)
-                                    (add-member! exchange admin-service user))
+                                    (admin-routes/add! {:request-json request-json
+                                                        :respond-json respond-json!}
+                                                       exchange admin-service user))
 
-                                  (and auth-system admin-service (= "POST" method)
+                                  (and (= :admin feature) auth-system admin-service (= "POST" method)
                                        (= "/v1/admin/members/revoke" path))
                                   (let [user (require-session-user! exchange auth-system)]
                                     (require-csrf! exchange auth-system user)
-                                    (revoke-member! exchange admin-service user))
+                                    (admin-routes/revoke! {:request-json request-json
+                                                           :respond-json respond-json!}
+                                                          exchange admin-service user))
 
                                   (and job-service (= "POST" method) (= "/v1/jobs" path))
                                   (let [user (authenticated-user! exchange auth-system token-service)]
