@@ -1337,7 +1337,9 @@
   (when-not (pos? size)
     (invalid-playback-range! size))
   (if (str/blank? header)
-    {:start 0 :end (dec size) :partial? false}
+    {:start 0
+     :end (dec (min size max-playback-range-bytes))
+     :partial? true}
     (let [[_ start-text end-text]
           (re-matches #"(?i)bytes=(\d*)-(\d*)" header)]
       (when-not (or (not (str/blank? start-text))
