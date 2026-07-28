@@ -277,12 +277,11 @@ unset PICKER_API_KEY
 
 Follow these sections in order. Use the reviewed checkout containing the issue
 #103 Terraform changes. The targeted Terraform bootstrap creates both secret
-containers and IAM without promoting an application. The development workflow
-checks its enabled version before its image push. Production first requires a
-successful development deployment for its exact commit, then remains
-Terraform-first by applying its complete plan before any production image is
-pushed. A halt is expected and recoverable; it is not permission to bypass a
-check or inject a placeholder value.
+containers and IAM without promoting an application. The proto workflow checks
+its enabled version before its image push on its own branch-local path.
+Production remains Terraform-first by applying its complete plan before any
+production image is pushed. A halt is expected and recoverable; it is not
+permission to bypass a check or inject a placeholder value.
 
 #### 1. Create the Resend account and verify sender DNS
 
@@ -365,42 +364,23 @@ test "$(gcloud secrets versions describe latest \
 
 #### 4. Rerun the guarded deployment workflows
 
-Every push to `main` starts both workflows, but production has no build,
-Terraform, image, or runtime permission until the development workflow for the
-exact same commit succeeds. Missing, failed, cancelled, timed-out, ambiguous,
-wrong-SHA, or fork results fail closed.
-
-If the initial runs halted, fetch the reviewed `main`, dispatch development,
-and record its run id. In the list output, choose only the highest `number`
-whose `sha` equals `release_sha`. Replace `DEVELOPMENT_RUN_ID` below with that
-numeric id, and do not dispatch production until the watched run completes
-successfully:
+Every push to protected `main` starts the production workflow directly. If the
+initial run halted after a reviewed fix, fetch the current `main`, confirm the
+checked-out commit matches the remote release commit, and manually dispatch
+production from `main`:
 
 ```sh
 git fetch origin main
 release_sha="$(git rev-parse refs/remotes/origin/main)"
 test "$(git rev-parse HEAD)" = "$release_sha"
 
-gh-axi workflow run deploy.yml --ref main
-gh-axi run list \
-  --workflow deploy.yml \
-  --branch main \
-  --commit "$release_sha" \
-  --event workflow_dispatch \
-  --limit 5 \
-  --fields headSha,number,url,updatedAt
-gh-axi run watch DEVELOPMENT_RUN_ID
-
 gh-axi workflow run deploy-production.yml --ref main
 ```
 
-Both dispatches must use `--ref main`. A production dispatch from another ref
-fails immediately, and there is no input that bypasses the development gate.
-If development fails, fix the cause and repeat this exact sequence with a new
-development dispatch. Production independently verifies the same SHA and the
-newest trusted development result before proceeding. Do not rerun production
-when either metadata check above is not `ENABLED`. Neither workflow reads the
-secret payload during its preflight.
+The dispatch must use `--ref main`. Do not rerun production when either
+metadata check above is not `ENABLED`. The workflow verifies the pushed commit,
+applies the full production Terraform plan before image promotion, and reads no
+secret payload during this metadata preflight.
 
 Rotate the value by adding and verifying the new enabled version before
 disabling the prior version. Replace `PREVIOUS_VERSION_NUMBER` only with the
@@ -428,18 +408,14 @@ so stop the release if either external checkpoint is not complete.
 
 ## Automatic production deployment
 
-Every push to protected `main` triggers **Deploy Alpha Compose production**. The
-workflow first waits for **Deploy smoke path** to succeed for the exact pushed
-commit. Its read-only gate rejects results from another SHA, repository, head
-repository, branch, event, or workflow path and fails closed on every
-non-success or ambiguous terminal result. Only then does the production job
-receive the OIDC permission needed to apply the complete production Terraform
-configuration. It builds and scans the pushed commit locally, applies Terraform
-using the currently promoted renderer digest and API origin, then pushes a new
-immutable digest, verifies both private services, reconciles API, overlay, and
-the durable renderer, publishes Hosting, and verifies health/privacy/terms. It
-neither publishes OAuth nor adds ordinary members; configured administrators
-are bootstrapped from `AGG_ADMIN_EMAILS`.
+Every push to protected `main` triggers **Deploy Alpha Compose production**.
+The workflow receives the OIDC permission needed to apply the complete
+production Terraform configuration, builds and scans the pushed commit locally,
+applies Terraform using the currently promoted renderer digest and API origin,
+then pushes a new immutable digest, verifies both private services,
+reconciles API, overlay, and the durable renderer, publishes Hosting, and
+verifies health/privacy/terms. It neither publishes OAuth nor adds ordinary
+members; configured administrators are bootstrapped from `AGG_ADMIN_EMAILS`.
 
 Terraform automation needs a one-time owner apply after
 `enable_terraform_deployments` is introduced. That reviewed bootstrap grants the
