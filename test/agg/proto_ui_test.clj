@@ -163,6 +163,39 @@
      "Proto playback browser regression requires Chrome or Chromium"
      html)))
 
+(defn- stale-source-browser-outcome []
+  (let [page (proto/page {:user {:email "owner@example.com"}
+                          :csrf "csrf-token"
+                          :folder-id proto/fixed-folder-id})
+        bootstrap
+        (str
+         "<script>"
+         "window.__protoState={analysisResolvers:{},timingResolvers:{},sessionRequests:[]};"
+         "window.fetch=(path,options={})=>{const request=options.body?JSON.parse(options.body):{};"
+         "if(path==='/v1/proto/sources')return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({listingMode:'folder-enumeration',folderId:'"
+         proto/fixed-folder-id
+         "',sources:[{fileId:'source-a',fileName:'alpha.mp4',mimeType:'video/mp4',size:1024},{fileId:'source-b',fileName:'beta.mp4',mimeType:'video/mp4',size:2048}]})});"
+         "if(path==='/v1/drive/playback-analyses')return new Promise(resolve=>{window.__protoState.analysisResolvers[request.fileId]=()=>resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:request.fileId==='source-a'?'alpha.mp4':'beta.mp4',evidence:{container:{format:'mp4'},video:{codec:'h264',codecTag:'avc1'},audio:{codec:'aac'}}})});if(request.fileId==='source-b')window.__protoState.analysisResolvers[request.fileId]();});"
+         "if(path==='/v1/drive/recording-clock-inspections')return new Promise(resolve=>{window.__protoState.timingResolvers[request.fileId]=()=>resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:request.fileId==='source-a'?'alpha.mp4':'beta.mp4',status:'manual',candidates:[],recommendedIndex:null,ambiguous:false,durationSeconds:10})});if(request.fileId==='source-b')window.__protoState.timingResolvers[request.fileId]();});"
+         "if(path==='/v1/drive/playback-sessions'){window.__protoState.sessionRequests.push(request.fileId);return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/'+request.fileId,contentType:'video/mp4',size:2048})});}"
+         "if(path.startsWith('/v1/drive/playback/'))return Promise.resolve({ok:true,status:206,headers:new Headers({'Content-Range':'bytes 0-1/2048','Content-Length':'2','Content-Type':'video/mp4'}),arrayBuffer:()=>Promise.resolve(new ArrayBuffer(2))});"
+         "return Promise.resolve({ok:false,status:500,json:()=>Promise.resolve({})});};"
+         "Object.defineProperties(HTMLMediaElement.prototype,{duration:{configurable:true,get(){return 10;}},currentTime:{configurable:true,get(){return 0;}},buffered:{configurable:true,get(){return {length:0};}}});"
+         "Object.defineProperty(window,'VideoDecoder',{configurable:true,value:undefined});HTMLMediaElement.prototype.canPlayType=()=> 'probably';HTMLMediaElement.prototype.load=function(){this.dispatchEvent(new Event('loadedmetadata'));};"
+         "</script>")
+        scenario
+        (str
+         "<script>function recordOutcome(outcome){const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.body.dataset.outcome=btoa(String.fromCharCode(...bytes));}"
+         "window.addEventListener('load',()=>setTimeout(async()=>{try{const buttons=document.querySelectorAll('#source-list button');buttons[0].click();await new Promise(resolve=>setTimeout(resolve,0));buttons[1].click();for(let i=0;i<8;i++)await new Promise(resolve=>setTimeout(resolve,0));window.__protoState.analysisResolvers['source-a']();window.__protoState.timingResolvers['source-a']();for(let i=0;i<12;i++)await new Promise(resolve=>setTimeout(resolve,0));recordOutcome({title:document.getElementById('selected-title').textContent,prep:JSON.parse(document.getElementById('prep-debug').textContent),requests:window.__protoState.sessionRequests});}catch(error){recordOutcome({error:error.message});}},0),{once:true});</script>")
+        html (-> page
+                 (str/replace "</head>" (str bootstrap "</head>"))
+                 (str/replace "</body>" (str scenario "</body>"))
+                 (str/replace "<body " "<body data-outcome=\"\">"))]
+    (browser-outcome
+     "agg-proto-stale-source-"
+     "Proto playback ignores stale source responses after a selection switch"
+     html)))
+
 (deftest proto-service-profile-serves-a-separate-playback-harness
   (let [{:keys [auth-system owner owner-cookie]} (fixture)
         port (available-port)
@@ -248,3 +281,13 @@
     (is (= "Duration only" (get-in outcome [:timing :state])))
     (is (= [] (get-in outcome [:requests :sessionRequests])))
     (is (nil? (get-in outcome [:range :rangeProbe])))))
+
+(deftest proto-page-ignores-stale-responses-after-source-switches
+  (let [outcome (stale-source-browser-outcome)]
+    (is (nil? (:error outcome)))
+    (is (= "beta.mp4" (:title outcome)))
+    (is (= "beta.mp4" (get-in outcome [:prep :selected :fileName])))
+    (is (= "beta.mp4" (get-in outcome [:prep :analysis :fileName])))
+    (is (= "/v1/drive/playback/source-b"
+           (get-in outcome [:prep :session :playbackUrl])))
+    (is (= ["source-b"] (:requests outcome)))))
