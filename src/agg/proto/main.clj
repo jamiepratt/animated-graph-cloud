@@ -1,6 +1,6 @@
 (ns agg.proto.main
   (:require [agg.api.main :as api]
-            [agg.auth.gcp :as gcp]
+            [agg.jobs.gcp :as gcp]
             [agg.observability :as observability])
   (:gen-class))
 

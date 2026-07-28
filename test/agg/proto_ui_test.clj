@@ -5,7 +5,6 @@
             [agg.http-test-support :as test-http]
             [agg.proto.core :as proto]
             [clojure.data.json :as json]
-            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]])
   (:import (java.io File)

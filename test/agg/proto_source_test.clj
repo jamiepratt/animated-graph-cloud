@@ -2,7 +2,7 @@
   (:require [agg.auth.core :as auth]
             [agg.drive.core :as drive]
             [agg.proto.core :as proto]
-            [clojure.test :refer [deftest is testing]]))
+            [clojure.test :refer [deftest is]]))
 
 (defn- auth-system [gateway]
   (let [oauth (reify auth/OAuthClient
