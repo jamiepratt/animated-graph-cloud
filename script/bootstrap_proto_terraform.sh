@@ -38,7 +38,7 @@ if ! gcloud iam service-accounts describe "$deployer_email" \
     --description="Branch-bound deployer for the separate proto Terraform root"
 fi
 
-attribute_mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref"
+attribute_mapping="google.subject=assertion.repository_id + ':' + assertion.ref,attribute.repository=assertion.repository,attribute.ref=assertion.ref"
 attribute_condition="assertion.repository == '${repository}' && (assertion.sub == '${subject}' || assertion.sub.startsWith('${tag_subject_prefix}'))"
 
 if gcloud iam workload-identity-pools providers describe "$provider_id" \

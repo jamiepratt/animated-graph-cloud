@@ -75,7 +75,7 @@ resource "google_iam_workload_identity_pool_provider" "proto" {
   display_name                       = "Alpha Compose proto GitHub"
 
   attribute_mapping = {
-    "google.subject"       = "assertion.sub"
+    "google.subject"       = "assertion.repository_id + ':' + assertion.ref"
     "attribute.repository" = "assertion.repository"
     "attribute.ref"        = "assertion.ref"
   }

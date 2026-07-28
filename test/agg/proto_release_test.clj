@@ -35,6 +35,13 @@
     (is (str/includes? proto-infra
                        "resource \"google_iam_workload_identity_pool_provider\" \"proto\""))
     (is (str/includes? proto-infra
+                       "\"google.subject\"       = \"assertion.repository_id + ':' + assertion.ref\"")
+        "Terraform maps tag-safe WIF subjects below Google's 127-byte limit")
+    (is (str/includes? proto-bootstrap
+                       "google.subject=assertion.repository_id + ':' + assertion.ref")
+        "bootstrap maps tag-safe WIF subjects below Google's 127-byte limit")
+    (is (not (str/includes? proto-bootstrap "google.subject=assertion.sub")))
+    (is (str/includes? proto-infra
                        "resource \"google_firebase_hosting_site\" \"proto\""))
     (is (str/includes? proto-infra "name                = \"agg-proto\""))
     (is (str/includes? proto-infra "AGG_SERVICE_PROFILE                 = \"proto\""))
