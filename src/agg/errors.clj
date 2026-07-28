@@ -9,6 +9,7 @@
     "completion_persistence"})
 (def ^:private safe-context-keys
   #{:status :offset :size :reported :sent-through :line :limit :limits
+    :range-start :range-end
     :retryable :job-id :field :component :exit-status :failure-code
     :state :components :reason :stage :attempt :elapsed-ms :timeout-ms})
 

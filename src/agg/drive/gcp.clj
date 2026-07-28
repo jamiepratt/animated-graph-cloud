@@ -59,20 +59,32 @@
      :body (.body response)}))
 
 (defn- http-stream-send! [{:keys [url headers timeout-ms]}]
-  (let [builder (HttpRequest/newBuilder (URI/create url))
-        _ (doseq [[name value] headers]
-            (.header builder name value))
-        _ (when timeout-ms
-            (.timeout builder (Duration/ofMillis (long timeout-ms))))
-        response (.send (HttpClient/newHttpClient)
-                        (-> builder .GET .build)
-                        (HttpResponse$BodyHandlers/ofInputStream))]
-    {:status (.statusCode response)
-     :headers (into {}
-                    (map (fn [[key values]]
-                           [(str/lower-case key) (first values)]))
-                    (.map (.headers response)))
-     :body (.body response)}))
+  (try
+    (let [builder (HttpRequest/newBuilder (URI/create url))
+          _ (doseq [[name value] headers]
+              (.header builder name value))
+          _ (when timeout-ms
+              (.timeout builder (Duration/ofMillis (long timeout-ms))))
+          response (.send (HttpClient/newHttpClient)
+                          (-> builder .GET .build)
+                          (HttpResponse$BodyHandlers/ofInputStream))]
+      {:status (.statusCode response)
+       :headers (into {}
+                      (map (fn [[key values]]
+                             [(str/lower-case key) (first values)]))
+                      (.map (.headers response)))
+       :body (.body response)})
+    (catch InterruptedException error
+      (.interrupt (Thread/currentThread))
+      (throw (errors/raise! "Google Drive streaming request was interrupted"
+                            {:type ::drive/stream-request-failed
+                             :retryable true}
+                            error)))
+    (catch Exception error
+      (throw (errors/raise! "Google Drive streaming request failed"
+                            {:type ::drive/stream-request-failed
+                             :retryable true}
+                            error)))))
 
 (defn- authorized [request access-token]
   (update request :headers assoc "Authorization" (str "Bearer " access-token)))
@@ -678,14 +690,22 @@
     (let [send-stream! (or (:stream-source-request! gateway)
                            http-stream-send!)
           response
-          (send-stream!
-           (authorized
-            {:method :get
-             :url (str (source-url file-id)
-                       "?alt=media&supportsAllDrives=true")
-             :headers {"Range" (str "bytes=" start "-" end)}
-             :timeout-ms timeout-ms}
-            access-token))]
+          (try
+            (send-stream!
+             (authorized
+              {:method :get
+               :url (str (source-url file-id)
+                         "?alt=media&supportsAllDrives=true")
+               :headers {"Range" (str "bytes=" start "-" end)}
+               :timeout-ms timeout-ms}
+              access-token))
+            (catch Throwable error
+              (throw (errors/raise! "Google Drive playback range request failed"
+                                    {:type ::drive/playback-range-unavailable
+                                     :range-start start
+                                     :range-end end
+                                     :retryable true}
+                                    error))))]
       (if (valid-playback-range-response? response start end)
         response
         (do

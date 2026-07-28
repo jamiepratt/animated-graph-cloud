@@ -1525,8 +1525,56 @@
     (respond-json! exchange 200
                    (assoc inspection :fileName (:name metadata)))))
 
+(defn- open-playback-range!
+  [gateway access-token file-id {:keys [start end] :as byte-range}]
+  (try
+    (drive/open-source-range! gateway access-token file-id
+                              (select-keys byte-range [:start :end]))
+    (catch clojure.lang.ExceptionInfo error
+      (throw error))
+    (catch Throwable error
+      (throw (errors/raise! "Google Drive playback range request failed"
+                            {:type ::drive/playback-range-unavailable
+                             :range-start start
+                             :range-end end
+                             :retryable true}
+                            error)))))
+
+(defn- playback-exception-class [error]
+  (some-> (or (.getCause ^Throwable error) error) class .getName))
+
+(defn- emit-playback-stream-failure!
+  [dependencies reason error start end]
+  (emit-event! dependencies "request_failed"
+               {:severity "WARNING"
+                :reason reason
+                :exceptionClass (playback-exception-class error)
+                :rangeStart start
+                :rangeEnd end
+                :retryable true}))
+
+(defn- transfer-playback-body!
+  [input output on-failure!]
+  (let [buffer (byte-array 8192)]
+    (loop []
+      (let [read-count
+            (try
+              (.read ^java.io.InputStream input buffer)
+              (catch Throwable error
+                (on-failure! "drive_playback_read_failed" error)
+                nil))]
+        (when (and read-count (pos? read-count))
+          (when
+           (try
+             (.write ^java.io.OutputStream output buffer 0 read-count)
+             true
+             (catch Throwable error
+               (on-failure! "drive_playback_write_failed" error)
+               false))
+            (recur)))))))
+
 (defn- stream-playback!
-  [^HttpExchange exchange auth-system path]
+  [^HttpExchange exchange auth-system dependencies path]
   (let [user (require-session-user! exchange auth-system)
         playback-id (last (.split path "/"))
         {:keys [file-id mime-type size]}
@@ -1538,8 +1586,7 @@
         {:keys [access-token]} (auth/drive-access! auth-system (:subject user))
         gateway (:drive auth-system)
         {:keys [body] :as source-response}
-        (drive/open-source-range! gateway access-token file-id
-                                  (select-keys byte-range [:start :end]))
+        (open-playback-range! gateway access-token file-id byte-range)
         response-status (if partial? 206 200)
         content-length (inc (- end start))]
     (when-not (valid-playback-response? source-response start end size)
@@ -1557,9 +1604,15 @@
       (.set (.getResponseHeaders exchange) "Content-Range"
             (str "bytes " start "-" end "/" size)))
     (.sendResponseHeaders exchange response-status content-length)
-    (with-open [input ^java.io.InputStream body
-                output (.getResponseBody exchange)]
-      (.transferTo input output))))
+    (try
+      (with-open [input ^java.io.InputStream body
+                  output (.getResponseBody exchange)]
+        (transfer-playback-body!
+         input output
+         #(emit-playback-stream-failure! dependencies %1 %2 start end)))
+      (catch Throwable error
+        (emit-playback-stream-failure!
+         dependencies "drive_playback_close_failed" error start end)))))
 
 (defn- completed-playback-output!
   [job-service subject job-id]
@@ -1637,8 +1690,7 @@
         {:keys [access-token]} (auth/drive-access! auth-system (:subject user))
         gateway (:drive auth-system)
         {:keys [body] :as source-response}
-        (drive/open-source-range! gateway access-token file-id
-                                  (select-keys byte-range [:start :end]))
+        (open-playback-range! gateway access-token file-id byte-range)
         response-status (if partial? 206 200)
         content-length (inc (- end start))]
     (when-not (valid-playback-response? source-response start end size)
@@ -1952,7 +2004,7 @@
 
                                   (and auth-system (= "GET" method)
                                        (re-matches drive-playback-path-pattern path))
-                                  (stream-playback! exchange auth-system path)
+                                  (stream-playback! exchange auth-system dependencies path)
 
                                   (and auth-system (= "POST" method) (= "/ui/preview" path))
                                   (let [user (require-session-user! exchange auth-system)]
@@ -2287,6 +2339,20 @@
                   ::browser-playback-not-supported
                   (respond-json! exchange 415
                                  {:error "browser_playback_not_supported"})
+
+                  ::drive/playback-range-unavailable
+                  (do
+                    (emit-event! dependencies "request_failed"
+                                 {:severity "WARNING"
+                                  :reason "drive_playback_open_failed"
+                                  :errorType (str error-type)
+                                  :exceptionClass (playback-exception-class error)
+                                  :rangeStart (:range-start (ex-data error))
+                                  :rangeEnd (:range-end (ex-data error))
+                                  :retryable true})
+                    (respond-json! exchange 502
+                                   {:error "drive_playback_unavailable"
+                                    :retryable true}))
 
                   ::drive/invalid-playback-response
                   (respond-json! exchange 502

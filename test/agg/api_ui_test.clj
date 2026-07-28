@@ -3717,6 +3717,61 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest drive-playback-range-open-failure-is-a-retryable-gateway-response
+  (let [port (available-port)
+        {:keys [auth-system owner-cookie owner-csrf]} (fixture)
+        events (atom [])
+        gateway
+        (reify drive/SourceGateway
+          (source-metadata! [_ access-token file-id]
+            (is (= "drive-access" access-token))
+            (is (= "drive-file" file-id))
+            {:id file-id
+             :name "private-source.mp4"
+             :mimeType "video/mp4"
+             :size 8192
+             :trashed false})
+          (stream-source! [_ _ _ _]
+            (throw (UnsupportedOperationException.)))
+          drive/PlaybackGateway
+          (open-source-range! [_ _ _ _]
+            (throw (java.io.IOException. "upstream connection reset"))))
+        server (start-api! port {:auth-system (assoc auth-system :drive gateway)
+                                 :event-sink
+                                 (fn [event fields]
+                                   (swap! events conj (assoc fields :event event)))})]
+    (try
+      (let [session
+            (request! port :post "/v1/drive/playback-sessions"
+                      (json/write-str {:fileId "drive-file"})
+                      {"Cookie" owner-cookie
+                       "X-CSRF-Token" owner-csrf
+                       "Content-Type" "application/json"})
+            browser-cookie
+            (some-> session .headers (.firstValue "set-cookie") .orElseThrow
+                    (str/split #";") first)
+            playback-url (:playbackUrl (json/read-str (.body session) :key-fn keyword))
+            response
+            (request! port :get playback-url nil
+                      {"Cookie" (str owner-cookie "; " browser-cookie)
+                       "Range" "bytes=0-4095"})]
+        (is (= 201 (.statusCode session)))
+        (is (= 502 (.statusCode response)))
+        (is (= {"error" "drive_playback_unavailable"
+                "retryable" true}
+               (json/read-str (.body response))))
+        (is (= [{:event "request_failed"
+                 :severity "WARNING"
+                 :reason "drive_playback_open_failed"
+                 :errorType ":agg.drive.core/playback-range-unavailable"
+                 :exceptionClass "java.io.IOException"
+                 :rangeStart 0
+                 :rangeEnd 4095
+                 :retryable true}]
+               @events)))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest compose-submit-starts-enabled-with-preview-available
   (let [page (ui/page {:user {:email "member@example.com" :role :member}
                        :csrf "csrf-test" :tokens [] :members []

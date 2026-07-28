@@ -80,6 +80,30 @@
            fields))
     (is (empty? (observability/safe-event-fields {:stage "private.mov"})))))
 
+(deftest playback-stream-failure-event-keeps-only-bounded-diagnostics
+  (is (= {:severity "WARNING"
+          :component "api"
+          :event "request_failed"
+          :reason "drive_playback_open_failed"
+          :errorType ":agg.drive.core/playback-range-unavailable"
+          :exceptionClass "java.io.IOException"
+          :rangeStart 0
+          :rangeEnd 4095
+          :retryable true}
+         (observability/safe-event-fields
+          {:severity "WARNING"
+           :component "api"
+           :event "request_failed"
+           :reason "drive_playback_open_failed"
+           :errorType ":agg.drive.core/playback-range-unavailable"
+           :exceptionClass "java.io.IOException"
+           :rangeStart 0
+           :rangeEnd 4095
+           :retryable true
+           :fileId "private-file"
+           :filename "private.mp4"
+           :signedUrl "https://drive.example/private"}))))
+
 (deftest early-access-delivery-event-keeps-only-bounded-operations-data
   (is (= {:severity "ERROR"
           :component "api"
