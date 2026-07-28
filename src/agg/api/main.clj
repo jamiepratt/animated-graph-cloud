@@ -1767,6 +1767,19 @@
             (ui/token-panel
              (tokens/list-tokens token-service (:subject user)))))
 
+(defn- token-page-ui! [exchange token-service auth-system]
+  (let [user (require-session-user! exchange auth-system)]
+    (doto (.getResponseHeaders exchange)
+      (.set "Cache-Control" "no-store")
+      (.set "Referrer-Policy" "no-referrer")
+      (.set "Content-Security-Policy"
+            "default-src 'none'; script-src https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"))
+    (respond! exchange 200 "text/html; charset=utf-8"
+              (ui/token-page
+               {:user user
+                :csrf (auth/issue-csrf-token auth-system user)
+                :tokens (tokens/list-tokens token-service (:subject user))}))))
+
 (defn- revoke-token-ui! [exchange token-service user token-id]
   (tokens/revoke-token! token-service (:subject user) token-id)
   (list-tokens-ui! exchange token-service user))
@@ -1774,6 +1787,20 @@
 (defn- members-ui! [exchange admin-service user]
   (respond! exchange 200 "text/html; charset=utf-8"
             (ui/member-panel (admin/list-members admin-service user))))
+
+(defn- member-admin-page-ui! [exchange admin-service auth-system]
+  (let [user (require-administrator-session-user! exchange auth-system
+                                                  admin-service)]
+    (doto (.getResponseHeaders exchange)
+      (.set "Cache-Control" "no-store")
+      (.set "Referrer-Policy" "no-referrer")
+      (.set "Content-Security-Policy"
+            "default-src 'none'; script-src https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"))
+    (respond! exchange 200 "text/html; charset=utf-8"
+              (ui/member-admin-page
+               {:user user
+                :csrf (auth/issue-csrf-token auth-system user)
+                :members (admin/list-members admin-service user)}))))
 
 (defn- logs-ui! [exchange admin-service log-store auth-system]
   (let [user (require-administrator-session-user! exchange auth-system
@@ -1977,8 +2004,8 @@
 
                                   (and auth-system token-service (= "GET" method)
                                        (= "/ui/tokens" path))
-                                  (list-tokens-ui! exchange token-service
-                                                   (require-session-user! exchange auth-system))
+                                  (token-page-ui! exchange token-service
+                                                  auth-system)
 
                                   (and auth-system token-service (= "POST" method)
                                        (re-matches #"/ui/tokens/[^/]+/revoke" path))
@@ -1989,8 +2016,8 @@
 
                                   (and auth-system admin-service (= "GET" method)
                                        (= "/ui/admin/members" path))
-                                  (members-ui! exchange admin-service
-                                               (require-session-user! exchange auth-system))
+                                  (member-admin-page-ui! exchange admin-service
+                                                         auth-system)
 
                                   (and auth-system admin-service log-store (= "GET" method)
                                        (= "/ui/admin/logs" path))

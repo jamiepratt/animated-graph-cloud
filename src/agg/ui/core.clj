@@ -507,28 +507,55 @@
                   "</li>")))
     "</ul></section>")))
 
-(defn member-panel
-  ([members]
-   (member-panel members true))
-  ([members logs-enabled?]
-   (str
-    "<section id=\"members\"><h2>Member administration</h2>"
-    (when logs-enabled?
-      "<p><a href=\"/ui/admin/logs\">View operational logs</a></p>")
-    "<form hx-post=\"/ui/admin/members\" hx-target=\"#members\" hx-swap=\"outerHTML\">"
-    "<label>Member email <input type=\"email\" name=\"email\" maxlength=\"254\" required></label>"
-    "<button type=\"submit\">Add member</button></form><ul>"
-    (apply str
-           (for [{:keys [email role status]} members]
-             (str "<li><strong>" (escape-html email) "</strong> · "
-                  (escape-html role) " · " (escape-html status)
-                  (when (and (= "member" role) (= "active" status))
-                    (str " <form class=\"inline\" hx-post=\"/ui/admin/members/revoke\" "
-                         "hx-target=\"#members\" hx-swap=\"outerHTML\">"
-                         "<input type=\"hidden\" name=\"email\" value=\""
-                         (escape-html email) "\"><button type=\"submit\">Revoke</button></form>"))
-                  "</li>")))
-    "</ul></section>")))
+(defn member-panel [members]
+  (str
+   "<section id=\"members\"><h2>Member administration</h2>"
+   "<form hx-post=\"/ui/admin/members\" hx-target=\"#members\" hx-swap=\"outerHTML\">"
+   "<label>Member email <input type=\"email\" name=\"email\" maxlength=\"254\" required></label>"
+   "<button type=\"submit\">Add member</button></form><ul>"
+   (apply str
+          (for [{:keys [email role status]} members]
+            (str "<li><strong>" (escape-html email) "</strong> · "
+                 (escape-html role) " · " (escape-html status)
+                 (when (and (= "member" role) (= "active" status))
+                   (str " <form class=\"inline\" hx-post=\"/ui/admin/members/revoke\" "
+                        "hx-target=\"#members\" hx-swap=\"outerHTML\">"
+                        "<input type=\"hidden\" name=\"email\" value=\""
+                        (escape-html email) "\"><button type=\"submit\">Revoke</button></form>"))
+                 "</li>")))
+   "</ul></section>"))
+
+(defn- management-link [href label description]
+  (str "<a class=\"management-link\" href=\"" href "\"><strong>"
+       (escape-html label)
+       "</strong><span>" (escape-html description) "</span></a>"))
+
+(defn- management-links-section
+  [{:keys [tokens members logs-enabled? user]}]
+  (let [links (cond-> []
+                (some? tokens)
+                (conj
+                 (management-link "/ui/tokens"
+                                  "Personal API tokens"
+                                  "Create and revoke personal API tokens."))
+
+                (and (admin/administrator? (:role user)) logs-enabled?)
+                (conj
+                 (management-link "/ui/admin/logs"
+                                  "View operation logs"
+                                  "Inspect recent structured service events."))
+
+                (some? members)
+                (conj
+                 (management-link "/ui/admin/members"
+                                  "Member admin"
+                                  "Allowlist members and revoke access.")))]
+    (when (seq links)
+      (str "<section class=\"card management-links-card\"><div class=\"section-head\">"
+           "<div><h2>Account and admin</h2><p class=\"muted\">Open the tools that match your access.</p></div>"
+           "</div><div class=\"management-links\">"
+           (apply str links)
+           "</div></section>"))))
 
 (defn- url-value [value]
   (URLEncoder/encode (str value) StandardCharsets/UTF_8))
@@ -698,6 +725,66 @@
        "<p class=\"empty\">No matching logs in the retention window.</p>")
      "</section>"
      "</div></body></html>")))
+
+(defn- tool-page-style []
+  (str
+   ".shell{max-width:62rem;margin:0 auto;padding:2rem 1.25rem 4rem}"
+   ".task-header{display:flex;justify-content:space-between;gap:1rem;align-items:end;margin:1rem 0 2rem}"
+   "h1,h2,p{margin-top:0}h1{font-size:clamp(2rem,4vw,3.4rem);letter-spacing:-.05em;margin-bottom:.35rem}"
+   ".session-controls{display:flex;align-items:flex-end;flex-direction:column;gap:.65rem}.session-controls p,.session-controls form{margin:0}"
+   ".card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:1.1rem;box-shadow:var(--shadow-surface);padding:1.35rem;margin:1rem 0}"
+   ".panel-surface>section{margin:0}.panel-surface form{display:flex;align-items:end;gap:.75rem;flex-wrap:wrap;margin:1rem 0 0}.panel-surface form.inline{display:inline-flex;align-items:center;gap:.45rem;margin:0 0 0 .45rem}"
+   ".panel-surface label{display:block;flex:1 1 18rem;font-weight:700;font-size:.9rem}.panel-surface input{font:inherit;width:100%;border:1px solid #6b8ba5;border-radius:.65rem;background:#06182b;color:var(--color-text);padding:.68rem .75rem;margin-top:.4rem}"
+   ".panel-surface button,.button{border:1px solid var(--color-border);border-radius:.65rem;padding:.7rem 1rem;font-weight:800;cursor:pointer;background:var(--color-surface-soft);color:var(--color-text);text-decoration:none;display:inline-block}"
+   ".panel-surface ul{list-style:none;padding:0;margin:1rem 0 0;display:grid;gap:.75rem}.panel-surface li{padding:.9rem 1rem;border:1px solid var(--color-border);border-radius:.8rem;background:var(--color-surface-soft);overflow-wrap:anywhere}"
+   ".panel-surface code{display:block;margin-top:.75rem;padding:.8rem 1rem;border:1px solid var(--color-border-strong);border-radius:.8rem;background:#06182b;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}"
+   ".notice{border:1px solid var(--color-warning);border-radius:.8rem;background:#2a230f;padding:1rem;margin-top:1rem}"
+   "@media(max-width:680px){.shell{padding:1rem .8rem 3rem}.task-header{display:block}.session-controls{align-items:flex-start;margin-top:1rem}.panel-surface form{display:block}.panel-surface form.inline{display:inline-flex}.panel-surface button{margin-top:.75rem}}"))
+
+(defn- tool-page
+  [{:keys [title eyebrow intro user csrf panel]}]
+  (str
+   "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+   "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+   "<meta name=\"color-scheme\" content=\"dark\">" (icon-links)
+   "<title>" (escape-html title) " · Alpha Compose</title>"
+   "<script src=\"https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js\" "
+   "integrity=\"sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V\" "
+   "crossorigin=\"anonymous\"></script>"
+   "<style>" (theme-style) (tool-page-style)
+   "</style></head><body data-theme=\"telemetry\" hx-headers=\""
+   (escape-html (str "{\"X-CSRF-Token\":\"" csrf "\"}"))
+   "\"><div class=\"shell\">"
+   (product-header)
+   "<header class=\"task-header\"><div><div class=\"eyebrow\">"
+   (escape-html eyebrow)
+   "</div><h1>" (escape-html title) "</h1><p class=\"muted\">"
+   (escape-html intro)
+   "</p></div><div class=\"session-controls\"><p class=\"muted\">Signed in as "
+   (escape-html (:email user))
+   "</p><form method=\"post\" action=\"/v1/auth/logout\"><input type=\"hidden\" name=\"csrf\" value=\""
+   (escape-html csrf)
+   "\"><button type=\"submit\">Log out</button></form></div></header>"
+   "<p><a href=\"/\">← Back to compose</a></p>"
+   "<section class=\"card panel-surface\">"
+   panel
+   "</section></div></body></html>"))
+
+(defn token-page [{:keys [user csrf tokens]}]
+  (tool-page {:title "Personal API tokens"
+              :eyebrow "Account"
+              :intro "Create a token for API access, then revoke it when you no longer need it."
+              :user user
+              :csrf csrf
+              :panel (token-panel tokens)}))
+
+(defn member-admin-page [{:keys [user csrf members]}]
+  (tool-page {:title "Member admin"
+              :eyebrow "Administration"
+              :intro "Allowlist members, review their status, and revoke access when needed."
+              :user user
+              :csrf csrf
+              :panel (member-panel members)}))
 
 (defn job-fragment
   [{:keys [id state output]
@@ -1048,6 +1135,7 @@
      ".video-chrome,.video-controls-dock{min-width:0}.timing-dock{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem;min-width:0;margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--color-border)}.timing-dock>*{min-width:0}.timing-dock>.full,.timing-dock>.status{grid-column:1/-1}.video-chrome:fullscreen,.video-chrome.is-fullscreen{display:grid;grid-template-rows:minmax(0,1fr) auto auto;width:100%;height:100dvh;max-width:none;min-width:0;overflow:hidden;padding:0;background:#010813;color:var(--color-text)}.video-chrome:fullscreen .video-stage,.video-chrome.is-fullscreen .video-stage{width:100%;height:100%;min-width:0;min-height:0;aspect-ratio:auto;border:0;border-radius:0}.video-chrome:fullscreen .video-time-context,.video-chrome.is-fullscreen .video-time-context{margin:.45rem clamp(.6rem,2vw,1.25rem) 0}.video-chrome:fullscreen .video-controls-dock,.video-chrome.is-fullscreen .video-controls-dock{position:relative;z-index:2;min-width:0;max-height:58dvh;overflow-y:auto;overflow-x:hidden;padding:.8rem clamp(.6rem,2vw,1.25rem) .45rem;border-top:1px solid var(--color-border-strong);background:#031225}.video-chrome:fullscreen .video-transport,.video-chrome.is-fullscreen .video-transport{margin-top:0}.video-chrome:fullscreen .video-timeline-wrap,.video-chrome.is-fullscreen .video-timeline-wrap{margin-top:.7rem}@media(prefers-reduced-motion:reduce){.video-shortcut{transition:none}}"
      ".status{min-height:1.4rem;color:var(--color-muted);font-size:.9rem}.status.error{color:var(--color-danger)}.status.success{color:var(--color-success)}"
      "details summary{cursor:pointer;font-weight:800;color:var(--color-link)}.raw-panel textarea{min-height:18rem}.raw-actions{display:flex;gap:.65rem;flex-wrap:wrap;margin-top:.7rem}.json-errors{white-space:pre-line}.field-reference{margin:.75rem 0 0;padding-left:1.25rem}.field-reference li{margin:.35rem 0}.field-reference code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}"
+     ".management-links-card{margin-top:1.25rem}.management-links{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,15rem),1fr));gap:.8rem}.management-link{display:block;padding:1rem;border:1px solid var(--color-border);border-radius:.85rem;background:var(--color-surface-soft);text-decoration:none}.management-link strong,.management-link span{display:block}.management-link strong{color:var(--color-text)}.management-link span{margin-top:.35rem;color:var(--color-muted);overflow-wrap:anywhere}"
      ".results{display:block;min-width:0}.results img{max-width:100%;border:1px solid #d9e1ed;border-radius:.75rem;background:#eef2f7}.preview-gallery{min-width:0}.preview-warning{background:#fff8e8;border:1px solid #e7c46b;border-radius:.8rem;color:#59400a;padding:.85rem 1rem;margin:1rem 0}.preview-warning h3,.preview-warning p{margin:0}.preview-warning p{margin-top:.35rem}.trace-preview{background:white;border:1px solid #e1e7f0;border-radius:1rem;padding:1rem;margin:1rem 0;min-width:0;max-width:100%}.preview-scroll{max-width:100%;min-width:0;overflow:visible}.preview-moments{display:flex;flex-wrap:wrap;justify-content:center;gap:.8rem;align-items:flex-start;min-width:0;max-width:100%}.preview-moment{display:flex;flex:0 0 8rem;width:8rem;flex-direction:column;gap:.65rem;min-width:0}.photo-title{font-size:.75rem;line-height:1.35;overflow-wrap:anywhere;margin:0 0 .35rem}.preview-cell{min-width:0;width:100%}.preview-cell .preview-open{display:block;width:100%;padding:0;background:#f8fafc}.preview-cell img{display:block;width:100%;height:auto}.frame-role{display:inline;font-weight:800;letter-spacing:.04em}.checkerboard{background-color:#fff;background-image:linear-gradient(45deg,#d9e1ed 25%,transparent 25%),linear-gradient(-45deg,#d9e1ed 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#d9e1ed 75%),linear-gradient(-45deg,transparent 75%,#d9e1ed 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}.preview-pending,.preview-error,.preview-stale,.preview-empty{background:white;border:1px solid #e1e7f0;border-radius:1rem;padding:1rem;margin:1rem 0}.preview-pending progress{width:min(24rem,100%)}#preview-dialog{width:calc(100dvw - 1rem);height:calc(100dvh - 1rem);max-width:none;max-height:none;border:0;border-radius:1rem;padding:1rem;overflow:hidden}#preview-dialog[open]{display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:.75rem}#preview-dialog::backdrop{background:#10213acc}.dialog-image-frame{display:flex;align-items:center;justify-content:center;min-width:0;min-height:0;overflow:hidden}#preview-dialog img{display:block;width:100%;height:100%;min-width:0;min-height:0;object-fit:contain;margin:0}.dialog-head{display:flex;justify-content:space-between;align-items:center;gap:1rem;min-width:0}.dialog-head h2{margin:0;min-width:0;overflow-wrap:anywhere}.dialog-nav{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:.75rem}.preview-counter{margin:0;text-align:center}"
      "#contextual-help-dialog{width:min(42rem,calc(100dvw - 1rem));max-width:none;max-height:calc(100dvh - 1rem);min-width:0;padding:1.25rem;overflow:auto;color:var(--color-text);background:var(--color-surface-strong);border:1px solid var(--color-border-strong);border-radius:1rem;box-shadow:var(--shadow-surface)}#contextual-help-dialog::backdrop{background:#010813e6}.contextual-help-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;min-width:0}.contextual-help-head h2{min-width:0;margin:.5rem 0;overflow-wrap:anywhere}.contextual-help-close{flex:0 0 auto}.contextual-help-answer{min-width:0;overflow-wrap:anywhere}.contextual-help-actions{margin:1.25rem 0 0}"
      ".job{margin:0}.notice{border:2px solid #d8a94d;padding:1rem;overflow-wrap:anywhere}.notice code{display:block;margin-top:.6rem;white-space:pre-wrap}"
@@ -1129,9 +1217,10 @@
      "<div class=\"actions\"><button id=\"preview-button\" class=\"primary button-with-spinner\" type=\"button\" hx-post=\"/ui/preview\" hx-include=\"closest form\" hx-target=\"#preview-result\" hx-swap=\"outerHTML\" hx-request='{\"timeout\":15000}'><span class=\"button-spinner\" aria-hidden=\"true\" hidden></span><span>Preview</span></button><button id=\"submit-button\" class=\"primary\" type=\"submit\">Create finished video</button><span id=\"preview-submit-status\" class=\"status\" role=\"status\">Preview is optional. Create the finished video when ready.</span><span id=\"form-status\" class=\"status\" role=\"status\"></span></div></section></div></form>"
      "<nav id=\"wizard-navigation\" class=\"card wizard-navigation\" aria-label=\"Wizard navigation\"><button id=\"wizard-back\" type=\"button\" disabled>Back</button><button id=\"wizard-next\" class=\"primary\" type=\"button\">Next</button></nav>"
      "<div class=\"results\"><div id=\"preview-result\"></div><div id=\"job-result\"></div></div></div>"
-     (token-panel tokens)
-     (when (admin/administrator? (:role user))
-       (member-panel members logs-enabled?))
+     (management-links-section {:tokens tokens
+                                :members members
+                                :logs-enabled? logs-enabled?
+                                :user user})
      (contextual-help-dialog)
      "<script>(function(){"
      "const form=document.getElementById('render-form'), hidden=document.getElementById('render-request'), raw=document.getElementById('raw-json'), projectJson=document.getElementById('project-json');"
