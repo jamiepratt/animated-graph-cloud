@@ -3,7 +3,10 @@
             [agg.contracts.render :as contract]
             [agg.jobs.lifecycle :as jobs]
             [agg.render.frames :as frames]
+            [agg.render.gallery :as gallery]
             [agg.render.media :as media]
+            [agg.render.plan :as plan]
+            [agg.render.process :as process]
             [agg.preview.core :as preview]
             [agg.render.spec :as spec]
             [agg.render.watermark :as watermark]
@@ -301,6 +304,54 @@
           {:section-start-at (Instant/parse "2026-07-17T10:00:00Z")
            :duration-seconds 26/25
            :display-time-zone (ZoneId/of "Europe/Warsaw")}))))
+
+(deftest render-command-planning-is-an-explicit-public-boundary
+  (let [render-spec {:width 64 :height 36 :fps 25 :duration-seconds 26/25
+                     :source-video {:trim-offset-seconds 26/25}
+                     :output-format "h264-mp4"
+                     :fit-mode "letterbox"
+                     :audio-mode "source+heartbeat"}
+        args ["ffmpeg" render-spec "/tmp/heartbeat.wav"
+              "/tmp/overlay.pipe" "/tmp/output.mp4"]]
+    (is (= (apply media/composite-command args)
+           (apply plan/composite-command args)))
+    (is (= (media/timing-metadata (with-test-clock render-spec))
+           (plan/timing-metadata (with-test-clock render-spec))))))
+
+(deftest media-process-supervision-maps-exit-and-timeout-without-output-details
+  (let [failure (executable-script! "#!/bin/sh\nprintf private-output\nexit 7\n")
+        timeout (executable-script! "#!/bin/sh\nexec sleep 5\n")]
+    (try
+      (let [failed (try
+                     (process/run-captured! [(str failure)])
+                     (catch Throwable error error))
+            timed-out (try
+                        (process/run-captured! [(str timeout)] 25)
+                        (catch Throwable error error))]
+        (is (= ::process/tool-failed (:type (ex-data failed))))
+        (is (= 7 (:exit-status (ex-data failed))))
+        (is (= ::process/tool-timeout (:type (ex-data timed-out))))
+        (is (= 25 (:timeout-ms (ex-data timed-out))))
+        (is (not (str/includes? (pr-str (ex-data failed)) "private-output"))))
+      (finally
+        (Files/deleteIfExists failure)
+        (Files/deleteIfExists timeout)))))
+
+(deftest gallery-decoding-is-bounded-behind-a-public-seam
+  (let [first-png (png-bytes 8 4 false)
+        second-png (png-bytes 8 4 true)
+        combined (byte-array (+ (alength first-png) (alength second-png)))]
+    (System/arraycopy first-png 0 combined 0 (alength first-png))
+    (System/arraycopy second-png 0 combined (alength first-png)
+                      (alength second-png))
+    (is (= [(seq first-png) (seq second-png)]
+           (mapv seq (gallery/decode-png-stream combined))))
+    (let [error (try
+                  (gallery/decode-png-stream
+                   (java.util.Arrays/copyOf first-png
+                                            (dec (alength first-png))))
+                  (catch Throwable cause cause))]
+      (is (= ::gallery/invalid-output (:type (ex-data error)))))))
 
 (deftest rendering-boundaries-are-protocol-backed
   (is (satisfies? frames/FrameRenderer frames/java2d-frame-renderer))
