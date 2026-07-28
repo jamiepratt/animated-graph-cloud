@@ -101,10 +101,10 @@ variable "enable_observability_log_ttl" {
   default     = true
 }
 
-variable "github_subject" {
-  description = "Optional exact GitHub OIDC subject, used to bind a deployment to a specific ref or environment."
-  type        = string
-  default     = ""
+variable "github_subjects" {
+  description = "Optional exact GitHub OIDC subjects, used to bind deployments to specific refs or environments."
+  type        = list(string)
+  default     = []
 }
 
 variable "enable_terraform_deployments" {

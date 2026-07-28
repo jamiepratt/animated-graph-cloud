@@ -52,10 +52,12 @@ script/release_acceptance.sh
 ```
 
 Protect the `main` branch with the intended required checks and restrict direct
-pushes. The Terraform WIF condition requires the repository's immutable GitHub
-OIDC subject
-`repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/main`;
-a workflow from another ref or repository identity cannot impersonate the
+pushes. The Terraform WIF condition accepts only the repository's immutable
+GitHub OIDC subjects for the `main` and `proto` branches:
+`repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/main`
+and
+`repo:jamiepratt@558780/animated-graph-cloud@1303177214:ref:refs/heads/proto`.
+A workflow from another ref or repository identity cannot impersonate the
 production deployer.
 
 The repository contains no secret values and no long-lived JSON credential file. Use

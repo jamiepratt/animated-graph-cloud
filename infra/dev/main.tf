@@ -1228,7 +1228,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "attribute.ref"        = "assertion.ref"
   }
 
-  attribute_condition = var.github_subject == "" ? "assertion.repository == '${var.github_repository}'" : "assertion.repository == '${var.github_repository}' && assertion.sub == '${var.github_subject}'"
+  attribute_condition = length(var.github_subjects) == 0 ? "assertion.repository == '${var.github_repository}'" : "assertion.repository == '${var.github_repository}' && (${join(" || ", [for subject in var.github_subjects : "assertion.sub == '${subject}'"])})"
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
