@@ -2451,6 +2451,10 @@
       (is (true? (get-in outcome [:initialReview :actionsInside])))
       (is (some #(str/includes? % "ProRes 4444 MOV")
                 (get-in outcome [:initialReview :summaries])))
+      (is (some #{(str "Timer start: 2026-07-17T11:00:00.4 · "
+                       "Timer end: 2026-07-17T11:00:01.6 · "
+                       "IANA timezone: Europe/Warsaw")}
+                (get-in outcome [:initialReview :summaries])))
       (is (= {:current "timer-overlay"
               :start "2026-07-17T11:00:00.4"
               :end "2026-07-17T11:00:01.6"}
