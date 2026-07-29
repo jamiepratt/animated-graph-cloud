@@ -6,6 +6,20 @@
 (defn- read-json [path]
   (json/read-str (slurp path) :key-fn keyword))
 
+(deftest proto-runbook-has-safe-request-correlated-log-queries
+  (let [runbook (slurp "docs/proto-runbook.md")]
+    (doseq [field ["requestId" "trace" "operation" "revision" "reason"]]
+      (is (str/includes? runbook (str "jsonPayload." field))))
+    (is (str/includes? runbook "gcloud logging read"))
+    (is (str/includes? runbook "resource.labels.service_name=\"agg-proto\""))
+    (is (str/includes? runbook "--limit=100"))
+    (is (str/includes?
+         runbook
+         "jsonPayload.exceptionClass,jsonPayload.exceptionStack"))
+    (is (not (re-find
+              #"jsonPayload\\.(?:fileId|fileName|account|token|credential|requestBody|telemetry)"
+              runbook)))))
+
 (deftest proto-runtime-wiring-is-separate-from-the-main-app
   (let [deps-edn (slurp "deps.edn")
         dev-workflow (slurp ".github/workflows/deploy.yml")

@@ -1375,12 +1375,20 @@
       (some? query) {:value query :source "query" :received? true}
       :else {:value nil :source "absent" :received? false})))
 
+(defn- request-trace-context [^HttpExchange exchange]
+  (when-let [[_ trace span sampled]
+             (some->> (some-> exchange .getRequestHeaders
+                              (.getFirst "X-Cloud-Trace-Context"))
+                      (re-matches
+                       #"(?i)^([0-9a-f]{32})(?:/([0-9]{1,20}))?(?:;o=([01]))?$"))]
+    (str (str/lower-case trace)
+         (when span (str "/" span))
+         (when sampled (str ";o=" sampled)))))
+
 (defn- request-trace-id [^HttpExchange exchange]
-  (some->> (some-> exchange .getRequestHeaders
-                   (.getFirst "X-Cloud-Trace-Context"))
-           (re-matches #"(?i)^([0-9a-f]{32})(?:/.*)?$")
-           second
-           str/lower-case))
+  (some-> (request-trace-context exchange)
+          (str/split #"/|;")
+          first))
 
 (defn- elapsed-millis [started-nanos]
   (quot (- (System/nanoTime) started-nanos) 1000000))
@@ -1392,6 +1400,63 @@
     (cond-> {:requestId request-id}
       trace (assoc :trace trace)
       revision (assoc :revision revision))))
+
+(defn- emit-playback-operation!
+  [dependencies exchange request-id operation status started-nanos fields]
+  (emit-event!
+   dependencies
+   (str operation "_" status)
+   (merge {:severity (if (= "failed" status) "WARNING" "INFO")
+           :operation operation
+           :status status
+           :elapsedMs (elapsed-millis started-nanos)}
+          fields
+          (playback-correlation-fields exchange dependencies request-id))))
+
+(defn- emit-playback-stage!
+  [dependencies exchange request-id event operation status started-nanos fields]
+  (emit-event!
+   dependencies event
+   (merge {:severity (if (= "failed" status) "WARNING" "INFO")
+           :operation operation
+           :status status
+           :elapsedMs (elapsed-millis started-nanos)}
+          fields
+          (playback-correlation-fields exchange dependencies request-id))))
+
+(defn- playback-analysis-failure-fields [error]
+  (let [error-type (:type (ex-data error))
+        data (ex-data error)]
+    (merge
+     {:reason
+      (case error-type
+        ::media/media-tool-timeout "playback_analysis_timeout"
+        ::media/invalid-source-inspection "playback_evidence_unavailable"
+        "playback_analysis_failed")
+      :errorType (some-> error-type str)
+      :retryable (not= ::media/invalid-source-inspection error-type)}
+     (when-let [timeout-ms (:timeout-ms data)]
+       {:timeoutMs timeout-ms})
+     (when-let [exit-status (:exit-status data)]
+       {:upstreamStatus exit-status})
+     (observability/exception-fields error))))
+
+(defn- recording-clock-failure-fields [error]
+  (let [error-type (:type (ex-data error))
+        data (ex-data error)]
+    (merge
+     {:reason (case error-type
+                ::drive/source-unavailable "drive_source_unavailable"
+                ::invalid-recording-clock-source
+                "invalid_recording_clock_source"
+                "recording_clock_inspection_failed")
+      :errorType (some-> error-type str)
+      :retryable (not= ::invalid-recording-clock-source error-type)}
+     (when-let [timeout-ms (:timeout-ms data)]
+       {:timeoutMs timeout-ms})
+     (when-let [upstream-status (:status data)]
+       {:upstreamStatus upstream-status})
+     (observability/exception-fields error))))
 
 (defn- respond-invalid-playback-range! [^HttpExchange exchange size]
   (doto (.getResponseHeaders exchange)
@@ -1410,8 +1475,9 @@
           (get headers "content-length"))))
 
 (defn- create-playback-session!
-  [^HttpExchange exchange auth-system]
-  (let [user (require-session-user! exchange auth-system)
+  [^HttpExchange exchange auth-system dependencies request-id]
+  (let [started-nanos (System/nanoTime)
+        user (require-session-user! exchange auth-system)
         _ (require-csrf! exchange auth-system user)
         request (request-json exchange)
         file-id (:fileId request)
@@ -1450,48 +1516,74 @@
                 :playback playback-token))]
     (.add (.getResponseHeaders exchange) "Set-Cookie"
           (browser-cookie-header browser-token))
+    (emit-event!
+     dependencies "playback_session_created"
+     (merge {:severity "INFO"
+             :operation "playback_session_creation"
+             :status "succeeded"
+             :elapsedMs (elapsed-millis started-nanos)
+             :retryable false}
+            (playback-correlation-fields exchange dependencies request-id)))
     (respond-json! exchange 201
                    {:playbackUrl playback-path
                     :contentType mimeType
                     :size size})))
 
 (defn- inspect-playback!
-  [^HttpExchange exchange auth-system]
-  (let [user (require-session-user! exchange auth-system)
-        _ (require-csrf! exchange auth-system user)
-        request (request-json exchange)
-        file-id (:fileId request)
-        _ (when-not (and (= #{:fileId} (set (keys request)))
-                         (string? file-id)
-                         (<= 1 (count file-id) 256))
-            (throw (errors/raise! "Drive playback source is invalid"
-                                  {:type ::invalid-playback-source})))
-        {:keys [access-token]} (auth/drive-access! auth-system (:subject user))
-        gateway (:drive auth-system)
-        _ (when-not (and (satisfies? drive/SourceGateway gateway)
-                         (satisfies? drive/PlaybackAnalysisGateway gateway))
-            (throw (errors/raise! "Drive playback analysis dependencies are incomplete"
-                                  {:type ::drive/source-unavailable})))
-        metadata (drive/source-metadata! gateway access-token file-id)
-        prepared (contract/attach-source-selection-metadata
-                  {:source-video {:file-id file-id}} metadata)
-        source-metadata (get-in prepared [:source-video :metadata])
-        evidence (drive/inspect-playback! gateway access-token file-id source-metadata)]
-    (respond-json! exchange 200
-                   {:fileName (:name source-metadata)
-                    :evidence evidence})))
+  [^HttpExchange exchange auth-system dependencies request-id]
+  (let [started-nanos (System/nanoTime)]
+    (emit-playback-operation! dependencies exchange request-id
+                              "playback_analysis" "started"
+                              started-nanos {})
+    (try
+      (let [user (require-session-user! exchange auth-system)
+            _ (require-csrf! exchange auth-system user)
+            request (request-json exchange)
+            file-id (:fileId request)
+            _ (when-not (and (= #{:fileId} (set (keys request)))
+                             (string? file-id)
+                             (<= 1 (count file-id) 256))
+                (throw (errors/raise! "Drive playback source is invalid"
+                                      {:type ::invalid-playback-source})))
+            {:keys [access-token]} (auth/drive-access! auth-system
+                                                       (:subject user))
+            gateway (:drive auth-system)
+            _ (when-not (and (satisfies? drive/SourceGateway gateway)
+                             (satisfies? drive/PlaybackAnalysisGateway gateway))
+                (throw (errors/raise!
+                        "Drive playback analysis dependencies are incomplete"
+                        {:type ::drive/source-unavailable})))
+            metadata (drive/source-metadata! gateway access-token file-id)
+            prepared (contract/attach-source-selection-metadata
+                      {:source-video {:file-id file-id}} metadata)
+            source-metadata (get-in prepared [:source-video :metadata])
+            evidence
+            (observability/with-event-context
+              {:fields
+               (playback-correlation-fields
+                exchange dependencies request-id)
+               :event-sink (:event-sink dependencies)}
+              (drive/inspect-playback! gateway access-token file-id
+                                       source-metadata))]
+        (emit-playback-operation! dependencies exchange request-id
+                                  "playback_analysis" "succeeded"
+                                  started-nanos {:retryable false})
+        (respond-json! exchange 200
+                       {:fileName (:name source-metadata)
+                        :evidence evidence}))
+      (catch Throwable error
+        (emit-playback-operation!
+         dependencies exchange request-id
+         "playback_analysis" "failed" started-nanos
+         (playback-analysis-failure-fields error))
+        (throw error)))))
 
 (defn- respond-playback-analysis-failure!
   [dependencies exchange path error-type status error-code retryable]
   (if (= "/v1/drive/playback-analyses" path)
-    (do
-      (emit-event! dependencies "request_failed"
-                   {:severity "WARNING"
-                    :reason error-code
-                    :errorType (str error-type)})
-      (respond-json! exchange status
-                     {:error error-code
-                      :retryable retryable}))
+    (respond-json! exchange status
+                   {:error error-code
+                    :retryable retryable})
     (do
       (emit-event! dependencies "request_failed"
                    {:severity "ERROR"
@@ -1526,32 +1618,49 @@
                     :mimeType mimeType})))
 
 (defn- inspect-recording-clock!
-  [^HttpExchange exchange auth-system]
-  (let [user (require-session-user! exchange auth-system)
-        _ (require-csrf! exchange auth-system user)
-        request (request-json exchange)
-        file-id (:fileId request)
-        _ (when-not (and (= #{:fileId} (set (keys request)))
-                         (string? file-id)
-                         (<= 1 (count file-id) 256))
-            (throw (errors/raise! "Drive recording-clock source is invalid"
-                                  {:type ::invalid-recording-clock-source})))
-        {:keys [access-token]}
-        (auth/drive-access! auth-system (:subject user))
-        gateway (:drive auth-system)
-        _ (when-not (and (satisfies? drive/SourceGateway gateway)
-                         (satisfies? drive/PlaybackGateway gateway))
-            (throw (errors/raise!
-                    "Drive recording-clock inspection dependencies are incomplete"
-                    {:type ::drive/source-unavailable})))
-        metadata (drive/source-metadata! gateway access-token file-id)
-        _ (contract/attach-source-selection-metadata
-           {:source-video {:file-id file-id}} metadata)
-        inspection
-        (drive-gcp/inspect-recording-clock!
-         gateway access-token file-id metadata)]
-    (respond-json! exchange 200
-                   (assoc inspection :fileName (:name metadata)))))
+  [^HttpExchange exchange auth-system dependencies request-id]
+  (let [started-nanos (System/nanoTime)]
+    (emit-playback-operation!
+     dependencies exchange request-id
+     "recording_clock_inspection" "started" started-nanos {})
+    (try
+      (let [user (require-session-user! exchange auth-system)
+            _ (require-csrf! exchange auth-system user)
+            request (request-json exchange)
+            file-id (:fileId request)
+            _ (when-not (and (= #{:fileId} (set (keys request)))
+                             (string? file-id)
+                             (<= 1 (count file-id) 256))
+                (throw (errors/raise!
+                        "Drive recording-clock source is invalid"
+                        {:type ::invalid-recording-clock-source})))
+            {:keys [access-token]}
+            (auth/drive-access! auth-system (:subject user))
+            gateway (:drive auth-system)
+            _ (when-not (and (satisfies? drive/SourceGateway gateway)
+                             (satisfies? drive/PlaybackGateway gateway))
+                (throw
+                 (errors/raise!
+                  "Drive recording-clock inspection dependencies are incomplete"
+                  {:type ::drive/source-unavailable})))
+            metadata (drive/source-metadata! gateway access-token file-id)
+            _ (contract/attach-source-selection-metadata
+               {:source-video {:file-id file-id}} metadata)
+            inspection
+            (drive-gcp/inspect-recording-clock!
+             gateway access-token file-id metadata)]
+        (emit-playback-operation!
+         dependencies exchange request-id
+         "recording_clock_inspection" "succeeded" started-nanos
+         {:retryable false})
+        (respond-json! exchange 200
+                       (assoc inspection :fileName (:name metadata))))
+      (catch Throwable error
+        (emit-playback-operation!
+         dependencies exchange request-id
+         "recording_clock_inspection" "failed" started-nanos
+         (recording-clock-failure-fields error))
+        (throw error)))))
 
 (defn- open-playback-range!
   [gateway access-token file-id {:keys [start end] :as byte-range}]
@@ -1568,38 +1677,53 @@
                              :retryable true}
                             error)))))
 
-(defn- playback-exception-class [error]
-  (some-> (or (.getCause ^Throwable error) error) class .getName))
-
 (defn- emit-playback-stream-failure!
-  [dependencies reason error start end]
-  (emit-event! dependencies "request_failed"
-               {:severity "WARNING"
-                :reason reason
-                :exceptionClass (playback-exception-class error)
-                :rangeStart start
-                :rangeEnd end
-                :retryable true}))
+  [dependencies exchange request-id started-nanos reason error
+   range-source received-range start end upstream-status
+   bytes-requested bytes-transferred]
+  (emit-playback-stage!
+   dependencies exchange request-id
+   "drive_playback_transfer_failed"
+   "drive_playback_transfer"
+   "failed"
+   started-nanos
+   (merge {:reason reason
+           :rangeSource range-source
+           :receivedRange received-range
+           :rangeStart start
+           :rangeEnd end
+           :upstreamStatus upstream-status
+           :bytesRequested bytes-requested
+           :bytesTransferred bytes-transferred
+           :retryable (= "drive_playback_read_failed" reason)}
+          (observability/exception-fields error))))
 
 (defn- transfer-playback-body!
   [input output on-failure!]
   (let [buffer (byte-array 8192)]
-    (loop []
+    (loop [bytes-transferred 0]
       (let [read-count
             (try
               (.read ^java.io.InputStream input buffer)
               (catch Throwable error
-                (on-failure! "drive_playback_read_failed" error)
+                (on-failure! "drive_playback_read_failed"
+                             error bytes-transferred)
                 nil))]
-        (when (and read-count (pos? read-count))
-          (when
+        (cond
+          (nil? read-count) nil
+          (neg? read-count) bytes-transferred
+          (zero? read-count) (recur bytes-transferred)
+          :else
+          (if
            (try
              (.write ^java.io.OutputStream output buffer 0 read-count)
              true
              (catch Throwable error
-               (on-failure! "drive_playback_write_failed" error)
+               (on-failure! "drive_playback_write_failed"
+                            error bytes-transferred)
                false))
-            (recur)))))))
+            (recur (+ bytes-transferred read-count))
+            nil))))))
 
 (defn- stream-playback!
   [^HttpExchange exchange auth-system dependencies path request-id]
@@ -1609,16 +1733,50 @@
         (auth/playback-source auth-system (:subject user) playback-id
                               (:playback (browser-cookie exchange auth-system)))
         range-request (playback-request-range exchange)
+        started-nanos (System/nanoTime)
+        _ (emit-playback-stage!
+           dependencies exchange request-id
+           "drive_playback_range_received"
+           "drive_playback_range"
+           "received"
+           started-nanos
+           {:rangeSource (:source range-request)
+            :receivedRange (:received? range-request)
+            :retryable false})
         {:keys [start end partial?] :as byte-range}
         (playback-range (:value range-request) size)
+        content-length (inc (- end start))
+        _ (emit-playback-stage!
+           dependencies exchange request-id
+           "drive_playback_range_resolved"
+           "drive_playback_range"
+           "resolved"
+           started-nanos
+           {:rangeSource (:source range-request)
+            :receivedRange (:received? range-request)
+            :rangeStart start
+            :rangeEnd end
+            :bytesRequested content-length
+            :retryable false})
         {:keys [access-token]} (auth/drive-access! auth-system (:subject user))
         gateway (:drive auth-system)
-        started-nanos (System/nanoTime)
+        open-started-nanos (System/nanoTime)
         {:keys [body] :as source-response}
         (open-playback-range! gateway access-token file-id byte-range)
-        elapsed-ms (elapsed-millis started-nanos)
         response-status (if partial? 206 200)
-        content-length (inc (- end start))]
+        _ (emit-playback-stage!
+           dependencies exchange request-id
+           "drive_playback_range_opened"
+           "drive_playback_open"
+           "succeeded"
+           open-started-nanos
+           {:rangeSource (:source range-request)
+            :receivedRange (:received? range-request)
+            :rangeStart start
+            :rangeEnd end
+            :bytesRequested content-length
+            :upstreamStatus (:status source-response)
+            :retryable false})]
     (when-not (valid-playback-response? source-response start end size)
       (when body (.close ^java.io.InputStream body))
       (throw (errors/raise! "Google Drive playback response was invalid"
@@ -1628,17 +1786,17 @@
                              :range-end end
                              :retryable true
                              :size content-length})))
-    (emit-event!
-     dependencies "drive_playback_range_opened"
-     (merge {:severity "INFO"
-             :rangeSource (:source range-request)
-             :receivedRange (:received? range-request)
-             :rangeStart start
-             :rangeEnd end
-             :upstreamStatus (:status source-response)
-             :elapsedMs elapsed-ms
-             :retryable false}
-            (playback-correlation-fields exchange dependencies request-id)))
+    (emit-playback-stage!
+     dependencies exchange request-id
+     "drive_playback_upstream_validated"
+     "drive_playback_upstream_validation"
+     "succeeded"
+     open-started-nanos
+     {:rangeStart start
+      :rangeEnd end
+      :bytesRequested content-length
+      :upstreamStatus (:status source-response)
+      :retryable false})
     (doto (.getResponseHeaders exchange)
       (.set "Content-Type" mime-type)
       (.set "Cache-Control" "no-store")
@@ -1648,15 +1806,38 @@
       (.set (.getResponseHeaders exchange) "Content-Range"
             (str "bytes " start "-" end "/" size)))
     (.sendResponseHeaders exchange response-status content-length)
-    (try
-      (with-open [input ^java.io.InputStream body
-                  output (.getResponseBody exchange)]
-        (transfer-playback-body!
-         input output
-         #(emit-playback-stream-failure! dependencies %1 %2 start end)))
-      (catch Throwable error
-        (emit-playback-stream-failure!
-         dependencies "drive_playback_close_failed" error start end)))))
+    (let [failure-emitted? (atom false)
+          bytes-transferred (atom 0)
+          fail!
+          (fn [reason error transferred]
+            (reset! bytes-transferred transferred)
+            (when (compare-and-set! failure-emitted? false true)
+              (emit-playback-stream-failure!
+               dependencies exchange request-id started-nanos
+               reason error
+               (:source range-request) (:received? range-request)
+               start end (:status source-response)
+               content-length transferred)))]
+      (try
+        (let [transferred
+              (with-open [input ^java.io.InputStream body
+                          output (.getResponseBody exchange)]
+                (transfer-playback-body! input output fail!))]
+          (when (and (some? transferred) (not @failure-emitted?))
+            (reset! bytes-transferred transferred)
+            (emit-playback-stage!
+             dependencies exchange request-id
+             "drive_playback_transfer_succeeded"
+             "drive_playback_transfer"
+             "succeeded"
+             started-nanos
+             {:rangeStart start
+              :rangeEnd end
+              :bytesRequested content-length
+              :bytesTransferred transferred
+              :retryable false})))
+        (catch Throwable error
+          (fail! "drive_playback_close_failed" error @bytes-transferred))))))
 
 (defn- completed-playback-output!
   [job-service subject job-id]
@@ -1950,6 +2131,10 @@
             request-id (str (UUID/randomUUID))
             request-started-nanos (System/nanoTime)]
         (.set (.getResponseHeaders exchange) "X-Request-Id" request-id)
+        (when-let [trace-context (request-trace-context exchange)]
+          (.set (.getResponseHeaders exchange)
+                "X-Cloud-Trace-Context"
+                trace-context))
         (try
           (observability/trace! ::api-request
                                 (cond
@@ -2039,11 +2224,13 @@
 
                                   (and auth-system (= "POST" method)
                                        (= "/v1/drive/playback-sessions" path))
-                                  (create-playback-session! exchange auth-system)
+                                  (create-playback-session!
+                                   exchange auth-system dependencies request-id)
 
                                   (and auth-system (= "POST" method)
                                        (= "/v1/drive/playback-analyses" path))
-                                  (inspect-playback! exchange auth-system)
+                                  (inspect-playback! exchange auth-system
+                                                     dependencies request-id)
 
                                   (and auth-system (= "POST" method)
                                        (= "/ui/project-source-validation" path))
@@ -2052,7 +2239,8 @@
                                   (and auth-system (= "POST" method)
                                        (= "/v1/drive/recording-clock-inspections"
                                           path))
-                                  (inspect-recording-clock! exchange auth-system)
+                                  (inspect-recording-clock!
+                                   exchange auth-system dependencies request-id)
 
                                   (and auth-system (= "GET" method)
                                        (re-matches drive-playback-path-pattern path))
@@ -2386,8 +2574,21 @@
                                  {:error "invalid_recording_clock_source"})
 
                   ::invalid-playback-range
-                  (respond-invalid-playback-range!
-                   exchange (or (:size (ex-data error)) 0))
+                  (do
+                    (let [range-request (playback-request-range exchange)]
+                      (emit-playback-stage!
+                       dependencies exchange request-id
+                       "drive_playback_range_resolution_failed"
+                       "drive_playback_range"
+                       "failed"
+                       request-started-nanos
+                       {:reason "playback_range_not_satisfiable"
+                        :errorType (str error-type)
+                        :rangeSource (:source range-request)
+                        :receivedRange (:received? range-request)
+                        :retryable false}))
+                    (respond-invalid-playback-range!
+                     exchange (or (:size (ex-data error)) 0)))
 
                   ::browser-playback-not-supported
                   (respond-json! exchange 415
@@ -2396,22 +2597,23 @@
                   ::drive/playback-range-unavailable
                   (do
                     (let [range-request (playback-request-range exchange)]
-                      (emit-event!
-                       dependencies "request_failed"
+                      (emit-playback-stage!
+                       dependencies exchange request-id
+                       "drive_playback_open_failed"
+                       "drive_playback_open"
+                       "failed"
+                       request-started-nanos
                        (merge
-                        {:severity "WARNING"
-                         :reason "drive_playback_open_failed"
+                        {:reason "drive_playback_open_failed"
                          :errorType (str error-type)
-                         :exceptionClass (playback-exception-class error)
                          :rangeSource (:source range-request)
                          :receivedRange (:received? range-request)
                          :rangeStart (:range-start (ex-data error))
                          :rangeEnd (:range-end (ex-data error))
-                         :upstreamStatus (long (or (:status (ex-data error)) 0))
-                         :elapsedMs (elapsed-millis request-started-nanos)
+                         :upstreamStatus
+                         (long (or (:status (ex-data error)) 0))
                          :retryable true}
-                        (playback-correlation-fields
-                         exchange dependencies request-id))))
+                        (observability/exception-fields error))))
                     (respond-json! exchange 502
                                    {:error "drive_playback_unavailable"
                                     :retryable true}))
@@ -2419,21 +2621,23 @@
                   ::drive/invalid-playback-response
                   (do
                     (let [range-request (playback-request-range exchange)]
-                      (emit-event!
-                       dependencies "request_failed"
+                      (emit-playback-stage!
+                       dependencies exchange request-id
+                       "drive_playback_upstream_validation_failed"
+                       "drive_playback_upstream_validation"
+                       "failed"
+                       request-started-nanos
                        (merge
-                        {:severity "WARNING"
-                         :reason "drive_playback_validation_failed"
+                        {:reason "drive_playback_validation_failed"
                          :errorType (str error-type)
                          :rangeSource (:source range-request)
                          :receivedRange (:received? range-request)
                          :rangeStart (:range-start (ex-data error))
                          :rangeEnd (:range-end (ex-data error))
-                         :upstreamStatus (long (or (:status (ex-data error)) 0))
-                         :elapsedMs (elapsed-millis request-started-nanos)
+                         :upstreamStatus
+                         (long (or (:status (ex-data error)) 0))
                          :retryable true}
-                        (playback-correlation-fields
-                         exchange dependencies request-id))))
+                        (observability/exception-fields error))))
                     (respond-json! exchange 502
                                    {:error "drive_playback_unavailable"
                                     :retryable true}))

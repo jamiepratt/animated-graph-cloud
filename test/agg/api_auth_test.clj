@@ -1783,11 +1783,29 @@
         (is (= {"error" "playback_analysis_timeout"
                 "retryable" true}
                (json/read-str (.body response))))
-        (is (= [["request_failed"
-                 {:severity "WARNING"
+        (is (= ["playback_analysis_started"
+                "playback_analysis_failed"]
+               (mapv first @events)))
+        (let [started (second (first @events))
+              failed (second (second @events))]
+          (is (= "playback_analysis" (:operation started)))
+          (is (= "started" (:status started)))
+          (is (= (:requestId started) (:requestId failed)))
+          (is (= {:severity "WARNING"
+                  :operation "playback_analysis"
+                  :status "failed"
                   :reason "playback_analysis_timeout"
-                  :errorType ":agg.render.media/media-tool-timeout"}]]
-               @events)))
+                  :errorType ":agg.render.media/media-tool-timeout"
+                  :exceptionClass "clojure.lang.ExceptionInfo"
+                  :timeoutMs 30000
+                  :retryable true}
+                 (select-keys
+                  failed
+                  [:severity :operation :status :reason :errorType
+                   :exceptionClass :timeoutMs :retryable])))
+          (is (seq (:exceptionStack failed)))
+          (is (not (re-find #"selected.mov|renderable-private-mov"
+                            (pr-str failed))))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

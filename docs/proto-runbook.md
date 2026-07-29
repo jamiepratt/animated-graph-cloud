@@ -103,3 +103,53 @@ the same closed, open-ended, suffix, malformed, and 8 MiB bounding rules.
 The query contains no playback authority or source identity. Playback authority
 remains in the owner-bound HttpOnly cookie. If the service worker cannot control
 the page, the proto harness fails closed before creating playback requests.
+
+## Request-correlated playback logs
+
+Use only the A/B/C labels and safe correlation values captured from response
+headers. Never paste source identity, account data, authority, request bodies,
+telemetry, or media into a logging query.
+
+Each query is intentionally limited and projects only allowlisted operational
+fields. Replace the uppercase placeholder, leaving the service filter intact.
+
+By request ID:
+
+```sh
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="agg-proto" AND jsonPayload.requestId="REPLACE_REQUEST_ID"' \
+  --freshness=24h --limit=100 \
+  --format='table(timestamp,jsonPayload.event,jsonPayload.operation,jsonPayload.status,jsonPayload.reason,jsonPayload.requestId,jsonPayload.trace,jsonPayload.revision,jsonPayload.rangeSource,jsonPayload.receivedRange,jsonPayload.rangeStart,jsonPayload.rangeEnd,jsonPayload.bytesRequested,jsonPayload.bytesTransferred,jsonPayload.upstreamStatus,jsonPayload.elapsedMs,jsonPayload.exceptionClass,jsonPayload.exceptionStack)'
+```
+
+By trace:
+
+```sh
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="agg-proto" AND jsonPayload.trace="REPLACE_TRACE"' \
+  --freshness=24h --limit=100 --format=json
+```
+
+By operation:
+
+```sh
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="agg-proto" AND jsonPayload.operation="REPLACE_OPERATION"' \
+  --freshness=24h --limit=100 --format=json
+```
+
+By deployed revision:
+
+```sh
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="agg-proto" AND jsonPayload.revision="REPLACE_REVISION"' \
+  --freshness=24h --limit=100 --format=json
+```
+
+By bounded failure reason:
+
+```sh
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="agg-proto" AND jsonPayload.reason="REPLACE_REASON"' \
+  --freshness=24h --limit=100 --format=json
+```

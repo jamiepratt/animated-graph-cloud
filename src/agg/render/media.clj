@@ -1,5 +1,6 @@
 (ns agg.render.media
   (:require [agg.errors :as errors]
+            [agg.observability :as observability]
             [clojure.data.json :as json]
             [clojure.string :as str])
   (:import (java.io ByteArrayInputStream IOException OutputStream RandomAccessFile)
@@ -56,6 +57,7 @@
 
 (def ^:private process-stop-grace-ms 1000)
 (def ^:private timed-out (Object.))
+(def browser-playback-timeout-ms 30000)
 
 (defn timing-metadata
   "Returns the versioned UTC timeline represented by a rendered artifact."
@@ -291,56 +293,153 @@
       :else (or format-name "unknown"))))
 
 (defn- inspect-browser-playback-command!
-  [command]
-  (let [output (run-captured!
-                command
-                30000)
-        probe (json/read-str output :key-fn keyword)
-        format (:format probe)
-        video (first (filter #(= "video" (:codec_type %)) (:streams probe)))
-        audio (first (filter #(= "audio" (:codec_type %)) (:streams probe)))
-        tags (:tags format)]
-    (when-not (and (string? (:codec_name video))
-                   (string? (:codec_tag_string video)))
-      (throw (errors/raise! "Selected source inspection did not produce playback evidence"
-                            {:type ::invalid-source-inspection})))
-    (cond-> {:container {:format (playback-container-format tags (:format_name format))
-                         :majorBrand (:major_brand tags)}
-             :video {:codec (:codec_name video)
-                     :codecTag (:codec_tag_string video)
-                     :profile (:profile video)
-                     :pixelFormat (:pix_fmt video)}}
-      audio
-      (assoc :audio {:codec (:codec_name audio)}))))
+  [command timeout-ms]
+  (let [started-nanos (System/nanoTime)
+        _ (observability/emit-context-event!
+           "api" "ffprobe_started"
+           {:severity "INFO"
+            :operation "ffprobe"
+            :status "started"
+            :elapsedMs 0
+            :timeoutMs timeout-ms
+            :retryable false})
+        output
+        (try
+          (let [output (run-captured!
+                        command
+                        timeout-ms)]
+            (observability/emit-context-event!
+             "api" "ffprobe_exited"
+             {:severity "INFO"
+              :operation "ffprobe"
+              :status "succeeded"
+              :elapsedMs (quot (- (System/nanoTime) started-nanos) 1000000)
+              :upstreamStatus 0
+              :retryable false})
+            output)
+          (catch Throwable error
+            (let [error-type (:type (ex-data error))
+                  elapsed-ms
+                  (quot (- (System/nanoTime) started-nanos) 1000000)]
+              (case error-type
+                ::media-tool-timeout
+                (observability/emit-context-event!
+                 "api" "ffprobe_timed_out"
+                 (merge {:severity "WARNING"
+                         :operation "ffprobe"
+                         :status "failed"
+                         :reason "deadline_exceeded"
+                         :errorType (str error-type)
+                         :elapsedMs elapsed-ms
+                         :timeoutMs timeout-ms
+                         :retryable true}
+                        (observability/exception-fields error)))
+
+                ::media-tool-failed
+                (let [exit-status
+                      (long (or (:exit-status (ex-data error)) 0))]
+                  (observability/emit-context-event!
+                   "api" "ffprobe_exited"
+                   {:severity "WARNING"
+                    :operation "ffprobe"
+                    :status "failed"
+                    :elapsedMs elapsed-ms
+                    :upstreamStatus exit-status
+                    :retryable true})
+                  (observability/emit-context-event!
+                   "api" "ffprobe_failed"
+                   (merge {:severity "WARNING"
+                           :operation "ffprobe"
+                           :status "failed"
+                           :reason "nonzero_exit"
+                           :errorType (str (:type (ex-data error)))
+                           :elapsedMs elapsed-ms
+                           :upstreamStatus exit-status
+                           :retryable true}
+                          (observability/exception-fields error))))
+
+                nil))
+            (throw error)))]
+    (try
+      (let [probe (json/read-str output :key-fn keyword)
+            format (:format probe)
+            video
+            (first (filter #(= "video" (:codec_type %)) (:streams probe)))
+            audio
+            (first (filter #(= "audio" (:codec_type %)) (:streams probe)))
+            tags (:tags format)]
+        (when-not (and (string? (:codec_name video))
+                       (string? (:codec_tag_string video)))
+          (throw
+           (errors/raise!
+            "Selected source inspection did not produce playback evidence"
+            {:type ::invalid-source-inspection})))
+        (cond-> {:container
+                 {:format
+                  (playback-container-format tags (:format_name format))
+                  :majorBrand (:major_brand tags)}
+                 :video {:codec (:codec_name video)
+                         :codecTag (:codec_tag_string video)
+                         :profile (:profile video)
+                         :pixelFormat (:pix_fmt video)}}
+          audio
+          (assoc :audio {:codec (:codec_name audio)})))
+      (catch Throwable error
+        (let [error
+              (if (= ::invalid-source-inspection (:type (ex-data error)))
+                error
+                (errors/raise!
+                 "Selected source inspection did not produce playback evidence"
+                 {:type ::invalid-source-inspection}
+                 error))]
+          (observability/emit-context-event!
+           "api" "ffprobe_failed"
+           (merge {:severity "WARNING"
+                   :operation "ffprobe"
+                   :status "failed"
+                   :reason "invalid_evidence"
+                   :errorType (str ::invalid-source-inspection)
+                   :elapsedMs
+                   (quot (- (System/nanoTime) started-nanos) 1000000)
+                   :retryable false}
+                  (observability/exception-fields error)))
+          (throw error))))))
 
 (defn inspect-browser-playback!
   "Returns normalized codec evidence for direct browser playback decisions."
-  [ffprobe url]
-  (inspect-browser-playback-command!
-   [ffprobe
-    "-v" "quiet"
-    "-protocol_whitelist" "http,tcp"
-    "-analyzeduration" "10000000"
-    "-probesize" "67108864"
-    "-show_entries"
-    (str "format=format_name:format_tags=major_brand,compatible_brands:"
-         "stream=codec_type,codec_name,codec_tag_string,profile,pix_fmt")
-    "-of" "json"
-    url]))
+  ([ffprobe url]
+   (inspect-browser-playback! ffprobe url browser-playback-timeout-ms))
+  ([ffprobe url timeout-ms]
+   (inspect-browser-playback-command!
+    [ffprobe
+     "-v" "quiet"
+     "-protocol_whitelist" "http,tcp"
+     "-analyzeduration" "10000000"
+     "-probesize" "67108864"
+     "-show_entries"
+     (str "format=format_name:format_tags=major_brand,compatible_brands:"
+          "stream=codec_type,codec_name,codec_tag_string,profile,pix_fmt")
+     "-of" "json"
+     url]
+    timeout-ms)))
 
 (defn inspect-browser-playback-file!
   "Returns normalized codec evidence for a bounded local playback fixture."
-  [ffprobe path]
-  (inspect-browser-playback-command!
-   [ffprobe
-    "-v" "quiet"
-    "-analyzeduration" "10000000"
-    "-probesize" "67108864"
-    "-show_entries"
-    (str "format=format_name:format_tags=major_brand,compatible_brands:"
-         "stream=codec_type,codec_name,codec_tag_string,profile,pix_fmt")
-    "-of" "json"
-    (str path)]))
+  ([ffprobe path]
+   (inspect-browser-playback-file!
+    ffprobe path browser-playback-timeout-ms))
+  ([ffprobe path timeout-ms]
+   (inspect-browser-playback-command!
+    [ffprobe
+     "-v" "quiet"
+     "-analyzeduration" "10000000"
+     "-probesize" "67108864"
+     "-show_entries"
+     (str "format=format_name:format_tags=major_brand,compatible_brands:"
+          "stream=codec_type,codec_name,codec_tag_string,profile,pix_fmt")
+     "-of" "json"
+     (str path)]
+    timeout-ms)))
 
 (defn composite-command
   "Returns the bounded FFmpeg command shape used by the compositing path."
