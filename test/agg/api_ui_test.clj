@@ -1413,7 +1413,7 @@
          "FAQ" [ui/faq-page "/faq"]
          "Privacy" [ui/privacy-page "/privacy"]
          "Terms" [ui/terms-page "/terms"]
-         "Drive recovery" [(ui/drive-recovery-page) nil]
+         "Drive recovery" [ui/drive-recovery-page nil]
          "early access" [(ui/early-access-page
                           {:email "verified@example.com"
                            :proof "signed-proof"})
@@ -2116,7 +2116,7 @@
          "faq" ui/faq-page
          "privacy" ui/privacy-page
          "terms" ui/terms-page
-         "Drive recovery" (ui/drive-recovery-page)
+         "Drive recovery" ui/drive-recovery-page
          "early access" (ui/early-access-page
                          {:email "verified@example.com"
                           :proof "signed-proof"})
@@ -2218,8 +2218,8 @@
          "public mobile" [ui/terms-page "/terms" "390,844"]
          "signed-in desktop" [compose nil "1280,900"]
          "signed-in mobile" [compose nil "390,844"]
-         "recovery desktop" [(ui/drive-recovery-page) nil "1280,900"]
-         "recovery mobile" [(ui/drive-recovery-page) nil "390,844"]
+         "recovery desktop" [ui/drive-recovery-page nil "1280,900"]
+         "recovery mobile" [ui/drive-recovery-page nil "390,844"]
          "admin desktop" [logs nil "1280,900"]
          "admin mobile" [logs nil "390,844"]}]
     (doseq [[surface [page active-path window-size]] pages]
