@@ -30,6 +30,7 @@
             [agg.release-config-test]
             [agg.renderer-drive-test]
             [agg.smoke-test]
+            [agg.test-targeted-test]
             [agg.timeline-property-test]
             [agg.tokens-test]
             [agg.tokens-gcp-test]
@@ -70,6 +71,7 @@
                                              'agg.release-config-test
                                              'agg.renderer-drive-test
                                              'agg.smoke-test
+                                             'agg.test-targeted-test
                                              'agg.timeline-property-test
                                              'agg.tokens-test
                                              'agg.tokens-gcp-test
