@@ -13,12 +13,13 @@
     :progressPercent :retryable :attempt :requestedMomentCount
     :generatedMomentCount :omittedMomentCount :requestedDurationSeconds
     :upstreamStatus :sourceFile :sourceLine :sourceColumn :exceptionClass
-    :rangeStart :rangeEnd})
+    :rangeStart :rangeEnd :rangeSource :receivedRange :trace :revision})
 
 (def ^:private safe-value-keys
   #{:severity :component :event :message :reason :failureCode :errorType
     :requestId :category :phase :view :listState :tokenStatus :accountStatus
-    :mimeFilter :indexStatus :stage :sourceFile :exceptionClass})
+    :mimeFilter :indexStatus :stage :sourceFile :exceptionClass :rangeSource
+    :trace :revision})
 
 (def ^:private early-access-delivery-event-keys
   #{:severity :component :event :requestId :category :upstreamStatus

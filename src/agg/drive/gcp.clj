@@ -713,6 +713,9 @@
           (throw (errors/raise! "Google Drive playback response was invalid"
                                 {:type ::drive/invalid-playback-response
                                  :status (long (or (:status response) 0))
+                                 :range-start start
+                                 :range-end end
+                                 :retryable true
                                  :size (inc (- end start))}))))))
   drive/SelectedWorkGateway
   (inspect-selected-work!

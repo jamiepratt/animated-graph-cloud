@@ -90,3 +90,16 @@ Terraform state or workflow output.
 
 Rollback with a reviewed revert pushed to `proto`. Do not delete Terraform
 state, `agg-proto`, the Hosting site, secrets, or OAuth credentials.
+
+## Private playback range boundary
+
+Firebase Hosting does not preserve the browser's `Range` header on the rewrite
+to Cloud Run. The proto page therefore waits for a same-origin service worker
+before loading sources. The worker copies only the byte-range expression into
+the `__agg_range` query parameter. The API always prefers a received `Range`
+header and uses the query value only when that header is absent, then applies
+the same closed, open-ended, suffix, malformed, and 8 MiB bounding rules.
+
+The query contains no playback authority or source identity. Playback authority
+remains in the owner-bound HttpOnly cookie. If the service worker cannot control
+the page, the proto harness fails closed before creating playback requests.

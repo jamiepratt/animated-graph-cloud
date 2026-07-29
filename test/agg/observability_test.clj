@@ -104,6 +104,38 @@
            :filename "private.mp4"
            :signedUrl "https://drive.example/private"}))))
 
+(deftest playback-range-correlation-keeps-only-safe-request-evidence
+  (is (= {:severity "INFO"
+          :component "api"
+          :event "drive_playback_range_opened"
+          :requestId "00000000-0000-0000-0000-000000000183"
+          :rangeSource "query"
+          :receivedRange true
+          :rangeStart 0
+          :rangeEnd 4095
+          :upstreamStatus 206
+          :elapsedMs 42
+          :retryable false
+          :trace "0123456789abcdef0123456789abcdef"
+          :revision "agg-proto-00001-test"}
+         (observability/safe-event-fields
+          {:severity "INFO"
+           :component "api"
+           :event "drive_playback_range_opened"
+           :requestId "00000000-0000-0000-0000-000000000183"
+           :rangeSource "query"
+           :receivedRange true
+           :rangeStart 0
+           :rangeEnd 4095
+           :upstreamStatus 206
+           :elapsedMs 42
+           :retryable false
+           :trace "0123456789abcdef0123456789abcdef"
+           :revision "agg-proto-00001-test"
+           :fileId "private-file"
+           :filename "private.mp4"
+           :requestBody "private"}))))
+
 (deftest early-access-delivery-event-keeps-only-bounded-operations-data
   (is (= {:severity "ERROR"
           :component "api"

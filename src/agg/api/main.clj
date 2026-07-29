@@ -1367,6 +1367,32 @@
                      (dec (+ start max-playback-range-bytes)))
            :partial? true})))))
 
+(defn- playback-request-range [^HttpExchange exchange]
+  (let [header (some-> exchange .getRequestHeaders (.getFirst "Range"))
+        query (get (query-params exchange) "__agg_range")]
+    (cond
+      (some? header) {:value header :source "header" :received? true}
+      (some? query) {:value query :source "query" :received? true}
+      :else {:value nil :source "absent" :received? false})))
+
+(defn- request-trace-id [^HttpExchange exchange]
+  (some->> (some-> exchange .getRequestHeaders
+                   (.getFirst "X-Cloud-Trace-Context"))
+           (re-matches #"(?i)^([0-9a-f]{32})(?:/.*)?$")
+           second
+           str/lower-case))
+
+(defn- elapsed-millis [started-nanos]
+  (quot (- (System/nanoTime) started-nanos) 1000000))
+
+(defn- playback-correlation-fields
+  [^HttpExchange exchange dependencies request-id]
+  (let [trace (request-trace-id exchange)
+        revision (or (:revision dependencies) (System/getenv "K_REVISION"))]
+    (cond-> {:requestId request-id}
+      trace (assoc :trace trace)
+      revision (assoc :revision revision))))
+
 (defn- respond-invalid-playback-range! [^HttpExchange exchange size]
   (doto (.getResponseHeaders exchange)
     (.set "Accept-Ranges" "bytes")
@@ -1576,19 +1602,21 @@
             (recur)))))))
 
 (defn- stream-playback!
-  [^HttpExchange exchange auth-system dependencies path]
+  [^HttpExchange exchange auth-system dependencies path request-id]
   (let [user (require-session-user! exchange auth-system)
         playback-id (last (.split path "/"))
         {:keys [file-id mime-type size]}
         (auth/playback-source auth-system (:subject user) playback-id
                               (:playback (browser-cookie exchange auth-system)))
+        range-request (playback-request-range exchange)
         {:keys [start end partial?] :as byte-range}
-        (playback-range (some-> exchange .getRequestHeaders (.getFirst "Range"))
-                        size)
+        (playback-range (:value range-request) size)
         {:keys [access-token]} (auth/drive-access! auth-system (:subject user))
         gateway (:drive auth-system)
+        started-nanos (System/nanoTime)
         {:keys [body] :as source-response}
         (open-playback-range! gateway access-token file-id byte-range)
+        elapsed-ms (elapsed-millis started-nanos)
         response-status (if partial? 206 200)
         content-length (inc (- end start))]
     (when-not (valid-playback-response? source-response start end size)
@@ -1596,7 +1624,21 @@
       (throw (errors/raise! "Google Drive playback response was invalid"
                             {:type ::drive/invalid-playback-response
                              :status (long (or (:status source-response) 0))
+                             :range-start start
+                             :range-end end
+                             :retryable true
                              :size content-length})))
+    (emit-event!
+     dependencies "drive_playback_range_opened"
+     (merge {:severity "INFO"
+             :rangeSource (:source range-request)
+             :receivedRange (:received? range-request)
+             :rangeStart start
+             :rangeEnd end
+             :upstreamStatus (:status source-response)
+             :elapsedMs elapsed-ms
+             :retryable false}
+            (playback-correlation-fields exchange dependencies request-id)))
     (doto (.getResponseHeaders exchange)
       (.set "Content-Type" mime-type)
       (.set "Cache-Control" "no-store")
@@ -1905,7 +1947,8 @@
       (let [method (.getRequestMethod exchange)
             path (some-> exchange .getRequestURI .getPath)
             feature (routes/feature-for {:method method :path path})
-            request-id (str (UUID/randomUUID))]
+            request-id (str (UUID/randomUUID))
+            request-started-nanos (System/nanoTime)]
         (.set (.getResponseHeaders exchange) "X-Request-Id" request-id)
         (try
           (observability/trace! ::api-request
@@ -1928,6 +1971,13 @@
                                   (and (= "GET" method) (contains? public-assets path))
                                   (let [[resource content-type] (get public-assets path)]
                                     (respond-asset! exchange resource content-type))
+
+                                  (and (= "proto" service-profile)
+                                       (= "GET" method)
+                                       (= "/proto-playback-range-worker.js" path))
+                                  (respond! exchange 200
+                                            "application/javascript; charset=utf-8"
+                                            proto/playback-range-worker)
 
                                   (and (= "proto" service-profile)
                                        auth-system
@@ -2006,7 +2056,8 @@
 
                                   (and auth-system (= "GET" method)
                                        (re-matches drive-playback-path-pattern path))
-                                  (stream-playback! exchange auth-system dependencies path)
+                                  (stream-playback! exchange auth-system dependencies
+                                                    path request-id)
 
                                   (and auth-system (= "POST" method) (= "/ui/preview" path))
                                   (let [user (require-session-user! exchange auth-system)]
@@ -2344,22 +2395,48 @@
 
                   ::drive/playback-range-unavailable
                   (do
-                    (emit-event! dependencies "request_failed"
-                                 {:severity "WARNING"
-                                  :reason "drive_playback_open_failed"
-                                  :errorType (str error-type)
-                                  :exceptionClass (playback-exception-class error)
-                                  :rangeStart (:range-start (ex-data error))
-                                  :rangeEnd (:range-end (ex-data error))
-                                  :retryable true})
+                    (let [range-request (playback-request-range exchange)]
+                      (emit-event!
+                       dependencies "request_failed"
+                       (merge
+                        {:severity "WARNING"
+                         :reason "drive_playback_open_failed"
+                         :errorType (str error-type)
+                         :exceptionClass (playback-exception-class error)
+                         :rangeSource (:source range-request)
+                         :receivedRange (:received? range-request)
+                         :rangeStart (:range-start (ex-data error))
+                         :rangeEnd (:range-end (ex-data error))
+                         :upstreamStatus (long (or (:status (ex-data error)) 0))
+                         :elapsedMs (elapsed-millis request-started-nanos)
+                         :retryable true}
+                        (playback-correlation-fields
+                         exchange dependencies request-id))))
                     (respond-json! exchange 502
                                    {:error "drive_playback_unavailable"
                                     :retryable true}))
 
                   ::drive/invalid-playback-response
-                  (respond-json! exchange 502
-                                 {:error "drive_playback_unavailable"
-                                  :retryable true})
+                  (do
+                    (let [range-request (playback-request-range exchange)]
+                      (emit-event!
+                       dependencies "request_failed"
+                       (merge
+                        {:severity "WARNING"
+                         :reason "drive_playback_validation_failed"
+                         :errorType (str error-type)
+                         :rangeSource (:source range-request)
+                         :receivedRange (:received? range-request)
+                         :rangeStart (:range-start (ex-data error))
+                         :rangeEnd (:range-end (ex-data error))
+                         :upstreamStatus (long (or (:status (ex-data error)) 0))
+                         :elapsedMs (elapsed-millis request-started-nanos)
+                         :retryable true}
+                        (playback-correlation-fields
+                         exchange dependencies request-id))))
+                    (respond-json! exchange 502
+                                   {:error "drive_playback_unavailable"
+                                    :retryable true}))
 
                   ::media/media-tool-timeout
                   (respond-playback-analysis-failure!

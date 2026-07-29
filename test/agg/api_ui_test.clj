@@ -3768,15 +3768,28 @@
         (is (= {"error" "drive_playback_unavailable"
                 "retryable" true}
                (json/read-str (.body response))))
-        (is (= [{:event "request_failed"
-                 :severity "WARNING"
-                 :reason "drive_playback_open_failed"
-                 :errorType ":agg.drive.core/playback-range-unavailable"
-                 :exceptionClass "java.io.IOException"
-                 :rangeStart 0
-                 :rangeEnd 4095
-                 :retryable true}]
-               @events)))
+        (let [event (first @events)
+              request-id
+              (some-> response .headers
+                      (.firstValue "x-request-id") (.orElse nil))]
+          (is (= {:event "request_failed"
+                  :severity "WARNING"
+                  :reason "drive_playback_open_failed"
+                  :errorType ":agg.drive.core/playback-range-unavailable"
+                  :exceptionClass "java.io.IOException"
+                  :rangeSource "header"
+                  :receivedRange true
+                  :rangeStart 0
+                  :rangeEnd 4095
+                  :upstreamStatus 0
+                  :retryable true}
+                 (select-keys
+                  event
+                  [:event :severity :reason :errorType :exceptionClass
+                   :rangeSource :receivedRange :rangeStart :rangeEnd
+                   :upstreamStatus :retryable])))
+          (is (= request-id (:requestId event)))
+          (is (<= 0 (:elapsedMs event) 10000))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
