@@ -1213,7 +1213,7 @@
       (.set "Cache-Control" "no-store")
       (.set "Referrer-Policy" "no-referrer")
       (.set "Content-Security-Policy"
-            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"))
+            "default-src 'none'; script-src 'unsafe-inline'; worker-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"))
     (respond! exchange 200 "text/html; charset=utf-8" body)))
 
 (defn- proto-sources! [^HttpExchange exchange auth-system dependencies]

@@ -108,6 +108,29 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest signed-in-proto-page-allows-only-the-same-origin-worker
+  (let [port (test-http/available-port)
+        {:keys [auth-system session]}
+        (playback-fixture (.getBytes "0123456789") (atom []))
+        server (api/start! port {:service-profile "proto"
+                                 :auth-system auth-system})]
+    (try
+      (let [response
+            (test-http/send-string!
+             :get
+             (str "http://127.0.0.1:" port "/")
+             nil
+             {"Cookie" (str "agg_session=" session)})
+            policy (.orElse
+                    (.firstValue (.headers response)
+                                 "Content-Security-Policy")
+                    "")]
+        (is (= 200 (.statusCode response)))
+        (is (.contains ^String policy "worker-src 'self';"))
+        (is (not (re-find #"worker-src [^;]*(?:https?:|\*)" policy))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest proto-page-registers-the-hosting-range-adapter-before-loading-sources
   (let [page (proto/page {:user {:email "owner@example.test"}
                           :csrf "csrf"
