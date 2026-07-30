@@ -1,10 +1,12 @@
 (ns agg.proto.main
   (:require [agg.api.main :as api]
             [agg.jobs.gcp :as gcp]
-            [agg.observability :as observability])
+            [agg.observability :as observability]
+            [agg.proto-release :as proto-release])
   (:gen-class))
 
 (defn -main [& _]
+  (proto-release/assert-valid!)
   (let [port (parse-long (get (System/getenv) "PORT" "8080"))
         dependencies (if (= "true" (get (System/getenv)
                                         "AGG_JOB_LIFECYCLE_ENABLED"))

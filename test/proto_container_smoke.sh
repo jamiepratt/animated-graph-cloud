@@ -3,9 +3,22 @@
 set -eu
 
 image="${1:-animated-graph-cloud:proto-smoke}"
+expected_build="${2:-dev}"
 expected_health='{"status":"ok"}'
 expected_startup='"message":"Proto API server started"'
 health_file="$(mktemp)"
+
+case "$expected_build" in
+  dev) short_build=dev ;;
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+    short_build="$(printf '%s' "$expected_build" | cut -c1-7)"
+    ;;
+  *)
+    echo "expected build must be dev or an exact lowercase Git commit" >&2
+    exit 2
+    ;;
+esac
+
 ffprobe_protocols="$(docker run --rm --entrypoint ffprobe "$image" \
   -hide_banner -protocols 2>&1)"
 for protocol in http tcp; do
@@ -37,6 +50,14 @@ health_body="$(cat "$health_file")"
 if [ "$health_body" != "$expected_health" ]; then
   echo "unexpected proto health response: $health_body" >&2
   docker logs "$proto_container_id" >&2
+  exit 1
+fi
+
+changelog="$(curl --fail --silent --show-error \
+  "http://127.0.0.1:$proto_host_port/changelog")"
+printf '%s' "$changelog" | grep -Fq "v0.8.0 · build $short_build"
+if printf '%s' "$changelog" | grep -Fq 'Unreleased'; then
+  echo "proto container changelog exposed Unreleased notes" >&2
   exit 1
 fi
 

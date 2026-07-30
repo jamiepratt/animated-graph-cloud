@@ -14,6 +14,8 @@
                :target-dir class-dir})
   (b/copy-file {:src "docs/openapi.yaml"
                 :target (str class-dir "/openapi.yaml")})
+  (b/copy-file {:src "docs/proto/CHANGELOG.md"
+                :target (str class-dir "/proto/CHANGELOG.md")})
   (b/compile-clj {:basis @basis
                   :class-dir class-dir
                   :ns-compile '[agg.api.main agg.renderer.main]

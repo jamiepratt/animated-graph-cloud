@@ -6,6 +6,7 @@
             [agg.derivative-worker-test]
             [agg.drive-range-proxy-test]
             [agg.observability-test]
+            [agg.proto-identity-test]
             [agg.proto-release-test]
             [agg.proto-playback-test]
             [agg.proto-source-test]
@@ -20,6 +21,7 @@
                                              'agg.derivative-worker-test
                                              'agg.drive-range-proxy-test
                                              'agg.observability-test
+                                             'agg.proto-identity-test
                                              'agg.proto-release-test
                                              'agg.proto-playback-test
                                              'agg.proto-source-test

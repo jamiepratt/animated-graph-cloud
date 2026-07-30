@@ -10,11 +10,14 @@ clj-kondo --lint \
   src/agg/derivative/worker.clj \
   src/agg/drive/range_proxy.clj \
   src/agg/proto \
+  src/agg/proto_release.clj \
+  src/agg/release.clj \
   src/agg/render/derivative.clj \
   src/agg/render/media.clj \
   test/agg/derivative_media_test.clj \
   test/agg/derivative_worker_test.clj \
   test/agg/drive_range_proxy_test.clj \
+  test/agg/proto_identity_test.clj \
   test/agg/proto_test_runner.clj \
   test/agg/proto_release_test.clj \
   test/agg/proto_playback_test.clj \

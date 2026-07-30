@@ -432,6 +432,19 @@
                   content-type
                   (.getBytes ^String body StandardCharsets/UTF_8)))
 
+(defn- respond-public-html! [^HttpExchange exchange body]
+  (let [bytes (.getBytes ^String body StandardCharsets/UTF_8)]
+    (doto (.getResponseHeaders exchange)
+      (.set "Content-Type" "text/html; charset=utf-8")
+      (.set "Cache-Control" "public, max-age=300")
+      (.set "Referrer-Policy" "no-referrer")
+      (.set "Content-Security-Policy"
+            "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+      (.set "X-Content-Type-Options" "nosniff"))
+    (.sendResponseHeaders exchange 200 (alength ^bytes bytes))
+    (with-open [response-body (.getResponseBody exchange)]
+      (.write response-body ^bytes bytes))))
+
 (defn- respond-asset! [^HttpExchange exchange resource content-type]
   (if-let [url (io/resource resource)]
     (with-open [input (io/input-stream url)]
@@ -1316,6 +1329,9 @@
       (.set "Content-Security-Policy"
             "default-src 'none'; script-src 'unsafe-inline'; worker-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"))
     (respond! exchange 200 "text/html; charset=utf-8" body)))
+
+(defn- proto-changelog! [^HttpExchange exchange]
+  (respond-public-html! exchange (proto/changelog-page)))
 
 (defn- proto-sources! [^HttpExchange exchange auth-system dependencies]
   (let [user (require-session-user! exchange auth-system)]
@@ -2641,6 +2657,11 @@
                                   (respond! exchange 200
                                             "application/javascript; charset=utf-8"
                                             proto/playback-range-worker)
+
+                                  (and (= "proto" service-profile)
+                                       (= "GET" method)
+                                       (= "/changelog" path))
+                                  (proto-changelog! exchange)
 
                                   (and (= "proto" service-profile)
                                        auth-system

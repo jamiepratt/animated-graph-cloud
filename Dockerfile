@@ -1,3 +1,6 @@
+ARG BUILD_COMMIT=dev
+ARG RELEASE_MODE=development
+
 FROM clojure:temurin-21-tools-deps@sha256:db77923e67984d00cbf55a4e44cfacdefed5a8fcf1499469086ba1b569f9d937 AS build
 
 WORKDIR /workspace
@@ -6,6 +9,7 @@ RUN clojure -P -T:build
 COPY src ./src
 COPY resources ./resources
 COPY docs/openapi.yaml ./docs/openapi.yaml
+COPY docs/proto/CHANGELOG.md ./docs/proto/CHANGELOG.md
 RUN clojure -T:build uber
 
 FROM eclipse-temurin:21-jre-jammy@sha256:d63bd8d9b171999cbed8576f2c76e874dd4856791a358536e5c4d407e77edc13 AS ffmpeg-build
@@ -68,6 +72,9 @@ RUN curl --fail --location --silent --show-error \
 
 FROM eclipse-temurin:21-jre-jammy@sha256:d63bd8d9b171999cbed8576f2c76e874dd4856791a358536e5c4d407e77edc13
 
+ARG BUILD_COMMIT
+ARG RELEASE_MODE
+
 RUN groupadd --system app \
     && useradd --system --gid app --home-dir /app app
 WORKDIR /app
@@ -79,7 +86,9 @@ COPY --from=build --chown=app:app /workspace/target/animated-graph-cloud.jar ./a
 RUN ldconfig
 
 USER app
-ENV JAVA_TOOL_OPTIONS="-Djava.awt.headless=true -Xmx2g"
+ENV JAVA_TOOL_OPTIONS="-Djava.awt.headless=true -Xmx2g" \
+    AGG_BUILD_COMMIT=$BUILD_COMMIT \
+    AGG_RELEASE_MODE=$RELEASE_MODE
 EXPOSE 8080
 ENTRYPOINT ["java", "-cp", "/app/animated-graph-cloud.jar"]
 CMD ["clojure.main", "-m", "agg.api.main"]

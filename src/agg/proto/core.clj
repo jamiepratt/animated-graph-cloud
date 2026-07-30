@@ -2,6 +2,7 @@
   (:require [agg.auth.core :as auth]
             [agg.contracts.render :as contract]
             [agg.drive.core :as drive]
+            [agg.proto-release :as proto-release]
             [agg.ui.core :as ui]
             [clojure.data.json :as json]
             [clojure.string :as str]))
@@ -35,6 +36,27 @@
        "<link rel=\"icon\" href=\"/favicon-16.png\" sizes=\"16x16\" type=\"image/png\">"
        "<link rel=\"icon\" href=\"/favicon-32.png\" sizes=\"32x32\" type=\"image/png\">"
        "<link rel=\"apple-touch-icon\" href=\"/apple-touch-icon.png\">"))
+
+(def ^:private release-style
+  (str
+   ".release-identity{display:inline-flex;max-width:100%;padding:.32rem .58rem;"
+   "border:1px solid var(--color-border-strong);border-radius:999px;"
+   "color:var(--color-muted);font:700 .72rem/1.25 ui-monospace,"
+   "SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere;text-decoration:none}"
+   ".release-identity:hover{color:var(--color-text);border-color:var(--color-accent)}"
+   ".release-identity:focus-visible{outline:3px solid var(--color-warning);"
+   "outline-offset:3px}"))
+
+(defn- release-link []
+  (str "<a class=\"release-identity\" href=\"/changelog\">"
+       (ui/escape-html (:label proto-release/current))
+       "</a>"))
+
+(defn- product-header []
+  (str "<header class=\"product-header\">"
+       "<a class=\"brand\" href=\"/\">Alpha Compose Proto</a>"
+       (release-link)
+       "</header>"))
 
 (defn- parse-duration-seconds [value]
   (let [parsed (cond
@@ -142,6 +164,7 @@
    (icon-links)
    "<title>Alpha Compose Proto</title><style>"
    (ui/theme-style)
+   release-style
    ".shell{max-width:76rem;margin:0 auto;padding:1.25rem 1rem 3rem}"
    ".hero{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(18rem,.85fr);gap:1rem;align-items:stretch}"
    ".hero-card,.hero-copy{padding:1.4rem;border:1px solid var(--color-border);border-radius:1.2rem;background:var(--color-surface);box-shadow:var(--shadow-surface)}"
@@ -151,7 +174,7 @@
    ".pill{display:inline-flex;align-items:center;gap:.35rem;padding:.35rem .65rem;border:1px solid var(--color-border-strong);border-radius:999px;background:#081729;color:var(--color-muted);font:700 .75rem ui-monospace,SFMono-Regular,Menlo,monospace}"
    "@media(max-width:760px){.hero{grid-template-columns:1fr}}"
    "</style></head><body data-theme=\"telemetry\"><div class=\"shell\">"
-   "<header class=\"product-header\"><a class=\"brand\" href=\"/\">Alpha Compose Proto</a></header>"
+   (product-header)
    "<main class=\"hero\"><section class=\"hero-copy\">"
    "<div class=\"eyebrow\">Authenticated playback harness</div>"
    "<h1>Timing workspace playback prototype</h1>"
@@ -164,6 +187,26 @@
    "<p class=\"muted\">Direct playback only. No transcode fallback. No generic Drive browsing. "
    "No main Alpha Compose navigation.</p></aside></main></div></body></html>"))
 
+(defn changelog-page []
+  (str
+   "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+   "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+   "<meta name=\"color-scheme\" content=\"dark\">"
+   (icon-links)
+   "<title>Changelog · Alpha Compose Proto</title><style>"
+   (ui/theme-style)
+   release-style
+   ".shell{max-width:62rem;margin:0 auto;padding:1.25rem 1rem 3rem}"
+   ".changelog{padding:clamp(1rem,4vw,2rem);border:1px solid var(--color-border);"
+   "border-radius:1rem;background:var(--color-surface);box-shadow:var(--shadow-surface)}"
+   ".changelog h1{margin-top:0}.changelog h2{margin-top:2rem}"
+   ".changelog li{margin:.45rem 0}.changelog code{overflow-wrap:anywhere}"
+   "</style></head><body data-theme=\"telemetry\"><div class=\"shell\">"
+   (product-header)
+   "<main><article class=\"changelog\">"
+   (proto-release/public-changelog-html)
+   "</article></main></div></body></html>"))
+
 (defn page [{:keys [user csrf folder-id]}]
   (let [csrf-json (json/write-str csrf)
         email-json (json/write-str (:email user))
@@ -175,6 +218,7 @@
      (icon-links)
      "<title>Alpha Compose Proto</title><style>"
      (ui/theme-style)
+     release-style
      ".shell{max-width:88rem;margin:0 auto;padding:1rem 1rem 3rem}"
      ".topbar{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin:0 0 1rem;padding:1rem 1.1rem;border:1px solid var(--color-border);border-radius:1rem;background:var(--color-surface);box-shadow:var(--shadow-surface)}"
      ".brandline h1{margin:.3rem 0 0;font-size:clamp(2rem,4vw,3.4rem);line-height:1.02;letter-spacing:-.05em}.brandline p{margin:.45rem 0 0}"
@@ -199,7 +243,9 @@
      "<header class=\"topbar\"><div class=\"brandline\"><div class=\"eyebrow\">Separate proto app</div>"
      "<h1>Timing workspace playback prototype</h1>"
      "<p class=\"muted\">Standalone playback harness for <code>proto.alphacompose.com</code>. "
-     "Fixed-folder scope, direct playback only, page-local debug only.</p></div>"
+     "Fixed-folder scope, direct playback only, page-local debug only.</p>"
+     (release-link)
+     "</div>"
      "<div class=\"session\"><div><div class=\"pill\">" (ui/escape-html (:email user)) "</div></div>"
      "<label class=\"field\" for=\"source-select\"><span class=\"field-label\">Files in folder "
      (ui/escape-html folder-id)

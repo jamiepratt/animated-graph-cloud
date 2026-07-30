@@ -580,6 +580,39 @@
       (finally
         (.close server)))))
 
+(deftest proto-release-identity-is-keyboard-focusable-without-narrow-overflow
+  (let [scenario
+        (str
+         "<script>window.addEventListener('load',()=>{"
+         "const link=document.querySelector('.release-identity');link.focus();"
+         "const style=getComputedStyle(link),outcome={"
+         "focused:document.activeElement===link,"
+         "outlineStyle:style.outlineStyle,"
+         "outlineWidth:style.outlineWidth,"
+         "fits:document.documentElement.scrollWidth<=window.innerWidth};"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));"
+         "document.body.dataset.outcome=btoa(String.fromCharCode(...bytes));"
+         "},{once:true});</script>")
+        html (-> (proto/changelog-page)
+                 (str/replace "</head>" (str scenario "</head>"))
+                 (str/replace "<body " "<body data-outcome=\"\" "))
+        outcome
+        (let [temp (File/createTempFile "agg-proto-release-layout-" ".html")]
+          (try
+            (spit temp html)
+            (browser-location-outcome
+             "Proto release identity requires keyboard focus and narrow layout"
+             (.toURI temp)
+             1000
+             browser-fixture-timeout-ms
+             ["--window-size=320,700"])
+            (finally
+              (.delete temp))))]
+    (is (= true (:focused outcome)))
+    (is (= "solid" (:outlineStyle outcome)))
+    (is (not= "0px" (:outlineWidth outcome)))
+    (is (= true (:fits outcome)))))
+
 (deftest proto-page-prepares-supported-playback-and-exposes-bounded-debug
   (let [outcome (proto-page-browser-outcome
                  {:can-play-type "probably"

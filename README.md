@@ -23,6 +23,21 @@ Targeted TDD keeps the normal test classpath but skips the full runner:
 clojure -M:test -m agg.test-targeted agg.api-auth-test
 ```
 
+## Proto release identity and changelog
+
+Proto's semantic-version source is `resources/agg/proto-version.edn`; its
+released history is `docs/proto/CHANGELOG.md`. Public `/changelog` renders only
+released entries and escapes raw HTML. `Unreleased` stays repository-only.
+
+Every complete proto HTML page displays `vX.Y.Z · build abc1234` linked to the
+proto changelog. Local builds use `build dev`. The proto deployment passes its
+exact 40-character commit through Docker and enables strict production mode, so
+a missing, malformed, or development identity stops the container.
+
+Update the version resource and newest released changelog heading together.
+After the exact commit deploys and its public changelog is verified, tag it
+`proto-vX.Y.Z`. Never move the verified tag or create a GitHub Release.
+
 The versioned production OpenAPI contract is publicly available at
 [`https://alphacompose.com/openapi.yaml`](https://alphacompose.com/openapi.yaml).
 This is the canonical published contract URL; its source is `docs/openapi.yaml`.

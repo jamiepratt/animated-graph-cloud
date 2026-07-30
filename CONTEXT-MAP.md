@@ -11,6 +11,7 @@
 | API contract | `docs/openapi.yaml` |
 | Production operation and release evidence | `docs/production-runbook.md`, `docs/release-acceptance.md` |
 | Architectural decisions | ADRs added with the implementing change |
+| Independent main and proto release identities | `docs/adr/0021-independent-release-identities.md` |
 | Recording-clock authority | `docs/adr/0017-confirm-source-video-recording-clock.md` |
 | Frame-accurate source trimming | `docs/adr/0018-trim-non-seekable-source-on-frame-boundaries.md` |
 | Canonical wizard state, Project JSON boundary, and explicit save semantics | `docs/adr/0019-canonical-wizard-state-and-project-boundary.md` |
