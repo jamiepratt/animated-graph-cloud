@@ -168,6 +168,21 @@
             (request! port :get (:playbackUrl created-body) nil
                       {"Cookie" browser-cookie
                        "Range" "bytes=3-7"})
+            hosting-adapted
+            (request!
+             port :get
+             (str (:playbackUrl created-body)
+                  "?__agg_range=bytes%3D0-3")
+             nil
+             {"Cookie" browser-cookie})
+            header-wins
+            (request!
+             port :get
+             (str (:playbackUrl created-body)
+                  "?__agg_range=bytes%3D0-3")
+             nil
+             {"Cookie" browser-cookie
+              "Range" "bytes=4-7"})
             open-ended
             (request! port :get (:playbackUrl created-body) nil
                       {"Cookie" browser-cookie
@@ -228,6 +243,19 @@
         (is (= "5"
                (.orElse
                 (.firstValue (.headers streamed) "Content-Length") "")))
+        (is (= 206 (.statusCode hosting-adapted)))
+        (is (= "0123" (.body hosting-adapted)))
+        (is (= "bytes 0-3/16"
+               (.orElse
+                (.firstValue (.headers hosting-adapted) "Content-Range") "")))
+        (is (= "4"
+               (.orElse
+                (.firstValue (.headers hosting-adapted) "Content-Length") "")))
+        (is (= 206 (.statusCode header-wins)))
+        (is (= "4567" (.body header-wins)))
+        (is (= "bytes 4-7/16"
+               (.orElse
+                (.firstValue (.headers header-wins) "Content-Range") "")))
         (is (= "video/mp4"
                (.orElse
                 (.firstValue (.headers streamed) "Content-Type") "")))

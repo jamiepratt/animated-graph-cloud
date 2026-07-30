@@ -2118,12 +2118,12 @@
             (throw
              (errors/raise! "Derivative playback asset changed"
                             {:type ::auth/invalid-playback})))
-        range-header
-        (some-> exchange .getRequestHeaders (.getFirst "Range"))
-        _ (when (and (some? range-header) (str/blank? range-header))
+        range-request (playback-request-range exchange)
+        _ (when (and (:received? range-request)
+                     (str/blank? (:value range-request)))
             (invalid-playback-range! (:size asset)))
         {:keys [start end] :as byte-range}
-        (playback-range range-header (:size asset))
+        (playback-range (:value range-request) (:size asset))
         content-length (inc (- end start))
         started-nanos (System/nanoTime)
         _ (emit-event!
@@ -2132,6 +2132,8 @@
                   {:severity "INFO"
                    :operation "derivative_playback"
                    :status "started"
+                   :rangeSource (:source range-request)
+                   :receivedRange (:received? range-request)
                    :rangeStart start
                    :rangeEnd end
                    :bytesRequested content-length}))
@@ -2147,6 +2149,8 @@
                      :operation "derivative_playback"
                      :status "failed"
                      :reason "storage_unavailable"
+                     :rangeSource (:source range-request)
+                     :receivedRange (:received? range-request)
                      :rangeStart start
                      :rangeEnd end
                      :bytesRequested content-length
@@ -2179,6 +2183,8 @@
               {:severity "INFO"
                :operation "derivative_playback"
                :status "succeeded"
+               :rangeSource (:source range-request)
+               :receivedRange (:received? range-request)
                :rangeStart start
                :rangeEnd end
                :bytesRequested content-length
@@ -2192,6 +2198,8 @@
                  :operation "derivative_playback"
                  :status "failed"
                  :reason "playback_transfer_failed"
+                 :rangeSource (:source range-request)
+                 :receivedRange (:received? range-request)
                  :rangeStart start
                  :rangeEnd end
                  :bytesRequested content-length
