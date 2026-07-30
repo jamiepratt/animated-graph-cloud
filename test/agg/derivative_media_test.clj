@@ -1,0 +1,308 @@
+(ns agg.derivative-media-test
+  (:require [agg.render.derivative :as derivative]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]])
+  (:import (com.sun.net.httpserver HttpHandler HttpServer)
+           (java.lang ProcessBuilder$Redirect)
+           (java.net InetSocketAddress)
+           (java.nio.file Files Path)
+           (java.nio.file.attribute FileAttribute)
+           (java.util.concurrent TimeUnit)))
+
+(defn- temp-path! [prefix suffix]
+  (Files/createTempFile prefix suffix (make-array FileAttribute 0)))
+
+(defn- run-command! [command]
+  (let [process
+        (-> (doto (ProcessBuilder. ^java.util.List command)
+              (.redirectErrorStream true)
+              (.redirectOutput ProcessBuilder$Redirect/DISCARD))
+            (.start))]
+    (is (.waitFor process 30 TimeUnit/SECONDS)
+        (str "command timed out: " (first command)))
+    (is (zero? (.exitValue process))
+        (str "command failed: " (first command)))))
+
+(defn- hevc-fixture! [^Path path width height audio?]
+  (run-command!
+   (cond->
+    ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
+     "-f" "lavfi" "-i"
+     (str "testsrc2=size=" width "x" height ":rate=30")]
+     audio?
+     (into ["-f" "lavfi" "-i"
+            "sine=frequency=440:sample_rate=44100"])
+     true
+     (into
+      (concat ["-t" "1" "-c:v" "libx265" "-preset" "ultrafast"]
+              (if audio?
+                ["-c:a" "pcm_s16le"]
+                ["-an"])
+              ["-y" (str path)]))))
+  path)
+
+(defn- with-source-server [^Path path operation]
+  (let [body (Files/readAllBytes path)
+        server (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)]
+    (.createContext
+     server "/source/opaque"
+     (reify HttpHandler
+       (handle [_ exchange]
+         (.add (.getResponseHeaders exchange)
+               "Content-Type" "application/octet-stream")
+         (.sendResponseHeaders exchange 200 (alength body))
+         (with-open [output (.getResponseBody exchange)]
+           (.write output body)))))
+    (.start server)
+    (try
+      (operation
+       (str "http://127.0.0.1:"
+            (.getPort (.getAddress server))
+            "/source/opaque"))
+      (finally
+        (.stop server 0)))))
+
+(defn- caught-data [operation]
+  (try
+    (operation)
+    nil
+    (catch clojure.lang.ExceptionInfo error
+      (ex-data error))))
+
+(deftest encode-command-locks-the-approved-browser-profile
+  (let [command
+        (derivative/encode-command
+         {:ffmpeg "ffmpeg"
+          :source-url "http://127.0.0.1:43123/source/opaque"
+          :source-duration-seconds 480
+          :source-has-audio? true
+          :output-path "/tmp/derivative.mp4"})]
+    (testing "the source is an identity-free loopback proxy"
+      (is (= "http://127.0.0.1:43123/source/opaque"
+             (nth command 6))))
+    (testing "video is fixed, seekable, bounded, and browser playable"
+      (doseq [argument ["libx264" "high" "4.0" "yuv420p" "25"
+                        "fast" "23" "4000000" "8000000" "50"
+                        "0" "+faststart"]]
+        (is (some #{argument} command) argument)))
+    (testing "audio is deterministic AAC-LC stereo"
+      (doseq [argument ["aac" "aac_low" "48000" "2" "128000"]]
+        (is (some #{argument} command) argument)))))
+
+(deftest encode-command-generates-bounded-silence-when-audio-is-missing
+  (let [command
+        (derivative/encode-command
+         {:ffmpeg "ffmpeg"
+          :source-url "http://127.0.0.1:43123/source/opaque"
+          :source-duration-seconds 17
+          :source-has-audio? false
+          :output-path "/tmp/derivative.mp4"})]
+    (is (some #{"anullsrc=r=48000:cl=stereo"} command))
+    (is (some #{"17.000"} command))))
+
+(deftest encoder-rejects-source-identity-or-authority-in-its-command
+  (let [data
+        (caught-data
+         #(derivative/encode-command
+           {:ffmpeg "ffmpeg"
+            :source-url
+            "https://private-authority.example/source/private-drive-id"
+            :source-duration-seconds 10
+            :source-has-audio? true
+            :output-path "/tmp/opaque-output.mp4"}))]
+    (is (= ::derivative/invalid-encode-request (:type data)))
+    (is (not (str/includes? (pr-str data) "private-authority")))
+    (is (not (str/includes? (pr-str data) "private-drive-id")))))
+
+(deftest browser-incompatible-source-produces-a-verified-derivative
+  (let [source (temp-path! "agg-generated-hevc-" ".mkv")
+        output (temp-path! "agg-generated-derivative-" ".mp4")]
+    (try
+      (hevc-fixture! source 320 180 true)
+      (Files/deleteIfExists output)
+      (with-source-server
+        source
+        (fn [source-url]
+          (is (= {:width 320 :height 180 :audio? true}
+                 (derivative/inspect-source!
+                  {:ffprobe "ffprobe"
+                   :source-url source-url
+                   :timeout-ms 30000})))
+          (is
+           (=
+            {:content-type "video/mp4"
+             :output-bytes :positive
+             :duration-seconds 1.0
+             :video {:codec "h264"
+                     :profile "High"
+                     :level 40
+                     :pixel-format "yuv420p"
+                     :width 320
+                     :height 180
+                     :fps "25/1"}
+             :audio {:codec "aac"
+                     :profile "LC"
+                     :sample-rate 48000
+                     :channels 2}
+             :fast-start? true}
+            (-> (derivative/encode!
+                 {:ffmpeg "ffmpeg"
+                  :ffprobe "ffprobe"
+                  :source-url source-url
+                  :source-duration-seconds 1
+                  :source-width 320
+                  :source-height 180
+                  :source-has-audio? true
+                  :output-path output
+                  :timeout-ms 30000
+                  :cancelled? (constantly false)})
+                (update :output-bytes
+                        #(if (pos? %) :positive :not-positive))
+                (dissoc :output-path))))))
+      (finally
+        (Files/deleteIfExists source)
+        (Files/deleteIfExists output)))))
+
+(deftest portrait-audio-less-source-keeps-its-size-and-receives-silence
+  (let [source (temp-path! "agg-generated-portrait-" ".mkv")
+        output (temp-path! "agg-generated-portrait-derivative-" ".mp4")]
+    (try
+      (hevc-fixture! source 180 320 false)
+      (Files/deleteIfExists output)
+      (with-source-server
+        source
+        (fn [source-url]
+          (let [result
+                (derivative/encode!
+                 {:ffmpeg "ffmpeg"
+                  :ffprobe "ffprobe"
+                  :source-url source-url
+                  :source-duration-seconds 1
+                  :source-width 180
+                  :source-height 320
+                  :source-has-audio? false
+                  :output-path output})]
+            (is (= [180 320]
+                   ((juxt :width :height) (:video result))))
+            (is (= {:codec "aac"
+                    :profile "LC"
+                    :sample-rate 48000
+                    :channels 2}
+                   (:audio result))))))
+      (finally
+        (Files/deleteIfExists source)
+        (Files/deleteIfExists output)))))
+
+(deftest approved-bitrate-ceiling-fits-the-maximum-duration
+  (is (= 247680000
+         (derivative/predicted-maximum-output-bytes 480)))
+  (is (< (derivative/predicted-maximum-output-bytes 480)
+         (* 256 1024 1024))))
+
+(deftest runtime-boundaries-accept-the-exact-limit-and-reject-one-over
+  (let [at-limit {:elapsed-ms 900000
+                  :output-bytes 268435456}]
+    (is (= at-limit (derivative/validate-runtime! at-limit)))
+    (is (= "derivative_timeout"
+           (:failure-code
+            (caught-data
+             #(derivative/validate-runtime! (update at-limit :elapsed-ms inc))))))
+    (is (= "derivative_size_exceeded"
+           (:failure-code
+            (caught-data
+             #(derivative/validate-runtime!
+               (update at-limit :output-bytes inc))))))))
+
+(deftest cancellation-timeout-and-verification-failure-remove-output
+  (let [source (temp-path! "agg-generated-failure-source-" ".mkv")
+        output (temp-path! "agg-generated-failure-output-" ".mp4")]
+    (try
+      (hevc-fixture! source 320 180 true)
+      (doseq [[expected-type overrides]
+              [[::derivative/cancelled
+                {:cancelled? (constantly true)}]
+               [::derivative/timeout
+                {:timeout-ms 1}]
+               [::derivative/verification-failed
+                {:ffprobe "/usr/bin/false"}]]]
+        (Files/deleteIfExists output)
+        (with-source-server
+          source
+          (fn [source-url]
+            (is (= expected-type
+                   (:type
+                    (caught-data
+                     #(derivative/encode!
+                       (merge
+                        {:ffmpeg "ffmpeg"
+                         :ffprobe "ffprobe"
+                         :source-url source-url
+                         :source-duration-seconds 1
+                         :source-width 320
+                         :source-height 180
+                         :source-has-audio? true
+                         :output-path output}
+                        overrides))))))))
+        (is (not (Files/exists
+                  output (make-array java.nio.file.LinkOption 0)))))
+      (finally
+        (Files/deleteIfExists source)
+        (Files/deleteIfExists output)))))
+
+(deftest invalid-or-premature-source-fails-with-bounded-diagnostics
+  (let [source (temp-path! "agg-generated-invalid-source-" ".bin")
+        output (temp-path! "agg-generated-invalid-output-" ".mp4")]
+    (try
+      (Files/write source (byte-array [1 2 3 4])
+                   (make-array java.nio.file.OpenOption 0))
+      (Files/deleteIfExists output)
+      (with-source-server
+        source
+        (fn [source-url]
+          (let [data
+                (caught-data
+                 #(derivative/encode!
+                   {:ffmpeg "ffmpeg"
+                    :ffprobe "ffprobe"
+                    :source-url source-url
+                    :source-duration-seconds 1
+                    :source-width 320
+                    :source-height 180
+                    :source-has-audio? false
+                    :output-path output}))]
+            (is (= ::derivative/encode-failed (:type data)))
+            (is (= "derivative_encode_failed" (:failure-code data)))
+            (is (= #{:type :source :failure-code :exit-status}
+                   (set (keys data)))))))
+      (is (not (Files/exists
+                output (make-array java.nio.file.LinkOption 0))))
+      (finally
+        (Files/deleteIfExists source)
+        (Files/deleteIfExists output)))))
+
+(deftest premature-video-eof-cannot-hide-behind-generated-silence
+  (let [source (temp-path! "agg-generated-short-source-" ".mkv")
+        output (temp-path! "agg-generated-short-output-" ".mp4")]
+    (try
+      (hevc-fixture! source 320 180 false)
+      (Files/deleteIfExists output)
+      (with-source-server
+        source
+        (fn [source-url]
+          (is (= ::derivative/verification-failed
+                 (:type
+                  (caught-data
+                   #(derivative/encode!
+                     {:ffmpeg "ffmpeg"
+                      :ffprobe "ffprobe"
+                      :source-url source-url
+                      :source-duration-seconds 2
+                      :source-width 320
+                      :source-height 180
+                      :source-has-audio? false
+                      :output-path output})))))))
+      (is (not (Files/exists
+                output (make-array java.nio.file.LinkOption 0))))
+      (finally
+        (Files/deleteIfExists source)
+        (Files/deleteIfExists output)))))

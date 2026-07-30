@@ -31,6 +31,7 @@ case "$png_encoder_help" in
     ;;
 esac
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -decoders 2>&1 | grep -q ' h264 '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -decoders 2>&1 | grep -q ' hevc '
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -demuxers 2>&1 | grep -q ' matroska,webm '
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -muxers 2>&1 | grep -q ' mp4 '
 if ! image2pipe_muxer_help="$(docker run --rm --entrypoint ffmpeg "$image" \
@@ -57,6 +58,11 @@ docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' select '
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' setpts '
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' split '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' aformat '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' anullsrc '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' aresample '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' fps '
+docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' scale '
 
 docker run --rm "$image" clojure.main -e '
 (require (quote [agg.render.audio :as audio])

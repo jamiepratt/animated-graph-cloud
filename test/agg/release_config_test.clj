@@ -519,6 +519,14 @@
     (is (not (re-find #"-encoders.*grep -q ' png '" smoke)))
     (is (not (re-find #"-muxers.*grep -q ' image2pipe '" smoke)))))
 
+(deftest container-smoke-checks-derivative-preview-media-capabilities
+  (let [smoke (slurp "test/container_smoke.sh")]
+    (is (str/includes? smoke "-decoders 2>&1 | grep -q ' hevc '"))
+    (doseq [filter-name ["aformat" "anullsrc" "aresample" "fps" "scale"]]
+      (is (str/includes? smoke
+                         (str "-filters 2>&1 | grep -q ' "
+                              filter-name " '"))))))
+
 (deftest container-smoke-covers-a-real-non-seekable-short-source
   (let [smoke (slurp "test/container_smoke.sh")]
     (is (str/includes? smoke "short-source.mp4"))

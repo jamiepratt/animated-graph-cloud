@@ -1,5 +1,6 @@
 (ns agg.drive.range-proxy
   (:require [agg.drive.core :as drive]
+            [agg.derivative.contract :as derivative-contract]
             [agg.drive.limits :as drive-limits]
             [agg.errors :as errors]
             [clojure.string :as str])
@@ -21,6 +22,18 @@
     :lifetime-ms})
 
 (def renderer-limits-v1 drive-limits/renderer-range-limits-v1)
+
+(def derivative-limits-v1
+  (let [transfer (get-in derivative-contract/contract-v1
+                         [:limits :transfer])
+        timeout-seconds (get-in derivative-contract/contract-v1
+                                [:limits :compute :timeout-seconds])]
+    (assoc renderer-limits-v1
+           :max-upstream-bytes (:max-upstream-bytes transfer)
+           :max-request-count (:max-request-count transfer)
+           :max-range-bytes (:max-range-bytes transfer)
+           :max-cache-bytes (:max-range-bytes transfer)
+           :lifetime-ms (* 1000 timeout-seconds))))
 
 (defn- valid-limits? [limits]
   (and (= required-limit-keys (set (keys limits)))

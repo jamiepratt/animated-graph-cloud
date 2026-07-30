@@ -34,6 +34,19 @@
     (is (not (str/includes? runtime "zlib1g-dev")))
     (is (not (str/includes? runtime "apt-get install")))))
 
+(deftest docker-build-includes-derivative-preview-media-capabilities
+  (let [runtime-start (str/last-index-of dockerfile "\nFROM ")
+        ffmpeg-builder (subs dockerfile 0 runtime-start)]
+    (is (str/includes? dockerfile
+                       "--enable-encoder=aac,libx264,png,prores_ks"))
+    (is (str/includes? dockerfile "--enable-decoders"))
+    (is (str/includes? dockerfile "--enable-muxer=image2pipe,mov,mp4"))
+    (doseq [filter-name ["aformat" "anullsrc" "aresample" "fps" "scale"]]
+      (is (re-find (re-pattern (str "--enable-filter=[^\\n]*\\b"
+                                    filter-name "\\b"))
+                   ffmpeg-builder)
+          (str "derivative preview requires FFmpeg filter " filter-name)))))
+
 (deftest renderer-job-pins-the-runtime-project
   (is (str/includes? terraform
                      "name  = \"GOOGLE_CLOUD_PROJECT\""))
