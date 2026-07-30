@@ -762,6 +762,8 @@
                                   "2026-07-17T10:00:02Z;132")
         oxiwear-text (str/trim
                       (slurp (io/resource "fixtures/oxiwear/hr-midnight.csv")))
+        spo2-text (str/trim
+                   (slurp (io/resource "fixtures/oxiwear/spo2-midnight.csv")))
         summary-text (str "Activity Type,Date,Favorite,Title,Distance\n"
                           "Running,2026-07-17,false,Morning Run,5.2")
         ambiguous-text (str "timestamp,heart_rate,reading_time,pulse_rate\n"
@@ -769,11 +771,14 @@
                             "2026-07-17T10:00:00Z,130")
         malformed-polar-text (str "timestamp,heart_rate\n"
                                   "not-a-time,secret-row-value")
+        raw-oxiwear-request (assoc (fixture/render-request)
+                                   :telemetryFormat "oxiwear-hr-csv"
+                                   :telemetry oxiwear-text)
         scenario
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "(async()=>{let outcome;try{"
-         "const format=document.getElementById('telemetry-format'),input=document.getElementById('telemetry-file'),telemetry=document.getElementById('telemetry'),status=document.getElementById('telemetry-status'),advanced=document.getElementById('advanced-activity-data'),advancedFormat=document.getElementById('advanced-telemetry-format'),advancedInput=document.getElementById('advanced-telemetry-file'),advancedStatus=document.getElementById('advanced-telemetry-status'),advancedRoute=document.getElementById('open-advanced-activity-data'),next=document.getElementById('wizard-next');"
+         "const format=document.getElementById('telemetry-format'),input=document.getElementById('telemetry-file'),telemetry=document.getElementById('telemetry'),status=document.getElementById('telemetry-status'),next=document.getElementById('wizard-next');"
          "document.querySelector('input[name=\"wizard-outcome\"][value=\"transparent-overlay\"]').click();next.click();document.getElementById('timezone').value='UTC';document.getElementById('section-start-at').value='2026-07-17T10:00:00';document.getElementById('section-end-at').value='2026-07-17T10:00:02';next.click();"
          "const waitForStatus=node=>new Promise((resolve,reject)=>{const deadline=Date.now()+5000,check=()=>{if(node.classList.contains('success')||node.classList.contains('error'))resolve();else if(Date.now()>deadline)reject(new Error('Timed out waiting for activity-file status'));else setTimeout(check,5);};check();});"
          "const upload=async(target,file,statusNode)=>{const transfer=new DataTransfer();if(file)transfer.items.add(file);target.files=transfer.files;target.dispatchEvent(new Event('change',{bubbles:true}));const clearedImmediately=telemetry.value==='';if(file)await waitForStatus(statusNode);return {clearedImmediately,format:format.value,content:telemetry.value,status:statusNode.textContent,success:statusNode.classList.contains('success'),error:statusNode.classList.contains('error')};};"
@@ -782,8 +787,7 @@
          "const polar=await upload(input,new File([" (json/write-str csv-text) "],'polar.csv',{type:'text/csv'}),status);polar.matches=polar.content===" (json/write-str csv-text) ";"
          "const alternate=await upload(input,new File([" (json/write-str alternate-polar-text) "],'alternate.csv',{type:'text/csv'}),status);alternate.matches=alternate.content===" (json/write-str alternate-polar-text) ";"
          "const cancelled=await upload(input,null,status);cancelled.inputFiles=input.files.length;cancelled.status=status.textContent;"
-         "const oxiwear=await upload(input,new File([" (json/write-str oxiwear-text) "],'oxiwear.csv',{type:'text/csv'}),status);oxiwear.routeVisible=!advancedRoute.hidden;advancedRoute.click();oxiwear.advancedOpen=advanced.open;oxiwear.focused=document.activeElement===advancedFormat;advancedFormat.value='oxiwear-hr-csv';advancedFormat.dispatchEvent(new Event('change',{bubbles:true}));"
-         "const advancedUpload=await upload(advancedInput,new File([" (json/write-str oxiwear-text) "],'oxiwear.csv',{type:'text/csv'}),advancedStatus);advancedUpload.matches=advancedUpload.content===" (json/write-str oxiwear-text) ";advancedUpload.advancedFormat=advancedFormat.value;"
+         "const oxiwear=await upload(input,new File([" (json/write-str oxiwear-text) "],'oxiwear.csv',{type:'text/csv'}),status);"
          "const summary=await upload(input,new File([" (json/write-str summary-text) "],'activities.csv',{type:'text/csv'}),status);"
          "const ambiguous=await upload(input,new File([" (json/write-str ambiguous-text) "],'ambiguous.csv',{type:'text/csv'}),status);"
          "const wrongExtension=await upload(input,new File([" (json/write-str csv-text) "],'activity.txt',{type:'text/plain'}),status);"
@@ -791,7 +795,9 @@
          "const malformedFit=await upload(input,new File([new Uint8Array([14,1,0,0,4,0,0,0,46,70,73,84])],'malformed.fit',{type:'application/octet-stream'}),status);"
          "const oversized=await upload(input,new File([new Uint8Array(10485761)],'oversized.fit',{type:'application/octet-stream'}),status);"
          "const NativeFileReader=FileReader;FileReader=function(){const reader=new NativeFileReader(),nativeReadAsText=reader.readAsText.bind(reader);reader.readAsText=function(file,...args){if(file?.name==='unreadable.csv'){setTimeout(()=>reader.onerror?.(new ProgressEvent('error')),0);return;}return nativeReadAsText(file,...args);};return reader;};FileReader.prototype=NativeFileReader.prototype;const readFailure=await upload(input,new File([" (json/write-str csv-text) "],'unreadable.csv',{type:'text/csv'}),status);FileReader=NativeFileReader;readFailure.privateContentLeaked=readFailure.status.includes('2026-07-17');"
-         "const panel=document.getElementById('activity-data-step'),rect=panel.getBoundingClientRect();outcome={fit,polar,alternate,cancelled,oxiwear,advancedUpload,summary,ambiguous,wrongExtension,malformedCsv,malformedFit,oversized,readFailure,activityStep:document.getElementById('compose-workflow').dataset.currentStep,labels:{simple:input.labels[0]?.textContent||'',advanced:advancedInput.labels[0]?.textContent||'',format:advancedFormat.labels[0]?.textContent||''},advancedSummary:advanced.querySelector('summary').textContent,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,panelFits:rect.left>=-.5&&rect.right<=innerWidth+.5};"
+         "const raw=document.getElementById('raw-json');raw.value=" (json/write-str (json/write-str raw-oxiwear-request)) ";document.getElementById('apply-json').click();const rawOxiwear={format:format.value,content:telemetry.value,status:status.textContent};"
+         "const spo2Enabled=document.getElementById('spo2-enabled'),spo2Fields=document.getElementById('spo2-fields'),spo2Input=document.getElementById('spo2-file'),spo2Telemetry=document.getElementById('spo2-telemetry'),spo2Status=document.getElementById('spo2-status');spo2Enabled.click();const spo2Transfer=new DataTransfer();spo2Transfer.items.add(new File([" (json/write-str spo2-text) "],'spo2.csv',{type:'text/csv'}));spo2Input.files=spo2Transfer.files;spo2Input.dispatchEvent(new Event('change',{bubbles:true}));await waitForStatus(spo2Status);const spo2={fieldsVisible:!spo2Fields.hidden,stepPresent:!!document.querySelector('#wizard-step-list [data-step-id=\"spo2-overlay\"]'),content:spo2Telemetry.value,status:spo2Status.textContent,success:spo2Status.classList.contains('success')};"
+         "const panel=document.getElementById('activity-data-step'),sourceBox=panel.querySelector('.source-box'),rect=panel.getBoundingClientRect(),advancedIds=['advanced-activity-data','open-advanced-activity-data','advanced-telemetry-format','advanced-telemetry-file','advanced-telemetry-status'];outcome={fit,polar,alternate,cancelled,oxiwear,rawOxiwear,spo2,summary,ambiguous,wrongExtension,malformedCsv,malformedFit,oversized,readFailure,activityStep:document.getElementById('compose-workflow').dataset.currentStep,label:input.labels[0]?.textContent||'',advancedIdsAbsent:advancedIds.every(id=>!document.getElementById(id)),sourceBoxEndsWithStatus:sourceBox.lastElementChild?.id==='telemetry-status',spo2ControlsPresent:['spo2-enabled','spo2-fields','spo2-file','spo2-telemetry','spo2-status'].every(id=>!!document.getElementById(id)),viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,panelFits:rect.left>=-.5&&rect.right<=innerWidth+.5};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
          "</script>")
@@ -1544,10 +1550,11 @@
          "Choose your heart-rate file"
          "Upload a FIT or CSV file"
          "detects Garmin FIT or Polar CSV automatically"
-         "Advanced activity data"
          "OxiWear heart-rate CSV"
          "Heart-rate data format"
          "Heart-rate file"
+         "Include optional OxiWear SpO2"
+         "Oxygen-saturation CSV file"
          "Yes - the camera and activity device clocks matched"
          "No - the camera and activity device clocks were different"
          "Selected source-video frame"
@@ -1568,6 +1575,8 @@
          "Telemetry sync time"
          "Heart-rate sync time"
          "Telemetry timestamps"
+         "Advanced activity data"
+         "Use Advanced activity data"
          "Preview overlay"]
         technical-identifiers
         ["<code>telemetryFormat</code>"
@@ -4321,12 +4330,16 @@
     (is (str/includes? failed "retry with the Preview button"))
     (is (str/includes? empty "No preview moments"))))
 
-(deftest activity-files-are-detected-locally-with-advanced-oxiwear-routing
+(deftest heart-rate-file-step-detects-primary-files-without-advanced-oxiwear-controls
   (let [page (ui/page {:user {:email "owner@example.com" :role :member}
                        :csrf "csrf-test"
                        :tokens []
                        :members []
                        :logs-enabled? false})
+        oxiwear-text (str/trim
+                      (slurp (io/resource "fixtures/oxiwear/hr-midnight.csv")))
+        spo2-text (str/trim
+                   (slurp (io/resource "fixtures/oxiwear/spo2-midnight.csv")))
         outcomes [(telemetry-file-browser-outcome page "1280,900")
                   (telemetry-file-browser-outcome page "390,844")]]
     (is (str/includes?
@@ -4337,11 +4350,18 @@
     (is (not (str/includes? page "<textarea id=\"telemetry\"")))
     (doseq [fragment ["id=\"telemetry-file\""
                       "accept=\".fit,.csv"
-                      "id=\"advanced-activity-data\""
+                      "id=\"telemetry-status\""
+                      "id=\"spo2-enabled\""
+                      "id=\"spo2-fields\""
+                      "id=\"spo2-file\""]]
+      (is (str/includes? page fragment) fragment))
+    (doseq [fragment ["id=\"advanced-activity-data\""
                       "id=\"advanced-telemetry-format\""
                       "id=\"advanced-telemetry-file\""
-                      "id=\"open-advanced-activity-data\""]]
-      (is (str/includes? page fragment) fragment))
+                      "id=\"advanced-telemetry-status\""
+                      "id=\"open-advanced-activity-data\""
+                      ".advanced-activity-data"]]
+      (is (not (str/includes? page fragment)) fragment))
     (doseq [outcome outcomes]
       (is (nil? (:error outcome)) outcome)
       (is (= "activity-data" (:activityStep outcome)))
@@ -4370,15 +4390,18 @@
       (is (true? (get-in outcome [:oxiwear :error])))
       (is (str/includes? (get-in outcome [:oxiwear :status])
                          "OxiWear heart-rate CSV"))
-      (is (true? (get-in outcome [:oxiwear :routeVisible])))
-      (is (true? (get-in outcome [:oxiwear :advancedOpen])))
-      (is (true? (get-in outcome [:oxiwear :focused])))
       (is (= "oxiwear-hr-csv"
-             (get-in outcome [:advancedUpload :format])))
-      (is (= "oxiwear-hr-csv"
-             (get-in outcome [:advancedUpload :advancedFormat])))
-      (is (true? (get-in outcome [:advancedUpload :matches])))
-      (is (true? (get-in outcome [:advancedUpload :success])))
+             (get-in outcome [:rawOxiwear :format])))
+      (is (= oxiwear-text
+             (get-in outcome [:rawOxiwear :content])))
+      (is (str/includes? (get-in outcome [:rawOxiwear :status])
+                         "Loaded from JSON"))
+      (is (= {:fieldsVisible true
+              :stepPresent true
+              :content spo2-text
+              :status "Loaded spo2.csv."
+              :success true}
+             (:spo2 outcome)))
       (doseq [[result guidance]
               [[:summary "activity-list summary"]
                [:ambiguous "matches more than one"]
@@ -4393,9 +4416,10 @@
         (is (= "" (get-in outcome [result :content])) result))
       (is (false? (get-in outcome [:malformedCsv :privateContentLeaked])))
       (is (false? (get-in outcome [:readFailure :privateContentLeaked])))
-      (is (every? #(str/includes? % "Heart-rate")
-                  (vals (:labels outcome))))
-      (is (= "Advanced activity data" (:advancedSummary outcome)))
+      (is (str/includes? (:label outcome) "Heart-rate"))
+      (is (true? (:advancedIdsAbsent outcome)))
+      (is (true? (:sourceBoxEndsWithStatus outcome)))
+      (is (true? (:spo2ControlsPresent outcome)))
       (is (true? (:noHorizontalOverflow outcome)))
       (is (true? (:panelFits outcome))))
     (is (= 1280 (:viewportWidth (first outcomes))))
