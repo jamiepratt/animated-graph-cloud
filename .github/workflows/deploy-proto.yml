@@ -94,6 +94,16 @@ jobs:
           test -n "$service_url"
           echo "url=$service_url" >>"$GITHUB_OUTPUT"
 
+      - id: proto-service-audience
+        name: Discover existing proto derivative audience
+        run: |
+          service_url="$(gcloud run services describe "$PROTO_SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(status.url)')"
+          test -n "$service_url"
+          echo "url=$service_url" >>"$GITHUB_OUTPUT"
+
       - id: image
         name: Push and resolve immutable image digest
         run: |
@@ -107,6 +117,7 @@ jobs:
       - name: Plan and apply proto Terraform
         env:
           TF_VAR_api_service_url: ${{ steps.service-url.outputs.url }}
+          TF_VAR_proto_service_url: ${{ steps.proto-service-audience.outputs.url }}
           TF_VAR_proto_image: ${{ steps.image.outputs.uri }}
         run: |
           set -euo pipefail

@@ -6,6 +6,145 @@
 (defn- read-json [path]
   (json/read-str (slurp path) :key-fn keyword))
 
+(deftest derivative-preview-has-an-isolated-private-execution-plane
+  (let [proto-infra (slurp "infra/proto/main.tf")]
+    (testing "ephemeral derivative objects stay private and expire after one day"
+      (is (str/includes?
+           proto-infra
+           "resource \"google_storage_bucket\" \"derivative_previews\""))
+      (is (str/includes? proto-infra
+                         "name                        = \"${local.project_id}-derivative-previews\""))
+      (is (str/includes? proto-infra
+                         "public_access_prevention    = \"enforced\""))
+      (is (str/includes? proto-infra
+                         "uniform_bucket_level_access = true"))
+      (is (str/includes? proto-infra
+                         "retention_duration_seconds = 0"))
+      (is (re-find #"(?s)resource \"google_storage_bucket\" \"derivative_previews\".*?versioning \{\s+enabled = false\s+\}.*?lifecycle_rule \{.*?age = 1"
+                   proto-infra)))
+    (testing "dispatch is isolated and serialized"
+      (is (str/includes?
+           proto-infra
+           "resource \"google_cloud_tasks_queue\" \"derivative_preview\""))
+      (is (str/includes? proto-infra
+                         "name     = \"agg-derivative-preview\""))
+      (is (str/includes? proto-infra
+                         "max_concurrent_dispatches = 1"))
+      (is (str/includes? proto-infra
+                         "max_dispatches_per_second = 1"))
+      (is (str/includes?
+           proto-infra
+           "resource \"google_service_account\" \"derivative_tasks\""))
+      (is (str/includes?
+           proto-infra
+           "resource \"google_service_account\" \"derivative_worker\"")))
+    (testing "the worker is one bounded, non-retrying task"
+      (is (str/includes?
+           proto-infra
+           "resource \"google_cloud_run_v2_job\" \"derivative_preview\""))
+      (is (str/includes? proto-infra
+                         "name                = \"agg-derivative-preview\""))
+      (is (str/includes? proto-infra "parallelism = 1"))
+      (is (str/includes? proto-infra "task_count  = 1"))
+      (is (str/includes? proto-infra "max_retries           = 0"))
+      (is (str/includes? proto-infra "timeout               = \"900s\""))
+      (is (str/includes? proto-infra "cpu    = \"4\""))
+      (is (str/includes? proto-infra "memory = \"4Gi\""))
+      (is (str/includes? proto-infra "image = var.proto_image"))
+      (is (str/includes?
+           proto-infra
+           "args  = [\"clojure.main\", \"-m\", \"agg.derivative.worker\"]")))))
+
+(deftest derivative-preview-runtime-and-iam-are-bounded
+  (let [proto-infra (slurp "infra/proto/main.tf")
+        proto-workflow (slurp ".github/workflows/deploy-proto.yml")]
+    (testing "only the API reader and worker receive derivative object access"
+      (is (re-find #"(?s)resource \"google_storage_bucket_iam_member\" \"api_derivative_reader\".*?roles/storage\.objectViewer.*?data\.google_service_account\.api\.email"
+                   proto-infra))
+      (is (re-find #"(?s)resource \"google_storage_bucket_iam_member\" \"derivative_worker_objects\".*?roles/storage\.objectUser.*?google_service_account\.derivative_worker\.email"
+                   proto-infra))
+      (is (not (re-find #"(?s)resource \"google_storage_bucket_iam_member\" \"[^\"]*derivative[^\"]*\" \{[^}]*roles/storage\.(?:admin|objectAdmin)"
+                        proto-infra))))
+    (testing "the API can operate only the dedicated queue and worker job"
+      (doseq [role ["roles/cloudtasks.enqueuer"
+                    "roles/cloudtasks.taskDeleter"]]
+        (is (re-find
+             (re-pattern
+              (str "(?s)resource \\\"google_cloud_tasks_queue_iam_member\\\""
+                   ".*?name\\s*=\\s*google_cloud_tasks_queue\\.derivative_preview\\.name"
+                   ".*?" (java.util.regex.Pattern/quote role)
+                   ".*?data\\.google_service_account\\.api\\.email"))
+             proto-infra)))
+      (doseq [role ["roles/run.jobsExecutorWithOverrides"
+                    "roles/run.viewer"]]
+        (is (re-find
+             (re-pattern
+              (str "(?s)resource \\\"google_cloud_run_v2_job_iam_member\\\""
+                   ".*?name\\s*=\\s*google_cloud_run_v2_job\\.derivative_preview\\.name"
+                   ".*?" (java.util.regex.Pattern/quote role)
+                   ".*?data\\.google_service_account\\.api\\.email"))
+             proto-infra))))
+    (testing "task and worker identities have only their required boundaries"
+      (doseq [contract ["roles/iam.serviceAccountUser"
+                        "roles/iam.serviceAccountTokenCreator"
+                        "roles/run.invoker"
+                        "roles/datastore.user"
+                        "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+                        "roles/secretmanager.secretAccessor"]]
+        (is (str/includes? proto-infra contract)))
+      (is (re-find #"(?s)resource \"google_kms_crypto_key_iam_member\" \"derivative_worker_drive_token_cipher\".*?drive-refresh-tokens.*?roles/cloudkms\.cryptoKeyEncrypterDecrypter.*?google_service_account\.derivative_worker\.email"
+                   proto-infra))
+      (is (re-find #"(?s)resource \"google_secret_manager_secret_iam_member\" \"derivative_worker_oauth_access\".*?oauth-client-secret.*?roles/secretmanager\.secretAccessor.*?google_service_account\.derivative_worker\.email"
+                   proto-infra))
+      (is (not (re-find #"(?s)google_service_account\\.derivative_worker\\.email.*?roles/(?:owner|editor|storage\\.admin|run\\.admin)"
+                        proto-infra))))
+    (testing "the proto API receives the approved derivative contract"
+      (doseq [runtime-value
+              ["AGG_DERIVATIVE_BUCKET"
+               "AGG_DERIVATIVE_TASKS_QUEUE"
+               "AGG_DERIVATIVE_TASKS_SERVICE_ACCOUNT"
+               "AGG_DERIVATIVE_WORKER_JOB"
+               "AGG_DERIVATIVE_DISPATCHER_URL"
+               "AGG_DERIVATIVE_MAX_SOURCE_DURATION_SECONDS"
+               "AGG_DERIVATIVE_MAX_SOURCE_BYTES"
+               "AGG_DERIVATIVE_MAX_UPSTREAM_BYTES"
+               "AGG_DERIVATIVE_MAX_REQUEST_COUNT"
+               "AGG_DERIVATIVE_MAX_RANGE_BYTES"
+               "AGG_DERIVATIVE_MAX_OUTPUT_BYTES"
+               "AGG_DERIVATIVE_MAX_PROJECT_NONTERMINAL_JOBS"
+               "AGG_DERIVATIVE_MAX_USER_NONTERMINAL_JOBS"
+               "AGG_DERIVATIVE_ATTEMPT_RESERVATION_MINOR_UNITS"
+               "AGG_DERIVATIVE_MAX_USER_ATTEMPTS_PER_DAY"
+               "AGG_DERIVATIVE_MAX_USER_MONTHLY_MINOR_UNITS"
+               "AGG_DERIVATIVE_MAX_MONTHLY_MINOR_UNITS"]]
+        (is (str/includes? proto-infra runtime-value))))
+    (testing "immutable inputs are resolved before a guarded Terraform apply"
+      (let [service-index (str/index-of
+                           proto-workflow
+                           "Discover current API dispatcher audience")
+            image-index (str/index-of
+                         proto-workflow
+                         "Push and resolve immutable image digest")
+            terraform-index (str/index-of
+                             proto-workflow
+                             "Plan and apply proto Terraform")
+            verification-index (str/index-of
+                                proto-workflow
+                                "Verify proto health and landing page")]
+        (is (every? number?
+                    [service-index image-index terraform-index
+                     verification-index]))
+        (is (< service-index terraform-index verification-index))
+        (is (< image-index terraform-index verification-index)))
+      (is (str/includes? proto-workflow
+                         "Delete or replace actions are forbidden"))
+      (is (str/includes? proto-workflow
+                         "Discover existing proto derivative audience"))
+      (is (str/includes? proto-workflow
+                         "TF_VAR_proto_service_url: ${{ steps.proto-service-audience.outputs.url }}"))
+      (is (not (str/includes? proto-workflow "gcloud run jobs deploy")))
+      (is (not (str/includes? proto-workflow "gcloud tasks queues create"))))))
+
 (deftest proto-runbook-has-safe-request-correlated-log-queries
   (let [runbook (slurp "docs/proto-runbook.md")]
     (doseq [field ["requestId" "trace" "operation" "revision" "reason"]]
@@ -58,7 +197,7 @@
     (is (str/includes? proto-infra
                        "resource \"google_firebase_hosting_site\" \"proto\""))
     (is (str/includes? proto-infra "name                = \"agg-proto\""))
-    (is (str/includes? proto-infra "AGG_SERVICE_PROFILE                 = \"proto\""))
+    (is (re-find #"AGG_SERVICE_PROFILE\s*=\s*\"proto\"" proto-infra))
     (is (str/includes? proto-infra "deletion_protection = true"))
     (is (str/includes? proto-infra "prevent_destroy = true"))
     (is (str/includes? proto-versions "prefix = \"proto\""))
@@ -101,6 +240,8 @@
     (is (str/includes? proto-bootstrap-workflow
                        "providers/animated-graph-cloud-proto"))
     (is (str/includes? proto-bootstrap-workflow
+                       "TF_VAR_proto_service_url: ${{ steps.context.outputs.proto_service_url }}"))
+    (is (str/includes? proto-bootstrap-workflow
                        "terraform -chdir=infra/proto apply"))
     (is (str/includes? proto-bootstrap "PROTO_BOOTSTRAP_CONFIRM"))
     (is (str/includes? proto-bootstrap "agg-proto-github-deployer"))
@@ -110,6 +251,11 @@
       (is (not (str/includes? configuration
                               "animated-graph-cloud proto branch"))))
     (is (not (str/includes? proto-bootstrap "service-account key")))
+    (doseq [role ["roles/cloudkms.admin"
+                  "roles/cloudtasks.admin"
+                  "roles/aggTerraformSecretAdmin"]]
+      (is (str/includes? proto-infra role))
+      (is (str/includes? proto-bootstrap role)))
     (is (str/includes? proto-smoke "clojure.main -m agg.proto.main"))
     (is (str/includes? proto-smoke "Proto API server started"))
     (is (str/includes? proto-smoke "/health"))

@@ -70,6 +70,8 @@ gcloud iam service-accounts add-iam-policy-binding "$deployer_email" \
 
 for role in \
   roles/artifactregistry.writer \
+  roles/cloudkms.admin \
+  roles/cloudtasks.admin \
   roles/containeranalysis.occurrences.viewer \
   roles/firebasehosting.admin \
   roles/iam.serviceAccountAdmin \
@@ -77,7 +79,8 @@ for role in \
   roles/resourcemanager.projectIamAdmin \
   roles/run.admin \
   roles/serviceusage.serviceUsageConsumer \
-  "projects/${project_id}/roles/aggTerraformStorageAdmin"
+  "projects/${project_id}/roles/aggTerraformStorageAdmin" \
+  "projects/${project_id}/roles/aggTerraformSecretAdmin"
 do
   gcloud projects add-iam-policy-binding "$project_id" \
     --member="serviceAccount:${deployer_email}" \

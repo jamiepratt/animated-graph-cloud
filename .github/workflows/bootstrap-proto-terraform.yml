@@ -65,14 +65,21 @@ jobs:
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --format='value(status.url)')"
+          proto_service_url="$(gcloud run services describe "$PROTO_SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(status.url)')"
           test -n "$proto_image"
           test -n "$api_service_url"
+          test -n "$proto_service_url"
           echo "proto_image=$proto_image" >>"$GITHUB_OUTPUT"
           echo "api_service_url=$api_service_url" >>"$GITHUB_OUTPUT"
+          echo "proto_service_url=$proto_service_url" >>"$GITHUB_OUTPUT"
 
       - name: Import and apply proto Terraform
         env:
           TF_VAR_api_service_url: ${{ steps.context.outputs.api_service_url }}
+          TF_VAR_proto_service_url: ${{ steps.context.outputs.proto_service_url }}
           TF_VAR_proto_image: ${{ steps.context.outputs.proto_image }}
         run: |
           set -euo pipefail

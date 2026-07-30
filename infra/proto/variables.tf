@@ -18,6 +18,16 @@ variable "api_service_url" {
   }
 }
 
+variable "proto_service_url" {
+  description = "Existing proto Cloud Run origin used as the derivative task audience."
+  type        = string
+
+  validation {
+    condition     = can(regex("^https://[^/]+\\.run\\.app$", var.proto_service_url))
+    error_message = "proto_service_url must be an HTTPS run.app origin without a path."
+  }
+}
+
 variable "owner_email" {
   description = "Proto owner email."
   type        = string
