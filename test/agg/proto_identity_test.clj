@@ -117,8 +117,9 @@
         (is (str/includes? dockerfile contract))))
     (is (str/includes? build
                        "{:src \"docs/proto/CHANGELOG.md\""))
-    (doseq [contract ["--build-arg BUILD_COMMIT=\"$GITHUB_SHA\""
-                      "--build-arg RELEASE_MODE=production"
+    (doseq [contract ["BUILD_COMMIT=${{ github.sha }}"
+                      "RELEASE_MODE=production"
+                      "Resolve CI-built immutable proto candidate digest"
                       "test/proto_container_smoke.sh \"$IMAGE\" \"$GITHUB_SHA\""
                       "\"$PROTO_PUBLIC_BASE_URL/changelog\""
                       "v0.8.0 · build $SHORT_RELEASE_COMMIT"

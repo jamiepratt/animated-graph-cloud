@@ -25,5 +25,21 @@
              :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}
                           org.webjars.npm/htmx.org {:mvn/version "2.0.10"}}
              :main-opts ["-m" "agg.test-runner"]}
+  :test-area {:extra-paths ["test"]
+              :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}
+                           org.webjars.npm/htmx.org {:mvn/version "2.0.10"}}
+              :main-opts ["-m" "agg.test-runner" "--area"]}
+  :test-shard {:extra-paths ["test"]
+               :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}
+                            org.webjars.npm/htmx.org {:mvn/version "2.0.10"}}
+               :main-opts ["-m" "agg.test-runner" "--shard"]}
+  :test-ns {:extra-paths ["test"]
+            :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}
+                         org.webjars.npm/htmx.org {:mvn/version "2.0.10"}}
+            :main-opts ["-m" "agg.test-runner" "--namespace"]}
+  :test-changed {:extra-paths ["test"]
+                 :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}
+                              org.webjars.npm/htmx.org {:mvn/version "2.0.10"}}
+                 :main-opts ["-m" "agg.test-selection"]}
   :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
           :ns-default build}}}

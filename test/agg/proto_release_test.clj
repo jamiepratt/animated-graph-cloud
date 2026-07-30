@@ -27,7 +27,7 @@
                                "sudo apt-get install --yes ffmpeg"))
         gate-index (some-> proto-tests
                            (str/index-of
-                            "Run proto-only validation gate"))]
+                            "Run complete proto-area gate"))]
     (is (string? proto-tests))
     (is (str/includes? proto-tests "sudo apt-get update"))
     (is (number? install-index))
@@ -289,7 +289,7 @@
                            "Discover current API dispatcher audience")
             image-index (str/index-of
                          proto-workflow
-                         "Push and resolve immutable image digest")
+                         "Resolve CI-built immutable proto candidate digest")
             terraform-index (str/index-of
                              proto-workflow
                              "Plan and apply proto Terraform")
@@ -407,7 +407,8 @@
     (is (re-find #"(?s)on:\s+push:\s+branches: \[proto\]"
                  proto-workflow))
     (is (not (str/includes? proto-workflow "workflow_dispatch")))
-    (is (str/includes? proto-workflow "clojure -M:proto-test"))
+    (is (str/includes? proto-workflow "clojure -M:test-changed"))
+    (is (str/includes? proto-workflow "test/proto_ci.sh"))
     (is (str/includes? proto-workflow "test/proto_container_smoke.sh"))
     (is (not (str/includes? proto-workflow "clojure -M:test-all")))
     (is (not (str/includes? proto-workflow "clj-kondo --lint src test build.clj")))

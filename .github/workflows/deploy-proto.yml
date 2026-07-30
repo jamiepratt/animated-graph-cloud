@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: proto-deployment
@@ -25,7 +24,30 @@ env:
   PROTO_FIREBASE_SITE: proto-alphacompose
 
 jobs:
+  affected-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          cli: 1.12.5.1654
+      - name: Run affected proto feedback
+        env:
+          BASE_SHA: ${{ github.event.before }}
+        run: |
+          if [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            BASE_SHA="$(git rev-parse HEAD^)"
+          fi
+          clojure -M:test-changed --base "$BASE_SHA" --head "$GITHUB_SHA"
+
   proto-tests:
+    needs: affected-tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -45,27 +67,46 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes ffmpeg
-      # This gate intentionally runs clojure -M:proto-test, not test-all.
-      - name: Run proto-only validation gate
+      - name: Run complete proto-area gate
         run: test/proto_ci.sh
 
-  deploy:
-    needs: proto-tests
+  candidate-image:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v7
+      - id: auth
+        name: Authenticate through proto-only WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud-proto
+          service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
 
-      - name: Build proto image
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: ">= 541.0.0"
+      - name: Configure Artifact Registry
+        run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and push immutable proto candidate
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}
+          build-args: |
+            BUILD_COMMIT=${{ github.sha }}
+            RELEASE_MODE=production
+          cache-from: type=gha,scope=proto-image
+          cache-to: type=gha,mode=max,scope=proto-image
+      - name: Smoke proto candidate
         run: |
-          docker build \
-            --build-arg BUILD_COMMIT="$GITHUB_SHA" \
-            --build-arg RELEASE_MODE=production \
-            --tag "$IMAGE" .
-
-      - name: Smoke proto container
-        run: test/proto_container_smoke.sh "$IMAGE" "$GITHUB_SHA"
-
-      - name: Scan proto image
+          docker pull "$IMAGE"
+          test/proto_container_smoke.sh "$IMAGE" "$GITHUB_SHA"
+      - name: Scan proto candidate
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}
@@ -75,6 +116,14 @@ jobs:
           vuln-type: os,library
           severity: CRITICAL,HIGH
 
+  deploy:
+    needs: [proto-tests, candidate-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
       - id: auth
         name: Authenticate through proto-only WIF
         uses: google-github-actions/auth@v3
@@ -82,7 +131,6 @@ jobs:
           project_id: ${{ env.PROJECT_ID }}
           workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud-proto
           service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
-
       - uses: google-github-actions/setup-gcloud@v3
         with:
           version: ">= 541.0.0"
@@ -123,10 +171,8 @@ jobs:
           echo "url=$service_url" >>"$GITHUB_OUTPUT"
 
       - id: image
-        name: Push and resolve immutable image digest
+        name: Resolve CI-built immutable proto candidate digest
         run: |
-          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
-          docker push "$IMAGE"
           digest="$(gcloud artifacts docker images describe "$IMAGE" \
             --format='value(image_summary.digest)')"
           test -n "$digest"

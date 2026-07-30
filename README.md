@@ -12,16 +12,33 @@ Requires JDK 21, Clojure CLI, Terraform, Google Cloud CLI, and Docker Desktop.
 
 ```sh
 clojure -M:test-all
+clojure -M:test-changed
+clojure -M:test-area proto
+clojure -M:test-ns agg.proto-playback-test
 clojure -T:build uber
 terraform -chdir=infra/dev init
 terraform -chdir=infra/dev validate
 ```
 
-Targeted TDD keeps the normal test classpath but skips the full runner:
+`test-all` verifies that the canonical catalogue accounts for every
+`*_test.clj` namespace. `test-changed` inspects staged, unstaged, and untracked
+work, follows reverse namespace dependencies, prints each selection reason,
+and falls back to the complete suite for shared or unknown changes. Compare an
+explicit proto range with:
+
+```sh
+clojure -M:test-changed --base origin/proto --head HEAD
+```
+
+Named areas may overlap. Targeted TDD keeps the normal test classpath but skips the full runner.
+Named namespaces do the same:
 
 ```sh
 clojure -M:test -m agg.test-targeted agg.api-auth-test
 ```
+
+See [`docs/testing.md`](docs/testing.md) for areas, CI shards, impact rules,
+and conservative fallback behavior.
 
 ## Proto release identity and changelog
 
