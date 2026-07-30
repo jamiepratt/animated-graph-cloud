@@ -205,6 +205,7 @@
     (is (wizard/navigation-eligible? chosen :source-video))
     (is (not (wizard/navigation-eligible? chosen :activity-data)))
     (is (= :source-video (:current-step at-source)))
+    (is (= :source-video (:current-step source-complete)))
     (is (wizard/navigation-eligible? source-complete
                                      :activity-data))
     (is (= #{:synchronization-decision}

@@ -38,7 +38,7 @@
     :description "Choose the kind of video workflow you want to complete."}
    :source-video
    {:title "Choose your source video"
-    :description "Pick one Google Drive video, then review its detected recording-clock hint."}
+    :description "Pick one Google Drive video. You can verify or replace it before continuing."}
    :activity-data
    {:title "Choose your heart-rate file"
     :description "Provide the activity data used to draw the heart-rate trace."}
@@ -408,4 +408,4 @@
    "const validateWizardStepWithLegacyActivityFields=validateWizardStep;validateWizardStep=function(step){if(step==='activity-data'){required('telemetry','Heart-rate file');if(!value('telemetry-format'))throw new Error('Choose a compatible Garmin FIT, Polar CSV, or Advanced OxiWear heart-rate file.');return;}return validateWizardStepWithLegacyActivityFields(step);};"
    "function navigateWizardStep(step,{push=true,focus=true}={}){const steps=activeWizardSteps();if(!steps.includes(step))return false;wizardState.currentStep=step;if(!wizardState.visitedStepIds.includes(step))wizardState.visitedStepIds.push(step);clearWizardError();if(push){const state=history.state&&typeof history.state==='object'?history.state:{};history.pushState({...state,wizardStep:step},'',location.href);}renderWizardStep(focus);return true;}"
    "function completeCurrentWizardStep(){const step=wizardState.currentStep;try{validateWizardStep(step);}catch(error){showWizardError(error.message);return;}if(!wizardState.completion.completedStepIds.includes(step))wizardState.completion.completedStepIds.push(step);captureWizardState(wizardState.renderRequest);const steps=activeWizardSteps(),index=steps.indexOf(step),nextStep=steps[index+1];if(nextStep)navigateWizardStep(nextStep,{push:true,focus:true});}"
-   "function acceptWizardSourceSelection(){if(wizardState.activeRoute!=='finished-video')chooseWizardOutcome('finished-video',false);for(const step of ['outcome','source-video'])if(!wizardState.completion.completedStepIds.includes(step))wizardState.completion.completedStepIds.push(step);navigateWizardStep('activity-data',{push:true,focus:true});}"))
+   "function acceptWizardSourceSelection(){if(wizardState.activeRoute!=='finished-video')chooseWizardOutcome('finished-video',false);clearWizardError();renderWizardStep(false);}"))

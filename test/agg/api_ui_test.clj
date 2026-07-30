@@ -318,8 +318,9 @@
         scenario
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
-         "let outcome;try{"
-         "const state=window.__pickerState,button=document.getElementById('open-picker'),selection=document.getElementById('picker-selection');"
+         "(async()=>{let outcome;try{"
+         "const state=window.__pickerState,button=document.getElementById('open-picker'),selection=document.getElementById('picker-selection'),workflow=document.getElementById('compose-workflow'),next=document.getElementById('wizard-next'),snapshot=()=>({current:workflow.dataset.currentStep,selection:selection.textContent,fileId:document.getElementById('source-video-file-id').value,nextDisabled:next.disabled});"
+         "document.querySelector('input[name=\"wizard-outcome\"][value=\"finished-video\"]').click();next.click();const source=snapshot();"
          "button.click();const initialLoading=selection.textContent;"
          "const firstLoad=state.loads.at(-1);if(typeof firstLoad?.onerror!=='function')throw new Error('Picker load has no error recovery');"
          "firstLoad.onerror();const failureMessage=selection.textContent;"
@@ -335,12 +336,15 @@
          "state.callback({action:google.picker.Action.PICKED,docs:[{id:'folder-id',name:'Nested folder',mimeType:'application/vnd.google-apps.folder'}]});"
          "const folderRejected={selection:selection.textContent,fileId:document.getElementById('source-video-file-id').value};"
          "state.callback({action:google.picker.Action.PICKED,docs:[{id:'test-file-id',name:'video.mp4',mimeType:'video/mp4'}]});"
-         "const selected=selection.textContent;button.click();state.callback({action:google.picker.Action.CANCEL});"
-         "outcome={initialLoading,failureMessage,failureRetryLoading,timeoutMessage,timeoutRetryLoading,rejected,folderRejected,selected,views:state.addedViews,selectableMimeTypes:state.selectableMimeTypes,visible:state.visible,diagnostics:state.diagnostics,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+         "const selected=snapshot();state.callback({action:google.picker.Action.PICKED,docs:[{id:'replacement-file-id',name:'replacement.mov',mimeType:'video/quicktime'}]});const replaced=snapshot();"
+         "state.callback({action:google.picker.Action.PICKED,docs:[{id:'uploaded-file-id',name:'uploaded.mp4',mimeType:'video/mp4'}]});const uploaded=snapshot();"
+         "await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));const backgroundCompleted=snapshot();next.click();const afterNext=snapshot();await new Promise(resolve=>setTimeout(resolve,0));const afterNextBackground=snapshot();"
+         "button.click();state.callback({action:google.picker.Action.CANCEL});"
+         "outcome={source,initialLoading,failureMessage,failureRetryLoading,timeoutMessage,timeoutRetryLoading,rejected,folderRejected,selected,replaced,uploaded,backgroundCompleted,afterNext,afterNextBackground,advisoryPresent:!!document.getElementById('source-clock-advisory'),views:state.addedViews,selectableMimeTypes:state.selectableMimeTypes,visible:state.visible,diagnostics:state.diagnostics,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
          "}catch(error){outcome={error:error.message};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));"
          "document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
-         "</script>")
+         "})();</script>")
         html (-> page
                  (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
                  (str/replace "<script>(function(){"
@@ -441,7 +445,7 @@
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "(async()=>{let outcome;try{"
-         "const state=window.__capabilityState,outcomes=[];state.loads[0].callback();"
+         "const state=window.__capabilityState,outcomes=[],next=document.getElementById('wizard-next');state.loads[0].callback();document.querySelector('input[name=\"wizard-outcome\"][value=\"finished-video\"]').click();next.click();"
          "async function waitForTerminal(){const deadline=performance.now()+750;while(performance.now()<=deadline){const status=document.getElementById('video-player-status').textContent,inspection=document.getElementById('video-clock-inspection-status').textContent;if((status==='Ready. Click or drag the timeline to seek.'||status.startsWith('This video cannot play in this browser because '))&&!inspection.startsWith('Inspecting'))return;await new Promise(resolve=>setTimeout(resolve,5));}throw new Error('Playback capability case did not reach a terminal state');}"
          "for(const testCase of " (json/write-str browser-cases) "){state.currentCase=testCase;state.analysisRequests=[];state.sessionRequests=[];state.canPlayTypeCalls=[];state.videoDecoderCalls=[];configureCapability(testCase);state.callback({action:google.picker.Action.PICKED,docs:[{id:'hevc-source',name:'ride.mov',mimeType:'video/quicktime'}]});await waitForTerminal();document.getElementById('video-recording-start').value='2026-07-26T07:12:05';document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();const video=document.getElementById('source-video-player');outcomes.push({label:testCase.label,selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,analysisRequests:[...state.analysisRequests],sessionRequests:[...state.sessionRequests],canPlayTypeCalls:[...state.canPlayTypeCalls],videoDecoderCalls:[...state.videoDecoderCalls],status:document.getElementById('video-player-status').textContent,stageHidden:document.getElementById('video-stage').hidden,transportHidden:document.querySelector('.video-transport').hidden,summaryHidden:document.getElementById('no-source-output-summary').hidden,sourceEnd:document.getElementById('video-source-end').textContent,src:video.getAttribute('src'),viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth});}outcome={outcomes};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
@@ -485,8 +489,8 @@
           (str
            "<pre id=\"browser-result\">pending</pre><script>"
            "(async()=>{let outcome;try{"
-           "const state=window.__prepFailureState;state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'broken-source',name:'broken.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();await new Promise(resolve=>setTimeout(resolve,0));const video=document.getElementById('source-video-player'),next=document.getElementById('wizard-next'),failureState={status:document.getElementById('video-player-status').textContent,stageHidden:document.getElementById('video-stage').hidden,transportHidden:document.querySelector('.video-transport').hidden,src:video.getAttribute('src')};"
-           "document.getElementById('telemetry-format').value='polar-csv';document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-26T06:54:33Z,120\\n2026-07-26T06:56:39Z,124';next.click();document.querySelector('input[name=\"synchronization-mode\"][value=\"shared-clock\"]').click();next.click();next.click();next.click();document.getElementById('timer-enabled').click();next.click();"
+           "const state=window.__prepFailureState,next=document.getElementById('wizard-next');document.querySelector('input[name=\"wizard-outcome\"][value=\"finished-video\"]').click();next.click();state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'broken-source',name:'broken.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();await new Promise(resolve=>setTimeout(resolve,0));const video=document.getElementById('source-video-player'),failureState={status:document.getElementById('video-player-status').textContent,stageHidden:document.getElementById('video-stage').hidden,transportHidden:document.querySelector('.video-transport').hidden,src:video.getAttribute('src')};"
+           "next.click();document.getElementById('telemetry-format').value='polar-csv';document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-26T06:54:33Z,120\\n2026-07-26T06:56:39Z,124';next.click();document.querySelector('input[name=\"synchronization-mode\"][value=\"shared-clock\"]').click();next.click();next.click();next.click();document.getElementById('timer-enabled').click();next.click();"
            "const timeline=document.getElementById('video-timeline'),startMarker=document.getElementById('timer-start-marker'),endMarker=document.getElementById('timer-end-marker'),rect=timeline.getBoundingClientRect(),initialValues=[startMarker.getAttribute('aria-valuenow'),endMarker.getAttribute('aria-valuenow')],videoTime=video.currentTime,startPointer=new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX:rect.left+rect.width*.25,pointerId:31}),endPointer=new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX:rect.left+rect.width*.75,pointerId:32});startMarker.dispatchEvent(startPointer);startMarker.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,clientX:rect.left+rect.width*.25,pointerId:31}));endMarker.dispatchEvent(endPointer);endMarker.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,clientX:rect.left+rect.width*.75,pointerId:32}));const pointerValues=[startMarker.getAttribute('aria-valuenow'),endMarker.getAttribute('aria-valuenow')],startKey=new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'ArrowRight'}),endKey=new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'ArrowLeft'});startMarker.dispatchEvent(startKey);endMarker.dispatchEvent(endKey);const visible=node=>!node.hidden&&getComputedStyle(node).display!=='none'&&node.getBoundingClientRect().height>0,timerFailure={current:document.getElementById('compose-workflow').dataset.currentStep,fieldsVisible:visible(document.getElementById('timer-fields')),timezoneVisible:visible(document.getElementById('display-time-zone-field')),outputFieldsVisible:visible(document.getElementById('output-start-field'))||visible(document.getElementById('output-end-field')),optionalOverlaysVisible:visible(document.getElementById('optional-overlays-step')),markersDisabled:[startMarker.disabled,endMarker.disabled],initialValues,pointerPrevented:[startPointer.defaultPrevented,endPointer.defaultPrevented],pointerValues,captures:state.pointerCaptures,releases:state.pointerReleases,keyboardPrevented:[startKey.defaultPrevented,endKey.defaultPrevented],keyboardValues:[startMarker.getAttribute('aria-valuenow'),endMarker.getAttribute('aria-valuenow')],fields:[document.getElementById('timer-start-at').value,document.getElementById('timer-end-at').value],request:JSON.parse(document.getElementById('render-request').value).timer,videoUnchanged:video.currentTime===videoTime};"
            "outcome={selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,analysisRequests:state.analysisRequests,sessionRequests:state.sessionRequests,...failureState,timerFailure,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
            "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
@@ -2413,6 +2417,23 @@
                       "data-step-id=\"review\""]]
       (is (str/includes? page fragment) fragment))))
 
+(deftest source-video-step-keeps-selection-feedback-without-clock-advisory
+  (let [page (ui/page {:user {:email "member@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})]
+    (doseq [fragment ["data-step-id=\"source-video\""
+                      "id=\"open-picker\""
+                      "id=\"picker-selection\""
+                      "Selected:"]]
+      (is (str/includes? page fragment) fragment))
+    (doseq [advisory ["id=\"source-clock-advisory\""
+                      "Detected recording-clock hint"
+                      "review its detected recording-clock hint"
+                      "Review the hint here"]]
+      (is (not (str/includes? page advisory)) advisory))))
+
 (deftest compose-review-owns-actions-and-keeps-trace-opacity-advanced
   (let [page (ui/page {:user {:email "member@example.com" :role :member}
                        :csrf "csrf-test"
@@ -3840,7 +3861,26 @@
              (:rejected outcome)))
       (is (= {:selection "Choose a video file" :fileId ""}
              (:folderRejected outcome)))
-      (is (= "video.mp4" (:selected outcome)))
+      (is (= "source-video" (get-in outcome [:source :current])))
+      (is (= {:current "source-video"
+              :selection "video.mp4"
+              :fileId "test-file-id"
+              :nextDisabled false}
+             (:selected outcome)))
+      (is (= {:current "source-video"
+              :selection "replacement.mov"
+              :fileId "replacement-file-id"
+              :nextDisabled false}
+             (:replaced outcome)))
+      (is (= {:current "source-video"
+              :selection "uploaded.mp4"
+              :fileId "uploaded-file-id"
+              :nextDisabled false}
+             (:uploaded outcome)))
+      (is (= (:uploaded outcome) (:backgroundCompleted outcome)))
+      (is (= "activity-data" (get-in outcome [:afterNext :current])))
+      (is (= (:afterNext outcome) (:afterNextBackground outcome)))
+      (is (false? (:advisoryPresent outcome)))
       (let [[normal-drive shared-drives upload] (:views outcome)
             mime-types (str/join "," drive/supported-source-video-mime-types)]
         (is (= {:kind "drive"
@@ -3853,9 +3893,9 @@
         (is (= {:kind "upload" :includeFolders false} upload))
         (is (= mime-types (:selectableMimeTypes outcome)))
         (is (not (contains? normal-drive :ownedByMe))))
-      (is (= [false true false true false] (:visible outcome)))
+      (is (= [false true false false false true false] (:visible outcome)))
       (is (= ["error" "error" "opened" "loaded" "error" "error"
-              "selected" "opened" "cancelled"]
+              "selected" "selected" "selected" "opened" "cancelled"]
              (mapv :phase (:diagnostics outcome))))
       (is (every? #(= #{:phase :view :listState} (set (keys %)))
                   (:diagnostics outcome)))
