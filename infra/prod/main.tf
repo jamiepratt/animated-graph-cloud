@@ -288,7 +288,7 @@ resource "google_cloud_run_v2_job" "production_private_preview" {
   }
 
   depends_on = [
-    google_service_account_iam_member.production_deployer_uses_private_preview_worker,
+    time_sleep.production_private_preview_worker_iam_propagation,
     google_secret_manager_secret_iam_member.production_private_preview_worker_oauth,
     google_secret_manager_secret_iam_member.production_private_preview_worker_pepper,
   ]
@@ -315,6 +315,14 @@ resource "google_service_account_iam_member" "production_deployer_uses_private_p
   service_account_id = google_service_account.production_private_preview_worker.name
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${data.google_service_account.production_deployer.email}"
+}
+
+resource "time_sleep" "production_private_preview_worker_iam_propagation" {
+  create_duration = "480s"
+
+  triggers = {
+    worker_iam = google_service_account_iam_member.production_deployer_uses_private_preview_worker.id
+  }
 }
 
 resource "google_service_account_iam_member" "production_api_uses_private_preview_tasks" {
@@ -503,6 +511,17 @@ resource "google_logging_metric" "production_private_preview_reserved_minor_unit
   depends_on = [module.application]
 }
 
+resource "time_sleep" "production_private_preview_metrics_propagation" {
+  create_duration = "660s"
+
+  triggers = {
+    failures_metric      = google_logging_metric.production_private_preview_failures.id
+    latency_metric       = google_logging_metric.production_private_preview_latency_ms.id
+    queue_age_metric     = google_logging_metric.production_private_preview_queue_age_ms.id
+    reserved_cost_metric = google_logging_metric.production_private_preview_reserved_minor_units.id
+  }
+}
+
 resource "google_monitoring_alert_policy" "production_private_preview_latency" {
   project      = local.project_id
   display_name = "Production private-preview latency"
@@ -526,6 +545,8 @@ resource "google_monitoring_alert_policy" "production_private_preview_latency" {
       }
     }
   }
+
+  depends_on = [time_sleep.production_private_preview_metrics_propagation]
 }
 
 resource "google_monitoring_alert_policy" "production_private_preview_failures" {
@@ -551,6 +572,8 @@ resource "google_monitoring_alert_policy" "production_private_preview_failures" 
       }
     }
   }
+
+  depends_on = [time_sleep.production_private_preview_metrics_propagation]
 }
 
 resource "google_monitoring_alert_policy" "production_private_preview_queue_age" {
@@ -576,6 +599,8 @@ resource "google_monitoring_alert_policy" "production_private_preview_queue_age"
       }
     }
   }
+
+  depends_on = [time_sleep.production_private_preview_metrics_propagation]
 }
 
 resource "google_monitoring_alert_policy" "production_private_preview_backlog" {
@@ -626,6 +651,8 @@ resource "google_monitoring_alert_policy" "production_private_preview_reserved_c
       }
     }
   }
+
+  depends_on = [time_sleep.production_private_preview_metrics_propagation]
 }
 
 import {

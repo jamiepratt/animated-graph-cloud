@@ -9,6 +9,8 @@
 (def ^:private production-workflow
   (slurp ".github/workflows/deploy-production.yml"))
 (def ^:private production-terraform (slurp "infra/prod/main.tf"))
+(def ^:private production-terraform-versions
+  (slurp "infra/prod/versions.tf"))
 (def ^:private cloud-spike (slurp "script/run_cloud_spike.sh"))
 
 (defn- workflow-section [start-marker end-marker]
@@ -23,6 +25,17 @@
                  (str/index-of production-workflow end-marker start))]
     (when (and start end)
       (subs production-workflow start end))))
+
+(defn- production-resource-section [resource-type resource-name]
+  (let [start-marker (str "resource \"" resource-type "\" \""
+                          resource-name "\"")
+        start (str/index-of production-terraform start-marker)
+        end (and start
+                 (str/index-of production-terraform
+                               "\nresource \""
+                               (+ start (count start-marker))))]
+    (when start
+      (subs production-terraform start (or end (count production-terraform))))))
 
 (deftest docker-build-includes-runtime-resources
   (is (str/includes? dockerfile "COPY resources ./resources"))
@@ -429,6 +442,35 @@
     (is (str/includes?
          production-terraform
          (str "resource \"google_monitoring_alert_policy\" \"" alert "\""))
+        alert)))
+
+(deftest production-private-preview-first-apply-waits-for-propagation
+  (is (str/includes? production-terraform-versions
+                     "source  = \"hashicorp/time\""))
+  (doseq [[wait-name duration]
+          [["production_private_preview_worker_iam_propagation" "480s"]
+           ["production_private_preview_metrics_propagation" "660s"]]]
+    (let [wait-resource
+          (production-resource-section "time_sleep" wait-name)]
+      (is (some? wait-resource) wait-name)
+      (is (and wait-resource
+               (str/includes? wait-resource
+                              (str "create_duration = \"" duration "\"")))
+          wait-name)))
+  (is (str/includes?
+       (production-resource-section
+        "google_cloud_run_v2_job"
+        "production_private_preview")
+       "time_sleep.production_private_preview_worker_iam_propagation"))
+  (doseq [alert ["production_private_preview_latency"
+                 "production_private_preview_failures"
+                 "production_private_preview_queue_age"
+                 "production_private_preview_reserved_cost"]]
+    (is (str/includes?
+         (production-resource-section
+          "google_monitoring_alert_policy"
+          alert)
+         "time_sleep.production_private_preview_metrics_propagation")
         alert)))
 
 (deftest production-workflow-keeps-private-preview-on-the-candidate-release
