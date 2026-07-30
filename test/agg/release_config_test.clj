@@ -703,7 +703,7 @@
     (is (str/includes? workflow "name: Alpha Compose CI"))
     (is (str/includes? workflow "clojure -M:test-changed"))
     (is (str/includes? workflow "clojure -M:test-shard"))
-    (is (str/includes? workflow "proto]"))
+    (is (str/includes? workflow "- shard: proto"))
     (is (str/includes? proto-workflow "test/proto_ci.sh"))
     (is (not (str/includes? workflow "clojure -M:test-all")))
     (is (not (str/includes? workflow "terraform -chdir=infra/dev init -backend=false -input=false")))

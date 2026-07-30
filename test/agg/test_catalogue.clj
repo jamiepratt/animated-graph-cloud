@@ -5,7 +5,11 @@
 (defn- entry [namespace shard & areas]
   {:namespace namespace
    :shard shard
-   :areas (set (conj areas shard))})
+   :areas (set (conj areas shard))
+   :tools #{}})
+
+(defn- requires-tools [test-entry & tools]
+  (assoc test-entry :tools (set tools)))
 
 (def tests
   [(entry 'agg.admin-gcp-test :cloud :api :auth)
@@ -28,11 +32,13 @@
    (entry 'agg.derivative-gcp-test :cloud :derivative)
    (entry 'agg.derivative-keys-test :derivative :cloud)
    (entry 'agg.derivative-lifecycle-test :derivative :cloud :proto)
-   (entry 'agg.derivative-media-test :derivative :render :proto)
+   (requires-tools
+    (entry 'agg.derivative-media-test :derivative :render :proto)
+    :ffmpeg)
    (entry 'agg.derivative-preparation-test :derivative :cloud :proto)
    (entry 'agg.derivative-storage-test :derivative :cloud)
    (entry 'agg.derivative-worker-test :derivative :cloud :proto)
-   (entry 'agg.drive-gcp-test :cloud :drive)
+   (requires-tools (entry 'agg.drive-gcp-test :cloud :drive) :ffmpeg)
    (entry 'agg.drive-range-proxy-test :drive :api :proto)
    (entry 'agg.drive-test :drive)
    (entry 'agg.early-access-resend-test :cloud :api :auth)

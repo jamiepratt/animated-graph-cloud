@@ -1,5 +1,6 @@
 (ns agg.build-pipeline-test
-  (:require [clojure.string :as str]
+  (:require [agg.test-catalogue :as catalogue]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]))
 
 (def ^:private ci (slurp ".github/workflows/ci.yml"))
@@ -8,16 +9,57 @@
 (def ^:private development (slurp ".github/workflows/deploy.yml"))
 (def ^:private proto (slurp ".github/workflows/deploy-proto.yml"))
 
+(defn- matrix-shards [workflow]
+  (->> (re-seq #"(?m)^\s+- shard: ([a-z-]+)\s*$" workflow)
+       (map (comp keyword second))
+       set))
+
+(defn- ffmpeg-matrix-shards [workflow]
+  (->> (re-seq #"(?m)^\s+- shard: ([a-z-]+)\n\s+ffmpeg: true\s*$"
+               workflow)
+       (map (comp keyword second))
+       set))
+
+(defn- catalogue-ffmpeg-shards []
+  (->> catalogue/tests
+       (filter #(contains? (:tools %) :ffmpeg))
+       (map :shard)
+       set))
+
+(defn- occurs-before? [text earlier later]
+  (let [earlier-index (str/index-of text earlier)
+        later-index (str/index-of text later)]
+    (and (number? earlier-index)
+         (number? later-index)
+         (< earlier-index later-index))))
+
 (deftest ci-runs-fast-affected-feedback-and-complete-production-coverage
   (is (str/includes? ci "name: Alpha Compose CI"))
   (is (str/includes? ci "clojure -M:test-changed"))
   (is (str/includes? ci "fetch-depth: 0"))
   (is (str/includes? ci "matrix:"))
-  (is (str/includes?
-       ci
-       "shard: [api, auth, cloud, derivative, drive, render, release, proto]"))
+  (is (= (catalogue/shards) (matrix-shards ci)))
   (is (str/includes? ci "clojure -M:test-shard ${{ matrix.shard }}"))
   (is (str/includes? ci "needs: affected-tests")))
+
+(deftest ci-installs-ffmpeg-before-affected-selector
+  (let [install (str "Install FFmpeg for affected-test fallback\n"
+                     "        run: |\n"
+                     "          sudo apt-get update\n"
+                     "          sudo apt-get install --yes ffmpeg")]
+    (is (occurs-before? ci
+                        install
+                        "Run affected tests with selection reasons"))))
+
+(deftest ci-installs-ffmpeg-before-media-dependent-complete-shards
+  (let [install (str "Install FFmpeg for media-dependent shard\n"
+                     "        if: matrix.ffmpeg\n"
+                     "        run: |\n"
+                     "          sudo apt-get update\n"
+                     "          sudo apt-get install --yes ffmpeg")]
+    (is (occurs-before? ci install "Run complete catalogue shard")))
+  (is (= #{:cloud :derivative} (catalogue-ffmpeg-shards)))
+  (is (= (catalogue-ffmpeg-shards) (ffmpeg-matrix-shards ci))))
 
 (deftest ci-builds-one-scanned-immutable-main-candidate-in-parallel
   (is (str/includes? ci "candidate-image:"))

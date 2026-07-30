@@ -23,6 +23,10 @@ jobs:
       - uses: DeLaGuardo/setup-clojure@13.6.1
         with:
           cli: 1.12.5.1654
+      - name: Install FFmpeg for affected-test fallback
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg
       - name: Run affected tests with selection reasons
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -38,7 +42,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [api, auth, cloud, derivative, drive, render, release, proto]
+        include:
+          - shard: api
+            ffmpeg: false
+          - shard: auth
+            ffmpeg: false
+          - shard: cloud
+            ffmpeg: true
+          - shard: derivative
+            ffmpeg: true
+          - shard: drive
+            ffmpeg: false
+          - shard: render
+            ffmpeg: false
+          - shard: release
+            ffmpeg: false
+          - shard: proto
+            ffmpeg: false
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v5
@@ -48,6 +68,11 @@ jobs:
       - uses: DeLaGuardo/setup-clojure@13.6.1
         with:
           cli: 1.12.5.1654
+      - name: Install FFmpeg for media-dependent shard
+        if: matrix.ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg
       - name: Run complete catalogue shard
         run: clojure -M:test-shard ${{ matrix.shard }}
 

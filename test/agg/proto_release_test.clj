@@ -14,7 +14,7 @@
     (is (str/includes? deps-edn ":proto {:main-opts [\"-m\" \"agg.proto.main\"]}"))
     (is (str/includes? deps-edn ":proto-test"))
     (is (str/includes? ci-workflow "name: Alpha Compose CI"))
-    (is (str/includes? ci-workflow "shard: [api, auth, cloud, derivative, drive, render, release, proto]"))
+    (is (str/includes? ci-workflow "- shard: proto"))
     (is (str/includes? proto-workflow "name: Deploy proto app"))
     (is (str/includes? proto-workflow "branches: [proto]"))
     (is (str/includes? proto-workflow "test/proto_ci.sh"))
