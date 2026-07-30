@@ -206,25 +206,27 @@
     out))
 
 (defn- parse-name-status [output]
-  (loop [tokens (seq (str/split output #"\u0000"))
-         changes []]
-    (if-not (seq tokens)
-      changes
-      (let [[status-token path & more] tokens
-            status (first status-token)]
-        (if (= \R status)
-          (let [[new-path & remaining] more]
-            (recur remaining
-                   (conj changes {:status :renamed
-                                  :old-path path
-                                  :path new-path})))
-          (recur more
-                 (conj changes
-                       {:status ({\A :added \D :deleted \M :modified
-                                  \C :copied \T :modified \U :modified}
-                                 status
-                                 :modified)
-                        :path path})))))))
+  (if (str/blank? output)
+    []
+    (loop [tokens (seq (str/split output #"\u0000"))
+           changes []]
+      (if-not (seq tokens)
+        changes
+        (let [[status-token path & more] tokens
+              status (first status-token)]
+          (if (= \R status)
+            (let [[new-path & remaining] more]
+              (recur remaining
+                     (conj changes {:status :renamed
+                                    :old-path path
+                                    :path new-path})))
+            (recur more
+                   (conj changes
+                         {:status ({\A :added \D :deleted \M :modified
+                                    \C :copied \T :modified \U :modified}
+                                   status
+                                   :modified)
+                          :path path}))))))))
 
 (defn git-changes [{:keys [root base head] :or {root "."}}]
   (let [tracked-output

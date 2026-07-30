@@ -146,6 +146,11 @@
       (git! root "commit" "-qm" "changed")
       (let [head (git! root "rev-parse" "HEAD")
             base (git! root "rev-parse" "HEAD^")]
+        (is (= []
+               (selection/git-changes
+                {:root root
+                 :base (.trim head)
+                 :head (.trim head)})))
         (is (= #{{:status :modified :path "src/agg/core.clj"}
                  {:status :added :path "README.md"}}
                (set (selection/git-changes

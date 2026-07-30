@@ -32,6 +32,16 @@
            'agg.build-pipeline-test}
          (set (catalogue/namespaces-for-areas [:proto])))))
 
+(deftest catalogue-records-external-test-tools
+  (let [tools-by-namespace
+        (into {} (map (juxt :namespace :tools)) catalogue/tests)]
+    (is (= #{:ffmpeg}
+           (tools-by-namespace 'agg.derivative-media-test)))
+    (is (= #{:ffmpeg}
+           (tools-by-namespace 'agg.drive-gcp-test)))
+    (is (= #{}
+           (tools-by-namespace 'agg.api-auth-test)))))
+
 (deftest runner-selects-complete-area-shard-and-explicit-namespace-suites
   (is (= (catalogue/all-namespaces)
          (runner/selected-namespaces [])))
