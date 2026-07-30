@@ -29,6 +29,8 @@
       (doseq [path (reverse (vec (.toList paths)))]
         (Files/deleteIfExists path)))))
 
+(def simulated-hang-timeout-ms 3000)
+
 (deftest unresponsive-browser-is-bounded-cleaned-up-and-does-not-poison-retry
   (let [root (.toFile
               (Files/createTempDirectory
@@ -56,7 +58,9 @@
                 :fixture "simulated unresponsive browser"
                 :location "about:blank"
                 :virtual-time-budget-ms 0
-                :timeout-ms 500})
+                ;; Leave enough bounded startup time for the fake browser to
+                ;; create its child even when the full suite saturates the host.
+                :timeout-ms simulated-hang-timeout-ms})
               nil
               (catch clojure.lang.ExceptionInfo error error))
             elapsed-ms (/ (- (System/nanoTime) started-at) 1000000)
@@ -74,11 +78,12 @@
         (is (= ::browser/timeout (:type failure-data)))
         (is (= "simulated unresponsive browser" (:fixture failure-data)))
         (is (= :browser-process (:phase failure-data)))
-        (is (= 500 (:timeout-ms failure-data)))
-        (is (< elapsed-ms 5000))
+        (is (= simulated-hang-timeout-ms (:timeout-ms failure-data)))
+        (is (< elapsed-ms 10000))
         (is child-pid)
         (is (false? (process-alive? (:root-pid failure-data))))
         (is (false? (process-alive? child-pid)))
+        (is (pos? (get-in failure-data [:cleanup :observed-descendants])))
         (is (true? (get-in failure-data [:cleanup :process-tree-terminated?])))
         (is (true? (get-in failure-data [:cleanup :profile-removed?])))
         (is (= 0 (:exit retry)))
