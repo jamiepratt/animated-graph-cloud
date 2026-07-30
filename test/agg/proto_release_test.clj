@@ -164,6 +164,7 @@
            proto-infra
            "resource \"google_service_account\" \"derivative_worker\"")))
     (testing "timed-out work is reconciled through the proto audience"
+      (is (str/includes? proto-infra "\"roles/cloudscheduler.admin\""))
       (is (re-find
            #"(?s)resource \"google_cloud_scheduler_job\" \"derivative_reconcile\".*?name\s+=\s+\"agg-derivative-reconcile\".*?schedule\s+=\s+\"\* \* \* \* \*\".*?derivative-preparations/reconcile.*?X-CloudScheduler.*?audience\s+=\s+var\.proto_service_url"
            proto-infra))

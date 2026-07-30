@@ -16,6 +16,7 @@ locals {
   deployer_project_roles = toset([
     "roles/artifactregistry.writer",
     "roles/cloudkms.admin",
+    "roles/cloudscheduler.admin",
     "roles/cloudtasks.admin",
     "roles/containeranalysis.occurrences.viewer",
     "roles/firebasehosting.admin",
