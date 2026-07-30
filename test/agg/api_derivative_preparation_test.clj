@@ -4,6 +4,7 @@
             [agg.derivative.lifecycle :as derivative]
             [agg.derivative.storage :as storage]
             [agg.drive.core :as drive]
+            [agg.drive.gcp :as drive-gcp]
             [agg.http-test-support :as test-http]
             [clojure.data.json :as json]
             [clojure.string :as str]
@@ -367,6 +368,52 @@
                       ["private-id" "private-name.mov" "private-owner"
                        "owner@example.com" "private-access"
                        "fixture-secret"])))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest preparation-admission-uses-bounded-duration-when-drive-omits-it
+  (let [inspections (atom [])
+        drive-gateway
+        (reify
+          drive/SourceGateway
+          (source-metadata! [_ _ file-id]
+            {:id file-id
+             :name "private-name.mov"
+             :mimeType "video/quicktime"
+             :size 4096
+             :version "17"
+             :trashed false})
+          (stream-source! [_ _ _ _])
+          drive/PlaybackGateway
+          (open-source-range! [_ _ _ _]
+            (throw (UnsupportedOperationException.))))
+        {:keys [system cookie csrf]} (auth-fixture drive-gateway)
+        preparation
+        (derivative/in-memory-preparation-system
+         {:fingerprint-secret "fixture-secret"})
+        port (test-http/available-port)
+        server
+        (api/start! port
+                    {:auth-system system
+                     :derivative-preparation-service (:service preparation)})]
+    (try
+      (with-redefs
+       [drive-gcp/inspect-recording-clock!
+        (fn [_ access-token file-id metadata]
+          (swap! inspections conj
+                 [access-token file-id
+                  (select-keys metadata [:size :mimeType])])
+          {:durationSeconds 84.5})]
+        (let [response
+              (request! port :post "/v1/derivative-preparations"
+                        {:fileId "private-id"}
+                        {"Idempotency-Key" "bounded-duration"
+                         "Cookie" (str "__session=" cookie)
+                         "X-CSRF-Token" csrf})]
+          (is (= 202 (.statusCode response)) (.body response))
+          (is (= [["private-access" "private-id"
+                   {:size 4096 :mimeType "video/quicktime"}]]
+                 @inspections))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

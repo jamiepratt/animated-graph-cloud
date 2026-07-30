@@ -2261,7 +2261,13 @@
              (errors/raise! "Derivative source dependencies are incomplete"
                             {:type ::drive/source-unavailable})))
         metadata (drive/source-metadata! gateway access-token file-id)
-        duration-seconds (source-duration-seconds metadata)
+        duration-seconds
+        (or
+         (source-duration-seconds metadata)
+         (when (satisfies? drive/PlaybackGateway gateway)
+           (:durationSeconds
+            (drive-gcp/inspect-recording-clock!
+             gateway access-token file-id metadata))))
         authoritative-source-bytes
         (let [reported (:size metadata)]
           (if (string? reported)
