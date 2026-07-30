@@ -120,13 +120,14 @@
 (defn- proto-page-browser-outcome
   [{:keys [analysis-failure? analysis-response cache-hit? can-play-type
            cancel-and-retry? derivative? media-error? submit-failure supported?
-           terminal-resource timing-response webcodecs?]}]
-  (let [analysis-response
+           source-file-name terminal-resource timing-response webcodecs?]}]
+  (let [source-file-name (or source-file-name "timing-ride.mp4")
+        analysis-response
         (or analysis-response
             {:ok true
              :status 200
              :body
-             {:fileName "timing-ride.mp4"
+             {:fileName source-file-name
               :evidence
               {:container {:format "mp4" :majorBrand "isom"}
                :video {:codec "h264" :codecTag "avc1"
@@ -154,7 +155,9 @@
          "window.fetch=(path,options={})=>{"
          "if(path==='/v1/proto/sources'){return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({listingMode:'folder-enumeration',folderId:'"
          proto/fixed-folder-id
-         "',sources:[{fileId:'timing-source-1',fileName:'timing-ride.mp4',mimeType:'video/mp4',size:8192,durationSeconds:125.5,width:1920,height:1080}]})});}"
+         "',sources:[{fileId:'timing-source-1',fileName:"
+         (json/write-str source-file-name)
+         ",mimeType:'video/mp4',size:8192,durationSeconds:125.5,width:1920,height:1080}]})});}"
          "if(path==='/v1/drive/playback-analyses'){window.__protoState.analysisRequests.push(JSON.parse(options.body));return Promise.resolve({ok:"
          (json/write-str (:ok analysis-response))
          ",status:" (:status analysis-response)
@@ -205,7 +208,9 @@
          "function recordOutcome(outcome){const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.body.dataset.outcome=btoa(String.fromCharCode(...bytes));}"
          "function delay(ms){return new Promise(resolve=>setTimeout(resolve,ms));}"
          "async function waitFor(label,predicate,attempts){for(let index=0;index<attempts;index+=1){const value=predicate();if(value)return value;await delay(25);}throw new Error('Timed out waiting for '+label);}"
-         "async function runScenario(){try{const select=await waitFor('source select',()=>document.getElementById('source-select'),200);await waitFor('source option',()=>select.options.length>1&&select.options[1].value==='timing-source-1',200);select.value='timing-source-1';select.dispatchEvent(new Event('change',{bubbles:true}));await waitFor('selected title',()=>document.getElementById('selected-title').textContent==='timing-ride.mp4',200);"
+         "async function runScenario(){try{const select=await waitFor('source select',()=>document.getElementById('source-select'),200);await waitFor('source option',()=>select.options.length>1&&select.options[1].value==='timing-source-1',200);select.value='timing-source-1';select.dispatchEvent(new Event('change',{bubbles:true}));await waitFor('selected title',()=>document.getElementById('selected-title').textContent==="
+         (json/write-str source-file-name)
+         ",200);"
          (cond
            derivative?
            (str
@@ -241,8 +246,22 @@
 (deftest proto-page-requires-explicit-preparation-before-loading-a-renderable-rejected-source
   (let [outcome
         (proto-page-browser-outcome
-         {:can-play-type ""
+         {:analysis-response
+          {:ok true
+           :status 200
+           :body
+           {:fileName "private-name.mov"
+            :fileId "private-analysis-file-id"
+            :owner "private-analysis-owner"
+            :downloadUrl "https://private.example/source"
+            :evidence
+            {:container {:format "mov" :majorBrand "qt  "}
+             :video {:codec "hevc" :codecTag "hvc1"
+                     :profile "Main" :pixelFormat "yuv420p"}
+             :audio {:codec "aac"}}}}
+          :can-play-type ""
           :derivative? true
+          :source-file-name "private-name.mov"
           :webcodecs? false
           :timing-response {:fileName "timing-ride.mp4"
                             :status "manual"
@@ -274,10 +293,21 @@
     (is (str/includes? (:preparationText outcome) "24 hours"))
     (is (= "request-status"
            (get-in outcome [:prep :derivative :requestId])))
+    (is (= {:format "mov" :majorBrand "qt  "}
+           (get-in outcome [:prep :analysis :evidence :container])))
+    (is (= {:codec "hevc"
+            :codecTag "hvc1"
+            :profile "Main"
+            :pixelFormat "yuv420p"}
+           (get-in outcome [:prep :analysis :evidence :video])))
     (let [debug-json (json/write-str (:prep outcome))]
       (doseq [private-value ["owner@example.com"
                              proto/fixed-folder-id
                              "timing-source-1"
+                             "private-name.mov"
+                             "private-analysis-file-id"
+                             "private-analysis-owner"
+                             "https://private.example/source"
                              "00000000-0000-0000-0000-000000000196"
                              "00000000-0000-0000-0000-000000000296"
                              "00000000-0000-0000-0000-000000000396"]]
@@ -468,8 +498,8 @@
          "window.fetch=(path,options={})=>{"
          "if(path==='/v1/proto/sources')return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({listingMode:'folder-enumeration',folderId:'"
          proto/fixed-folder-id
-         "',sources:[{fileId:'source-a',fileName:'alpha.mov',mimeType:'video/quicktime',size:8192,durationSeconds:120,width:1920,height:1080},{fileId:'source-b',fileName:'bravo.mov',mimeType:'video/quicktime',size:8192,durationSeconds:120,width:1920,height:1080}]})});"
-         "if(path==='/v1/drive/playback-analyses'){const body=JSON.parse(options.body);return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:body.fileId==='source-a'?'alpha.mov':'bravo.mov',evidence:{container:{format:'mov',majorBrand:'qt  '},video:{codec:'hevc',codecTag:'hvc1',profile:'Main',pixelFormat:'yuv420p'},audio:{codec:'aac'}}})});}"
+         "',sources:[{fileId:'source-a',fileName:'private-name.mov',mimeType:'video/quicktime',size:8192,durationSeconds:120,width:1920,height:1080},{fileId:'source-b',fileName:'bravo.mov',mimeType:'video/quicktime',size:8192,durationSeconds:120,width:1920,height:1080}]})});"
+         "if(path==='/v1/drive/playback-analyses'){const body=JSON.parse(options.body);return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:body.fileId==='source-a'?'private-name.mov':'bravo.mov',evidence:{container:{format:'mov',majorBrand:'qt  '},video:{codec:'hevc',codecTag:'hvc1',profile:'Main',pixelFormat:'yuv420p'},audio:{codec:'aac'}}})});}"
          "if(path==='/v1/drive/recording-clock-inspections')return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({status:'manual',candidates:[],recommendedIndex:null,ambiguous:false,durationSeconds:120,limits:{maxBytes:524288,maxRanges:2,timeoutMillis:3000}})});"
          "if(path==='/v1/derivative-preparations'&&options.method==='POST'){window.__switchState.submitRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:202,headers:new Headers({'X-Request-Id':'switch-submit'}),json:()=>Promise.resolve({id:'"
          job-id
@@ -662,7 +692,8 @@
     (is (nil? (:error outcome)))
     (is (= "bravo.mov" (:selectedTitle outcome)))
     (is (str/includes? (:playerStatus outcome) "Private playback loaded"))
-    (is (= "bravo.mov" (get-in outcome [:prep :analysis :fileName])))
+    (is (= "h264"
+           (get-in outcome [:prep :analysis :evidence :video :codec])))
     (is (= "2026-07-27T23:00:00+02:00" (get-in outcome [:prep :timing :candidates 0 :value])))
     (is (= "direct" (get-in outcome [:prep :session :kind])))
     (is (= "video/quicktime" (get-in outcome [:prep :session :contentType])))
@@ -682,8 +713,10 @@
             :cancelRequests 0
             :submitRequests 1
             :panel
-            "A browser preview for alpha.mov is still queued. Wait for it or cancel it explicitly before preparing this source."}
+            "A browser preview for another selected source is still queued. Wait for it or cancel it explicitly before preparing this source."}
            (:beforeWait outcome)))
+    (is (not (str/includes? (get-in outcome [:beforeWait :panel])
+                            "private-name.mov")))
     (is (= 2 (count (get-in outcome [:requests :statusRequests]))))
     (is (= [] (get-in outcome [:requests :cancelRequests])))
     (is (= [] (get-in outcome [:requests :playbackRequests])))
