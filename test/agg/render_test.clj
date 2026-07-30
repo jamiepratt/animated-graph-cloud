@@ -18,7 +18,10 @@
   (:import (java.awt Color Font)
            (java.awt.image BufferedImage)
            (java.io ByteArrayInputStream ByteArrayOutputStream IOException OutputStream)
-           (java.nio.file Files OpenOption)
+           (java.lang ProcessHandle)
+           (java.nio.file DirectoryNotEmptyException
+                          FileAlreadyExistsException Files NoSuchFileException
+                          OpenOption)
            (java.security MessageDigest)
            (java.time Instant ZoneId)
            (java.util HexFormat)
@@ -110,6 +113,24 @@
       (throw (IOException. "Could not make the media test script executable")))
     path))
 
+(defn- composite-pipe-directories []
+  (with-open [directories
+              (Files/newDirectoryStream
+               (.toPath (io/file (System/getProperty "java.io.tmpdir")))
+               "agg-composite-pipe-*")]
+    (set (iterator-seq (.iterator directories)))))
+
+(defn- eventually? [timeout-ms predicate]
+  (let [deadline (+ (System/nanoTime) (* timeout-ms 1000000))]
+    (loop []
+      (cond
+        (predicate) true
+        (< (System/nanoTime) deadline)
+        (do
+          (Thread/sleep 10)
+          (recur))
+        :else false))))
+
 (defn- png-bytes [width height opaque?]
   (let [image (BufferedImage. width height BufferedImage/TYPE_INT_ARGB)
         output (ByteArrayOutputStream.)]
@@ -168,6 +189,11 @@
        "wait \"$overlay_reader\"\n"
        "sleep " delay-seconds "\n"
        "exit 0\n"))
+
+(defn- cancellable-composite-script [pid-path]
+  (str "#!/bin/sh\n"
+       "echo $$ > \"" pid-path "\"\n"
+       "exec sleep 30\n"))
 
 (defn- blocked-producer-failure-script [exit-status]
   (str "#!/bin/sh\n"
@@ -1207,6 +1233,184 @@
         (is (< elapsed-ms 1000))
         (is (= 1 @source-invocations)))
       (finally
+        (Files/deleteIfExists output)
+        (Files/deleteIfExists ffmpeg)))))
+
+(deftest composite-timeout-quiesces-late-owned-pipe-entry-before-cleanup
+  (let [ffmpeg (executable-script! (short-source-reader-script 0))
+        encoder (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
+        output (Files/createTempFile
+                "agg-late-pipe-entry-composite-" ".mp4"
+                (make-array java.nio.file.attribute.FileAttribute 0))
+        existing-directories (composite-pipe-directories)
+        owned-directory (promise)
+        producer-thread (promise)
+        producer-stopped (promise)]
+    (try
+      (let [cause
+            (try
+              (media/encode-composite!
+               encoder
+               {:width 64 :height 36 :fps 25 :duration-seconds 9
+                :output-format "h264-mp4"
+                :fit-mode "letterbox"
+                :audio-mode "heartbeat-only"
+                :timeout-ms 500}
+               "/tmp/heartbeat.wav"
+               output
+               (fn [source-output]
+                 (.write ^OutputStream source-output (byte-array [0])))
+               (fn [overlay-output]
+                 (let [directory
+                       (first (remove existing-directories
+                                      (composite-pipe-directories)))
+                       overlay-path (.resolve directory "overlay.rgba")
+                       current-thread (Thread/currentThread)]
+                   (deliver owned-directory directory)
+                   (deliver producer-thread current-thread)
+                   (.setPriority current-thread Thread/MAX_PRIORITY)
+                   (.write ^OutputStream overlay-output (byte-array [0]))
+                   (.flush ^OutputStream overlay-output)
+                   (Files/deleteIfExists overlay-path)
+                   (try
+                     (loop []
+                       (when-not (.isInterrupted current-thread)
+                         (try
+                           (Files/createFile
+                            overlay-path
+                            (make-array
+                             java.nio.file.attribute.FileAttribute 0))
+                           (catch FileAlreadyExistsException _)
+                           (catch NoSuchFileException _))
+                         (Thread/onSpinWait)
+                         (recur)))
+                     (finally
+                       (deliver producer-stopped true))))))
+              nil
+              (catch Throwable error error))
+            directory (deref owned-directory 1000 nil)]
+        (is (= ::media/composite-timeout (:type (ex-data cause)))
+            (str (class cause) ": " (.getMessage ^Throwable cause)
+                 ", cause=" (some-> cause .getCause class)
+                 ": " (some-> cause .getCause .getMessage)))
+        (is (not (instance? DirectoryNotEmptyException cause)))
+        (is (= true (deref producer-stopped 1000 false)))
+        (is (some? directory))
+        (when directory
+          (is (not (Files/exists directory
+                                 (make-array java.nio.file.LinkOption 0))))))
+      (finally
+        (when-let [thread (deref producer-thread 10 nil)]
+          (.interrupt ^Thread thread)
+          (.join ^Thread thread 1000))
+        (when-let [directory (deref owned-directory 10 nil)]
+          (Files/deleteIfExists (.resolve directory "overlay.rgba"))
+          (Files/deleteIfExists directory))
+        (Files/deleteIfExists output)
+        (Files/deleteIfExists ffmpeg)))))
+
+(deftest composite-cleanup-does-not-swallow-an-unrelated-entry
+  (let [ffmpeg (executable-script! (short-source-reader-script 0))
+        encoder (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
+        output (Files/createTempFile
+                "agg-unrelated-pipe-entry-composite-" ".mp4"
+                (make-array java.nio.file.attribute.FileAttribute 0))
+        existing-directories (composite-pipe-directories)
+        owned-directory (promise)]
+    (try
+      (let [cause
+            (try
+              (media/encode-composite!
+               encoder
+               {:width 64 :height 36 :fps 25 :duration-seconds 9
+                :output-format "h264-mp4"
+                :fit-mode "letterbox"
+                :audio-mode "heartbeat-only"
+                :timeout-ms 2000}
+               "/tmp/heartbeat.wav"
+               output
+               (fn [source-output]
+                 (.write ^OutputStream source-output (byte-array [0])))
+               (fn [overlay-output]
+                 (let [directory
+                       (first (remove existing-directories
+                                      (composite-pipe-directories)))]
+                   (deliver owned-directory directory)
+                   (.write ^OutputStream overlay-output (byte-array [0]))
+                   (Files/createFile
+                    (.resolve directory "unrelated")
+                    (make-array
+                     java.nio.file.attribute.FileAttribute 0)))))
+              nil
+              (catch Throwable error error))]
+        (is (instance? DirectoryNotEmptyException cause)))
+      (finally
+        (when-let [directory (deref owned-directory 10 nil)]
+          (Files/deleteIfExists (.resolve directory "unrelated"))
+          (Files/deleteIfExists directory))
+        (Files/deleteIfExists output)
+        (Files/deleteIfExists ffmpeg)))))
+
+(deftest cancelled-composite-removes-its-process-and-pipe-directory
+  (let [pid-path (Files/createTempFile
+                  "agg-cancelled-composite-" ".pid"
+                  (make-array java.nio.file.attribute.FileAttribute 0))
+        _ (Files/deleteIfExists pid-path)
+        ffmpeg (executable-script! (cancellable-composite-script pid-path))
+        encoder (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
+        output (Files/createTempFile
+                "agg-cancelled-composite-" ".mp4"
+                (make-array java.nio.file.attribute.FileAttribute 0))
+        existing-directories (composite-pipe-directories)
+        call-finished (promise)
+        call
+        (future
+          (try
+            (media/encode-composite!
+             encoder
+             {:width 64 :height 36 :fps 25 :duration-seconds 9
+              :output-format "h264-mp4"
+              :fit-mode "letterbox"
+              :audio-mode "heartbeat-only"
+              :timeout-ms 10000}
+             "/tmp/heartbeat.wav"
+             output
+             (fn [source-output]
+               (.write ^OutputStream source-output (byte-array [0])))
+             (fn [overlay-output]
+               (.write ^OutputStream overlay-output (byte-array [0]))))
+            (catch Throwable _)
+            (finally
+              (deliver call-finished true))))]
+    (try
+      (let [_ (is (eventually? 2000 #(Files/exists
+                                      pid-path
+                                      (make-array
+                                       java.nio.file.LinkOption 0))))
+            directory
+            (first (remove existing-directories
+                           (composite-pipe-directories)))]
+        (is (some? directory))
+        (let [pid (Long/parseLong (str/trim (Files/readString pid-path)))
+              process (.get (ProcessHandle/of pid))]
+          (is (.isAlive process))
+          (is (true? (future-cancel call)))
+          (is (= true (deref call-finished 2000 false)))
+          (is (eventually? 2000 #(not (.isAlive process))))
+          (when directory
+            (is (eventually?
+                 2000
+                 #(not (Files/exists
+                        directory
+                        (make-array java.nio.file.LinkOption 0))))))))
+      (finally
+        (future-cancel call)
+        (when-let [directory
+                   (first (remove existing-directories
+                                  (composite-pipe-directories)))]
+          (Files/deleteIfExists (.resolve directory "overlay.rgba"))
+          (Files/deleteIfExists directory))
+        (Files/deleteIfExists pid-path)
         (Files/deleteIfExists output)
         (Files/deleteIfExists ffmpeg)))))
 
