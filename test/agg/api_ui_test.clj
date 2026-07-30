@@ -894,8 +894,8 @@
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "(async()=>{let outcome;try{"
-         "const workflow=document.getElementById('compose-workflow'),header=document.getElementById('wizard-current-step-header'),heading=document.getElementById('wizard-current-step-heading'),progress=document.getElementById('wizard-progress'),stepList=document.getElementById('wizard-step-list'),errorSummary=document.getElementById('wizard-error-summary'),back=document.getElementById('wizard-back'),next=document.getElementById('wizard-next'),finished=document.querySelector('input[name=\"wizard-outcome\"][value=\"finished-video\"]'),transparent=document.querySelector('input[name=\"wizard-outcome\"][value=\"transparent-overlay\"]');"
-         "const current=()=>workflow.dataset.currentStep,activePanels=()=>[...document.querySelectorAll('[data-wizard-panel]')].filter(panel=>!panel.hidden).map(panel=>panel.dataset.stepId),snapshot=()=>({current:current(),heading:heading.textContent,progress:progress.textContent,activePanels:activePanels(),currentSemantic:header.getAttribute('aria-current'),currentButtons:[...stepList.querySelectorAll('[aria-current=\"step\"]')].map(button=>button.dataset.stepId),backDisabled:back.disabled,nextHidden:next.hidden,focus:document.activeElement.id||null,noOverflow:document.documentElement.scrollWidth<=innerWidth});"
+         "const workflow=document.getElementById('compose-workflow'),header=document.getElementById('wizard-current-step-header'),heading=document.getElementById('wizard-current-step-heading'),progress=document.getElementById('wizard-progress'),stepList=document.getElementById('wizard-step-list'),errorSummary=document.getElementById('wizard-error-summary'),navigation=document.getElementById('wizard-navigation'),back=document.getElementById('wizard-back'),next=document.getElementById('wizard-next'),finished=document.querySelector('input[name=\"wizard-outcome\"][value=\"finished-video\"]'),transparent=document.querySelector('input[name=\"wizard-outcome\"][value=\"transparent-overlay\"]');"
+         "const current=()=>workflow.dataset.currentStep,activePanels=()=>[...document.querySelectorAll('[data-wizard-panel]')].filter(panel=>!panel.hidden).map(panel=>panel.dataset.stepId),snapshot=()=>({current:current(),heading:heading.textContent,progress:progress.textContent,activePanels:activePanels(),currentSemantic:header.getAttribute('aria-current'),currentButtons:[...stepList.querySelectorAll('[aria-current=\"step\"]')].map(button=>button.dataset.stepId),backDisabled:back.disabled,nextHidden:next.hidden,focus:document.activeElement.id||null,navigationParent:navigation.parentElement.id||null,navigationInsideCard:navigation.parentElement.classList.contains('card'),navigationAfterContent:navigation.parentElement.lastElementChild===navigation,navigationHasCardClass:navigation.classList.contains('card'),navigationCount:document.querySelectorAll('#wizard-navigation').length,navigationNoOverlap:next.hidden||back.getBoundingClientRect().right<=next.getBoundingClientRect().left,noOverflow:document.documentElement.scrollWidth<=innerWidth});"
          "const initial=snapshot();"
          "finished.click();const finishedRoute=snapshot();next.click();const source=snapshot();"
          "next.click();const sourceError={...snapshot(),message:errorSummary.textContent,errorFocused:document.activeElement===errorSummary};"
@@ -942,15 +942,15 @@
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
-         "const workflow=document.getElementById('compose-workflow'),raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),next=document.getElementById('wizard-next'),review=document.getElementById('review-step'),reviewSections=document.getElementById('review-sections'),timer=document.getElementById('timer-enabled'),timerStart=document.getElementById('timer-start-at'),timerEnd=document.getElementById('timer-end-at'),input=node=>node.dispatchEvent(new Event('input',{bubbles:true})),current=()=>workflow.dataset.currentStep,reviewSnapshot=()=>({current:current(),steps:[...reviewSections.querySelectorAll('[data-review-step]')].map(section=>section.dataset.reviewStep),titles:[...reviewSections.querySelectorAll('h3')].map(node=>node.textContent),summaries:[...reviewSections.querySelectorAll('p')].map(node=>node.textContent),editSteps:[...reviewSections.querySelectorAll('[data-edit-step]')].map(button=>button.dataset.editStep),nextHidden:next.hidden,actionsInside:review.contains(document.getElementById('preview-button'))&&review.contains(document.getElementById('submit-button')),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth});"
+         "const workflow=document.getElementById('compose-workflow'),raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),navigation=document.getElementById('wizard-navigation'),next=document.getElementById('wizard-next'),review=document.getElementById('review-step'),reviewSections=document.getElementById('review-sections'),timer=document.getElementById('timer-enabled'),timerStart=document.getElementById('timer-start-at'),timerEnd=document.getElementById('timer-end-at'),input=node=>node.dispatchEvent(new Event('input',{bubbles:true})),current=()=>workflow.dataset.currentStep,navigationSnapshot=()=>({insideCard:navigation.parentElement.classList.contains('card'),afterContent:navigation.parentElement.lastElementChild===navigation,insideOutputSettings:document.getElementById('output-settings-step').contains(navigation),hasCardClass:navigation.classList.contains('card'),count:document.querySelectorAll('#wizard-navigation').length}),reviewSnapshot=()=>({current:current(),steps:[...reviewSections.querySelectorAll('[data-review-step]')].map(section=>section.dataset.reviewStep),titles:[...reviewSections.querySelectorAll('h3')].map(node=>node.textContent),summaries:[...reviewSections.querySelectorAll('p')].map(node=>node.textContent),editSteps:[...reviewSections.querySelectorAll('[data-edit-step]')].map(button=>button.dataset.editStep),nextHidden:next.hidden,actionsInside:review.contains(document.getElementById('preview-button'))&&review.contains(document.getElementById('submit-button')),navigationInsideReview:review.contains(navigation),navigationInsideCard:navigation.parentElement.classList.contains('card'),navigationAfterContent:navigation.parentElement.lastElementChild===navigation,navigationHasCardClass:navigation.classList.contains('card'),navigationCount:document.querySelectorAll('#wizard-navigation').length,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth});"
          "raw.value=JSON.stringify(" (json/write-str request) ");apply.click();"
          "for(let count=0;count<7&&current()!=='review';count++)next.click();"
          "const initialReview=reviewSnapshot(),timerEdit=[...reviewSections.querySelectorAll('[data-edit-step]')].find(button=>button.dataset.editStep==='timer-overlay');timerEdit.click();const edited={current:current(),start:timerStart.value,end:timerEnd.value},previewResult=document.getElementById('preview-result');previewResult.dataset.previewOperation='preview-1';previewResult.className='preview-gallery';"
          "timer.click();const deselected={current:current(),requestTimer:JSON.parse(document.getElementById('render-request').value).timer||null,previewClass:previewResult.className};"
-         "const optionalEdit=[...reviewSections.querySelectorAll('[data-edit-step]')].find(button=>button.dataset.editStep==='optional-overlays');optionalEdit.click();timer.click();next.click();const restored={current:current(),start:timerStart.value,end:timerEnd.value};next.click();const finishLabel=next.textContent;next.click();const restoredReview=reviewSnapshot();"
+         "const optionalEdit=[...reviewSections.querySelectorAll('[data-edit-step]')].find(button=>button.dataset.editStep==='optional-overlays');optionalEdit.click();timer.click();next.click();const restored={current:current(),start:timerStart.value,end:timerEnd.value};next.click();const finishLabel=next.textContent,outputSettingsNavigation=navigationSnapshot();next.click();const restoredReview=reviewSnapshot();"
          "const transparent={summaryHidden:document.getElementById('no-source-output-summary').hidden,sourceControlsHidden:document.getElementById('source-output-controls').hidden,requestOutputFormat:JSON.parse(document.getElementById('render-request').value).outputFormat||null};"
          "raw.value=JSON.stringify(" (json/write-str finished-request) ");apply.click();for(let count=0;count<12&&current()!=='review';count++)next.click();const finishedReview=reviewSnapshot(),finishedGenerated=JSON.parse(document.getElementById('render-request').value),finished={review:finishedReview,summaryHidden:document.getElementById('no-source-output-summary').hidden,sourceControlsHidden:document.getElementById('source-output-controls').hidden,request:{outputFormat:finishedGenerated.outputFormat,fitMode:finishedGenerated.fitMode,audioMode:finishedGenerated.audioMode}};"
-         "outcome={viewportWidth:innerWidth,initialReview,edited,deselected,restored,finishLabel,restoredReview,transparent,finished,advancedOpen:document.querySelector('.advanced-output-settings').open};"
+         "outcome={viewportWidth:innerWidth,initialReview,edited,deselected,restored,finishLabel,outputSettingsNavigation,restoredReview,transparent,finished,advancedOpen:document.querySelector('.advanced-output-settings').open};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
          "</script>")
@@ -1166,7 +1166,7 @@
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
          "const shell=document.querySelector('.shell'),navigation=document.getElementById('wizard-navigation'),route=document.querySelector('input[name=\"wizard-outcome\"][value=\"" (if reveal-source? "finished-video" "transparent-overlay") "\"]'),next=document.getElementById('wizard-next');route.click();next.click();"
-         "const rect=node=>{const value=node.getBoundingClientRect();return {left:value.left,right:value.right,width:value.width};},referenceRect=rect(navigation),panels=[...document.querySelectorAll('[data-wizard-panel]')].filter(panel=>!panel.hidden),panelRects=panels.map(panel=>({step:panel.dataset.stepId,heading:panel.querySelector('h2,summary')?.textContent||'',...rect(panel)})),aligned=value=>Math.abs(value.left-referenceRect.left)<=.5&&Math.abs(value.right-referenceRect.right)<=.5;"
+         "const rect=node=>{const value=node.getBoundingClientRect();return {left:value.left,right:value.right,width:value.width};},referenceRect=rect(navigation.parentElement),panels=[...document.querySelectorAll('[data-wizard-panel]')].filter(panel=>!panel.hidden),panelRects=panels.map(panel=>({step:panel.dataset.stepId,heading:panel.querySelector('h2,summary')?.textContent||'',...rect(panel)})),aligned=value=>Math.abs(value.left-referenceRect.left)<=.5&&Math.abs(value.right-referenceRect.right)<=.5;"
          "outcome={viewportWidth:innerWidth,route:route.value,currentStep:document.getElementById('compose-workflow').dataset.currentStep,reference:referenceRect,panels:panelRects,aligned:panels.length===1&&panelRects.every(aligned),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,shellFits:shell.getBoundingClientRect().left>=-.5&&shell.getBoundingClientRect().right<=innerWidth+.5};"
          "}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
          "</script>")
@@ -2485,6 +2485,11 @@
       (is (= "review" (get-in outcome [:initialReview :current])))
       (is (true? (get-in outcome [:initialReview :nextHidden])))
       (is (true? (get-in outcome [:initialReview :actionsInside])))
+      (is (true? (get-in outcome [:initialReview :navigationInsideReview])))
+      (is (true? (get-in outcome [:initialReview :navigationInsideCard])))
+      (is (true? (get-in outcome [:initialReview :navigationAfterContent])))
+      (is (false? (get-in outcome [:initialReview :navigationHasCardClass])))
+      (is (= 1 (get-in outcome [:initialReview :navigationCount])))
       (is (some #(str/includes? % "ProRes 4444 MOV")
                 (get-in outcome [:initialReview :summaries])))
       (is (some #{(str "Timer start: 2026-07-17T11:00:00.4 · "
@@ -2500,6 +2505,12 @@
              (get-in outcome [:deselected :previewClass])))
       (is (= (:edited outcome) (:restored outcome)))
       (is (= "Finish" (:finishLabel outcome)))
+      (is (= {:insideCard true
+              :afterContent true
+              :insideOutputSettings true
+              :hasCardClass false
+              :count 1}
+             (:outputSettingsNavigation outcome)))
       (is (= (get-in outcome [:initialReview :steps])
              (get-in outcome [:restoredReview :steps])))
       (is (false? (:advancedOpen outcome)))
@@ -2545,6 +2556,12 @@
               :backDisabled true
               :nextHidden false
               :focus nil
+              :navigationParent "wizard-outcome-step"
+              :navigationInsideCard true
+              :navigationAfterContent true
+              :navigationHasCardClass false
+              :navigationCount 1
+              :navigationNoOverlap true
               :noOverflow true}
              (:initial outcome)))
       (is (= "Step 1 of 8" (get-in outcome [:finishedRoute :progress])))
@@ -2593,7 +2610,22 @@
                          "Timer start"))
       (is (= "optional-overlays" (get-in outcome [:pruned :current])))
       (is (= 6 (get-in outcome [:pruned :stepCount])))
-      (is (true? (get-in outcome [:pruned :noOverflow]))))
+      (is (true? (get-in outcome [:pruned :noOverflow])))
+      (doseq [[snapshot parent]
+              [[(:source outcome) "drive-source-step"]
+               [(:activity outcome) "activity-data-step"]
+               [(:matching outcome) "video-player"]
+               [(:confirmVideoClock outcome) "confirm-video-clock-step"]
+               [(:finishedTimespan outcome) "video-player"]
+               [(:optional outcome) "optional-overlays-step"]
+               [(:timer outcome) "video-player"]
+               [(:pruned outcome) "optional-overlays-step"]]]
+        (is (= parent (:navigationParent snapshot)) snapshot)
+        (is (true? (:navigationInsideCard snapshot)) snapshot)
+        (is (true? (:navigationAfterContent snapshot)) snapshot)
+        (is (false? (:navigationHasCardClass snapshot)) snapshot)
+        (is (= 1 (:navigationCount snapshot)) snapshot)
+        (is (true? (:navigationNoOverlap snapshot)) snapshot)))
     (is (= 1280 (:viewportWidth (first outcomes))))
     (is (<= (:viewportWidth (second outcomes)) 500))))
 
