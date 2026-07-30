@@ -72,6 +72,20 @@
                        :size (long (or size 0))}))))
   byte-range)
 
+(defn- require-playback-asset!
+  [{:keys [object-key generation size content-type profile-version] :as asset}]
+  (when-not
+   (and (valid-object-key? object-key)
+        (pos-int? generation)
+        (pos-int? size)
+        (= "video/mp4" content-type)
+        (= (get-in contract/contract-v1 [:profile :version])
+           profile-version))
+    (throw
+     (errors/raise! "Derivative asset is unavailable"
+                    {:type ::asset-unavailable})))
+  asset)
+
 (defn- asset-result [generation size content-type profile-version]
   {:generation generation
    :size size
@@ -118,6 +132,7 @@
                           profile-version]
                    :as asset}
                 byte-range]
+    (require-playback-asset! asset)
     (require-range! asset byte-range)
     (let [stored (get-in @state [:objects object-key])]
       (when-not (and stored
@@ -254,6 +269,7 @@
                           profile-version]
                    :as asset}
                 byte-range]
+    (require-playback-asset! asset)
     (require-range! asset byte-range)
     (try
       (let [blob-id (BlobId/of bucket object-key)

@@ -718,6 +718,145 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         "429": {$ref: "#/components/responses/AdmissionRejected"}
+  /v1/derivative-preparations/{preparationId}/playback-sessions:
+    parameters:
+      - $ref: "#/components/parameters/DerivativePreparationId"
+    post:
+      operationId: createDerivativePlaybackSession
+      tags: [Derivative preparation]
+      summary: Mint private playback authority for one completed preparation.
+      description: |
+        Revalidates the active session, membership generation, owner,
+        production environment, succeeded state, immutable asset generation,
+        fixed media profile, and asset expiry. The response contains only an
+        opaque same-origin URL. Object keys, source identity, account identity,
+        storage URLs, and signed authority remain outside URLs and
+        JavaScript-visible state. Authority is signed into the HttpOnly
+        `__session` cookie and expires after at most one hour.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "201":
+          description: Owner-bound derivative playback session created.
+          headers:
+            Set-Cookie:
+              description: Signed Firebase-compatible `__session` cookie containing the existing session and short-lived playback authority.
+              schema: {type: string}
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [playbackUrl, contentType, size]
+                properties:
+                  playbackUrl:
+                    type: string
+                    pattern: "^/v1/derivative-preparations/[0-9a-f-]{36}/playback/[0-9a-f-]{36}$"
+                  contentType: {const: video/mp4}
+                  size: {type: integer, minimum: 1}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "403": {$ref: "#/components/responses/CsrfRequired"}
+        "404":
+          description: The preparation or immutable private asset is unavailable.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      error: {const: derivative_playback_unavailable}
+  /v1/derivative-preparations/{preparationId}/playback/{playbackId}:
+    parameters:
+      - $ref: "#/components/parameters/DerivativePreparationId"
+    get:
+      operationId: streamDerivativePlayback
+      tags: [Derivative preparation]
+      summary: Stream one completed private-preview asset with bounded ranges.
+      description: |
+        Every request revalidates the active member session, owner,
+        preparation, production environment, succeeded state, immutable asset
+        identity and generation, fixed profile, path binding, purpose, and
+        expiry. Storage remains private. A missing Range requests the initial
+        bounded segment; bounded, open-ended, and suffix forms are capped at
+        8 MiB. Every successful response is a truthful 206 and is no-store.
+      parameters:
+        - name: playbackId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: Range
+          in: header
+          required: false
+          description: One byte range, including bounded, open-ended, or suffix form.
+          schema:
+            type: string
+            examples: ["bytes=0-1048575", "bytes=1048576-", "bytes=-1048576"]
+      responses:
+        "206":
+          description: Initial or requested bounded byte range.
+          headers:
+            Accept-Ranges:
+              schema: {const: bytes}
+            Content-Range:
+              schema: {type: string, example: "bytes 0-1048575/7340032"}
+            Content-Length:
+              schema: {type: integer, minimum: 1, maximum: 8388608}
+            Cache-Control:
+              schema: {const: no-store}
+            X-Content-Type-Options:
+              schema: {const: nosniff}
+          content:
+            video/mp4:
+              schema: {type: string, contentEncoding: binary}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "404":
+          description: The preparation or immutable private asset is unavailable.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      error: {const: derivative_playback_unavailable}
+        "416":
+          description: Range is malformed, multiple, empty, or outside the asset.
+          headers:
+            Accept-Ranges:
+              schema: {const: bytes}
+            Content-Range:
+              schema: {type: string, example: "bytes */7340032"}
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      error: {const: playback_range_not_satisfiable}
+        "502":
+          description: Private storage returned a missing or untruthful bounded range.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      error: {const: derivative_playback_unavailable}
   /v1/jobs/{jobId}:
     parameters:
       - $ref: "#/components/parameters/JobId"
@@ -1725,6 +1864,7 @@ components:
             - derivative_user_budget_exhausted
             - derivative_pool_budget_exhausted
             - derivative_preparation_not_found
+            - derivative_playback_unavailable
             - invalid_derivative_transition
             - daily_submission_limit_exhausted
             - monthly_budget_exhausted

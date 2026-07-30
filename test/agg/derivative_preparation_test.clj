@@ -107,7 +107,9 @@
             :content-type "video/mp4"
             :profile-version "h264-aac-1080p25-v1"
             :measurements {:output-bytes 1024}})]
-    (is (= {:object-key "private-object"
+    (is (= {:asset-id "00000000-0000-0000-0000-000000000193"
+            :environment "production"
+            :object-key "private-object"
             :generation 42
             :size 1024
             :content-type "video/mp4"
@@ -121,6 +123,10 @@
     (is (nil?
          (derivative/preparation-playback-asset
           service job-id (assoc owner :membership-version "membership-v2"))))
+    (swap! state assoc-in [:jobs job-id :environment] "proto")
+    (is (nil?
+         (derivative/preparation-playback-asset service job-id owner)))
+    (swap! state assoc-in [:jobs job-id :environment] "production")
     (is (= 1
            (admin/cancel-member-jobs!
             service {:subject "private-owner"

@@ -100,3 +100,33 @@
                   (ex-data error))))))
       (finally
         (Files/deleteIfExists path)))))
+
+(deftest playback-refuses-temporary-or-nonproduction-object-paths
+  (let [bytes (.getBytes "0123456789")
+        temporary-key "temporary/private-job/attempt-1/output.mp4"
+        store
+        (storage/->InMemoryAssetStore
+         (atom
+          {:next-generation 2
+           :objects
+           {temporary-key
+            {:generation 1
+             :size 10
+             :content-type "video/mp4"
+             :profile-version "h264-aac-1080p25-v1"
+             :bytes bytes}}}))
+        error-data
+        (try
+          (storage/open-range!
+           store
+           {:object-key temporary-key
+            :generation 1
+            :size 10
+            :content-type "video/mp4"
+            :profile-version "h264-aac-1080p25-v1"}
+           {:start 0 :end 4})
+          nil
+          (catch clojure.lang.ExceptionInfo error
+            (ex-data error)))]
+    (is (= ::storage/asset-unavailable (:type error-data)))
+    (is (not (contains? error-data :object-key)))))

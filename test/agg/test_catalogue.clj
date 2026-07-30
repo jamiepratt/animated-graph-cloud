@@ -16,6 +16,7 @@
    (entry 'agg.admin-test :api :auth)
    (entry 'agg.api-admin-test :api :auth)
    (entry 'agg.api-auth-test :api :auth)
+   (entry 'agg.api-derivative-playback-test :api :derivative :auth)
    (entry 'agg.api-derivative-preparation-test :api :derivative :proto)
    (entry 'agg.api-preview-test :api :render)
    (entry 'agg.api-profile-test :api)

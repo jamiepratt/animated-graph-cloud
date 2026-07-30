@@ -557,6 +557,7 @@
         (let [job (get-in @state [:jobs job-id])
               now (Instant/now clock)]
           (when (and (= :succeeded (:state job))
+                     (= "production" (:environment job))
                      (= (:subject identity) (:owner-subject job))
                      (= (:membership-version identity)
                         (:membership-version job))
@@ -570,7 +571,9 @@
                         (:asset-profile-version job))
                      (string? (:object-key job))
                      (not-empty (:object-key job)))
-            (cond-> {:object-key (:object-key job)
+            (cond-> {:asset-id (:asset-id job)
+                     :environment (:environment job)
+                     :object-key (:object-key job)
                      :generation (:asset-generation job)
                      :size (:asset-size job)
                      :content-type (:asset-content-type job)

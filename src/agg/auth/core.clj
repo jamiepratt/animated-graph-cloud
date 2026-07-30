@@ -375,6 +375,28 @@
               :exp (.getEpochSecond
                     (.plusSeconds (Instant/now clock) playback-seconds))}))
 
+(defn issue-derivative-playback-token
+  [{:keys [session-key clock]}
+   {:keys [subject preparation-id playback-id asset-id environment generation
+           mime-type size profile-version expires-at]}]
+  (let [now (Instant/now clock)
+        authority-expiry
+        (min (.getEpochSecond (.plusSeconds now playback-seconds))
+             (.getEpochSecond ^Instant expires-at))]
+    (sign-json session-key
+               {:purpose "production-derivative-playback"
+                :sub subject
+                :preparationId preparation-id
+                :playbackId playback-id
+                :assetId asset-id
+                :environment environment
+                :generation generation
+                :mimeType mime-type
+                :size size
+                :profileVersion profile-version
+                :assetExp (.getEpochSecond ^Instant expires-at)
+                :exp authority-expiry})))
+
 (defn playback-source
   [{:keys [session-key clock]} subject playback-id token]
   (try
@@ -420,6 +442,47 @@
         (throw (errors/raise! "Playback session is invalid or expired"
                               {:type ::invalid-playback})))
       {:mime-type mimeType :size size})
+    (catch clojure.lang.ExceptionInfo error
+      (if (= ::invalid-playback (:type (ex-data error)))
+        (throw error)
+        (throw (errors/raise! "Playback session is invalid"
+                              {:type ::invalid-playback}
+                              error))))
+    (catch Throwable error
+      (throw (errors/raise! "Playback session is invalid"
+                            {:type ::invalid-playback}
+                            error)))))
+
+(defn derivative-playback-session
+  [{:keys [session-key clock]} subject preparation-id playback-id token]
+  (try
+    (let [{:keys [purpose sub preparationId playbackId assetId environment
+                  generation mimeType size profileVersion assetExp exp]}
+          (verify-json session-key token ::invalid-playback)
+          now (.getEpochSecond (Instant/now clock))]
+      (when-not (and (= "production-derivative-playback" purpose)
+                     (= subject sub)
+                     (= preparation-id preparationId)
+                     (= playback-id playbackId)
+                     (not (str/blank? assetId))
+                     (= "production" environment)
+                     (pos-int? generation)
+                     (= "video/mp4" mimeType)
+                     (pos-int? size)
+                     (not (str/blank? profileVersion))
+                     (number? assetExp)
+                     (> (long assetExp) now)
+                     (number? exp)
+                     (> (long exp) now))
+        (throw (errors/raise! "Playback session is invalid or expired"
+                              {:type ::invalid-playback})))
+      {:asset-id assetId
+       :environment environment
+       :generation generation
+       :mime-type mimeType
+       :size size
+       :profile-version profileVersion
+       :asset-expires-at assetExp})
     (catch clojure.lang.ExceptionInfo error
       (if (= ::invalid-playback (:type (ex-data error)))
         (throw error)

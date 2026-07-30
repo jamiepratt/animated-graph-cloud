@@ -344,7 +344,10 @@
           (is (= "succeeded" (:state completed)))
           (is (= completed duplicate))
           (is (=
-               {:object-key
+               {:asset-id
+                "00000000-0000-0000-0000-000000000193"
+                :environment "production"
+                :object-key
                 "production/derivative-previews/v1/00000000-0000-0000-0000-000000000193.mp4"
                 :generation 42
                 :size 1024
