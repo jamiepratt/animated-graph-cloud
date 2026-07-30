@@ -14,5 +14,15 @@
          (routes/feature-for {:method "GET" :path "/v1/admin/members"})))
   (is (= :jobs
          (routes/feature-for {:method "POST" :path "/v1/jobs"})))
+  (is (= :jobs
+         (routes/feature-for
+          {:method "POST"
+           :path
+           "/v1/derivative-preparations/00000000-0000-0000-0000-000000000195/playback-sessions"})))
+  (is (= :jobs
+         (routes/feature-for
+          {:method "GET"
+           :path
+           "/v1/derivative-preparations/00000000-0000-0000-0000-000000000195/playback/00000000-0000-0000-0000-000000000196"})))
   (is (= :not-found
          (routes/feature-for {:method "GET" :path "/not-a-route"}))))

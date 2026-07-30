@@ -7,6 +7,18 @@
 (def job-id "00000000-0000-0000-0000-000000000191")
 (def asset-id "00000000-0000-0000-0000-000000000192")
 (def submitted-at (Instant/parse "2026-07-30T10:00:00Z"))
+(def completed-at (Instant/parse "2026-07-30T10:05:00Z"))
+
+(defn successful-completion []
+  {:type :complete
+   :outcome :succeeded
+   :asset-id asset-id
+   :object-key "private/object/key.mp4"
+   :asset-generation 42
+   :asset-size 1024
+   :asset-content-type "video/mp4"
+   :asset-profile-version "h264-aac-1080p25-v1"
+   :now completed-at})
 
 (defn submitted-job []
   (lifecycle/transition
@@ -20,11 +32,7 @@
 (defn succeeded-job []
   (lifecycle/transition
    (running-job)
-   {:type :complete
-    :outcome :succeeded
-    :asset-id asset-id
-    :object-key "private/object/key.mp4"
-    :now (Instant/parse "2026-07-30T10:05:00Z")}))
+   (successful-completion)))
 
 (deftest preparation-submit-dispatch-and-completion-produce-a-bounded-resource
   (let [submitted
@@ -36,11 +44,7 @@
                     :now (Instant/parse "2026-07-30T10:00:01Z")})
         succeeded
         (lifecycle/transition
-         running {:type :complete
-                  :outcome :succeeded
-                  :asset-id asset-id
-                  :object-key "private/object/key.mp4"
-                  :now (Instant/parse "2026-07-30T10:05:00Z")})
+         running (successful-completion))
         public (lifecycle/public-resource
                 (assoc succeeded
                        :owner-subject "private-owner"
@@ -52,6 +56,14 @@
            (select-keys submitted [:state :attempt])))
     (is (= :running (:state running)))
     (is (= :succeeded (:state succeeded)))
+    (is (= {:asset-generation 42
+            :asset-size 1024
+            :asset-content-type "video/mp4"
+            :asset-profile-version "h264-aac-1080p25-v1"
+            :completed-at completed-at}
+           (select-keys succeeded
+                        [:asset-generation :asset-size :asset-content-type
+                         :asset-profile-version :completed-at])))
     (is (= {:id job-id
             :state "succeeded"
             :attempt 1
@@ -105,6 +117,10 @@
                         :outcome :succeeded
                         :asset-id asset-id
                         :object-key "private/object/key.mp4"
+                        :asset-generation 42
+                        :asset-size 1024
+                        :asset-content-type "video/mp4"
+                        :asset-profile-version "h264-aac-1080p25-v1"
                         :now (Instant/parse "2026-07-30T10:05:00Z")})
             nil
             (catch clojure.lang.ExceptionInfo error

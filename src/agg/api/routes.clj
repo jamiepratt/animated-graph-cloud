@@ -38,7 +38,7 @@
         (re-matches
          (re-pattern
           (str "/v1/derivative-preparations/" uuid
-               "(?:/(?:cancel|retry))?"))
+               "(?:/(?:cancel|retry|playback-sessions|playback/" uuid "))?"))
          path)
         (= path "/internal/v1/derivative-preparations/reconcile")
         (re-matches

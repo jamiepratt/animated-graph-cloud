@@ -160,6 +160,55 @@
             (auth/issue-playback-token
              system (assoc source :playback-id "empty-source" :size 0)))))))
 
+(deftest derivative-playback-token-is-purpose-owner-job-uuid-generation-and-expiry-bound
+  (let [{:keys [system]} (drive-fixture)
+        authority {:subject "google-subject-1"
+                   :job-id "00000000-0000-0000-0000-000000000195"
+                   :playback-id "00000000-0000-0000-0000-000000000196"
+                   :generation 42
+                   :mime-type "video/mp4"
+                   :size 20}
+        token (auth/issue-derivative-playback-token system authority)
+        invalid?
+        (fn invalid?
+          ([candidate-system overrides]
+           (invalid? candidate-system overrides token))
+          ([candidate-system overrides candidate-token]
+           (try
+             (auth/derivative-playback-session
+              candidate-system
+              (merge (select-keys authority
+                                  [:subject :job-id :playback-id])
+                     overrides)
+              candidate-token)
+             false
+             (catch clojure.lang.ExceptionInfo error
+               (= ::auth/invalid-playback (:type (ex-data error)))))))]
+    (is (= {:generation 42 :mime-type "video/mp4" :size 20}
+           (auth/derivative-playback-session
+            system
+            (select-keys authority [:subject :job-id :playback-id])
+            token)))
+    (is (invalid? system {:subject "google-subject-2"}))
+    (is (invalid? system
+                  {:job-id "00000000-0000-0000-0000-000000000197"}))
+    (is (invalid? system
+                  {:playback-id "00000000-0000-0000-0000-000000000198"}))
+    (is (invalid?
+         (assoc system :clock
+                (Clock/fixed (Instant/parse "2026-07-17T13:00:01Z")
+                             ZoneOffset/UTC))
+         {}))
+    (is (invalid?
+         system {}
+         (auth/issue-completed-playback-token
+          system
+          {:subject (:subject authority)
+           :job-id (:job-id authority)
+           :playback-id (:playback-id authority)
+           :mime-type "video/mp4"
+           :size 20})))))
+
 (deftest login-callback-requires-matching-unexpired-state-and-allowlisted-email
   (let [exchanges (atom [])
         system (assoc (:system (drive-fixture)) :oauth (fake-oauth exchanges))

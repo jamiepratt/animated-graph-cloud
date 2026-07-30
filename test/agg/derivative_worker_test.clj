@@ -205,6 +205,8 @@
               {:job-id job-id
                :attempt 2
                :profile worker/profile
+               :asset {:id job-id
+                       :object-key "derivatives/opaque-final.mp4"}
                :source {:file-id "private-id"
                         :drive-version "private-version"
                         :bytes 4096
@@ -242,15 +244,131 @@
                :duration-seconds 10.0
                :video {:codec "h264"}
                :audio {:codec "aac"}
-               :fast-start? true})})
+               :fast-start? true})
+            :publish-derivative!
+            (fn [service publication]
+              (swap! calls conj
+                     [:publish service
+                      (select-keys publication
+                                   [:job-id :attempt :asset-id :object-key
+                                    :content-type :size :profile-version])])
+              {:generation 42
+               :size 2048
+               :content-type "video/mp4"
+               :profile-version (:version worker/profile)})
+            :complete-preparation-attempt!
+            (fn [service completed-job-id attempt completion]
+              (swap! calls conj
+                     [:complete service completed-job-id attempt completion])
+              {:id completed-job-id :state "succeeded"})})
           (finally
             (Files/deleteIfExists output)))]
-    (is (= :derivative-ready (:classification result)))
+    (is (= {:id job-id :state "succeeded"} result))
     (is (= [[:load :service job-id 2]
             [:access :service job-id 2]
-            [:cancel? :service job-id 2]]
+            [:cancel? :service job-id 2]
+            [:publish :service
+             {:job-id job-id
+              :attempt 2
+              :asset-id job-id
+              :object-key "derivatives/opaque-final.mp4"
+              :content-type "video/mp4"
+              :size 2048
+              :profile-version (:version worker/profile)}]
+            [:cancel? :service job-id 2]
+            [:complete :service job-id 2
+             {:asset-id job-id
+              :object-key "derivatives/opaque-final.mp4"
+              :generation 42
+              :size 2048
+              :content-type "video/mp4"
+              :profile-version (:version worker/profile)
+              :measurements {:output-bytes 2048}}]]
            @calls))
+    (is (not (Files/exists
+              output (make-array java.nio.file.LinkOption 0))))
     (is (not (str/includes? (pr-str result) "private")))))
+
+(deftest cancellation-racing-publication-removes-the-exact-published-generation
+  (let [job-id "00000000-0000-0000-0000-000000000195"
+        output (Files/createTempFile
+                "agg-worker-publish-race-" ".mp4"
+                (make-array FileAttribute 0))
+        cancellation-checks (atom 0)
+        deleted (atom [])
+        completed? (atom false)
+        dependencies
+        {:service :service
+         :output-path output
+         :load-preparation-attempt
+         (fn [_ _ _]
+           {:job-id job-id
+            :attempt 1
+            :profile worker/profile
+            :asset {:id job-id
+                    :object-key "derivatives/opaque-final.mp4"}
+            :source {:file-id "private-id"
+                     :drive-version "private-version"
+                     :bytes 4096
+                     :duration-seconds 10}
+            :owner {:subject "private-owner"
+                    :membership-version "private-membership"}})
+         :source-access!
+         (fn [_ _ _]
+           {:gateway :gateway
+            :access-token "private-authority"
+            :file-id "private-id"})
+         :preparation-cancellation-requested?
+         (fn [_ _ _]
+           (pos? (swap! cancellation-checks inc)))
+         :start-source-proxy!
+         (fn [_]
+           (proxy {:upstream-bytes 4096
+                   :request-count 1
+                   :retry-count 0
+                   :cache-hit-count 0
+                   :failure-reason nil}))
+         :inspect-source! (fn [_] {:width 320 :height 180 :audio? true})
+         :encode!
+         (fn [request]
+           {:output-path (:output-path request)
+            :content-type "video/mp4"
+            :output-bytes 2048
+            :duration-seconds 10.0
+            :video {:codec "h264"}
+            :audio {:codec "aac"}
+            :fast-start? true})
+         :publish-derivative!
+         (fn [_ _]
+           {:generation 42
+            :size 2048
+            :content-type "video/mp4"
+            :profile-version (:version worker/profile)})
+         :delete-derivative!
+         (fn [_ asset]
+           (swap! deleted conj asset))
+         :complete-preparation-attempt!
+         (fn [& _] (reset! completed? true))
+         :acknowledge-preparation-cancellation!
+         (fn [& _])}]
+    (try
+      (is (= ::worker/publication-cancelled
+             (:type
+              (try
+                (worker/run-cloud-attempt!
+                 {:job-id job-id :attempt 1}
+                 dependencies)
+                nil
+                (catch clojure.lang.ExceptionInfo error
+                  (ex-data error))))))
+      (is (false? @completed?))
+      (is (= [{:object-key "derivatives/opaque-final.mp4"
+               :generation 42}]
+             @deleted))
+      (is (not (Files/exists
+                output (make-array java.nio.file.LinkOption 0))))
+      (finally
+        (Files/deleteIfExists output)))))
 
 (deftest proxy-budget-failure-wins-over-ffmpeg-symptoms
   (let [data
@@ -296,6 +414,8 @@
            {:job-id job-id
             :attempt 3
             :profile worker/profile
+            :asset {:id job-id
+                    :object-key "derivatives/opaque-final.mp4"}
             :source {:file-id "private-id"
                      :drive-version nil
                      :bytes 4096

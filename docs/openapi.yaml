@@ -722,6 +722,121 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         "429": {$ref: "#/components/responses/AdmissionRejected"}
+  /v1/derivative-preparations/{preparationId}/playback-sessions:
+    parameters:
+      - $ref: "#/components/parameters/DerivativePreparationId"
+    post:
+      operationId: createDerivativePlaybackSession
+      tags: [Derivative preparation]
+      summary: Create private playback authority for one completed derivative.
+      description: |
+        Revalidates the active owner and exact membership generation, completed
+        asset generation, profile, size, content type, and expiry. The returned
+        URL contains only preparation and playback UUIDs. Object keys and signed
+        storage authority remain server-side.
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "201":
+          description: Derivative playback session created.
+          headers:
+            Set-Cookie:
+              description: Signed Firebase-compatible `__session` cookie containing the existing session and short-lived derivative playback authority.
+              schema: {type: string}
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [playbackUrl, contentType, size]
+                properties:
+                  playbackUrl:
+                    type: string
+                    pattern: "^/v1/derivative-preparations/[0-9a-f-]{36}/playback/[0-9a-f-]{36}$"
+                  contentType: {const: video/mp4}
+                  size: {type: integer, minimum: 1}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "403": {$ref: "#/components/responses/CsrfRequired"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "503": {$ref: "#/components/responses/CapacityUnavailable"}
+  /v1/derivative-preparations/{preparationId}/playback/{playbackId}:
+    parameters:
+      - $ref: "#/components/parameters/DerivativePreparationId"
+    get:
+      operationId: streamDerivativePlayback
+      tags: [Derivative preparation]
+      summary: Stream one exact completed derivative generation.
+      description: |
+        Revalidates the active member session, owner, membership generation,
+        playback UUID, completed asset generation, metadata, and expiry on every
+        request. One closed, open-ended, or suffix range is accepted and capped
+        at 8 MiB. Successful responses are always truthful private 206 ranges.
+      parameters:
+        - name: playbackId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: Range
+          in: header
+          required: false
+          description: One byte range, including bounded, open-ended, or suffix form.
+          schema:
+            type: string
+            examples: ["bytes=0-1048575", "bytes=1048576-", "bytes=-1048576"]
+      responses:
+        "206":
+          description: Requested exact derivative byte range.
+          headers:
+            Accept-Ranges:
+              schema: {const: bytes}
+            Content-Range:
+              schema: {type: string, example: "bytes 0-1048575/7340032"}
+            Content-Length:
+              schema: {type: integer, minimum: 1, maximum: 8388608}
+            Cache-Control:
+              schema: {const: no-store}
+            X-Content-Type-Options:
+              schema: {const: nosniff}
+          content:
+            video/mp4:
+              schema: {type: string, contentEncoding: binary}
+        "401": {$ref: "#/components/responses/AuthenticationRequired"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "416":
+          description: Range is malformed, multiple, empty, or outside the derivative.
+          headers:
+            Accept-Ranges:
+              schema: {const: bytes}
+            Content-Range:
+              schema: {type: string, example: "bytes */7340032"}
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      error: {const: playback_range_not_satisfiable}
+        "503":
+          description: The exact immutable derivative generation is unavailable.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      error: {const: derivative_asset_unavailable}
   /v1/jobs/{jobId}:
     parameters:
       - $ref: "#/components/parameters/JobId"
@@ -1717,6 +1832,7 @@ components:
             - source_video_too_large
             - invalid_source_video
             - drive_source_unavailable
+            - derivative_asset_unavailable
             - invalid_idempotency_key
             - idempotency_conflict
             - derivative_source_not_renderable

@@ -4,6 +4,7 @@
             [agg.auth.gcp :as auth-gcp]
             [agg.derivative.contract :as contract]
             [agg.derivative.lifecycle :as lifecycle]
+            [agg.derivative.storage :as storage]
             [agg.drive.derivative :as drive-derivative]
             [agg.errors :as errors]
             [agg.render.derivative :as render-derivative]
@@ -134,6 +135,14 @@
     (:asset-expires-at job)
     (assoc "assetExpiresAt" (Date/from (:asset-expires-at job)))
     (:object-key job) (assoc "objectKey" (:object-key job))
+    (:asset-generation job)
+    (assoc "assetGeneration" (long (:asset-generation job)))
+    (:asset-size job) (assoc "assetSize" (long (:asset-size job)))
+    (:asset-content-type job)
+    (assoc "assetContentType" (:asset-content-type job))
+    (:asset-profile-version job)
+    (assoc "assetProfileVersion" (:asset-profile-version job))
+    (:completed-at job) (assoc "completedAt" (Date/from (:completed-at job)))
     (:failure-code job) (assoc "failureCode" (:failure-code job))
     (contains? job :retryable)
     (assoc "retryable" (boolean (:retryable job)))
@@ -168,6 +177,16 @@
         (get data "assetExpiresAt")
         (assoc :asset-expires-at (date->instant (get data "assetExpiresAt")))
         (get data "objectKey") (assoc :object-key (get data "objectKey"))
+        (get data "assetGeneration")
+        (assoc :asset-generation (long (get data "assetGeneration")))
+        (get data "assetSize")
+        (assoc :asset-size (long (get data "assetSize")))
+        (get data "assetContentType")
+        (assoc :asset-content-type (get data "assetContentType"))
+        (get data "assetProfileVersion")
+        (assoc :asset-profile-version (get data "assetProfileVersion"))
+        (get data "completedAt")
+        (assoc :completed-at (date->instant (get data "completedAt")))
         (get data "failureCode")
         (assoc :failure-code (get data "failureCode"))
         (contains? data "retryable")
@@ -195,16 +214,44 @@
     (invalid-attempt!))
   job)
 
-(defn- attempt-resource [job]
-  {:job-id (:id job)
-   :attempt (:attempt job)
-   :profile render-derivative/profile-v1
-   :source {:file-id (:file-id job)
-            :drive-version (:drive-version job)
-            :bytes (:source-bytes job)
-            :duration-seconds (:source-duration-seconds job)}
-   :owner {:subject (:owner-subject job)
-           :membership-version (:membership-version job)}})
+(defn- exact-completion? [job result]
+  (= [(:asset-id job)
+      (:object-key job)
+      (:asset-generation job)
+      (:asset-size job)
+      (:asset-content-type job)
+      (:asset-profile-version job)]
+     [(:asset-id result)
+      (:object-key result)
+      (:generation result)
+      (:size result)
+      (:content-type result)
+      (:profile-version result)]))
+
+(declare request-fingerprint)
+
+(defn- attempt-resource [secret job]
+  (let [fingerprint
+        (:fingerprint
+         (request-fingerprint
+          secret
+          {:subject (:owner-subject job)
+           :file-id (:file-id job)
+           :drive-version (:drive-version job)
+           :source-bytes (:source-bytes job)
+           :profile-version (:profile-version job)}
+          (:id job)))]
+    {:job-id (:id job)
+     :attempt (:attempt job)
+     :profile render-derivative/profile-v1
+     :asset {:id (:id job)
+             :object-key (str "derivatives/" fingerprint ".mp4")}
+     :source {:file-id (:file-id job)
+              :drive-version (:drive-version job)
+              :bytes (:source-bytes job)
+              :duration-seconds (:source-duration-seconds job)}
+     :owner {:subject (:owner-subject job)
+             :membership-version (:membership-version job)}}))
 
 (defn- member-identity [request]
   {:subject (:subject request)
@@ -263,6 +310,11 @@
    "profileVersion" (:profile-version job)
    "assetId" (:asset-id job)
    "objectKey" (:object-key job)
+   "assetGeneration" (long (:asset-generation job))
+   "assetSize" (long (:asset-size job))
+   "assetContentType" (:asset-content-type job)
+   "assetProfileVersion" (:asset-profile-version job)
+   "completedAt" (Date/from (:completed-at job))
    "assetExpiresAt" (Date/from (:asset-expires-at job))
    "expireAt" (Date/from (:asset-expires-at job))})
 
@@ -270,7 +322,12 @@
   [^DocumentSnapshot snapshot candidate now minimum-remaining-seconds]
   (when (.exists snapshot)
     (let [data (.getData snapshot)
-          expires-at (date->instant (get data "assetExpiresAt"))]
+          expires-at (date->instant (get data "assetExpiresAt"))
+          generation (get data "assetGeneration")
+          size (get data "assetSize")
+          content-type (get data "assetContentType")
+          asset-profile-version (get data "assetProfileVersion")
+          completed-at (date->instant (get data "completedAt"))]
       (when (and expires-at
                  (not (.isBefore
                        expires-at
@@ -281,12 +338,22 @@
                  (= (:drive-version candidate)
                     (get data "sourceDriveVersion"))
                  (= (:profile-version candidate)
-                    (get data "profileVersion")))
+                    (get data "profileVersion"))
+                 (pos-int? generation)
+                 (pos-int? size)
+                 (= "video/mp4" content-type)
+                 (= (:profile-version candidate) asset-profile-version)
+                 completed-at)
         (assoc candidate
                :state :succeeded
                :reservation-minor-units 0
                :asset-id (get data "assetId")
                :object-key (get data "objectKey")
+               :asset-generation (long generation)
+               :asset-size (long size)
+               :asset-content-type content-type
+               :asset-profile-version asset-profile-version
+               :completed-at completed-at
                :asset-expires-at expires-at)))))
 
 (defn- current-admission [snapshot day month]
@@ -639,7 +706,7 @@
 (defrecord FirestorePreparationService
            [^Firestore firestore queue launcher ^Clock clock
             fingerprint-secret member-directory limits source-gateway
-            access-provider]
+            access-provider asset-store]
   lifecycle/PreparationAccess
   (owns-preparation? [_ job-id subject]
     (let [job
@@ -650,6 +717,41 @@
       (and (= subject (:owner-subject job))
            (not (contains? #{:expired :revoked} (:state job)))
            (.isBefore (Instant/now clock) (:metadata-expires-at job)))))
+  lifecycle/PreparationPlaybackAccess
+  (preparation-playback-asset [_ job-id identity]
+    (transaction!
+     firestore
+     (fn [transaction]
+       (let [job
+             (snapshot-job
+              (transaction-snapshot
+               transaction
+               (.document
+                (.collection firestore "derivative-preparations")
+                job-id)))
+             now (Instant/now clock)]
+         (require-transaction-member! member-directory transaction identity)
+         (when (and (= :succeeded (:state job))
+                    (= (:subject identity) (:owner-subject job))
+                    (= (:membership-version identity)
+                       (:membership-version job))
+                    (instance? Instant (:completed-at job))
+                    (instance? Instant (:asset-expires-at job))
+                    (.isBefore now (:asset-expires-at job))
+                    (pos-int? (:asset-generation job))
+                    (pos-int? (:asset-size job))
+                    (= "video/mp4" (:asset-content-type job))
+                    (= (:profile-version job)
+                       (:asset-profile-version job))
+                    (string? (:object-key job))
+                    (not-empty (:object-key job)))
+           {:object-key (:object-key job)
+            :generation (:asset-generation job)
+            :size (:asset-size job)
+            :content-type (:asset-content-type job)
+            :profile-version (:asset-profile-version job)
+            :completed-at (:completed-at job)
+            :expires-at (:asset-expires-at job)})))))
   lifecycle/PreparationService
   (submit-preparation! [_ idempotency-key raw-request]
     (require-idempotency-key! idempotency-key)
@@ -1149,9 +1251,12 @@
            attempt)]
       (when-not (= :running (:state job))
         (invalid-attempt!))
-      (attempt-resource job)))
+      (attempt-resource fingerprint-secret job)))
   (complete-preparation-attempt! [_ job-id attempt result]
     (contract/validate-work! (:measurements result))
+    (when-not (= (:size result)
+                 (get-in result [:measurements :output-bytes]))
+      (invalid-attempt!))
     (let [job-ref (.document
                    (.collection firestore "derivative-preparations") job-id)
           admission-ref
@@ -1168,12 +1273,20 @@
                      (transaction-snapshot transaction job-ref))
                     attempt)
                    updated
-                   (lifecycle/transition
-                    job {:type :complete
-                         :outcome :succeeded
-                         :asset-id (:asset-id result)
-                         :object-key (:object-key result)
-                         :now (Instant/now clock)})
+                   (if (= :succeeded (:state job))
+                     (if (exact-completion? job result)
+                       job
+                       (invalid-attempt!))
+                     (lifecycle/transition
+                      job {:type :complete
+                           :outcome :succeeded
+                           :asset-id (:asset-id result)
+                           :object-key (:object-key result)
+                           :asset-generation (:generation result)
+                           :asset-size (:size result)
+                           :asset-content-type (:content-type result)
+                           :asset-profile-version (:profile-version result)
+                           :now (Instant/now clock)}))
                    fingerprint
                    (request-fingerprint
                     fingerprint-secret
@@ -1339,7 +1452,7 @@
 
 (defn preparation-service
   [{:keys [firestore queue launcher clock fingerprint-secret member-directory
-           limits source-gateway access-provider]
+           limits source-gateway access-provider asset-store]
     :or {clock (Clock/systemUTC)}}]
   (when-not (and (string? fingerprint-secret)
                  (not-empty fingerprint-secret))
@@ -1349,7 +1462,25 @@
   (->FirestorePreparationService
    (or firestore (.getService (FirestoreOptions/getDefaultInstance)))
    queue launcher clock fingerprint-secret member-directory
-   (merge (default-limits) limits) source-gateway access-provider))
+   (merge (default-limits) limits) source-gateway access-provider asset-store))
+
+(defn publish-derivative!
+  [service publication]
+  (let [asset-store (:asset-store service)]
+    (when-not (satisfies? storage/AssetStore asset-store)
+      (throw
+       (errors/raise! "Derivative asset storage is unavailable"
+                      {:type ::storage/invalid-configuration})))
+    (storage/publish-verified! asset-store publication)))
+
+(defn delete-derivative!
+  [service asset]
+  (let [asset-store (:asset-store service)]
+    (when-not (satisfies? storage/AssetStore asset-store)
+      (throw
+       (errors/raise! "Derivative asset storage is unavailable"
+                      {:type ::storage/invalid-configuration})))
+    (storage/delete-generation! asset-store asset)))
 
 (defn source-access!
   "Returns exact-attempt Drive authority only inside the worker boundary."
@@ -1396,6 +1527,7 @@
   "Builds the worker-side exact-attempt and Drive-authority service."
   ([]
    (let [environment (System/getenv)
+         config (runtime-config environment)
          project
          (get environment "GOOGLE_CLOUD_PROJECT"
               "animated-graph-cloud-jp")
@@ -1418,8 +1550,9 @@
        :member-directory member-directory
        :fingerprint-secret
        (get environment "AGG_TOKEN_HASH_PEPPER")
+       :asset-store (storage/gcs-asset-store (:bucket config))
        :source-gateway (:gateway source)
        :access-provider (:access-provider source)
-       :limits (:admission-limits (runtime-config environment))})))
+       :limits (:admission-limits config)})))
   ([options]
    (preparation-service options)))

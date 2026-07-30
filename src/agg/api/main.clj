@@ -5,6 +5,7 @@
             [agg.auth.core :as auth]
             [agg.derivative.contract :as derivative-contract]
             [agg.derivative.lifecycle :as derivative]
+            [agg.derivative.storage :as derivative-storage]
             [agg.drive.core :as drive]
             [agg.drive.gcp :as drive-gcp]
             [agg.early-access.core :as early-access]
@@ -83,6 +84,15 @@
 (def ^:private derivative-preparation-action-path-pattern
   (re-pattern (str "/v1/derivative-preparations/"
                    uuid-path-component "/(?:cancel|retry)")))
+
+(def ^:private derivative-playback-session-path-pattern
+  (re-pattern (str "/v1/derivative-preparations/"
+                   uuid-path-component "/playback-sessions")))
+
+(def ^:private derivative-playback-path-pattern
+  (re-pattern (str "/v1/derivative-preparations/"
+                   uuid-path-component "/playback/"
+                   uuid-path-component)))
 
 (def ^:private public-assets
   {"/openapi.yaml" ["openapi.yaml" "application/yaml; charset=utf-8"]
@@ -1976,6 +1986,108 @@
                 output (.getResponseBody exchange)]
       (.transferTo input output))))
 
+(defn- derivative-playback-asset!
+  [service job-id identity]
+  (when-not (satisfies? derivative/PreparationPlaybackAccess service)
+    (throw
+     (errors/raise! "Derivative playback access is unavailable"
+                    {:type ::derivative/preparation-not-found})))
+  (or (derivative/preparation-playback-asset service job-id identity)
+      (throw
+       (errors/raise! "Derivative preparation does not exist"
+                      {:type ::derivative/preparation-not-found}))))
+
+(defn- create-derivative-playback-session!
+  [^HttpExchange exchange service auth-system job-id]
+  (let [user (require-session-user! exchange auth-system)
+        _ (require-csrf! exchange auth-system user)
+        request (request-json exchange)
+        _ (when-not (empty? request)
+            (throw
+             (errors/raise! "Derivative playback request is invalid"
+                            {:type ::invalid-playback-source})))
+        {:keys [generation content-type size]}
+        (derivative-playback-asset! service job-id user)
+        playback-id (str (UUID/randomUUID))
+        playback-path
+        (str "/v1/derivative-preparations/" job-id
+             "/playback/" playback-id)
+        playback-token
+        (auth/issue-derivative-playback-token
+         auth-system
+         {:subject (:subject user)
+          :job-id job-id
+          :playback-id playback-id
+          :generation generation
+          :mime-type content-type
+          :size size})
+        browser-token
+        (auth/issue-browser-cookie
+         auth-system
+         (assoc (or (browser-cookie exchange auth-system) {})
+                :session (session-token exchange auth-system)
+                :playback playback-token))]
+    (.add (.getResponseHeaders exchange) "Set-Cookie"
+          (browser-cookie-header browser-token))
+    (respond-json! exchange 201
+                   {:playbackUrl playback-path
+                    :contentType content-type
+                    :size size})))
+
+(defn- stream-derivative-playback!
+  [^HttpExchange exchange service asset-store auth-system path]
+  (let [user (require-session-user! exchange auth-system)
+        [job-id playback-id]
+        (rest
+         (re-matches
+          (re-pattern
+           (str "/v1/derivative-preparations/("
+                uuid-path-component ")/playback/("
+                uuid-path-component ")"))
+          path))
+        session
+        (auth/derivative-playback-session
+         auth-system
+         {:subject (:subject user)
+          :job-id job-id
+          :playback-id playback-id}
+         (:playback (browser-cookie exchange auth-system)))
+        asset (derivative-playback-asset! service job-id user)
+        _ (when-not
+           (and (= (:generation session) (:generation asset))
+                (= (:mime-type session) (:content-type asset))
+                (= (:size session) (:size asset)))
+            (throw
+             (errors/raise! "Derivative playback asset changed"
+                            {:type ::auth/invalid-playback})))
+        range-header
+        (some-> exchange .getRequestHeaders (.getFirst "Range"))
+        _ (when (and (some? range-header) (str/blank? range-header))
+            (invalid-playback-range! (:size asset)))
+        {:keys [start end] :as byte-range}
+        (playback-range range-header (:size asset))
+        {:keys [body] :as stored-response}
+        (derivative-storage/open-range!
+         asset-store asset (select-keys byte-range [:start :end]))
+        content-length (inc (- end start))]
+    (when-not
+     (valid-playback-response? stored-response start end (:size asset))
+      (when body (.close ^java.io.InputStream body))
+      (throw
+       (errors/raise! "Derivative storage response was invalid"
+                      {:type ::derivative-storage/asset-unavailable})))
+    (doto (.getResponseHeaders exchange)
+      (.set "Content-Type" (:content-type asset))
+      (.set "Cache-Control" "no-store")
+      (.set "X-Content-Type-Options" "nosniff")
+      (.set "Accept-Ranges" "bytes")
+      (.set "Content-Range"
+            (str "bytes " start "-" end "/" (:size asset))))
+    (.sendResponseHeaders exchange 206 content-length)
+    (with-open [input ^java.io.InputStream body
+                output (.getResponseBody exchange)]
+      (.transferTo input output))))
+
 (defn- cancel-job! [exchange job-service job-id]
   (let [job (jobs/cancel-job! job-service job-id)]
     (respond-json! exchange
@@ -2249,6 +2361,7 @@
 (defn- route-handler [{:keys [frame-renderer video-encoder job-service
                               preview-job-service preview-asset-store
                               derivative-preparation-service
+                              derivative-asset-store
                               upload-signer auth-system picker-api-key
                               picker-app-id token-service admin-service log-store
                               early-access-system service-profile clock]
@@ -2599,6 +2712,27 @@
                                         (retry-derivative-preparation!
                                          exchange derivative-preparation-service
                                          job-id))))
+
+                                  (and auth-system
+                                       derivative-preparation-service
+                                       derivative-asset-store
+                                       (= "POST" method)
+                                       (re-matches
+                                        derivative-playback-session-path-pattern
+                                        path))
+                                  (create-derivative-playback-session!
+                                   exchange derivative-preparation-service
+                                   auth-system (nth (.split path "/") 3))
+
+                                  (and auth-system
+                                       derivative-preparation-service
+                                       derivative-asset-store
+                                       (= "GET" method)
+                                       (re-matches
+                                        derivative-playback-path-pattern path))
+                                  (stream-derivative-playback!
+                                   exchange derivative-preparation-service
+                                   derivative-asset-store auth-system path)
 
                                   (and upload-signer (= "POST" method) (= "/v1/uploads" path))
                                   (do (->> (authenticated-user! exchange auth-system token-service)
@@ -2983,6 +3117,16 @@
                                  {:error "not_allowlisted"
                                   :requestId request-id
                                   :retryable false})
+
+                  ::derivative-storage/asset-unavailable
+                  (respond-json! exchange 503
+                                 {:error "derivative_asset_unavailable"
+                                  :requestId request-id
+                                  :retryable true})
+
+                  ::derivative-storage/invalid-range
+                  (respond-invalid-playback-range!
+                   exchange (or (:size (ex-data error)) 0))
 
                   ::contract/invalid-source-metadata
                   (if (preview-path? path)

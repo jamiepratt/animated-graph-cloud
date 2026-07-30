@@ -5,6 +5,7 @@
             [agg.auth.core :as auth]
             [agg.auth.gcp :as auth-gcp]
             [agg.derivative.gcp :as derivative-gcp]
+            [agg.derivative.storage :as derivative-storage]
             [agg.jobs.lifecycle :as lifecycle]
             [agg.logs.core :as logs]
             [agg.logs.gcp :as logs-gcp]
@@ -1176,6 +1177,11 @@
               :early-access-recipient
               (env "AGG_EARLY_ACCESS_RECIPIENT" "me@jamiep.org")}))
           derivative-config (derivative-gcp/runtime-config)
+          derivative-asset-store
+          (when (and auth-enabled?
+                     (:dispatcher-url derivative-config))
+            (derivative-storage/gcs-asset-store
+             (:bucket derivative-config)))
           service
           (job-service
            {:firestore firestore
@@ -1227,6 +1233,7 @@
                 :access-provider
                 #(auth/drive-access!
                   (:auth-system auth-dependencies) %)
+                :asset-store derivative-asset-store
                 :limits (:admission-limits derivative-config)})))
           job-dependencies
           (cond-> {:upload-signer store
@@ -1236,6 +1243,7 @@
             derivative-service
             (assoc
              :derivative-preparation-service derivative-service
+             :derivative-asset-store derivative-asset-store
              :derivative-tasks-service-account
              (:tasks-service-account derivative-config)))]
       (if auth-enabled?

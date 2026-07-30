@@ -76,12 +76,14 @@
   (or (nil? value) (present-string? value)))
 
 (defn- require-attempt-record!
-  [{:keys [job-id attempt profile source owner] :as record}
+  [{:keys [job-id attempt profile asset source owner] :as record}
    expected-job-id expected-attempt]
   (when-not
    (and (= expected-job-id job-id)
         (= expected-attempt attempt)
         (= render-derivative/profile-v1 profile)
+        (= job-id (:id asset))
+        (present-string? (:object-key asset))
         (present-string? (:file-id source))
         (valid-optional-string? (:drive-version source))
         (pos-int? (:bytes source))
@@ -128,7 +130,9 @@
   [{:keys [service fail-preparation-attempt!
            acknowledge-preparation-cancellation!]}
    job-id attempt error]
-  (if (= ::render-derivative/cancelled (:type (ex-data error)))
+  (if (contains? #{::render-derivative/cancelled
+                   ::publication-cancelled}
+                 (:type (ex-data error)))
     (when acknowledge-preparation-cancellation!
       (acknowledge-preparation-cancellation! service job-id attempt))
     (when fail-preparation-attempt!
@@ -143,16 +147,18 @@
           :retryable (retryable-failure? (:type data))})))))
 
 (defn run-cloud-attempt!
-  "Loads one exact private attempt and returns its verified local artifact."
+  "Loads, verifies, immutably publishes, and completes one exact private attempt."
   [{:keys [job-id attempt]}
    {:keys [service output-path load-preparation-attempt source-access!
-           preparation-cancellation-requested?]
+           preparation-cancellation-requested? publish-derivative!
+           delete-derivative! complete-preparation-attempt!]
     :as dependencies}]
   (let [record
         (require-attempt-record!
          (load-preparation-attempt service job-id attempt)
          job-id attempt)
         source (:source record)
+        asset (:asset record)
         access
         (require-source-access!
          (source-access! service job-id attempt)
@@ -162,26 +168,68 @@
             (Files/createTempFile
              "agg-derivative-output-" ".mp4"
              (make-array FileAttribute 0)))
+        cancellation-requested?
+        #(preparation-cancellation-requested? service job-id attempt)
         cancelled?
         (bounded-cancellation-check
-         #(preparation-cancellation-requested? service job-id attempt))]
+         cancellation-requested?)
+        published (atom nil)]
     (Files/deleteIfExists ^Path output-path)
     (try
-      (run!
-       {:classification :derivative-required
-        :source-duration-seconds (:duration-seconds source)
-        :source-bytes (:bytes source)
-        :output-path output-path}
-       (assoc dependencies
-              :proxy-config access
-              :cancelled? cancelled?))
+      (let [verified
+            (run!
+             {:classification :derivative-required
+              :source-duration-seconds (:duration-seconds source)
+              :source-bytes (:bytes source)
+              :output-path output-path}
+             (assoc dependencies
+                    :proxy-config access
+                    :cancelled? cancelled?))
+            publication
+            {:job-id job-id
+             :attempt attempt
+             :asset-id (:id asset)
+             :object-key (:object-key asset)
+             :output-path (:output-path verified)
+             :content-type (:content-type verified)
+             :size (:output-bytes verified)
+             :profile-version (:version profile)}
+            stored (publish-derivative! service publication)
+            completion
+            {:asset-id (:id asset)
+             :object-key (:object-key asset)
+             :generation (:generation stored)
+             :size (:size stored)
+             :content-type (:content-type stored)
+             :profile-version (:profile-version stored)
+             :measurements {:output-bytes (:output-bytes verified)}}]
+        (reset! published
+                {:object-key (:object-key asset)
+                 :generation (:generation stored)})
+        (when (cancellation-requested?)
+          (throw
+           (errors/raise! "Derivative publication was cancelled"
+                          {:type ::publication-cancelled
+                           :reason "cancelled"})))
+        (let [completed
+              (complete-preparation-attempt!
+               service job-id attempt completion)]
+          (reset! published nil)
+          completed))
       (catch Throwable error
+        (when (and @published delete-derivative!)
+          (try
+            (delete-derivative! service @published)
+            (catch Throwable _
+              nil)))
         (Files/deleteIfExists ^Path output-path)
         (try
           (report-failure! dependencies job-id attempt error)
           (catch Throwable _
             nil))
-        (throw error)))))
+        (throw error))
+      (finally
+        (Files/deleteIfExists ^Path output-path)))))
 
 (defn- required-resolve [symbol]
   (or (requiring-resolve symbol)
@@ -206,7 +254,14 @@
       'agg.derivative.lifecycle/fail-preparation-attempt!)
      :acknowledge-preparation-cancellation!
      (required-resolve
-      'agg.derivative.lifecycle/acknowledge-preparation-cancellation!)}))
+      'agg.derivative.lifecycle/acknowledge-preparation-cancellation!)
+     :publish-derivative!
+     (required-resolve 'agg.derivative.gcp/publish-derivative!)
+     :delete-derivative!
+     (required-resolve 'agg.derivative.gcp/delete-derivative!)
+     :complete-preparation-attempt!
+     (required-resolve
+      'agg.derivative.lifecycle/complete-preparation-attempt!)}))
 
 (defn -main [& args]
   (try

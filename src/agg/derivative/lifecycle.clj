@@ -37,6 +37,8 @@
 
 (defn- without-terminal-data [job]
   (dissoc job :asset-id :asset-expires-at :object-key
+          :asset-generation :asset-size :asset-content-type
+          :asset-profile-version :completed-at
           :failure-code :retryable))
 
 (defn- membership-failure [job state now]
@@ -51,7 +53,9 @@
 
 (defn transition
   "Applies one pure derivative preparation lifecycle event."
-  [job {:keys [type id now outcome asset-id object-key failure-code retryable]
+  [job {:keys [type id now outcome asset-id object-key
+               asset-generation asset-size asset-content-type
+               asset-profile-version failure-code retryable]
         :as event}]
   (case type
     :submit
@@ -90,12 +94,21 @@
       (and (= :running (:state job))
            (= :succeeded outcome)
            (opaque-id? asset-id)
-           (string? object-key)
+           (and (string? object-key) (not-empty object-key))
+           (pos-int? asset-generation)
+           (pos-int? asset-size)
+           (= "video/mp4" asset-content-type)
+           (= (:profile-version job) asset-profile-version)
            (instance? Instant now))
       (assoc job
              :state :succeeded
              :asset-id asset-id
              :object-key object-key
+             :asset-generation asset-generation
+             :asset-size asset-size
+             :asset-content-type asset-content-type
+             :asset-profile-version asset-profile-version
+             :completed-at now
              :updated-at now
              :metadata-expires-at
              (.plusSeconds ^Instant now retention-seconds)
@@ -139,7 +152,8 @@
                  :metadata-expires-at
                  (.plusSeconds ^Instant now retention-seconds))
           (dissoc :failure-code :retryable :asset-id :asset-expires-at
-                  :object-key))
+                  :object-key :asset-generation :asset-size
+                  :asset-content-type :asset-profile-version :completed-at))
       (invalid-transition! job event))
 
     :expire
@@ -227,6 +241,9 @@
 
 (defprotocol PreparationAccess
   (owns-preparation? [service job-id subject]))
+
+(defprotocol PreparationPlaybackAccess
+  (preparation-playback-asset [service job-id identity]))
 
 (defprotocol PreparationCache
   (put-preparation-cache! [service request asset]))
@@ -360,16 +377,42 @@
     (invalid-derivative-attempt!))
   job)
 
-(defn- attempt-resource [job]
-  {:job-id (:id job)
-   :attempt (:attempt job)
-   :profile render-derivative/profile-v1
-   :source {:file-id (:file-id job)
-            :drive-version (:drive-version job)
-            :bytes (:source-bytes job)
-            :duration-seconds (:source-duration-seconds job)}
-   :owner {:subject (:owner-subject job)
-           :membership-version (:membership-version job)}})
+(defn- exact-completion? [job result]
+  (= [(:asset-id job)
+      (:object-key job)
+      (:asset-generation job)
+      (:asset-size job)
+      (:asset-content-type job)
+      (:asset-profile-version job)]
+     [(:asset-id result)
+      (:object-key result)
+      (:generation result)
+      (:size result)
+      (:content-type result)
+      (:profile-version result)]))
+
+(defn- attempt-resource [secret job]
+  (let [fingerprint
+        (:fingerprint
+         (fingerprint
+          secret
+          {:subject (:owner-subject job)
+           :file-id (:file-id job)
+           :drive-version (:drive-version job)
+           :source-bytes (:source-bytes job)
+           :profile-version (:profile-version job)
+           :job-id (:id job)}))]
+    {:job-id (:id job)
+     :attempt (:attempt job)
+     :profile render-derivative/profile-v1
+     :asset {:id (:id job)
+             :object-key (str "derivatives/" fingerprint ".mp4")}
+     :source {:file-id (:file-id job)
+              :drive-version (:drive-version job)
+              :bytes (:source-bytes job)
+              :duration-seconds (:source-duration-seconds job)}
+     :owner {:subject (:owner-subject job)
+             :membership-version (:membership-version job)}}))
 
 (defn- admit-attempt [state request clock]
   (let [subject (:subject request)
@@ -460,6 +503,34 @@
            (not (contains? #{:expired :revoked} (:state job)))
            (or (nil? (:metadata-expires-at job))
                (.isBefore now (:metadata-expires-at job))))))
+  PreparationPlaybackAccess
+  (preparation-playback-asset [_ job-id identity]
+    (with-active-member
+      member-directory identity
+      (fn []
+        (let [job (get-in @state [:jobs job-id])
+              now (Instant/now clock)]
+          (when (and (= :succeeded (:state job))
+                     (= (:subject identity) (:owner-subject job))
+                     (= (:membership-version identity)
+                        (:membership-version job))
+                     (instance? Instant (:completed-at job))
+                     (instance? Instant (:asset-expires-at job))
+                     (.isBefore now ^Instant (:asset-expires-at job))
+                     (pos-int? (:asset-generation job))
+                     (pos-int? (:asset-size job))
+                     (= "video/mp4" (:asset-content-type job))
+                     (= (:profile-version job)
+                        (:asset-profile-version job))
+                     (string? (:object-key job))
+                     (not-empty (:object-key job)))
+            {:object-key (:object-key job)
+             :generation (:asset-generation job)
+             :size (:asset-size job)
+             :content-type (:asset-content-type job)
+             :profile-version (:asset-profile-version job)
+             :completed-at (:completed-at job)
+             :expires-at (:asset-expires-at job)})))))
   PreparationCache
   (put-preparation-cache! [_ request asset]
     (let [request (normalized-request request)
@@ -619,20 +690,32 @@
     (let [job (exact-attempt-job (get-in @state [:jobs job-id]) attempt)]
       (when-not (= :running (:state job))
         (invalid-derivative-attempt!))
-      (attempt-resource job)))
+      (attempt-resource fingerprint-secret job)))
   (complete-preparation-attempt! [_ job-id attempt result]
     (contract/validate-work! (:measurements result))
+    (when-not (= (:size result)
+                 (get-in result [:measurements :output-bytes]))
+      (invalid-derivative-attempt!))
     (let [completed
           (locking state
             (let [job (exact-attempt-job (get-in @state [:jobs job-id])
                                          attempt)
                   updated
-                  (transition job
-                              {:type :complete
-                               :outcome :succeeded
-                               :asset-id (:asset-id result)
-                               :object-key (:object-key result)
-                               :now (Instant/now clock)})
+                  (if (= :succeeded (:state job))
+                    (if (exact-completion? job result)
+                      job
+                      (invalid-derivative-attempt!))
+                    (transition job
+                                {:type :complete
+                                 :outcome :succeeded
+                                 :asset-id (:asset-id result)
+                                 :object-key (:object-key result)
+                                 :asset-generation (:generation result)
+                                 :asset-size (:size result)
+                                 :asset-content-type (:content-type result)
+                                 :asset-profile-version
+                                 (:profile-version result)
+                                 :now (Instant/now clock)}))
                   cache-key
                   (:fingerprint
                    (fingerprint fingerprint-secret

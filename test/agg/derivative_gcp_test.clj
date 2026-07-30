@@ -3,6 +3,7 @@
             [agg.admin.gcp :as admin-gcp]
             [agg.derivative.gcp :as gcp]
             [agg.derivative.lifecycle :as derivative]
+            [agg.derivative.storage :as storage]
             [agg.render.derivative :as render-derivative]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]])
@@ -40,6 +41,42 @@
               (instant [] @now)
               (millis [] (.toEpochMilli ^Instant @now))))]
     (clock-for ZoneOffset/UTC)))
+
+(deftest worker-publication-uses-the-configured-immutable-asset-store
+  (let [calls (atom [])
+        asset-store
+        (reify storage/AssetStore
+          (publish-verified! [_ publication]
+            (swap! calls conj [:publish publication])
+            {:generation 42
+             :size 1024
+             :content-type "video/mp4"
+             :profile-version "h264-aac-1080p25-v1"})
+          (delete-generation! [_ asset]
+            (swap! calls conj [:delete asset])
+            true)
+          (open-range! [_ _ _]))
+        service
+        (gcp/preparation-service
+         {:firestore ::firestore
+          :fingerprint-secret "fixture-secret"
+          :asset-store asset-store})
+        publication {:job-id "job-id"
+                     :attempt 1
+                     :object-key "derivatives/final.mp4"}]
+    (is (= {:generation 42
+            :size 1024
+            :content-type "video/mp4"
+            :profile-version "h264-aac-1080p25-v1"}
+           (gcp/publish-derivative! service publication)))
+    (is (true?
+         (gcp/delete-derivative!
+          service {:object-key "derivatives/final.mp4"
+                   :generation 42})))
+    (is (= [[:publish publication]
+            [:delete {:object-key "derivatives/final.mp4"
+                      :generation 42}]]
+           @calls))))
 
 (deftest cloud-run-worker-and-runtime-configuration-match-infrastructure
   (let [request
@@ -174,17 +211,22 @@
                      (mapv deref))]
             (is (= 1 (count (filter :started? dispatches))))
             (is (= 1 (count @launched))))
-          (is (= {:job-id job-id
-                  :attempt 1
-                  :profile render-derivative/profile-v1
-                  :source {:file-id "private-drive-id"
-                           :drive-version "17"
-                           :bytes 4096
-                           :duration-seconds 120.0}
-                  :owner {:subject "private-owner"
-                          :membership-version
-                          (:membership-version member)}}
-                 (derivative/load-preparation-attempt service job-id 1)))
+          (let [attempt
+                (derivative/load-preparation-attempt service job-id 1)]
+            (is (= {:job-id job-id
+                    :attempt 1
+                    :profile render-derivative/profile-v1
+                    :source {:file-id "private-drive-id"
+                             :drive-version "17"
+                             :bytes 4096
+                             :duration-seconds 120.0}
+                    :owner {:subject "private-owner"
+                            :membership-version
+                            (:membership-version member)}}
+                   (dissoc attempt :asset)))
+            (is (= job-id (get-in attempt [:asset :id])))
+            (is (re-matches #"derivatives/[0-9a-f]{64}\.mp4"
+                            (get-in attempt [:asset :object-key]))))
           (is (= "cancellation-requested"
                  (:state (derivative/cancel-preparation! service job-id))))
           (is (= [(str "executions/" job-id "/attempts/1")] @cancelled))
@@ -259,17 +301,40 @@
                        service "cache-source" request)
                       [:job :id])
               _ (derivative/dispatch-preparation! service job-id 1)
+              completion
+              {:asset-id "00000000-0000-0000-0000-000000000193"
+               :object-key
+               "derivatives/00000000-0000-0000-0000-000000000193.mp4"
+               :generation 42
+               :size 1024
+               :content-type "video/mp4"
+               :profile-version "h264-aac-1080p25-v1"
+               :measurements {:output-bytes 1024}}
               completed
               (derivative/complete-preparation-attempt!
-               service job-id 1
-               {:asset-id "00000000-0000-0000-0000-000000000193"
-                :object-key
-                "derivatives/00000000-0000-0000-0000-000000000193.mp4"
-                :measurements {:output-bytes 1024}})
+               service job-id 1 completion)
+              duplicate
+              (derivative/complete-preparation-attempt!
+               service job-id 1 completion)
               cached
               (derivative/submit-preparation! service "cache-reuse" request)
               public-text (pr-str [completed cached])]
           (is (= "succeeded" (:state completed)))
+          (is (= completed duplicate))
+          (is (=
+               {:object-key
+                "derivatives/00000000-0000-0000-0000-000000000193.mp4"
+                :generation 42
+                :size 1024
+                :content-type "video/mp4"
+                :profile-version "h264-aac-1080p25-v1"}
+               (dissoc
+                (derivative/preparation-playback-asset
+                 service job-id
+                 {:subject "private-owner"
+                  :email "owner@example.com"
+                  :membership-version (:membership-version member)})
+                :completed-at :expires-at)))
           (is (:cache-hit? cached))
           (is (false? (:created? cached)))
           (is (= 1 (count @enqueued)))

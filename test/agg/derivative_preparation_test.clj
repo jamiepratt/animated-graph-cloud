@@ -85,11 +85,31 @@
            service job-id 1
            {:asset-id "00000000-0000-0000-0000-000000000193"
             :object-key "private-object"
+            :generation 42
+            :size 1024
+            :content-type "video/mp4"
+            :profile-version "h264-aac-1080p25-v1"
             :measurements {:output-bytes 1024}})]
+    (is (= {:object-key "private-object"
+            :generation 42
+            :size 1024
+            :content-type "video/mp4"
+            :profile-version "h264-aac-1080p25-v1"}
+           (dissoc
+            (derivative/preparation-playback-asset service job-id owner)
+            :completed-at :expires-at)))
+    (is (nil?
+         (derivative/preparation-playback-asset
+          service job-id (assoc owner :subject "another-owner"))))
+    (is (nil?
+         (derivative/preparation-playback-asset
+          service job-id (assoc owner :membership-version "membership-v2"))))
     (is (= 1
            (admin/cancel-member-jobs!
             service {:subject "private-owner"
                      :membership-version "membership-v1"})))
+    (is (nil?
+         (derivative/preparation-playback-asset service job-id owner)))
     (is (= "revoked" (:state (derivative/get-preparation service job-id))))
     (is (not (derivative/owns-preparation?
               service job-id "private-owner")))
@@ -98,6 +118,39 @@
          (derivative/submit-preparation!
           service "after-revocation" (preparation-request))))
     (is (= 2 (count @queued)))))
+
+(deftest exact-duplicate-completion-keeps-the-published-generation
+  (let [{:keys [service]}
+        (derivative/in-memory-preparation-system
+         {:clock (Clock/fixed now ZoneOffset/UTC)
+          :fingerprint-secret "fixture-secret"})
+        job-id
+        (get-in
+         (derivative/submit-preparation!
+          service "duplicate-completion" (preparation-request))
+         [:job :id])
+        _ (derivative/dispatch-preparation! service job-id)
+        completion
+        {:asset-id job-id
+         :object-key "private-object"
+         :generation 42
+         :size 1024
+         :content-type "video/mp4"
+         :profile-version "h264-aac-1080p25-v1"
+         :measurements {:output-bytes 1024}}
+        first-completion
+        (derivative/complete-preparation-attempt!
+         service job-id 1 completion)]
+    (is (= first-completion
+           (derivative/complete-preparation-attempt!
+            service job-id 1 completion)))
+    (is (= ::derivative/invalid-derivative-attempt
+           (try
+             (derivative/complete-preparation-attempt!
+              service job-id 1 (assoc completion :generation 43))
+             nil
+             (catch clojure.lang.ExceptionInfo error
+               (:type (ex-data error))))))))
 
 (deftest cancellation-retry-and-membership-cleanup-preserve-attempt-accounting
   (let [{:keys [service state queued cancelled-executions]}
@@ -191,16 +244,20 @@
                  service "worker-seam" (preparation-request))
                 [:job :id])]
     (derivative/dispatch-preparation! service job-id 1)
-    (is (= {:job-id job-id
-            :attempt 1
-            :profile render-derivative/profile-v1
-            :source {:file-id "private-drive-id"
-                     :drive-version "17"
-                     :bytes 4096
-                     :duration-seconds 120.0}
-            :owner {:subject "private-owner"
-                    :membership-version "membership-v1"}}
-           (derivative/load-preparation-attempt service job-id 1)))
+    (let [attempt (derivative/load-preparation-attempt service job-id 1)]
+      (is (= {:job-id job-id
+              :attempt 1
+              :profile render-derivative/profile-v1
+              :asset {:id job-id}
+              :source {:file-id "private-drive-id"
+                       :drive-version "17"
+                       :bytes 4096
+                       :duration-seconds 120.0}
+              :owner {:subject "private-owner"
+                      :membership-version "membership-v1"}}
+             (update-in attempt [:asset] dissoc :object-key)))
+      (is (re-matches #"derivatives/[0-9a-f]{64}\.mp4"
+                      (get-in attempt [:asset :object-key]))))
     (is (false?
          (derivative/preparation-cancellation-requested? service job-id 1)))
     (derivative/cancel-preparation! service job-id)
