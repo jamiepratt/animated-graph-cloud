@@ -1168,6 +1168,7 @@
              #(logs/append-log! log-store %))
           admin-emails (env-emails "AGG_ADMIN_EMAILS")
           auth-enabled? (= "true" (env "AGG_AUTH_ENABLED" "false"))
+          derivative-config (derivative-gcp/runtime-config)
           auth-dependencies
           (when auth-enabled?
             (auth-gcp/api-dependencies
@@ -1176,6 +1177,8 @@
               :region region
               :base-url (env "AGG_PUBLIC_BASE_URL" dispatcher-url)
               :internal-audience dispatcher-url
+              :derivative-internal-audience
+              (:dispatcher-url derivative-config)
               :owner-email (env "AGG_OWNER_EMAIL" nil)
               :admin-emails admin-emails
               :session-secret (env "AGG_SESSION_KEY" nil)
@@ -1192,7 +1195,6 @@
                    "Alpha Compose <early-access@alphacompose.com>")
               :early-access-recipient
               (env "AGG_EARLY_ACCESS_RECIPIENT" "me@jamiep.org")}))
-          derivative-config (derivative-gcp/runtime-config)
           derivative-asset-store
           (when (and auth-enabled?
                      (:dispatcher-url derivative-config))

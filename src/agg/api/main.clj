@@ -1004,9 +1004,19 @@
                                    :releasedLeases released-leases}))))
 
 (defn- verified-derivative-task?
-  [exchange {:keys [derivative-tasks-service-account] :as dependencies}]
+  [exchange
+   {:keys [derivative-tasks-service-account
+           derivative-task-token-verifier derivative-task-audience]
+    :as dependencies}]
   (verified-internal-caller?
-   exchange dependencies "X-CloudTasks-TaskName"
+   exchange
+   (cond-> dependencies
+     derivative-task-token-verifier
+     (assoc :task-token-verifier derivative-task-token-verifier)
+
+     derivative-task-audience
+     (assoc :task-audience derivative-task-audience))
+   "X-CloudTasks-TaskName"
    derivative-tasks-service-account))
 
 (defn- dispatch-derivative-preparation!

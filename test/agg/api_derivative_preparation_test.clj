@@ -673,6 +673,14 @@
                :audience "https://app.example.com"
                :email email
                :email-verified? true})))
+        derivative-verifier
+        (reify auth/TaskTokenVerifier
+          (verify-task-token! [_ token]
+            (when (= "derivative-task-token" token)
+              {:issuer "https://accounts.google.com"
+               :audience "https://proto.example.com"
+               :email "derivative-tasks@example.com"
+               :email-verified? true})))
         port (test-http/available-port)
         server
         (api/start!
@@ -681,6 +689,8 @@
           :derivative-preparation-service service
           :task-token-verifier verifier
           :task-audience "https://app.example.com"
+          :derivative-task-token-verifier derivative-verifier
+          :derivative-task-audience "https://proto.example.com"
           :derivative-tasks-service-account
           "derivative-tasks@example.com"
           :scheduler-service-account "scheduler@example.com"

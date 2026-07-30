@@ -277,9 +277,18 @@
         auth-runtime (slurp "src/agg/auth/gcp.clj")]
     (is (str/includes? runtime ":internal-audience dispatcher-url"))
     (is (str/includes?
+         runtime
+         ":derivative-internal-audience"))
+    (is (str/includes?
          auth-runtime
          ":task-token-verifier (task-token-verifier internal-audience)"))
-    (is (str/includes? auth-runtime ":task-audience internal-audience"))))
+    (is (str/includes? auth-runtime ":task-audience internal-audience"))
+    (is (str/includes?
+         auth-runtime
+         ":derivative-task-token-verifier"))
+    (is (str/includes?
+         auth-runtime
+         ":derivative-task-audience"))))
 
 (deftest firebase-hosting-routes-the-public-domain-to-warsaw-cloud-run
   (let [{:keys [hosting]} (read-json "firebase.json")
