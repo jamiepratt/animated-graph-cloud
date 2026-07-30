@@ -3,7 +3,7 @@
 | Area | Source of truth |
 |---|---|
 | Product and security invariants | `CONTEXT.md` |
-| Local development and verification | `README.md` |
+| Local development and verification | `README.md`, `docs/testing.md` |
 | Development infrastructure | `infra/dev/` |
 | Production infrastructure | `infra/prod/` |
 | Delivery scope and dependencies | GitHub Issues |

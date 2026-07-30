@@ -17,6 +17,7 @@
 (deftest release-images-and-workflows-carry-and-verify-the-exact-main-commit
   (let [dockerfile (slurp "Dockerfile")
         build (slurp "build.clj")
+        ci (slurp ".github/workflows/ci.yml")
         production (slurp ".github/workflows/deploy-production.yml")
         development (slurp ".github/workflows/deploy.yml")
         smoke (slurp "test/container_smoke.sh")]
@@ -28,10 +29,16 @@
       (testing contract
         (is (str/includes? dockerfile contract))))
     (is (str/includes? build "{:src \"CHANGELOG.md\""))
-    (doseq [workflow [production development]]
-      (is (str/includes? workflow "--build-arg BUILD_COMMIT=\"$RELEASE_COMMIT\""))
-      (is (str/includes? workflow "test/container_smoke.sh \"$IMAGE_TAG\" \"$RELEASE_COMMIT\"")))
-    (is (str/includes? production "--build-arg RELEASE_MODE=production"))
+    (is (str/includes? ci "BUILD_COMMIT=${{ github.sha }}"))
+    (is (str/includes? ci "RELEASE_MODE=production"))
+    (is (str/includes? ci "test/container_smoke.sh \"$IMAGE\" \"$GITHUB_SHA\""))
+    (is (str/includes? development "BUILD_COMMIT=${{ github.sha }}"))
+    (is (str/includes?
+         development
+         "test/container_smoke.sh \"$IMAGE_TAG\" \"$RELEASE_COMMIT\""))
+    (is (str/includes? production
+                       "github.event.workflow_run.head_sha || github.sha"))
+    (is (not (str/includes? production "docker build")))
     (is (str/includes? production "\"$PUBLIC_BASE_URL/changelog\""))
     (is (str/includes? production "v0.6.0 · build $SHORT_RELEASE_COMMIT"))
     (is (str/includes? smoke "expected_build=\"${2:-dev}\""))
@@ -125,8 +132,9 @@
                            "")
         full-apply (str/index-of workflow
                                  "- name: Plan and apply production Terraform")
-        image-push (str/index-of workflow
-                                 "name: Push and resolve immutable image digest")]
+        image-resolution (str/index-of
+                          workflow
+                          "name: Resolve CI-built immutable candidate digest")]
     (is (str/includes? full-terraform "terraform -chdir=infra/prod plan"))
     (is (str/includes? full-terraform "terraform -chdir=infra/prod apply"))
     (is (not (str/includes? full-terraform "-target=")))
@@ -135,26 +143,26 @@
     (is (str/includes? full-terraform
                        "API_SERVICE_URL: ${{ steps.terraform-context.outputs.service_url }}"))
     (is (number? full-apply))
-    (is (number? image-push))
-    (when (and (number? full-apply) (number? image-push))
-      (is (< full-apply image-push)))
+    (is (number? image-resolution))
+    (when (and (number? full-apply) (number? image-resolution))
+      (is (< full-apply image-resolution)))
     (is (not (str/includes? workflow
                             "Ensure Terraform-owned overlay service exists")))
     (is (not (str/includes? runbook
                             "Other production Terraform drift remains a\nseparate reviewed apply.")))))
 
-(deftest production-release-deploys-directly-from-protected-main
+(deftest production-release-deploys-ci-approved-protected-main
   (let [workflow (slurp ".github/workflows/deploy-production.yml")
         runbook (slurp "docs/production-runbook.md")
         deploy-position (str/index-of workflow "  deploy:")
         deploy (if (number? deploy-position)
                  (subs workflow deploy-position)
                  "")
-        build-position (str/index-of workflow
-                                     "name: Build immutable release candidate")
+        verify-position (str/index-of workflow
+                                      "name: Verify CI-approved commit")
         terraform-position (str/index-of workflow
                                          "name: Plan and apply production Terraform")]
-    (is (re-find #"(?s)on:\s+push:\s+branches: \[main\]\s+workflow_dispatch:"
+    (is (re-find #"(?s)on:\s+workflow_run:\s+workflows: \[Alpha Compose CI\]\s+branches: \[main\]\s+types: \[completed\]\s+workflow_dispatch:"
                  workflow))
     (is (str/includes? workflow "permissions: {}"))
     (doseq [missing ["development-gate:"
@@ -172,19 +180,20 @@
                       "id-token: write"]]
       (testing contract (is (str/includes? deploy contract))))
     (is (not (str/includes? deploy "needs: development-gate")))
-    (doseq [mutation ["docker build"
-                      "terraform -chdir=infra/prod"
-                      "docker push"
+    (doseq [mutation ["terraform -chdir=infra/prod"
                       "gcloud run deploy"
                       "module.application.google_cloud_run_v2_job.renderer"]]
       (testing mutation
         (is (str/includes? deploy mutation))))
-    (doseq [position [deploy-position build-position terraform-position]]
+    (doseq [position [deploy-position verify-position terraform-position]]
       (is (number? position)))
-    (when (every? number? [deploy-position build-position terraform-position])
-      (is (< deploy-position build-position))
+    (when (every? number? [deploy-position verify-position terraform-position])
+      (is (< deploy-position verify-position))
       (is (< deploy-position terraform-position)))
-    (is (not (str/includes? workflow "workflow_run:")))))
+    (is (str/includes? workflow
+                       "github.event.workflow_run.conclusion == 'success'"))
+    (is (not (str/includes? deploy "docker build")))
+    (is (not (str/includes? deploy "docker push")))))
 
 (deftest artifact-registry-bootstrap-target-is-isolated-and-state-compatible
   (let [shared (slurp "infra/dev/main.tf")
@@ -222,8 +231,9 @@
                                       "Plan and apply production Terraform")
         secret-check (str/index-of production-workflow
                                    "Verify enabled Resend secret version")
-        image-push (str/index-of production-workflow
-                                 "Push and resolve immutable image digest")]
+        image-resolution (str/index-of
+                          production-workflow
+                          "Resolve CI-built immutable candidate digest")]
     (is (str/includes? shared "\"resend-api-key\""))
     (is (re-find #"(?s)resource \"google_secret_manager_secret_iam_member\" \"api_resend_access\".*?secret_id\s*=\s*google_secret_manager_secret\.application\[\"resend-api-key\"\]\.secret_id.*?member\s*=\s*\"serviceAccount:\$\{google_service_account\.api\.email\}\""
                  shared))
@@ -242,10 +252,10 @@
                      "AGG_EARLY_ACCESS_RECIPIENT"]]
       (is (str/includes? runtime setting)))
     (is (str/includes? auth-runtime ":early-access-system"))
-    (doseq [position [terraform-apply secret-check image-push]]
+    (doseq [position [terraform-apply secret-check image-resolution]]
       (is (number? position)))
-    (when (every? number? [terraform-apply secret-check image-push])
-      (is (< terraform-apply secret-check image-push)))
+    (when (every? number? [terraform-apply secret-check image-resolution])
+      (is (< terraform-apply secret-check image-resolution)))
     (doseq [checkpoint ["gcloud secrets versions describe latest"
                         "--secret=resend-api-key"
                         "test \"$resend_secret_state\" = \"ENABLED\""]]
@@ -282,17 +292,19 @@
                                       "Plan and apply production Terraform")
         secret-check (str/index-of production-workflow
                                    "Verify enabled Resend secret version")
-        image-push (str/index-of production-workflow
-                                 "Push and resolve immutable image digest")]
+        image-resolution (str/index-of
+                          production-workflow
+                          "Resolve CI-built immutable candidate digest")]
     (doseq [position [account-and-dns terraform-bootstrap enabled-versions
-                      workflow-recovery terraform-apply secret-check image-push]]
+                      workflow-recovery terraform-apply secret-check
+                      image-resolution]]
       (is (number? position)))
     (when (every? number? [account-and-dns terraform-bootstrap enabled-versions
                            workflow-recovery])
       (is (< account-and-dns terraform-bootstrap enabled-versions
              workflow-recovery)))
-    (when (every? number? [terraform-apply secret-check image-push])
-      (is (< terraform-apply secret-check image-push)))
+    (when (every? number? [terraform-apply secret-check image-resolution])
+      (is (< terraform-apply secret-check image-resolution)))
     (doseq [target ["-target='google_secret_manager_secret.application[\"resend-api-key\"]'"
                     "-target=google_secret_manager_secret_iam_member.api_resend_access"
                     "-target=google_secret_manager_secret_iam_member.deployer_resend_metadata"
@@ -437,7 +449,8 @@
 
 (deftest production-release-deploys-main-push-and-is-domain-aware
   (let [workflow (slurp ".github/workflows/deploy-production.yml")]
-    (is (str/includes? workflow "push:"))
+    (is (str/includes? workflow "workflow_run:"))
+    (is (str/includes? workflow "workflows: [Alpha Compose CI]"))
     (is (str/includes? workflow "branches: [main]"))
     (is (str/includes? workflow "workflow_dispatch:"))
     (is (str/includes? workflow "import_existing_firestore:"))
@@ -685,11 +698,13 @@
                        "resource \"google_secret_manager_secret_iam_member\" \"deployer_picker_access\""))))
 
 (deftest continuous-integration-validates-both-environments-and-api-contract
-  (let [workflow (slurp ".github/workflows/ci.yml")]
-    (is (str/includes? workflow "name: Proto CI"))
-    (is (str/includes? workflow "branches: [codex/issue-161-proto-only]"))
-    (is (str/includes? workflow "clj-kondo --lint src/agg/proto"))
-    (is (str/includes? workflow "clojure -M:proto-test"))
+  (let [workflow (slurp ".github/workflows/ci.yml")
+        proto-workflow (slurp ".github/workflows/deploy-proto.yml")]
+    (is (str/includes? workflow "name: Alpha Compose CI"))
+    (is (str/includes? workflow "clojure -M:test-changed"))
+    (is (str/includes? workflow "clojure -M:test-shard"))
+    (is (str/includes? workflow "proto]"))
+    (is (str/includes? proto-workflow "test/proto_ci.sh"))
     (is (not (str/includes? workflow "clojure -M:test-all")))
     (is (not (str/includes? workflow "terraform -chdir=infra/dev init -backend=false -input=false")))
     (is (not (str/includes? workflow "@redocly/cli@2.39.0 lint docs/openapi.yaml")))))
@@ -698,7 +713,8 @@
   (let [readme (slurp "README.md")]
     (is (str/includes? readme "clojure -M:test-all"))
     (is (str/includes? readme "clojure -M:test -m agg.test-targeted agg.api-auth-test"))
-    (is (str/includes? readme "Targeted TDD keeps the normal test classpath but skips the full runner"))))
+    (is (re-find #"Targeted TDD keeps the normal test classpath but skips\s+the full runner"
+                 readme))))
 
 (deftest openapi-describes-the-supported-production-api
   (let [openapi (slurp "docs/openapi.yaml")]

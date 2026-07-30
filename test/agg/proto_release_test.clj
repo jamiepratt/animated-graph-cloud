@@ -5,6 +5,7 @@
 (deftest proto-runtime-wiring-is-separate-from-the-main-app
   (let [deps-edn (slurp "deps.edn")
         ci-workflow (slurp ".github/workflows/ci.yml")
+        proto-workflow (slurp ".github/workflows/deploy-proto.yml")
         dev-workflow (slurp ".github/workflows/deploy.yml")
         prod-workflow (slurp ".github/workflows/deploy-production.yml")
         shared-infra (slurp "infra/dev/main.tf")
@@ -12,9 +13,11 @@
         prod-infra (slurp "infra/prod/main.tf")]
     (is (str/includes? deps-edn ":proto {:main-opts [\"-m\" \"agg.proto.main\"]}"))
     (is (str/includes? deps-edn ":proto-test"))
-    (is (str/includes? ci-workflow "name: Proto CI"))
-    (is (str/includes? ci-workflow "branches: [codex/issue-161-proto-only]"))
-    (is (str/includes? ci-workflow "clojure -M:proto-test"))
+    (is (str/includes? ci-workflow "name: Alpha Compose CI"))
+    (is (str/includes? ci-workflow "shard: [api, auth, cloud, derivative, drive, render, release, proto]"))
+    (is (str/includes? proto-workflow "name: Deploy proto app"))
+    (is (str/includes? proto-workflow "branches: [proto]"))
+    (is (str/includes? proto-workflow "test/proto_ci.sh"))
     (is (not (str/includes? ci-workflow "clojure -M:test-all")))
     (is (str/includes? shared-vars "variable \"enable_proto_service\""))
     (is (str/includes? shared-infra "resource \"google_cloud_run_v2_service\" \"proto\""))

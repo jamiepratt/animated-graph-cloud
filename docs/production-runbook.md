@@ -280,8 +280,8 @@ Follow these sections in order. Use the reviewed checkout containing the issue
 containers and IAM without promoting an application. The development workflow
 checks the version before its image push on `main` and `dev`, deploying the
 exact pushed commit to the development server. Production remains
-Terraform-first by applying its complete plan before any production image is
-pushed. A halt is expected and recoverable; it is not permission to bypass a
+Terraform-first by applying its complete plan before the CI-built candidate is
+promoted. A halt is expected and recoverable; it is not permission to bypass a
 check or inject a placeholder value.
 
 #### 1. Create the Resend account and verify sender DNS
@@ -365,9 +365,11 @@ test "$(gcloud secrets versions describe latest \
 
 #### 4. Rerun the guarded deployment workflows
 
-Every push to protected `main` starts the production workflow directly. If the
-initial run halted after a reviewed fix, fetch the current `main`, confirm the
-checked-out commit matches the remote release commit, and manually dispatch
+Every push to protected `main` starts Alpha Compose CI. Production starts only
+after affected tests, every complete catalogue shard, and the independently
+built and scanned immutable candidate succeed. If production later halted after
+a reviewed fix, fetch the current `main`, confirm the checked-out commit matches
+the remote release commit and has a successful CI run, then manually dispatch
 production from `main`:
 
 ```sh
@@ -379,9 +381,10 @@ gh-axi workflow run deploy-production.yml --ref main
 ```
 
 The dispatch must use `--ref main`. Do not rerun production when either
-metadata check above is not `ENABLED`. The workflow verifies the pushed commit,
-applies the full production Terraform plan before image promotion, and reads no
-secret payload during this metadata preflight.
+metadata check above is not `ENABLED`. The workflow verifies the exact
+CI-approved commit and candidate, applies the full production Terraform plan
+before image promotion, and reads no secret payload during this metadata
+preflight.
 
 Rotate the value by adding and verifying the new enabled version before
 disabling the prior version. Replace `PREVIOUS_VERSION_NUMBER` only with the
@@ -409,11 +412,14 @@ so stop the release if either external checkpoint is not complete.
 
 ## Automatic production deployment
 
-Every push to protected `main` triggers **Deploy Alpha Compose production**.
-The workflow receives the OIDC permission needed to apply the complete
-production Terraform configuration, builds and scans the pushed commit locally,
-applies Terraform using the currently promoted renderer digest and API origin,
-then pushes a new immutable digest, verifies both private services,
+Every push to protected `main` runs **Alpha Compose CI**. Affected tests gate
+complete parallel catalogue shards. In parallel, CI builds, smoke-tests, scans,
+and pushes one immutable candidate using persistent BuildKit caches. Only a
+successful CI run triggers **Deploy Alpha Compose production** for its exact
+commit. The deployment workflow receives the OIDC permission needed to apply
+the complete production Terraform configuration, applies Terraform using the
+currently promoted renderer digest and API origin, then resolves the already
+verified candidate digest, verifies both private services,
 reconciles API, overlay, and the durable renderer, publishes Hosting, and
 verifies health/privacy/terms. It neither publishes OAuth nor adds ordinary
 members; configured administrators are bootstrapped from `AGG_ADMIN_EMAILS`.
@@ -488,8 +494,8 @@ The canonical public OpenAPI contract URL is
 
 ### Post-deployment main release tag
 
-The production workflow builds with the exact pushed commit, rejects a
-development or malformed identity, and verifies that
+CI builds with the exact pushed commit and production mode. The production
+workflow consumes only that successful CI commit and verifies that
 `https://alphacompose.com/changelog` displays the matching seven-character
 build before it succeeds. No database migration, Terraform import, secret,
 OAuth, Firebase, DNS, or console action is required for the `v0.6.0` identity

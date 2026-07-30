@@ -12,16 +12,33 @@ Requires JDK 21, Clojure CLI, Terraform, Google Cloud CLI, and Docker Desktop.
 
 ```sh
 clojure -M:test-all
+clojure -M:test-changed
+clojure -M:test-area auth
+clojure -M:test-ns agg.api-auth-test
 clojure -T:build uber
 terraform -chdir=infra/dev init
 terraform -chdir=infra/dev validate
 ```
 
-Targeted TDD keeps the normal test classpath but skips the full runner:
+`test-all` verifies that the canonical catalogue accounts for every
+`*_test.clj` namespace. `test-changed` inspects staged, unstaged, and untracked
+work, follows reverse namespace dependencies, prints each selection reason,
+and falls back to the complete suite for shared or unknown changes. Compare an
+explicit range with:
+
+```sh
+clojure -M:test-changed --base origin/main --head HEAD
+```
+
+Named areas may overlap. Targeted TDD keeps the normal test classpath but skips
+the full runner. Named namespaces do the same:
 
 ```sh
 clojure -M:test -m agg.test-targeted agg.api-auth-test
 ```
+
+See [`docs/testing.md`](docs/testing.md) for areas, CI shards, impact rules,
+and conservative fallback behavior.
 
 ## Release identity and changelog
 
@@ -481,14 +498,13 @@ Credentials provide local authentication; do not create service-account key
 files or commit credentials. See `docs/production-runbook.md` for production
 checkpoints and `docs/release-acceptance.md` for the evidence matrix.
 
-Pushes to `main` authenticate through GitHub Workload Identity Federation,
-scan and push an immutable commit-tagged image, deploy the private `agg-api`
-service, and execute `agg-renderer-smoke`. The workflow verifies the health
-response, runtime identities, renderer completion log, and exact public
-version/build identity at `/changelog`.
-Production follows the same protected-`main` model through its separate
-automatic deployment workflow; each successful push can promote the public
-application after the private candidate and smoke checks pass.
+Pushes to `main` run affected tests, then complete parallel catalogue shards.
+In parallel, CI authenticates through GitHub Workload Identity Federation and
+uses persistent BuildKit caches to build, smoke-test, scan, and push one
+immutable commit-tagged candidate. Only successful CI triggers production for
+that exact commit and image. Production retains full Terraform planning and
+apply before private candidate promotion, then verifies health, identities,
+renderer completion, and exact public version/build identity at `/changelog`.
 
 ## Google login and Drive delivery
 

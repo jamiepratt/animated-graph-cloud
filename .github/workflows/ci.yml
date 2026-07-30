@@ -1,8 +1,8 @@
-name: Proto CI
+name: Alpha Compose CI
 
 on:
   push:
-    branches: [codex/issue-161-proto-only]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -10,8 +10,35 @@ permissions:
   contents: read
 
 jobs:
-  proto:
+  affected-tests:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          cli: 1.12.5.1654
+      - name: Run affected tests with selection reasons
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            BASE_SHA="$(git rev-parse HEAD^)"
+          fi
+          clojure -M:test-changed --base "$BASE_SHA" --head "$GITHUB_SHA"
+
+  complete-tests:
+    needs: affected-tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [api, auth, cloud, derivative, drive, render, release, proto]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v5
@@ -21,6 +48,57 @@ jobs:
       - uses: DeLaGuardo/setup-clojure@13.6.1
         with:
           cli: 1.12.5.1654
-          clj-kondo: 2026.05.25
-      - run: clj-kondo --lint src/agg/proto src/agg/api/main.clj test/agg/proto_test_runner.clj test/agg/proto_release_test.clj test/agg/proto_source_test.clj test/agg/proto_ui_test.clj
-      - run: clojure -M:proto-test
+      - name: Run complete catalogue shard
+        run: clojure -M:test-shard ${{ matrix.shard }}
+
+  candidate-image:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT_ID: animated-graph-cloud-prod-jp
+      PROJECT_NUMBER: "488013150738"
+      REGION: europe-central2
+      IMAGE: europe-central2-docker.pkg.dev/animated-graph-cloud-prod-jp/containers/animated-graph-cloud:${{ github.sha }}
+      DEPLOYER_SERVICE_ACCOUNT: agg-github-deployer@animated-graph-cloud-prod-jp.iam.gserviceaccount.com
+    steps:
+      - uses: actions/checkout@v7
+      - id: auth
+        name: Authenticate through production WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud
+          service_account: ${{ env.DEPLOYER_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: ">= 541.0.0"
+      - name: Configure Artifact Registry
+        run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and push immutable candidate
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}
+          build-args: |
+            BUILD_COMMIT=${{ github.sha }}
+            RELEASE_MODE=production
+          cache-from: type=gha,scope=production-image
+          cache-to: type=gha,mode=max,scope=production-image
+      - name: Smoke immutable candidate
+        run: |
+          docker pull "$IMAGE"
+          test/container_smoke.sh "$IMAGE" "$GITHUB_SHA"
+      - name: Scan immutable candidate
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH

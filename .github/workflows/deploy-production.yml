@@ -1,8 +1,10 @@
 name: Deploy Alpha Compose production
 
 on:
-  push:
+  workflow_run:
+    workflows: [Alpha Compose CI]
     branches: [main]
+    types: [completed]
   workflow_dispatch:
     inputs:
       import_existing_firestore:
@@ -28,6 +30,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  RELEASE_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
   PROJECT_ID: animated-graph-cloud-prod-jp
   PROJECT_NUMBER: "488013150738"
   REGION: europe-central2
@@ -56,43 +59,37 @@ env:
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ env.RELEASE_COMMIT }}
 
-      - name: Verify pushed commit
+      - name: Verify successful CI for manual recovery
+        if: github.event_name == 'workflow_dispatch'
         env:
-          RELEASE_COMMIT: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          successful_runs="$(gh api \
+            "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$RELEASE_COMMIT&status=success" \
+            --jq '.total_count')"
+          if [ "$successful_runs" -lt 1 ]; then
+            echo "::error title=Successful CI required::The exact manual recovery commit has no successful Alpha Compose CI run."
+            exit 1
+          fi
+
+      - name: Verify CI-approved commit
         run: |
           if [[ ! "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "github.sha must be an exact full 40-character lowercase commit SHA." >&2
+            echo "release commit must be an exact full 40-character lowercase commit SHA." >&2
             exit 2
           fi
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-
-      - name: Build immutable release candidate
-        env:
-          IMAGE_TAG: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/animated-graph-cloud:${{ github.sha }}
-          RELEASE_COMMIT: ${{ github.sha }}
-        run: |
-          docker build \
-            --build-arg BUILD_COMMIT="$RELEASE_COMMIT" \
-            --build-arg RELEASE_MODE=production \
-            --tag "$IMAGE_TAG" .
-          test/container_smoke.sh "$IMAGE_TAG" "$RELEASE_COMMIT"
-
-      - name: Scan release candidate
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/animated-graph-cloud:${{ github.sha }}
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: CRITICAL,HIGH
 
       - id: auth
         name: Authenticate through production WIF
@@ -320,12 +317,10 @@ jobs:
           fi
 
       - id: image
-        name: Push and resolve immutable image digest
+        name: Resolve CI-built immutable candidate digest
         env:
-          IMAGE_TAG: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/animated-graph-cloud:${{ github.sha }}
+          IMAGE_TAG: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/animated-graph-cloud:${{ env.RELEASE_COMMIT }}
         run: |
-          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
-          docker push "$IMAGE_TAG"
           digest="$(gcloud artifacts docker images describe "$IMAGE_TAG" --format='value(image_summary.digest)')"
           test -n "$digest"
           echo "uri=$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/animated-graph-cloud@$digest" >>"$GITHUB_OUTPUT"

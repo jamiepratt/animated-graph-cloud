@@ -13,9 +13,13 @@ branch.
 
 ## Decision
 
-Production deployment triggers on every push to `main`. The workflow builds and
-scans the pushed `github.sha`, plans and applies production Terraform against
-the currently promoted renderer and API origin, pushes an immutable image,
+Production deployment remains automatic for protected `main`. Every push runs
+required CI. A successful CI run triggers production
+for its exact head commit. CI runs affected feedback and complete catalogue
+coverage while independently building, smoke-testing, scanning, and pushing
+one immutable candidate with persistent BuildKit caching. Production plans and
+applies Terraform against the currently promoted renderer and API origin,
+resolves the already verified immutable candidate,
 verifies the private Cloud Run candidate and renderer smoke job, configures
 runtime, opens ingress, publishes the pinned Firebase Hosting route, promotes
 the durable renderer, and checks the public health and legal routes.

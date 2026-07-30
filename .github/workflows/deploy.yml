@@ -42,14 +42,18 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - uses: docker/setup-buildx-action@v3
+
       - name: Build image
-        env:
-          IMAGE_TAG: ${{ env.IMAGE }}
-          RELEASE_COMMIT: ${{ github.sha }}
-        run: >-
-          docker build
-          --build-arg BUILD_COMMIT="$RELEASE_COMMIT"
-          --tag "$IMAGE_TAG" .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE }}
+          build-args: |
+            BUILD_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=development-image
+          cache-to: type=gha,mode=max,scope=development-image
 
       - name: Test image entry points
         env:

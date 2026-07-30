@@ -1,11 +1,8 @@
 (ns agg.proto-test-runner
-  (:require [agg.proto-release-test]
-            [agg.proto-source-test]
-            [agg.proto-ui-test]
-            [clojure.test :as test]))
+  (:require [agg.test-runner :as runner]))
 
 (defn -main [& _]
-  (let [{:keys [error fail]} (test/run-tests 'agg.proto-release-test
-                                             'agg.proto-source-test
-                                             'agg.proto-ui-test)]
+  (let [{:keys [error fail]} (runner/run-selected
+                              (runner/selected-namespaces
+                               ["--area" "proto"]))]
     (System/exit (if (pos? (+ error fail)) 1 0))))
