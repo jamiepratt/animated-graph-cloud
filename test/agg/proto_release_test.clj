@@ -281,7 +281,7 @@
                "AGG_DERIVATIVE_MAX_MONTHLY_MINOR_UNITS"]]
         (is (str/includes? proto-infra runtime-value)))
       (is (re-find
-           #"AGG_DERIVATIVE_MAX_USER_ATTEMPTS_PER_DAY\s*=\s*\"14\""
+           #"AGG_DERIVATIVE_MAX_USER_ATTEMPTS_PER_DAY\s*=\s*\"5\""
            proto-infra)))
     (testing "immutable inputs are resolved before a guarded Terraform apply"
       (let [service-index (str/index-of

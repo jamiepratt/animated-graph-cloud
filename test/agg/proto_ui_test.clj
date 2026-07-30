@@ -119,7 +119,8 @@
 
 (defn- proto-page-browser-outcome
   [{:keys [analysis-failure? analysis-response cache-hit? can-play-type
-           cancel-and-retry? derivative? media-error? submit-failure supported?
+           cancel-and-retry? derivative? media-error? media-error-recovery?
+           submit-failure supported?
            source-file-name terminal-resource timing-response webcodecs?]}]
   (let [source-file-name (or source-file-name "timing-ride.mp4")
         analysis-response
@@ -189,16 +190,20 @@
          "if(path==='/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/playback-sessions'){window.__protoState.derivativePlaybackRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/playback/00000000-0000-0000-0000-000000000396',contentType:'video/mp4',size:4096})});}"
          "if(path==='/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/playback/00000000-0000-0000-0000-000000000396'){window.__protoState.rangeRequests.push(options.headers&&options.headers.Range||null);return Promise.resolve({ok:true,status:206,headers:new Headers({'Content-Range':'bytes 0-4095/4096','Content-Length':'4096','Content-Type':'video/mp4'}),arrayBuffer:()=>Promise.resolve(new ArrayBuffer(16))});}"
          "return Promise.resolve({ok:false,status:500,json:()=>Promise.resolve({error:'unexpected'})});};"
-         "Object.defineProperties(HTMLMediaElement.prototype,{duration:{configurable:true,get(){return this.__duration??125.5;}},currentTime:{configurable:true,get(){return this.__currentTime??0;},set(value){this.__currentTime=Number(value);this.dispatchEvent(new Event('timeupdate'));}},paused:{configurable:true,get(){return this.__paused!==false;}},buffered:{configurable:true,get(){const ranges=this.__bufferedRanges??[];return {length:ranges.length,start:index=>ranges[index][0],end:index=>ranges[index][1]};}}});"
+         "Object.defineProperties(HTMLMediaElement.prototype,{duration:{configurable:true,get(){return this.__duration??125.5;}},currentTime:{configurable:true,get(){return this.__currentTime??0;},set(value){this.__currentTime=Number(value);this.dispatchEvent(new Event('timeupdate'));}},paused:{configurable:true,get(){return this.__paused!==false;}},buffered:{configurable:true,get(){const ranges=this.__bufferedRanges??[];return {length:ranges.length,start:index=>ranges[index][0],end:index=>ranges[index][1]};}},error:{configurable:true,get(){return this.__mediaError??null;}}});"
          "HTMLMediaElement.prototype.canPlayType=function(type){window.__protoState.canPlayType=type;return "
          (json/write-str can-play-type)
          ";};"
          (if webcodecs?
            "Object.defineProperty(window,'VideoDecoder',{configurable:true,value:{isConfigSupported(config){window.__protoState.videoDecoderConfig=config;return Promise.resolve({supported:true});}}});"
            "Object.defineProperty(window,'VideoDecoder',{configurable:true,value:undefined});")
-         "HTMLMediaElement.prototype.load=function(){if(this.getAttribute('src')){this.__duration=125.5;this.dispatchEvent(new Event('"
-         (if media-error? "error" "loadedmetadata")
-         "'));}};"
+         "HTMLMediaElement.prototype.load=function(){if(this.getAttribute('src')){this.__duration=125.5;"
+         (if media-error?
+           (str "this.__mediaError={code:4};this.dispatchEvent(new Event('error'));"
+                (when media-error-recovery?
+                  "this.__mediaError=null;this.dispatchEvent(new Event('timeupdate'));"))
+           "this.dispatchEvent(new Event('loadedmetadata'));")
+         "}};"
          "HTMLMediaElement.prototype.play=function(){this.__paused=false;this.dispatchEvent(new Event('play'));return Promise.resolve();};"
          "HTMLMediaElement.prototype.pause=function(){this.__paused=true;this.dispatchEvent(new Event('pause'));};"
          "</script>")
@@ -224,7 +229,9 @@
            "await waitFor('analysis failure status',()=>document.getElementById('player-status').textContent.includes('playback_analysis_timeout'),200);"
 
            (and supported? media-error?)
-           "await waitFor('preparation debug',()=>{const text=document.getElementById('prep-debug').textContent;return text&&text.includes('\"playback\"')&&text.includes('\"session\"');},200);await waitFor('actual media load failure',()=>document.getElementById('player-status').textContent.includes('actual media load'),200);"
+           (str "await waitFor('preparation debug',()=>{const text=document.getElementById('prep-debug').textContent;return text&&text.includes('\"playback\"')&&text.includes('\"session\"');},200);await waitFor('actual media load failure',()=>document.getElementById('player-status').textContent.includes('actual media load'),200);"
+                (when media-error-recovery?
+                  "await waitFor('recovered media diagnostic',()=>JSON.parse(document.getElementById('range-debug').textContent).media.error===false,200);"))
 
            supported?
            "await waitFor('preparation debug',()=>{const text=document.getElementById('prep-debug').textContent;return text&&text.includes('\"support\"')&&text.includes('\"session\"');},200);await waitFor('loaded player status',()=>document.getElementById('player-status').textContent.includes('Private playback loaded'),200);const video=document.getElementById('proto-player');video.__bufferedRanges=[[0,30],[60,90]];video.dispatchEvent(new Event('progress'));"
@@ -686,6 +693,26 @@
     (is (= true (get-in outcome [:range :media :error])))
     (is (= [{:fileId "timing-source-1"}]
            (get-in outcome [:requests :sessionRequests])))))
+
+(deftest proto-page-clears-a-recovered-media-load-error
+  (let [outcome (proto-page-browser-outcome
+                 {:can-play-type "probably"
+                  :media-error? true
+                  :media-error-recovery? true
+                  :webcodecs? false
+                  :supported? true
+                  :timing-response {:fileName "timing-ride.mp4"
+                                    :status "manual"
+                                    :candidates []
+                                    :recommendedIndex nil
+                                    :ambiguous false
+                                    :durationSeconds 125.5
+                                    :limits {:maxBytes 524288
+                                             :maxRanges 2
+                                             :timeoutMillis 3000}}})]
+    (is (nil? (:error outcome)))
+    (is (= "actual_media_load_failed" (get-in outcome [:prep :playback :actual])))
+    (is (= false (get-in outcome [:range :media :error])))))
 
 (deftest proto-page-ignores-stale-source-switch-completions
   (let [outcome (proto-page-race-browser-outcome)]
