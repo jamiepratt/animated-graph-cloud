@@ -314,7 +314,7 @@
         videos (filterv #(= "video" (:codec_type %)) (:streams probe))
         audios (filterv #(= "audio" (:codec_type %)) (:streams probe))
         video (first videos)]
-    (when-not (and (= 1 (count videos))
+    (when-not (and video
                    (pos-int? (:width video))
                    (pos-int? (:height video)))
       (throw

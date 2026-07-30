@@ -56,6 +56,19 @@
     "-y" (str path)])
   path)
 
+(defn- multi-video-hvc1-fixture! [^Path path]
+  (run-command!
+   ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
+    "-f" "lavfi" "-i" "testsrc2=size=320x180:rate=30"
+    "-f" "lavfi" "-i" "testsrc2=size=160x90:rate=30"
+    "-f" "lavfi" "-i" "sine=frequency=440:sample_rate=44100"
+    "-t" "1"
+    "-map" "0:v:0" "-map" "1:v:0" "-map" "2:a:0"
+    "-c:v" "libx265" "-preset" "ultrafast" "-tag:v" "hvc1"
+    "-c:a" "aac"
+    "-y" (str path)])
+  path)
+
 (defn- local-file-gateway [^bytes source]
   (let [size (alength source)]
     (reify drive/PlaybackGateway
@@ -235,6 +248,35 @@
                @stages))
         (is (< elapsed-ms 60000)
             "synthetic HVC1 worker path must keep 14 minutes of headroom"))
+      (finally
+        (Files/deleteIfExists source)
+        (Files/deleteIfExists output)))))
+
+(deftest primary-video-with-auxiliary-video-completes-the-worker-path
+  (let [source (temp-path! "agg-generated-multi-video-hvc1-" ".mp4")
+        output (temp-path! "agg-generated-primary-video-derivative-" ".mp4")]
+    (try
+      (multi-video-hvc1-fixture! source)
+      (Files/deleteIfExists output)
+      (let [source-bytes (Files/readAllBytes source)
+            result
+            (worker/run!
+             {:classification :derivative-required
+              :source-duration-seconds 1
+              :source-bytes (alength source-bytes)
+              :output-path output}
+             {:proxy-config
+              {:gateway (local-file-gateway source-bytes)
+               :access-token "opaque"
+               :file-id "opaque"}})]
+        (is (= :derivative-ready (:classification result)))
+        (is (= [320 180]
+               ((juxt :width :height) (:video result))))
+        (is (= {:codec "aac"
+                :profile "LC"
+                :sample-rate 48000
+                :channels 2}
+               (:audio result))))
       (finally
         (Files/deleteIfExists source)
         (Files/deleteIfExists output)))))
