@@ -131,7 +131,9 @@
         (is (= "application/javascript; charset=utf-8"
                (.orElse (.firstValue (.headers response) "Content-Type") "")))
         (is (.contains ^String (.body response) "__agg_range"))
-        (is (.contains ^String (.body response) "headers.get('Range')")))
+        (is (.contains ^String (.body response) "headers.get('Range')"))
+        (is (.contains ^String (.body response)
+                       "derivative-preparations")))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

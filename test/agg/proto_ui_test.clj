@@ -118,8 +118,9 @@
         (.delete temp)))))
 
 (defn- proto-page-browser-outcome
-  [{:keys [analysis-failure? analysis-response can-play-type media-error? webcodecs?
-           timing-response supported?]}]
+  [{:keys [analysis-failure? analysis-response cache-hit? can-play-type
+           cancel-and-retry? derivative? media-error? submit-failure supported?
+           terminal-resource timing-response webcodecs?]}]
   (let [analysis-response
         (or analysis-response
             {:ok true
@@ -131,13 +132,25 @@
                :video {:codec "h264" :codecTag "avc1"
                        :profile "High" :pixelFormat "yuv420p"}
                :audio {:codec "aac"}}}})
+        derivative-status-resource
+        (merge
+         {:id "00000000-0000-0000-0000-000000000196"
+          :state "succeeded"
+          :attempt (if cancel-and-retry? 2 1)
+          :profileVersion "h264-aac-1080p25-v1"
+          :assetId "00000000-0000-0000-0000-000000000296"
+          :expiresAt "2026-07-31T12:00:00Z"
+          :statusUrl "/v1/derivative-preparations/00000000-0000-0000-0000-000000000196"
+          :cancelUrl "/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/cancel"
+          :retryUrl "/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/retry"}
+         terminal-resource)
         page (proto/page {:user {:email "owner@example.com"}
                           :csrf "csrf-token"
                           :folder-id proto/fixed-folder-id})
         bootstrap
         (str
          "<script>"
-         "window.__protoState={analysisRequests:[],timingRequests:[],sessionRequests:[],rangeRequests:[]};"
+         "window.__protoState={analysisRequests:[],timingRequests:[],sessionRequests:[],derivativeRequests:[],derivativeStatusRequests:[],derivativePlaybackRequests:[],cancelRequests:[],retryRequests:[],rangeRequests:[]};"
          "window.fetch=(path,options={})=>{"
          "if(path==='/v1/proto/sources'){return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({listingMode:'folder-enumeration',folderId:'"
          proto/fixed-folder-id
@@ -152,6 +165,26 @@
          ")});}"
          "if(path==='/v1/drive/playback-sessions'){window.__protoState.sessionRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000115',contentType:'video/mp4',size:8192})});}"
          "if(path==='/v1/drive/playback/00000000-0000-0000-0000-000000000115'){window.__protoState.rangeRequests.push(options.headers&&options.headers.Range||null);return Promise.resolve({ok:true,status:206,headers:new Headers({'Content-Range':'bytes 0-4095/8192','Content-Length':'4096','Content-Type':'video/mp4'}),arrayBuffer:()=>Promise.resolve(new ArrayBuffer(16))});}"
+         (cond
+           submit-failure
+           (str "if(path==='/v1/derivative-preparations'&&options.method==='POST'){window.__protoState.derivativeRequests.push({body:JSON.parse(options.body),idempotencyKey:options.headers['Idempotency-Key']});return Promise.resolve({ok:false,status:"
+                (:status submit-failure)
+                ",headers:new Headers({'X-Request-Id':'request-failure-header'}),json:()=>Promise.resolve("
+                (json/write-str (:body submit-failure))
+                ")});}")
+
+           cache-hit?
+           "if(path==='/v1/derivative-preparations'&&options.method==='POST'){window.__protoState.derivativeRequests.push({body:JSON.parse(options.body),idempotencyKey:options.headers['Idempotency-Key']});return Promise.resolve({ok:true,status:200,headers:new Headers({'X-Request-Id':'request-cache'}),json:()=>Promise.resolve({id:'00000000-0000-0000-0000-000000000196',state:'succeeded',attempt:1,profileVersion:'h264-aac-1080p25-v1',assetId:'00000000-0000-0000-0000-000000000296',expiresAt:'2026-07-31T12:00:00Z',statusUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000196',cancelUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/cancel',retryUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/retry'})});}"
+
+           :else
+           "if(path==='/v1/derivative-preparations'&&options.method==='POST'){window.__protoState.derivativeRequests.push({body:JSON.parse(options.body),idempotencyKey:options.headers['Idempotency-Key']});return Promise.resolve({ok:true,status:202,headers:new Headers({'X-Request-Id':'request-submit'}),json:()=>Promise.resolve({id:'00000000-0000-0000-0000-000000000196',state:'queued',attempt:1,profileVersion:'h264-aac-1080p25-v1',statusUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000196',cancelUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/cancel',retryUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/retry'})});}")
+         "if(path==='/v1/derivative-preparations/00000000-0000-0000-0000-000000000196'&&(!options.method||options.method==='GET')){window.__protoState.derivativeStatusRequests.push(path);return Promise.resolve({ok:true,status:200,headers:new Headers({'X-Request-Id':'request-status'}),json:()=>Promise.resolve("
+         (json/write-str derivative-status-resource)
+         ")});}"
+         "if(path==='/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/cancel'){window.__protoState.cancelRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:200,headers:new Headers({'X-Request-Id':'request-cancel'}),json:()=>Promise.resolve({id:'00000000-0000-0000-0000-000000000196',state:'cancelled',attempt:1,profileVersion:'h264-aac-1080p25-v1',statusUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000196',cancelUrl:path,retryUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/retry'})});}"
+         "if(path==='/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/retry'){window.__protoState.retryRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:202,headers:new Headers({'X-Request-Id':'request-retry'}),json:()=>Promise.resolve({id:'00000000-0000-0000-0000-000000000196',state:'queued',attempt:2,profileVersion:'h264-aac-1080p25-v1',statusUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000196',cancelUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/cancel',retryUrl:path})});}"
+         "if(path==='/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/playback-sessions'){window.__protoState.derivativePlaybackRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/playback/00000000-0000-0000-0000-000000000396',contentType:'video/mp4',size:4096})});}"
+         "if(path==='/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/playback/00000000-0000-0000-0000-000000000396'){window.__protoState.rangeRequests.push(options.headers&&options.headers.Range||null);return Promise.resolve({ok:true,status:206,headers:new Headers({'Content-Range':'bytes 0-4095/4096','Content-Length':'4096','Content-Type':'video/mp4'}),arrayBuffer:()=>Promise.resolve(new ArrayBuffer(16))});}"
          "return Promise.resolve({ok:false,status:500,json:()=>Promise.resolve({error:'unexpected'})});};"
          "Object.defineProperties(HTMLMediaElement.prototype,{duration:{configurable:true,get(){return this.__duration??125.5;}},currentTime:{configurable:true,get(){return this.__currentTime??0;},set(value){this.__currentTime=Number(value);this.dispatchEvent(new Event('timeupdate'));}},paused:{configurable:true,get(){return this.__paused!==false;}},buffered:{configurable:true,get(){const ranges=this.__bufferedRanges??[];return {length:ranges.length,start:index=>ranges[index][0],end:index=>ranges[index][1]};}}});"
          "HTMLMediaElement.prototype.canPlayType=function(type){window.__protoState.canPlayType=type;return "
@@ -174,18 +207,26 @@
          "async function waitFor(label,predicate,attempts){for(let index=0;index<attempts;index+=1){const value=predicate();if(value)return value;await delay(25);}throw new Error('Timed out waiting for '+label);}"
          "async function runScenario(){try{const select=await waitFor('source select',()=>document.getElementById('source-select'),200);await waitFor('source option',()=>select.options.length>1&&select.options[1].value==='timing-source-1',200);select.value='timing-source-1';select.dispatchEvent(new Event('change',{bubbles:true}));await waitFor('selected title',()=>document.getElementById('selected-title').textContent==='timing-ride.mp4',200);"
          (cond
+           derivative?
+           (str
+            "const prepare=await waitFor('prepare browser preview action',()=>{const button=document.getElementById('prepare-browser-preview');return button&&!button.hidden&&button;},100);const beforeAction={sessionRequests:window.__protoState.sessionRequests.length,derivativeRequests:window.__protoState.derivativeRequests.length,playerSrc:document.getElementById('proto-player').getAttribute('src')};prepare.click();"
+            (if cancel-and-retry?
+              "const cancel=await waitFor('cancel action',()=>{const button=document.getElementById('cancel-preview');return button&&!button.hidden&&button;},100);cancel.click();const retry=await waitFor('retry action',()=>{const button=document.getElementById('retry-preview');return button&&!button.hidden&&button;},100);retry.click();"
+              "")
+            "await delay(1800);")
+
            analysis-failure?
            "await waitFor('analysis failure status',()=>document.getElementById('player-status').textContent.includes('playback_analysis_timeout'),200);"
 
-           media-error?
+           (and supported? media-error?)
            "await waitFor('preparation debug',()=>{const text=document.getElementById('prep-debug').textContent;return text&&text.includes('\"playback\"')&&text.includes('\"session\"');},200);await waitFor('actual media load failure',()=>document.getElementById('player-status').textContent.includes('actual media load'),200);"
 
            supported?
            "await waitFor('preparation debug',()=>{const text=document.getElementById('prep-debug').textContent;return text&&text.includes('\"support\"')&&text.includes('\"session\"');},200);await waitFor('loaded player status',()=>document.getElementById('player-status').textContent.includes('Private playback loaded'),200);const video=document.getElementById('proto-player');video.__bufferedRanges=[[0,30],[60,90]];video.dispatchEvent(new Event('progress'));"
 
            :else
-           "await waitFor('preparation debug',()=>{const text=document.getElementById('prep-debug').textContent;return text&&text.includes('\"support\"')&&text.includes('\"playback\"')&&text.includes('\"session\"');},200);await waitFor('heuristic-rejection playback status',()=>document.getElementById('player-status').textContent.includes('Private playback loaded after a heuristic rejection'),200);")
-         "recordOutcome({sourceStatus:document.getElementById('source-status').textContent,playerStatus:document.getElementById('player-status').textContent,selectedTitle:document.getElementById('selected-title').textContent,sourceSelect:{disabled:select.disabled,value:select.value,labels:Array.from(select.options).map(option=>option.textContent)},summary:{listing:document.getElementById('summary-listing').textContent,file:document.getElementById('summary-file').textContent,mime:document.getElementById('summary-mime').textContent,duration:document.getElementById('summary-duration').textContent,frameSize:document.getElementById('summary-size').textContent},timing:{start:document.getElementById('timing-start').textContent,end:document.getElementById('timing-end').textContent,state:document.getElementById('timing-state').textContent,confidence:document.getElementById('timing-confidence').textContent},prep:JSON.parse(document.getElementById('prep-debug').textContent),range:JSON.parse(document.getElementById('range-debug').textContent),requests:window.__protoState});}catch(error){recordOutcome({error:error.message});}}"
+           "await waitFor('prepare browser preview action',()=>{const button=document.getElementById('prepare-browser-preview');return button&&!button.hidden;},200);await waitFor('browser-rejected status',()=>document.getElementById('player-status').textContent.includes('original codec is not supported'),200);")
+         "recordOutcome({sourceStatus:document.getElementById('source-status').textContent,playerStatus:document.getElementById('player-status').textContent,selectedTitle:document.getElementById('selected-title').textContent,beforeAction:typeof beforeAction==='undefined'?null:beforeAction,preparationText:(document.getElementById('preparation-panel')||{}).textContent||'',actions:{prepareHidden:document.getElementById('prepare-browser-preview').hidden,waitHidden:document.getElementById('wait-for-preview').hidden,cancelHidden:document.getElementById('cancel-preview').hidden,retryHidden:document.getElementById('retry-preview').hidden},playerSrc:document.getElementById('proto-player').getAttribute('src'),sourceSelect:{disabled:select.disabled,value:select.value,labels:Array.from(select.options).map(option=>option.textContent)},summary:{listing:document.getElementById('summary-listing').textContent,file:document.getElementById('summary-file').textContent,mime:document.getElementById('summary-mime').textContent,duration:document.getElementById('summary-duration').textContent,frameSize:document.getElementById('summary-size').textContent},timing:{start:document.getElementById('timing-start').textContent,end:document.getElementById('timing-end').textContent,state:document.getElementById('timing-state').textContent,confidence:document.getElementById('timing-confidence').textContent},prep:JSON.parse(document.getElementById('prep-debug').textContent),range:JSON.parse(document.getElementById('range-debug').textContent),requests:window.__protoState});}catch(error){recordOutcome({error:error.message,requests:window.__protoState});}}"
          "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',()=>{setTimeout(runScenario,0);},{once:true});}else{setTimeout(runScenario,0);}"
          "</script>")
         html (-> page
@@ -196,6 +237,166 @@
      "agg-proto-browser-"
      "Proto playback browser regression requires Chrome or Chromium"
      html)))
+
+(deftest proto-page-requires-explicit-preparation-before-loading-a-renderable-rejected-source
+  (let [outcome
+        (proto-page-browser-outcome
+         {:can-play-type ""
+          :derivative? true
+          :webcodecs? false
+          :timing-response {:fileName "timing-ride.mp4"
+                            :status "manual"
+                            :candidates []
+                            :recommendedIndex nil
+                            :ambiguous false
+                            :durationSeconds 125.5
+                            :limits {:maxBytes 524288
+                                     :maxRanges 2
+                                     :timeoutMillis 3000}}})]
+    (is (nil? (:error outcome)))
+    (is (= {:sessionRequests 0
+            :derivativeRequests 0
+            :playerSrc nil}
+           (:beforeAction outcome)))
+    (is (= [] (get-in outcome [:requests :sessionRequests])))
+    (is (= [{:fileId "timing-source-1"}]
+           (mapv :body
+                 (get-in outcome [:requests :derivativeRequests]))))
+    (is (every? #(and (string? %)
+                      (<= 1 (count %) 128))
+                (map :idempotencyKey
+                     (get-in outcome [:requests :derivativeRequests]))))
+    (is (= [{}] (get-in outcome [:requests :derivativePlaybackRequests])))
+    (is (= "/v1/derivative-preparations/00000000-0000-0000-0000-000000000196/playback/00000000-0000-0000-0000-000000000396"
+           (:playerSrc outcome)))
+    (is (str/includes? (:preparationText outcome) "8 minutes"))
+    (is (str/includes? (:preparationText outcome) "2 GB"))
+    (is (str/includes? (:preparationText outcome) "24 hours"))
+    (is (= "request-status"
+           (get-in outcome [:prep :derivative :requestId])))
+    (let [debug-json (json/write-str (:prep outcome))]
+      (doseq [private-value ["owner@example.com"
+                             proto/fixed-folder-id
+                             "timing-source-1"
+                             "00000000-0000-0000-0000-000000000196"
+                             "00000000-0000-0000-0000-000000000296"
+                             "00000000-0000-0000-0000-000000000396"]]
+        (is (not (str/includes? debug-json private-value)))))
+    (is (= "bytes 0-4095/4096"
+           (get-in outcome [:range :rangeProbe :contentRange])))))
+
+(deftest proto-page-cache-hit-skips-queue-polling-and-new-work-copy
+  (let [outcome
+        (proto-page-browser-outcome
+         {:cache-hit? true
+          :can-play-type ""
+          :derivative? true
+          :webcodecs? false
+          :timing-response {:fileName "timing-ride.mp4"
+                            :status "manual"
+                            :candidates []
+                            :recommendedIndex nil
+                            :ambiguous false
+                            :durationSeconds 125.5
+                            :limits {:maxBytes 524288
+                                     :maxRanges 2
+                                     :timeoutMillis 3000}}})]
+    (is (nil? (:error outcome)))
+    (is (= [] (get-in outcome [:requests :sessionRequests])))
+    (is (= [] (get-in outcome [:requests :derivativeStatusRequests])))
+    (is (= true (get-in outcome [:prep :derivative :cacheHit])))
+    (is (= "request-cache"
+           (get-in outcome [:prep :derivative :requestId])))
+    (is (str/includes? (:preparationText outcome)
+                       "No new preparation work was started"))
+    (is (str/includes? (:playerStatus outcome) "Browser preview ready"))))
+
+(deftest proto-page-shows-safe-admission-failure-metadata
+  (let [request-id "request-capacity"
+        outcome
+        (proto-page-browser-outcome
+         {:can-play-type ""
+          :derivative? true
+          :submit-failure
+          {:status 503
+           :body {:error "derivative_project_backlog_exhausted"
+                  :requestId request-id
+                  :retryable true}}
+          :webcodecs? false
+          :timing-response {:fileName "timing-ride.mp4"
+                            :status "manual"
+                            :candidates []
+                            :recommendedIndex nil
+                            :ambiguous false
+                            :durationSeconds 125.5
+                            :limits {:maxBytes 524288
+                                     :maxRanges 2
+                                     :timeoutMillis 3000}}})]
+    (is (nil? (:error outcome)))
+    (is (= [] (get-in outcome [:requests :sessionRequests])))
+    (is (= [] (get-in outcome [:requests :derivativeStatusRequests])))
+    (is (str/includes? (:preparationText outcome)
+                       "derivative_project_backlog_exhausted"))
+    (is (str/includes? (:preparationText outcome) "Retryable: Yes"))
+    (is (str/includes? (:preparationText outcome)
+                       (str "Request ID: " request-id)))
+    (is (= {:status 503
+            :error "derivative_project_backlog_exhausted"
+            :retryable true
+            :requestId request-id}
+           (get-in outcome [:prep :preparationError])))))
+
+(deftest proto-page-surfaces-retryable-verification-failure
+  (let [outcome
+        (proto-page-browser-outcome
+         {:can-play-type ""
+          :derivative? true
+          :terminal-resource
+          {:state "failed"
+           :failureCode "derivative_verification_failed"
+           :retryable true}
+          :webcodecs? false
+          :timing-response {:fileName "timing-ride.mp4"
+                            :status "manual"
+                            :candidates []
+                            :recommendedIndex nil
+                            :ambiguous false
+                            :durationSeconds 125.5
+                            :limits {:maxBytes 524288
+                                     :maxRanges 2
+                                     :timeoutMillis 3000}}})]
+    (is (nil? (:error outcome)))
+    (is (str/includes? (:preparationText outcome)
+                       "derivative_verification_failed"))
+    (is (str/includes? (:preparationText outcome) "Retryable: Yes"))
+    (is (str/includes? (:preparationText outcome)
+                       "Request ID: request-status"))
+    (is (= false (get-in outcome [:actions :retryHidden])))
+    (is (= [] (get-in outcome [:requests :derivativePlaybackRequests])))
+    (is (nil? (:playerSrc outcome)))))
+
+(deftest proto-page-cancels-only-on-explicit-action-and-can-retry
+  (let [outcome
+        (proto-page-browser-outcome
+         {:cancel-and-retry? true
+          :can-play-type ""
+          :derivative? true
+          :webcodecs? false
+          :timing-response {:fileName "timing-ride.mp4"
+                            :status "manual"
+                            :candidates []
+                            :recommendedIndex nil
+                            :ambiguous false
+                            :durationSeconds 125.5
+                            :limits {:maxBytes 524288
+                                     :maxRanges 2
+                                     :timeoutMillis 3000}}})]
+    (is (nil? (:error outcome)))
+    (is (= [{}] (get-in outcome [:requests :cancelRequests])))
+    (is (= [{}] (get-in outcome [:requests :retryRequests])))
+    (is (= 2 (get-in outcome [:prep :derivative :attempt])))
+    (is (= "succeeded" (get-in outcome [:prep :derivative :state])))
+    (is (str/includes? (:playerStatus outcome) "Browser preview ready"))))
 
 (defn- proto-page-race-browser-outcome []
   (let [page (proto/page {:user {:email "owner@example.com"}
@@ -242,6 +443,66 @@
     (browser-outcome
      "agg-proto-browser-race-"
      "Proto playback race regression requires Chrome or Chromium"
+     html)))
+
+(defn- proto-page-preparation-switch-outcome []
+  (let [page (proto/page {:user {:email "owner@example.com"}
+                          :csrf "csrf-token"
+                          :folder-id proto/fixed-folder-id})
+        job-id "00000000-0000-0000-0000-000000000196"
+        status-url (str "/v1/derivative-preparations/" job-id)
+        bootstrap
+        (str
+         "<script>"
+         "window.__switchState={submitRequests:[],statusRequests:[],cancelRequests:[],playbackRequests:[]};"
+         "window.__firstStatus={};window.__firstStatus.promise=new Promise(resolve=>window.__firstStatus.resolve=resolve);"
+         "window.__readyStatusResponse=()=>({ok:true,status:200,headers:new Headers({'X-Request-Id':'switch-ready'}),json:()=>Promise.resolve({id:'"
+         job-id
+         "',state:'succeeded',attempt:1,profileVersion:'h264-aac-1080p25-v1',assetId:'00000000-0000-0000-0000-000000000296',expiresAt:'2026-07-31T12:00:00Z',statusUrl:'"
+         status-url
+         "',cancelUrl:'"
+         status-url
+         "/cancel',retryUrl:'"
+         status-url
+         "/retry'})});"
+         "window.fetch=(path,options={})=>{"
+         "if(path==='/v1/proto/sources')return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({listingMode:'folder-enumeration',folderId:'"
+         proto/fixed-folder-id
+         "',sources:[{fileId:'source-a',fileName:'alpha.mov',mimeType:'video/quicktime',size:8192,durationSeconds:120,width:1920,height:1080},{fileId:'source-b',fileName:'bravo.mov',mimeType:'video/quicktime',size:8192,durationSeconds:120,width:1920,height:1080}]})});"
+         "if(path==='/v1/drive/playback-analyses'){const body=JSON.parse(options.body);return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:body.fileId==='source-a'?'alpha.mov':'bravo.mov',evidence:{container:{format:'mov',majorBrand:'qt  '},video:{codec:'hevc',codecTag:'hvc1',profile:'Main',pixelFormat:'yuv420p'},audio:{codec:'aac'}}})});}"
+         "if(path==='/v1/drive/recording-clock-inspections')return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({status:'manual',candidates:[],recommendedIndex:null,ambiguous:false,durationSeconds:120,limits:{maxBytes:524288,maxRanges:2,timeoutMillis:3000}})});"
+         "if(path==='/v1/derivative-preparations'&&options.method==='POST'){window.__switchState.submitRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:202,headers:new Headers({'X-Request-Id':'switch-submit'}),json:()=>Promise.resolve({id:'"
+         job-id
+         "',state:'queued',attempt:1,profileVersion:'h264-aac-1080p25-v1',statusUrl:'"
+         status-url
+         "',cancelUrl:'"
+         status-url
+         "/cancel',retryUrl:'"
+         status-url
+         "/retry'})});}"
+         "if(path==='" status-url "'){window.__switchState.statusRequests.push(path);return window.__switchState.statusRequests.length===1?window.__firstStatus.promise:Promise.resolve(window.__readyStatusResponse());}"
+         "if(path==='" status-url "/cancel'){window.__switchState.cancelRequests.push({});return Promise.resolve({ok:false,status:500,json:()=>Promise.resolve({error:'unexpected_cancel'})});}"
+         "if(path==='" status-url "/playback-sessions'){window.__switchState.playbackRequests.push({});return Promise.resolve({ok:false,status:500,json:()=>Promise.resolve({error:'unexpected_playback'})});}"
+         "return Promise.resolve({ok:false,status:500,json:()=>Promise.resolve({error:'unexpected'})});};"
+         "HTMLMediaElement.prototype.canPlayType=()=>'';"
+         "HTMLMediaElement.prototype.load=function(){};"
+         "Object.defineProperty(window,'VideoDecoder',{configurable:true,value:undefined});"
+         "</script>")
+        scenario
+        (str
+         "<script>"
+         "function recordOutcome(value){const bytes=new TextEncoder().encode(JSON.stringify(value));document.body.dataset.outcome=btoa(String.fromCharCode(...bytes));}"
+         "const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));"
+         "async function waitFor(label,predicate){for(let index=0;index<100;index++){const value=predicate();if(value)return value;await delay(20);}throw new Error('Timed out waiting for '+label);}"
+         "window.addEventListener('load',()=>setTimeout(async()=>{try{const buttons=await waitFor('source buttons',()=>{const found=[...document.querySelectorAll('#source-list button')];return found.length===2&&found;});buttons[0].click();const prepare=await waitFor('prepare action',()=>{const button=document.getElementById('prepare-browser-preview');return !button.hidden&&button;});prepare.click();await waitFor('first status request',()=>window.__switchState.statusRequests.length===1);buttons[1].click();window.__firstStatus.resolve(window.__readyStatusResponse());const wait=await waitFor('wait action',()=>{const button=document.getElementById('wait-for-preview');return document.getElementById('selected-title').textContent==='bravo.mov'&&!button.hidden&&button;});await delay(50);const beforeWait={statusRequests:window.__switchState.statusRequests.length,cancelRequests:window.__switchState.cancelRequests.length,submitRequests:window.__switchState.submitRequests.length,panel:document.getElementById('preparation-summary').textContent};wait.click();await delay(1300);recordOutcome({error:null,beforeWait,selectedTitle:document.getElementById('selected-title').textContent,playerStatus:document.getElementById('player-status').textContent,panel:document.getElementById('preparation-summary').textContent,playerSrc:document.getElementById('proto-player').getAttribute('src'),requests:window.__switchState});}catch(error){recordOutcome({error:error.message,requests:window.__switchState});}},0),{once:true});"
+         "</script>")
+        html (-> page
+                 (str/replace "</head>" (str bootstrap "</head>"))
+                 (str/replace "</body>" (str scenario "</body>"))
+                 (str/replace "<body " "<body data-outcome=\"\">"))]
+    (browser-outcome
+     "agg-proto-derivative-switch-"
+     "Proto derivative source-switch regression requires Chrome or Chromium"
      html)))
 
 (deftest proto-service-profile-serves-a-separate-playback-harness
@@ -312,8 +573,8 @@
     (is (= "2026-07-27T22:00:00+02:00" (get-in outcome [:timing :start])))
     (is (= "2026-07-27T22:02:05.500+02:00" (get-in outcome [:timing :end])))
     (is (= true (get-in outcome [:prep :support :supported])))
-    (is (= "/v1/drive/playback/00000000-0000-0000-0000-000000000115"
-           (get-in outcome [:prep :session :playbackUrl])))
+    (is (= {:kind "direct" :contentType "video/mp4" :size 8192}
+           (get-in outcome [:prep :session])))
     (is (= ["bytes=0-4095"] (get-in outcome [:requests :rangeRequests])))
     (is (= "bytes 0-4095/8192" (get-in outcome [:range :rangeProbe :contentRange])))
     (is (= [[0 30] [60 90]] (get-in outcome [:range :media :buffered])))))
@@ -346,7 +607,7 @@
            (get-in outcome [:prep :analysisFailure])))
     (is (= [] (get-in outcome [:requests :sessionRequests])))))
 
-(deftest proto-page-attempts-private-playback-after-a-heuristic-rejection
+(deftest proto-page-does-not-load-rejected-original-media-before-explicit-preparation
   (let [outcome (proto-page-browser-outcome
                  {:can-play-type ""
                   :webcodecs? false
@@ -363,23 +624,22 @@
     (is (nil? (:error outcome)))
     (is (= "timing-source-1" (get-in outcome [:sourceSelect :value])))
     (is (str/includes? (:playerStatus outcome)
-                       "Private playback loaded after a heuristic rejection"))
+                       "original codec is not supported"))
     (is (= false (get-in outcome [:prep :support :supported])))
     (is (= "browser_rejected" (get-in outcome [:prep :support :reason])))
     (is (= "heuristic_rejected" (get-in outcome [:prep :playback :heuristic])))
-    (is (= "actual_media_loaded" (get-in outcome [:prep :playback :actual])))
+    (is (= "not_attempted" (get-in outcome [:prep :playback :actual])))
     (is (= "Duration only" (get-in outcome [:timing :state])))
-    (is (= [{:fileId "timing-source-1"}]
-           (get-in outcome [:requests :sessionRequests])))
-    (is (= "bytes 0-4095/8192"
-           (get-in outcome [:range :rangeProbe :contentRange])))))
+    (is (= [] (get-in outcome [:requests :sessionRequests])))
+    (is (= [] (get-in outcome [:requests :derivativeRequests])))
+    (is (nil? (get-in outcome [:range :rangeProbe])))))
 
-(deftest proto-page-distinguishes-an-actual-media-load-failure-from-a-heuristic-rejection
+(deftest proto-page-surfaces-an-actual-direct-media-load-failure
   (let [outcome (proto-page-browser-outcome
-                 {:can-play-type ""
+                 {:can-play-type "probably"
                   :media-error? true
                   :webcodecs? false
-                  :supported? false
+                  :supported? true
                   :timing-response {:fileName "timing-ride.mp4"
                                     :status "manual"
                                     :candidates []
@@ -391,7 +651,7 @@
                                              :timeoutMillis 3000}}})]
     (is (nil? (:error outcome)))
     (is (str/includes? (:playerStatus outcome) "actual media load"))
-    (is (= "heuristic_rejected" (get-in outcome [:prep :playback :heuristic])))
+    (is (= "heuristic_supported" (get-in outcome [:prep :playback :heuristic])))
     (is (= "actual_media_load_failed" (get-in outcome [:prep :playback :actual])))
     (is (= true (get-in outcome [:range :media :error])))
     (is (= [{:fileId "timing-source-1"}]
@@ -404,7 +664,7 @@
     (is (str/includes? (:playerStatus outcome) "Private playback loaded"))
     (is (= "bravo.mov" (get-in outcome [:prep :analysis :fileName])))
     (is (= "2026-07-27T23:00:00+02:00" (get-in outcome [:prep :timing :candidates 0 :value])))
-    (is (= "/v1/drive/playback/b-source" (get-in outcome [:prep :session :playbackUrl])))
+    (is (= "direct" (get-in outcome [:prep :session :kind])))
     (is (= "video/quicktime" (get-in outcome [:prep :session :contentType])))
     (is (= 2222 (get-in outcome [:prep :session :size])))
     (is (= [{:fileId "timing-source-2"}] (get-in outcome [:requests :sessionRequests])))
@@ -413,3 +673,20 @@
     (is (= "video/quicktime" (get-in outcome [:range :rangeProbe :contentType])))
     (is (= (:beforeStaleMedia outcome)
            (get-in outcome [:range :media])))))
+
+(deftest proto-page-source-switch-stops-polling-without-silent-cancellation
+  (let [outcome (proto-page-preparation-switch-outcome)]
+    (is (nil? (:error outcome)))
+    (is (= "bravo.mov" (:selectedTitle outcome)))
+    (is (= {:statusRequests 1
+            :cancelRequests 0
+            :submitRequests 1
+            :panel
+            "A browser preview for alpha.mov is still queued. Wait for it or cancel it explicitly before preparing this source."}
+           (:beforeWait outcome)))
+    (is (= 2 (count (get-in outcome [:requests :statusRequests]))))
+    (is (= [] (get-in outcome [:requests :cancelRequests])))
+    (is (= [] (get-in outcome [:requests :playbackRequests])))
+    (is (nil? (:playerSrc outcome)))
+    (is (str/includes? (:playerStatus outcome)
+                       "existing browser preview is ready"))))
