@@ -76,6 +76,8 @@ for role in \
   roles/firebasehosting.admin \
   roles/iam.serviceAccountAdmin \
   roles/iam.workloadIdentityPoolAdmin \
+  roles/logging.configWriter \
+  roles/monitoring.editor \
   roles/resourcemanager.projectIamAdmin \
   roles/run.admin \
   roles/serviceusage.serviceUsageConsumer \

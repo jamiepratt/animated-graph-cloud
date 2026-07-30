@@ -21,6 +21,8 @@ locals {
     "roles/firebasehosting.admin",
     "roles/iam.serviceAccountAdmin",
     "roles/iam.workloadIdentityPoolAdmin",
+    "roles/logging.configWriter",
+    "roles/monitoring.editor",
     "roles/resourcemanager.projectIamAdmin",
     "roles/run.admin",
     "roles/serviceusage.serviceUsageConsumer",
@@ -440,6 +442,509 @@ resource "google_cloud_run_service_iam_member" "public_invoker" {
   service  = google_cloud_run_v2_service.proto.name
   role     = "roles/run.invoker"
   member   = "allUsers"
+}
+
+resource "google_logging_metric" "derivative_preparation_latency_ms" {
+  project         = local.project_id
+  name            = "alpha_compose_proto/derivative_preparation_latency_ms"
+  description     = "Successful derivative preparation latency in milliseconds"
+  filter          = "jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.status=\"succeeded\""
+  value_extractor = "EXTRACT(jsonPayload.elapsedMs)"
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "DISTRIBUTION"
+    unit         = "ms"
+    display_name = "Derivative preparation latency"
+  }
+
+  bucket_options {
+    exponential_buckets {
+      num_finite_buckets = 12
+      growth_factor      = 2
+      scale              = 1000
+    }
+  }
+}
+
+resource "google_logging_metric" "derivative_cache_hits" {
+  project     = local.project_id
+  name        = "alpha_compose_proto/derivative_cache_hits"
+  description = "Eligible derivative preparation cache hits"
+  filter      = "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"derivative_cache_hit\" AND jsonPayload.cacheOutcome=\"hit\""
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    display_name = "Derivative cache hits"
+  }
+}
+
+resource "google_logging_metric" "derivative_cache_misses" {
+  project     = local.project_id
+  name        = "alpha_compose_proto/derivative_cache_misses"
+  description = "Derivative preparation cache misses"
+  filter      = "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"derivative_cache_miss\" AND jsonPayload.cacheOutcome=\"miss\""
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    display_name = "Derivative cache misses"
+  }
+}
+
+resource "google_logging_metric" "derivative_failures" {
+  project     = local.project_id
+  name        = "alpha_compose_proto/derivative_failures"
+  description = "Terminal derivative failures grouped by bounded reason"
+  filter      = "jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.status=\"failed\""
+
+  label_extractors = {
+    reason = "EXTRACT(jsonPayload.reason)"
+  }
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    display_name = "Derivative failures"
+
+    labels {
+      key         = "reason"
+      value_type  = "STRING"
+      description = "Bounded derivative failure reason"
+    }
+  }
+}
+
+resource "google_logging_metric" "derivative_timeouts" {
+  project     = local.project_id
+  name        = "alpha_compose_proto/derivative_timeouts"
+  description = "Derivative attempts that exceeded a bounded deadline"
+  filter      = "jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.reason=\"derivative_timeout\""
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    display_name = "Derivative timeouts"
+  }
+}
+
+resource "google_logging_metric" "derivative_drive_bytes" {
+  project         = local.project_id
+  name            = "alpha_compose_proto/derivative_drive_bytes"
+  description     = "Drive bytes transferred through the derivative range proxy"
+  filter          = "resource.type=\"cloud_run_job\" AND jsonPayload.event=\"derivative_encode_exited\" AND jsonPayload.status=\"succeeded\""
+  value_extractor = "EXTRACT(jsonPayload.upstreamBytes)"
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "DISTRIBUTION"
+    unit         = "By"
+    display_name = "Derivative Drive bytes"
+  }
+
+  bucket_options {
+    exponential_buckets {
+      num_finite_buckets = 16
+      growth_factor      = 2
+      scale              = 1048576
+    }
+  }
+}
+
+resource "google_logging_metric" "derivative_output_bytes" {
+  project         = local.project_id
+  name            = "alpha_compose_proto/derivative_output_bytes"
+  description     = "Verified derivative bytes published to private storage"
+  filter          = "resource.type=\"cloud_run_job\" AND jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.status=\"succeeded\""
+  value_extractor = "EXTRACT(jsonPayload.outputBytes)"
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "DISTRIBUTION"
+    unit         = "By"
+    display_name = "Derivative output bytes"
+  }
+
+  bucket_options {
+    exponential_buckets {
+      num_finite_buckets = 12
+      growth_factor      = 2
+      scale              = 1048576
+    }
+  }
+}
+
+resource "google_logging_metric" "derivative_cancellation_lag_ms" {
+  project         = local.project_id
+  name            = "alpha_compose_proto/derivative_cancellation_lag_ms"
+  description     = "Lag between cancellation request and terminal acknowledgement"
+  filter          = "jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.status=\"cancelled\""
+  value_extractor = "EXTRACT(jsonPayload.cancellationLagMs)"
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "DISTRIBUTION"
+    unit         = "ms"
+    display_name = "Derivative cancellation lag"
+  }
+
+  bucket_options {
+    exponential_buckets {
+      num_finite_buckets = 12
+      growth_factor      = 2
+      scale              = 100
+    }
+  }
+}
+
+resource "google_logging_metric" "derivative_queue_age_ms" {
+  project         = local.project_id
+  name            = "alpha_compose_proto/derivative_queue_age_ms"
+  description     = "Queue age when a derivative preparation dispatches"
+  filter          = "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"derivative_preparation_dispatched\""
+  value_extractor = "EXTRACT(jsonPayload.queueAgeMs)"
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "DISTRIBUTION"
+    unit         = "ms"
+    display_name = "Derivative queue age"
+  }
+
+  bucket_options {
+    exponential_buckets {
+      num_finite_buckets = 12
+      growth_factor      = 2
+      scale              = 1000
+    }
+  }
+}
+
+resource "google_logging_metric" "derivative_reserved_minor_units" {
+  project         = local.project_id
+  name            = "alpha_compose_proto/derivative_reserved_minor_units"
+  description     = "Minor PLN units reserved by admitted derivative attempts"
+  filter          = "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"derivative_preparation_submitted\" AND jsonPayload.reservedMinorUnits>0"
+  value_extractor = "EXTRACT(jsonPayload.reservedMinorUnits)"
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "DISTRIBUTION"
+    unit         = "1"
+    display_name = "Derivative reserved minor units"
+  }
+
+  bucket_options {
+    linear_buckets {
+      num_finite_buckets = 20
+      width              = 125
+      offset             = 0
+    }
+  }
+}
+
+resource "google_logging_metric" "derivative_reservation_rejections" {
+  project     = local.project_id
+  name        = "alpha_compose_proto/derivative_reservation_rejections"
+  description = "Derivative requests rejected by a bounded reservation ceiling"
+  filter      = "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.status=\"rejected\" AND jsonPayload.reason=(\"derivative_user_budget_exhausted\" OR \"derivative_pool_budget_exhausted\" OR \"project_budget_exhausted\")"
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    display_name = "Derivative reservation rejections"
+  }
+}
+
+resource "google_monitoring_notification_channel" "proto_owner_email" {
+  project      = local.project_id
+  display_name = "Alpha Compose proto owner"
+  type         = "email"
+
+  labels = {
+    email_address = var.owner_email
+  }
+}
+
+resource "google_monitoring_alert_policy" "derivative_latency" {
+  project      = local.project_id
+  display_name = "Proto derivative preparation latency"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.proto_owner_email.name,
+  ]
+
+  conditions {
+    display_name = "Derivative p99 preparation latency exceeds ten minutes"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.derivative_preparation_latency_ms.name}\" AND resource.type=\"cloud_run_job\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 600000
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_PERCENTILE_99"
+      }
+    }
+  }
+}
+
+resource "google_monitoring_alert_policy" "derivative_cache_ratio" {
+  project      = local.project_id
+  display_name = "Proto derivative cache ratio"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.proto_owner_email.name,
+  ]
+
+  conditions {
+    display_name = "Derivative cache misses remain elevated"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.derivative_cache_misses.name}\" AND resource.type=\"cloud_run_revision\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 10
+      duration        = "600s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  documentation {
+    content   = "Compare derivative cache hit and miss metrics over the same interval before changing cache policy."
+    mime_type = "text/markdown"
+  }
+}
+
+resource "google_monitoring_alert_policy" "derivative_failures" {
+  project      = local.project_id
+  display_name = "Proto derivative failures"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.proto_owner_email.name,
+  ]
+
+  conditions {
+    display_name = "A derivative worker failed"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.derivative_failures.name}\" AND resource.type=\"cloud_run_job\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+}
+
+resource "google_monitoring_alert_policy" "derivative_timeouts" {
+  project      = local.project_id
+  display_name = "Proto derivative timeouts"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.proto_owner_email.name,
+  ]
+
+  conditions {
+    display_name = "A derivative attempt exceeded its deadline"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.derivative_timeouts.name}\" AND resource.type=\"cloud_run_job\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+}
+
+resource "google_monitoring_alert_policy" "derivative_drive_bytes" {
+  project      = local.project_id
+  display_name = "Proto derivative Drive byte cost"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.proto_owner_email.name,
+  ]
+
+  conditions {
+    display_name = "Derivative Drive transfer reaches the bounded envelope"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.derivative_drive_bytes.name}\" AND resource.type=\"cloud_run_job\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 2147483648
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_PERCENTILE_99"
+      }
+    }
+  }
+}
+
+resource "google_monitoring_alert_policy" "derivative_output_bytes" {
+  project      = local.project_id
+  display_name = "Proto derivative output byte cost"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.proto_owner_email.name,
+  ]
+
+  conditions {
+    display_name = "Derivative output approaches its size ceiling"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.derivative_output_bytes.name}\" AND resource.type=\"cloud_run_job\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 201326592
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_PERCENTILE_99"
+      }
+    }
+  }
+}
+
+resource "google_monitoring_alert_policy" "derivative_cancellation_lag" {
+  project      = local.project_id
+  display_name = "Proto derivative cancellation lag"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.proto_owner_email.name,
+  ]
+
+  conditions {
+    display_name = "Derivative cancellation acknowledgement exceeds one minute"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.derivative_cancellation_lag_ms.name}\" AND resource.type=\"cloud_run_job\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 60000
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_PERCENTILE_99"
+      }
+    }
+  }
+}
+
+resource "google_monitoring_alert_policy" "derivative_queue_age" {
+  project      = local.project_id
+  display_name = "Proto derivative queue age"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.proto_owner_email.name,
+  ]
+
+  conditions {
+    display_name = "Derivative queue age exceeds five minutes"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.derivative_queue_age_ms.name}\" AND resource.type=\"cloud_run_revision\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 300000
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_PERCENTILE_99"
+      }
+    }
+  }
+}
+
+resource "google_monitoring_alert_policy" "derivative_backlog_depth" {
+  project      = local.project_id
+  display_name = "Proto derivative backlog depth"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.proto_owner_email.name,
+  ]
+
+  conditions {
+    display_name = "Derivative Cloud Tasks queue remains non-empty"
+
+    condition_threshold {
+      filter          = "metric.type=\"cloudtasks.googleapis.com/queue/depth\" AND resource.type=\"cloud_tasks_queue\" AND resource.label.queue_id=\"agg-derivative-preview\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "300s"
+
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_MAX"
+      }
+    }
+  }
+}
+
+resource "google_monitoring_alert_policy" "derivative_reservation_rejections" {
+  project      = local.project_id
+  display_name = "Proto derivative reservation rejection"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.proto_owner_email.name,
+  ]
+
+  conditions {
+    display_name = "A derivative reservation was rejected"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.derivative_reservation_rejections.name}\" AND resource.type=\"cloud_run_revision\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+}
+
+resource "google_monitoring_alert_policy" "derivative_reserved_cost" {
+  project      = local.project_id
+  display_name = "Proto derivative reserved cost"
+  combiner     = "OR"
+  notification_channels = [
+    google_monitoring_notification_channel.proto_owner_email.name,
+  ]
+
+  conditions {
+    display_name = "Derivative attempt reservation differs from contract"
+
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.derivative_reserved_minor_units.name}\" AND resource.type=\"cloud_run_revision\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 125
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_PERCENTILE_99"
+      }
+    }
+  }
 }
 
 resource "google_firebase_hosting_site" "proto" {

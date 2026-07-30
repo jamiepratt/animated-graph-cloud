@@ -128,6 +128,9 @@
            "expireAt" (Date/from (:metadata-expires-at job))}
     (:drive-version job)
     (assoc "sourceDriveVersion" (:drive-version job))
+    (:request-id job) (assoc "requestId" (:request-id job))
+    (:trace job) (assoc "trace" (:trace job))
+    (:revision job) (assoc "revision" (:revision job))
     (:execution job) (assoc "execution" (:execution job))
     (:dispatch-started-at job)
     (assoc "dispatchStartedAt" (Date/from (:dispatch-started-at job)))
@@ -170,6 +173,9 @@
                :updated-at (date->instant (get data "updatedAt"))
                :metadata-expires-at (date->instant (get data "expireAt"))}
         (get data "execution") (assoc :execution (get data "execution"))
+        (get data "requestId") (assoc :request-id (get data "requestId"))
+        (get data "trace") (assoc :trace (get data "trace"))
+        (get data "revision") (assoc :revision (get data "revision"))
         (get data "dispatchStartedAt")
         (assoc :dispatch-started-at
                (date->instant (get data "dispatchStartedAt")))
@@ -241,17 +247,24 @@
            :source-bytes (:source-bytes job)
            :profile-version (:profile-version job)}
           (:id job)))]
-    {:job-id (:id job)
-     :attempt (:attempt job)
-     :profile render-derivative/profile-v1
-     :asset {:id (:id job)
-             :object-key (str "derivatives/" fingerprint ".mp4")}
-     :source {:file-id (:file-id job)
-              :drive-version (:drive-version job)
-              :bytes (:source-bytes job)
-              :duration-seconds (:source-duration-seconds job)}
-     :owner {:subject (:owner-subject job)
-             :membership-version (:membership-version job)}}))
+    (cond->
+     {:job-id (:id job)
+      :attempt (:attempt job)
+      :profile render-derivative/profile-v1
+      :asset {:id (:id job)
+              :object-key (str "derivatives/" fingerprint ".mp4")}
+      :source {:file-id (:file-id job)
+               :drive-version (:drive-version job)
+               :bytes (:source-bytes job)
+               :duration-seconds (:source-duration-seconds job)}
+      :owner {:subject (:owner-subject job)
+              :membership-version (:membership-version job)}}
+      (:request-id job)
+      (assoc :observability
+             {:request-id (:request-id job)
+              :trace (:trace job)
+              :revision (:revision job)
+              :reservation-minor-units (:reservation-minor-units job)}))))
 
 (defn- member-identity [request]
   {:subject (:subject request)
@@ -745,13 +758,16 @@
                        (:asset-profile-version job))
                     (string? (:object-key job))
                     (not-empty (:object-key job)))
-           {:object-key (:object-key job)
-            :generation (:asset-generation job)
-            :size (:asset-size job)
-            :content-type (:asset-content-type job)
-            :profile-version (:asset-profile-version job)
-            :completed-at (:completed-at job)
-            :expires-at (:asset-expires-at job)})))))
+           (cond-> {:object-key (:object-key job)
+                    :generation (:asset-generation job)
+                    :size (:asset-size job)
+                    :content-type (:asset-content-type job)
+                    :profile-version (:asset-profile-version job)
+                    :completed-at (:completed-at job)
+                    :expires-at (:asset-expires-at job)}
+             (:request-id job) (assoc :request-id (:request-id job))
+             (:trace job) (assoc :trace (:trace job))
+             (:revision job) (assoc :revision (:revision job))))))))
   lifecycle/PreparationService
   (submit-preparation! [_ idempotency-key raw-request]
     (require-idempotency-key! idempotency-key)
@@ -772,6 +788,9 @@
            :drive-version (:drive-version request)
            :source-bytes (:source-bytes request)
            :source-duration-seconds (:source-duration-seconds request)
+           :request-id (:request-id request)
+           :trace (:trace request)
+           :revision (:revision request)
            :reservation-minor-units (:reservation-minor-units limits)
            :metadata-expires-at (.plusSeconds now retention))
           jobs (.collection firestore "derivative-preparations")
@@ -1096,6 +1115,7 @@
                (keep snapshot-job)
                vec)
           repaired (atom 0)
+          expired-jobs (atom [])
           now (Instant/now clock)]
       (doseq [job jobs]
         (cond
@@ -1147,6 +1167,7 @@
                        (:execution expired))
               (lifecycle/cancel-preparation-execution!
                launcher (:execution expired)))
+            (swap! expired-jobs conj (preparation-resource expired))
             (swap! repaired inc))
 
           (= :queued (:state job))
@@ -1238,7 +1259,8 @@
                   "derivative_failed")
                 :retryable true})
               (swap! repaired inc)))))
-      {:repairedJobs @repaired}))
+      {:repairedJobs @repaired
+       :expiredJobs @expired-jobs}))
   lifecycle/PreparationAttemptService
   (load-preparation-attempt [_ job-id attempt]
     (let [job

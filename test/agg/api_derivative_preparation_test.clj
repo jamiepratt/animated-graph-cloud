@@ -119,6 +119,8 @@
         service (:service preparation)
         asset-store (storage/in-memory-asset-store)
         bytes (.getBytes "0123456789abcdef")
+        operation-request-id "00000000-0000-0000-0000-000000000197"
+        events (atom [])
         {:keys [job-id object-key stored]}
         (completed-preparation!
          service asset-store
@@ -128,7 +130,10 @@
           :file-id "private-drive-id"
           :drive-version "17"
           :source-bytes 4096
-          :source-duration-seconds 120.0}
+          :source-duration-seconds 120.0
+          :request-id operation-request-id
+          :trace "0123456789abcdef0123456789abcdef"
+          :revision "agg-proto-00001-test"}
          bytes)
         session-path
         (str "/v1/derivative-preparations/" job-id "/playback-sessions")
@@ -139,7 +144,10 @@
          {:auth-system system
           :derivative-preparation-service service
           :derivative-asset-store asset-store
-          :clock clock})]
+          :clock clock
+          :event-sink
+          (fn [event fields]
+            (swap! events conj [event fields]))})]
     (try
       (let [other
             (request! port :post session-path {}
@@ -209,6 +217,9 @@
              [object-key "private-drive-id" "private-owner"
               "owner@example.com" "fixture-secret"]))
         (is (= 206 (.statusCode streamed)) (.body streamed))
+        (is (= operation-request-id
+               (.orElse
+                (.firstValue (.headers streamed) "X-Request-Id") "")))
         (is (= "34567" (.body streamed)))
         (is (= "bytes 3-7/16"
                (.orElse
@@ -254,7 +265,46 @@
                 :requestId)))
         (is (= ""
                (.orElse
-                (.firstValue (.headers unavailable) "Content-Range") ""))))
+                (.firstValue (.headers unavailable) "Content-Range") "")))
+        (let [range-events
+              (filterv
+               #(and (contains?
+                      #{"derivative_playback_range_started"
+                        "derivative_playback_range_succeeded"
+                        "derivative_playback_range_failed"}
+                      (first %))
+                     (= 3 (:rangeStart (second %)))
+                     (= 7 (:rangeEnd (second %))))
+               @events)]
+          (is (= ["derivative_playback_range_started"
+                  "derivative_playback_range_succeeded"
+                  "derivative_playback_range_started"
+                  "derivative_playback_range_failed"]
+                 (mapv first range-events)))
+          (is (every?
+               #(= {:operation "derivative_playback"
+                    :requestId operation-request-id
+                    :trace "0123456789abcdef0123456789abcdef"
+                    :revision "agg-proto-00001-test"
+                    :rangeStart 3
+                    :rangeEnd 7
+                    :bytesRequested 5}
+                   (select-keys
+                    (second %)
+                    [:operation :requestId :trace :revision :rangeStart
+                     :rangeEnd :bytesRequested]))
+               range-events))
+          (is (= {:status "succeeded" :bytesTransferred 5}
+                 (select-keys
+                  (second (second range-events))
+                  [:status :bytesTransferred])))
+          (is (= {:status "failed"
+                  :reason "storage_unavailable"
+                  :bytesTransferred 0
+                  :retryable true}
+                 (select-keys
+                  (second (last range-events))
+                  [:status :reason :bytesTransferred :retryable])))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
@@ -320,6 +370,190 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest preparation-submission-propagates-correlation-and-bounded-cost-events
+  (let [drive-gateway
+        (reify drive/SourceGateway
+          (source-metadata! [_ _ file-id]
+            {:id file-id
+             :name "private-name.mov"
+             :mimeType "video/quicktime"
+             :size "4096"
+             :version "17"
+             :trashed false
+             :videoMediaMetadata {:durationMillis "120000"}})
+          (stream-source! [_ _ _ _]))
+        {:keys [system cookie csrf]} (auth-fixture drive-gateway)
+        preparation
+        (derivative/in-memory-preparation-system
+         {:fingerprint-secret "fixture-secret"})
+        events (atom [])
+        port (test-http/available-port)
+        server
+        (api/start!
+         port
+         {:auth-system system
+          :derivative-preparation-service (:service preparation)
+          :revision "agg-proto-00001-test"
+          :event-sink
+          (fn [event fields]
+            (swap! events conj [event fields]))})]
+    (try
+      (let [response
+            (request!
+             port :post "/v1/derivative-preparations"
+             {:fileId "private-id"}
+             {"Idempotency-Key" "correlated-submit"
+              "Cookie" (str "__session=" cookie)
+              "X-CSRF-Token" csrf
+              "X-Cloud-Trace-Context"
+              "0123456789abcdef0123456789abcdef/42;o=1"})
+            request-id
+            (.orElse (.firstValue (.headers response) "X-Request-Id") "")
+            body (json/read-str (.body response) :key-fn keyword)
+            lifecycle-events
+            (filterv #(str/starts-with? (first %) "derivative_") @events)]
+        (is (= 202 (.statusCode response)))
+        (is (= request-id (:requestId body)))
+        (is (= ["derivative_preparation_submitted"
+                "derivative_cache_miss"
+                "derivative_preparation_queued"]
+               (mapv first lifecycle-events)))
+        (is (every?
+             #(= {:requestId request-id
+                  :trace "0123456789abcdef0123456789abcdef"
+                  :revision "agg-proto-00001-test"
+                  :attempt 1
+                  :profileVersion "h264-aac-1080p25-v1"}
+                 (select-keys
+                  (second %)
+                  [:requestId :trace :revision :attempt :profileVersion]))
+             lifecycle-events))
+        (is (= {:operation "derivative_preparation"
+                :status "succeeded"
+                :sourceBytes 4096
+                :durationBucket "120_to_299_seconds"
+                :reservedMinorUnits 125}
+               (select-keys
+                (second (first lifecycle-events))
+                [:operation :status :sourceBytes :durationBucket
+                 :reservedMinorUnits])))
+        (is (= {:operation "derivative_cache"
+                :status "resolved"
+                :cacheOutcome "miss"}
+               (select-keys
+                (second (second lifecycle-events))
+                [:operation :status :cacheOutcome])))
+        (is (= {:operation "derivative_queue"
+                :status "queued"
+                :queueDepth 1}
+               (select-keys
+                (second (nth lifecycle-events 2))
+                [:operation :status :queueDepth])))
+        (is (not (re-find
+                  #"private-id|private-name|private-owner|owner@example|fixture-secret"
+                  (pr-str lifecycle-events))))
+        (let [cancelled
+              (request!
+               port :post (:cancelUrl body) {}
+               {"Cookie" (str "__session=" cookie)
+                "X-CSRF-Token" csrf})
+              cancel-event
+              (some
+               #(when (= "derivative_preparation_terminal" (first %)) %)
+               @events)]
+          (is (= 200 (.statusCode cancelled)))
+          (is (= request-id
+                 (.orElse
+                  (.firstValue (.headers cancelled) "X-Request-Id") "")))
+          (is (= {:operation "derivative_cancellation"
+                  :status "cancelled"
+                  :reason "user_cancelled"
+                  :requestId request-id
+                  :attempt 1
+                  :profileVersion "h264-aac-1080p25-v1"
+                  :cancellationLagMs 0}
+                 (select-keys
+                  (second cancel-event)
+                  [:operation :status :reason :requestId :attempt
+                   :profileVersion :cancellationLagMs])))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest preparation-cache-hit-emits-one-terminal-success-without-reservation
+  (let [drive-gateway
+        (reify drive/SourceGateway
+          (source-metadata! [_ _ file-id]
+            {:id file-id
+             :name "private-name.mov"
+             :mimeType "video/quicktime"
+             :size "4096"
+             :version "17"
+             :trashed false
+             :videoMediaMetadata {:durationMillis "120000"}})
+          (stream-source! [_ _ _ _]))
+        {:keys [system cookie csrf]} (auth-fixture drive-gateway)
+        clock (Clock/fixed
+               (Instant/parse "2026-07-30T10:00:00Z")
+               ZoneOffset/UTC)
+        preparation
+        (derivative/in-memory-preparation-system
+         {:clock clock :fingerprint-secret "fixture-secret"})
+        _ (derivative/put-preparation-cache!
+           (:service preparation)
+           {:subject "private-owner"
+            :email "owner@example.com"
+            :membership-version nil
+            :file-id "private-id"
+            :drive-version "17"
+            :source-bytes 4096
+            :source-duration-seconds 120.0}
+           {:asset-id "00000000-0000-0000-0000-000000000195"
+            :expires-at (.plusSeconds (Instant/now clock) 7200)})
+        events (atom [])
+        port (test-http/available-port)
+        server
+        (api/start!
+         port
+         {:auth-system system
+          :derivative-preparation-service (:service preparation)
+          :event-sink
+          (fn [event fields]
+            (swap! events conj [event fields]))})]
+    (try
+      (let [response
+            (request!
+             port :post "/v1/derivative-preparations"
+             {:fileId "private-id"}
+             {"Idempotency-Key" "cache-hit-submit"
+              "Cookie" (str "__session=" cookie)
+              "X-CSRF-Token" csrf})
+            request-id
+            (.orElse (.firstValue (.headers response) "X-Request-Id") "")
+            derivative-events
+            (filterv #(str/starts-with? (first %) "derivative_") @events)
+            terminal-events
+            (filterv
+             #(= "derivative_preparation_terminal" (first %))
+             derivative-events)]
+        (is (= 200 (.statusCode response)))
+        (is (= ["derivative_preparation_submitted"
+                "derivative_cache_hit"
+                "derivative_preparation_terminal"]
+               (mapv first derivative-events)))
+        (is (= 1 (count terminal-events)))
+        (is (= {:operation "derivative_preparation"
+                :status "succeeded"
+                :reason "cache_hit"
+                :requestId request-id
+                :cacheOutcome "hit"
+                :reservedMinorUnits 0}
+               (select-keys
+                (second (first terminal-events))
+                [:operation :status :reason :requestId :cacheOutcome
+                 :reservedMinorUnits]))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest preparation-errors-include-request-id-and-retryability
   (let [drive-gateway
         (reify drive/SourceGateway
@@ -335,11 +569,15 @@
         preparation
         (derivative/in-memory-preparation-system
          {:fingerprint-secret "fixture-secret"})
+        events (atom [])
         port (test-http/available-port)
         server
         (api/start! port
                     {:auth-system system
-                     :derivative-preparation-service (:service preparation)})]
+                     :derivative-preparation-service (:service preparation)
+                     :event-sink
+                     (fn [event fields]
+                       (swap! events conj [event fields]))})]
     (try
       (let [response
             (request! port :post "/v1/derivative-preparations"
@@ -354,7 +592,23 @@
         (is (= "source_duration_exceeded" (:error body)))
         (is (= request-id (:requestId body)))
         (is (false? (:retryable body)))
-        (is (not (str/includes? (.body response) "private-id"))))
+        (is (not (str/includes? (.body response) "private-id")))
+        (let [terminal-events
+              (filterv
+               #(= "derivative_preparation_terminal" (first %))
+               @events)]
+          (is (= 1 (count terminal-events)))
+          (is (= {:operation "derivative_preparation"
+                  :status "rejected"
+                  :reason "source_duration_exceeded"
+                  :requestId request-id
+                  :retryable false}
+                 (select-keys
+                  (second (first terminal-events))
+                  [:operation :status :reason :requestId :retryable])))
+          (is (not (re-find
+                    #"private-id|private-owner|owner@example"
+                    (pr-str terminal-events))))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
@@ -365,6 +619,8 @@
           (stream-source! [_ _ _ _]))
         {:keys [system]} (auth-fixture drive-gateway)
         calls (atom [])
+        events (atom [])
+        operation-request-id "00000000-0000-0000-0000-000000000197"
         service
         (reify derivative/PreparationService
           (submit-preparation! [_ _ _])
@@ -373,12 +629,23 @@
           (dispatch-preparation! [_ job-id attempt]
             (swap! calls conj [:dispatch job-id attempt])
             {:started? true
-             :job {:id job-id :state "running" :attempt attempt}})
+             :job {:id job-id
+                   :state "running"
+                   :attempt attempt
+                   :profileVersion "h264-aac-1080p25-v1"
+                   :requestId operation-request-id
+                   :createdAt "2026-07-30T10:00:00Z"}})
           (cancel-preparation! [_ _])
           (retry-preparation! [_ _])
           (reconcile-preparations! [_]
             (swap! calls conj [:reconcile])
-            {:repairedJobs 2}))
+            {:repairedJobs 2
+             :expiredJobs
+             [{:id "00000000-0000-0000-0000-000000000198"
+               :state "expired"
+               :attempt 1
+               :profileVersion "h264-aac-1080p25-v1"
+               :requestId operation-request-id}]}))
         verifier
         (reify auth/TaskTokenVerifier
           (verify-task-token! [_ token]
@@ -400,7 +667,10 @@
           :task-audience "https://app.example.com"
           :derivative-tasks-service-account
           "derivative-tasks@example.com"
-          :scheduler-service-account "scheduler@example.com"})]
+          :scheduler-service-account "scheduler@example.com"
+          :event-sink
+          (fn [event fields]
+            (swap! events conj [event fields]))})]
     (try
       (let [job-id "00000000-0000-0000-0000-000000000193"
             dispatch-path
@@ -431,6 +701,43 @@
         (is (= 202 (.statusCode dispatched)))
         (is (= 401 (.statusCode task-spoofs-scheduler)))
         (is (= 200 (.statusCode reconciled)))
-        (is (= [[:dispatch job-id 3] [:reconcile]] @calls)))
+        (is (= [[:dispatch job-id 3] [:reconcile]] @calls))
+        (let [dispatch-event
+              (some #(when (= "derivative_preparation_dispatched" (first %))
+                       %)
+                    @events)
+              expiry-event
+              (some #(when (= "derivative_preparation_expired" (first %))
+                       %)
+                    @events)
+              reconciliation-event
+              (some #(when (= "derivative_reconciliation_complete" (first %))
+                       %)
+                    @events)]
+          (is (= {:operation "derivative_dispatch"
+                  :status "succeeded"
+                  :requestId operation-request-id
+                  :attempt 3
+                  :profileVersion "h264-aac-1080p25-v1"}
+                 (select-keys
+                  (second dispatch-event)
+                  [:operation :status :requestId :attempt :profileVersion])))
+          (is (<= 0 (:queueAgeMs (second dispatch-event))))
+          (is (= {:operation "derivative_reconciliation"
+                  :status "expired"
+                  :reason "expired"
+                  :requestId operation-request-id
+                  :attempt 1
+                  :profileVersion "h264-aac-1080p25-v1"}
+                 (select-keys
+                  (second expiry-event)
+                  [:operation :status :reason :requestId :attempt
+                   :profileVersion])))
+          (is (= {:operation "derivative_reconciliation"
+                  :status "succeeded"
+                  :repairedJobs 2}
+                 (select-keys
+                  (second reconciliation-event)
+                  [:operation :status :repairedJobs])))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))

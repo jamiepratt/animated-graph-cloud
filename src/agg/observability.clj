@@ -15,13 +15,17 @@
     :generatedMomentCount :omittedMomentCount :requestedDurationSeconds
     :upstreamStatus :sourceFile :sourceLine :sourceColumn :exceptionClass
     :rangeStart :rangeEnd :rangeSource :receivedRange :trace :revision
-    :operation :bytesRequested :bytesTransferred :exceptionStack})
+    :operation :bytesRequested :bytesTransferred :exceptionStack
+    :cancellationLagMs :durationBucket :cacheOutcome :profileVersion
+    :sourceBytes :upstreamBytes :outputBytes :reservedMinorUnits
+    :queueDepth})
 
 (def ^:private safe-value-keys
   #{:severity :component :event :message :reason :failureCode :errorType
     :requestId :category :phase :view :listState :tokenStatus :accountStatus
     :mimeFilter :indexStatus :stage :sourceFile :exceptionClass :rangeSource
-    :trace :revision :operation :status})
+    :trace :revision :operation :status :durationBucket :cacheOutcome
+    :profileVersion})
 
 (def ^:private early-access-delivery-event-keys
   #{:severity :component :event :requestId :category :upstreamStatus
@@ -45,10 +49,28 @@
     "drive_playback_open"
     "drive_playback_upstream_validation"
     "drive_playback_transfer"
-    "ffprobe"})
+    "ffprobe"
+    "derivative_preparation"
+    "derivative_cache"
+    "derivative_queue"
+    "derivative_dispatch"
+    "derivative_encode"
+    "derivative_verification"
+    "derivative_publication"
+    "derivative_playback"
+    "derivative_cancellation"
+    "derivative_reconciliation"})
 
 (def ^:private safe-operation-statuses
-  #{"started" "succeeded" "failed" "received" "resolved"})
+  #{"started" "succeeded" "failed" "received" "resolved" "queued"
+    "cancelled" "expired" "rejected"})
+
+(def ^:private safe-duration-buckets
+  #{"under_30_seconds" "30_to_119_seconds" "120_to_299_seconds"
+    "300_to_480_seconds"})
+
+(def ^:private safe-cache-outcomes
+  #{"hit" "miss" "replay" "not_applicable"})
 
 (defn- safe-string? [value]
   (and (string? value)
@@ -73,6 +95,12 @@
     (= :message key) (safe-message? value)
     (= :stage key) (contains? safe-stages value)
     (= :operation key) (contains? safe-operations value)
+    (= :durationBucket key) (contains? safe-duration-buckets value)
+    (= :cacheOutcome key) (contains? safe-cache-outcomes value)
+    (= :profileVersion key)
+    (and (string? value)
+         (<= 1 (count value) 64)
+         (re-matches #"[A-Za-z0-9._-]+" value))
     (= :status key)
     (or (contains? safe-operation-statuses value)
         (and (number? value)

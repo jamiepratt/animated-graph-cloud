@@ -195,6 +195,8 @@
                 "agg-worker-output-" ".mp4"
                 (make-array FileAttribute 0))
         calls (atom [])
+        events (atom [])
+        operation-request-id "00000000-0000-0000-0000-000000000197"
         result
         (try
           (worker/run-cloud-attempt!
@@ -214,7 +216,12 @@
                         :bytes 4096
                         :duration-seconds 10}
                :owner {:subject "private-owner"
-                       :membership-version "private-membership"}})
+                       :membership-version "private-membership"}
+               :observability
+               {:request-id operation-request-id
+                :trace "0123456789abcdef0123456789abcdef"
+                :revision "agg-proto-00001-test"
+                :reservation-minor-units 125}})
             :source-access!
             (fn [service loaded-job-id attempt]
               (swap! calls conj [:access service loaded-job-id attempt])
@@ -262,7 +269,10 @@
             (fn [service completed-job-id attempt completion]
               (swap! calls conj
                      [:complete service completed-job-id attempt completion])
-              {:id completed-job-id :state "succeeded"})})
+              {:id completed-job-id :state "succeeded"})
+            :event-sink
+            (fn [event fields]
+              (swap! events conj [event fields]))})
           (finally
             (Files/deleteIfExists output)))]
     (is (= {:id job-id :state "succeeded"} result))
@@ -289,7 +299,44 @@
            @calls))
     (is (not (Files/exists
               output (make-array java.nio.file.LinkOption 0))))
-    (is (not (str/includes? (pr-str result) "private")))))
+    (is (not (str/includes? (pr-str result) "private")))
+    (is (= ["derivative_encode_started"
+            "derivative_encode_exited"
+            "derivative_verification_succeeded"
+            "derivative_publication_started"
+            "derivative_publication_succeeded"
+            "derivative_preparation_terminal"]
+           (mapv first @events)))
+    (is (every?
+         #(= {:requestId operation-request-id
+              :trace "0123456789abcdef0123456789abcdef"
+              :revision "agg-proto-00001-test"
+              :attempt 2
+              :profileVersion "h264-aac-1080p25-v1"}
+             (select-keys
+              (second %)
+              [:requestId :trace :revision :attempt :profileVersion]))
+         @events))
+    (is (= {:operation "derivative_encode"
+            :status "succeeded"
+            :sourceBytes 4096
+            :upstreamBytes 4096
+            :outputBytes 2048}
+           (select-keys
+            (second (nth @events 1))
+            [:operation :status :sourceBytes :upstreamBytes :outputBytes])))
+    (is (= {:operation "derivative_preparation"
+            :status "succeeded"
+            :reason "completed"
+            :outputBytes 2048
+            :reservedMinorUnits 125}
+           (select-keys
+            (second (last @events))
+            [:operation :status :reason :outputBytes
+             :reservedMinorUnits])))
+    (is (not (re-find
+              #"private-id|private-version|private-owner|private-authority|objectKey"
+              (pr-str @events))))))
 
 (deftest cancellation-racing-publication-removes-the-exact-published-generation
   (let [job-id "00000000-0000-0000-0000-000000000195"
@@ -500,6 +547,7 @@
                 "agg-worker-cancel-" ".mp4"
                 (make-array FileAttribute 0))
         calls (atom [])
+        events (atom [])
         dependencies
         {:service :service
          :output-path output
@@ -515,7 +563,12 @@
                      :bytes 4096
                      :duration-seconds 10}
             :owner {:subject "private-owner"
-                    :membership-version nil}})
+                    :membership-version nil}
+            :observability
+            {:request-id "00000000-0000-0000-0000-000000000197"
+             :trace "0123456789abcdef0123456789abcdef"
+             :revision "agg-proto-00001-test"
+             :reservation-minor-units 125}})
          :source-access!
          (fn [_ _ _]
            {:gateway :gateway
@@ -544,7 +597,10 @@
            (when ((:cancelled? request))
              (throw
               (ex-info "cancelled"
-                       {:type :agg.render.derivative/cancelled}))))}]
+                       {:type :agg.render.derivative/cancelled}))))
+         :event-sink
+         (fn [event fields]
+           (swap! events conj [event fields]))}]
     (try
       (is (= :agg.render.derivative/cancelled
              (:type
@@ -558,7 +614,104 @@
       (is (= [[:cancel? :service job-id 3]
               [:ack :service job-id 3]]
              @calls))
+      (let [terminal-events
+            (filterv
+             #(= "derivative_preparation_terminal" (first %))
+             @events)
+            fields (second (first terminal-events))]
+        (is (= 1 (count terminal-events)))
+        (is (= {:operation "derivative_preparation"
+                :status "cancelled"
+                :reason "cancelled"
+                :requestId "00000000-0000-0000-0000-000000000197"
+                :trace "0123456789abcdef0123456789abcdef"
+                :revision "agg-proto-00001-test"
+                :attempt 3
+                :reservedMinorUnits 125}
+               (select-keys
+                fields
+                [:operation :status :reason :requestId :trace :revision
+                 :attempt :reservedMinorUnits])))
+        (is (<= 0 (:cancellationLagMs fields))))
       (is (not (Files/exists
                 output (make-array java.nio.file.LinkOption 0))))
+      (finally
+        (Files/deleteIfExists output)))))
+
+(deftest cloud-attempt-identifies-publication-failure-without-storage-details
+  (let [job-id "00000000-0000-0000-0000-000000000197"
+        output (Files/createTempFile
+                "agg-worker-publication-failure-" ".mp4"
+                (make-array FileAttribute 0))
+        events (atom [])
+        failures (atom [])]
+    (try
+      (with-redefs
+       [worker/run!
+        (fn [_ _]
+          {:output-path output
+           :content-type "video/mp4"
+           :output-bytes 2048
+           :duration-seconds 10.0
+           :video {:codec "h264"}
+           :audio {:codec "aac"}
+           :fast-start? true})]
+        (is (thrown?
+             clojure.lang.ExceptionInfo
+             (worker/run-cloud-attempt!
+              {:job-id job-id :attempt 1}
+              {:service :service
+               :output-path output
+               :load-preparation-attempt
+               (fn [_ _ _]
+                 {:job-id job-id
+                  :attempt 1
+                  :profile worker/profile
+                  :asset {:id job-id
+                          :object-key "derivatives/opaque-final.mp4"}
+                  :source {:file-id "private-id"
+                           :bytes 4096
+                           :duration-seconds 10}
+                  :owner {:subject "private-owner"}
+                  :observability
+                  {:request-id job-id
+                   :reservation-minor-units 125}})
+               :source-access!
+               (fn [_ _ _]
+                 {:gateway :gateway
+                  :access-token "private-authority"
+                  :file-id "private-id"})
+               :preparation-cancellation-requested?
+               (fn [& _] false)
+               :publish-derivative!
+               (fn [& _]
+                 (throw
+                  (ex-info "storage symptom"
+                           {:type ::storage-write-failed
+                            :object-key "private-object-key"})))
+               :fail-preparation-attempt!
+               (fn [_ _ _ failure]
+                 (swap! failures conj failure))
+               :event-sink
+               (fn [event fields]
+                 (swap! events conj [event fields]))}))))
+      (is (= [{:failure-code "derivative_failed"
+               :retryable false}]
+             @failures))
+      (let [terminal
+            (second
+             (first
+              (filter
+               #(= "derivative_preparation_terminal" (first %))
+               @events)))]
+        (is (= {:operation "derivative_preparation"
+                :status "failed"
+                :reason "publication_failed"
+                :requestId job-id}
+               (select-keys
+                terminal
+                [:operation :status :reason :requestId])))
+        (is (not (contains? terminal :objectKey)))
+        (is (not (str/includes? (pr-str terminal) "private-object-key"))))
       (finally
         (Files/deleteIfExists output)))))

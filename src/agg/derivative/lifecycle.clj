@@ -219,6 +219,10 @@
            :state (name (:state job))
            :attempt (:attempt job)
            :profileVersion (:profile-version job)}
+    (:request-id job) (assoc :requestId (:request-id job))
+    (:trace job) (assoc :trace (:trace job))
+    (:revision job) (assoc :revision (:revision job))
+    (:created-at job) (assoc :createdAt (str (:created-at job)))
     (:asset-id job) (assoc :assetId (:asset-id job))
     (:asset-expires-at job) (assoc :expiresAt (str (:asset-expires-at job)))
     (:failure-code job) (assoc :failureCode (:failure-code job))
@@ -402,17 +406,24 @@
            :source-bytes (:source-bytes job)
            :profile-version (:profile-version job)
            :job-id (:id job)}))]
-    {:job-id (:id job)
-     :attempt (:attempt job)
-     :profile render-derivative/profile-v1
-     :asset {:id (:id job)
-             :object-key (str "derivatives/" fingerprint ".mp4")}
-     :source {:file-id (:file-id job)
-              :drive-version (:drive-version job)
-              :bytes (:source-bytes job)
-              :duration-seconds (:source-duration-seconds job)}
-     :owner {:subject (:owner-subject job)
-             :membership-version (:membership-version job)}}))
+    (cond->
+     {:job-id (:id job)
+      :attempt (:attempt job)
+      :profile render-derivative/profile-v1
+      :asset {:id (:id job)
+              :object-key (str "derivatives/" fingerprint ".mp4")}
+      :source {:file-id (:file-id job)
+               :drive-version (:drive-version job)
+               :bytes (:source-bytes job)
+               :duration-seconds (:source-duration-seconds job)}
+      :owner {:subject (:owner-subject job)
+              :membership-version (:membership-version job)}}
+      (:request-id job)
+      (assoc :observability
+             {:request-id (:request-id job)
+              :trace (:trace job)
+              :revision (:revision job)
+              :reservation-minor-units (:reservation-minor-units job)}))))
 
 (defn- admit-attempt [state request clock]
   (let [subject (:subject request)
@@ -479,6 +490,9 @@
          :drive-version (:drive-version request)
          :source-bytes (:source-bytes request)
          :source-duration-seconds (:source-duration-seconds request)
+         :request-id (:request-id request)
+         :trace (:trace request)
+         :revision (:revision request)
          :reservation-minor-units reservation-minor-units))
 
 (defn- try-delete-task! [queue job]
@@ -524,13 +538,16 @@
                         (:asset-profile-version job))
                      (string? (:object-key job))
                      (not-empty (:object-key job)))
-            {:object-key (:object-key job)
-             :generation (:asset-generation job)
-             :size (:asset-size job)
-             :content-type (:asset-content-type job)
-             :profile-version (:asset-profile-version job)
-             :completed-at (:completed-at job)
-             :expires-at (:asset-expires-at job)})))))
+            (cond-> {:object-key (:object-key job)
+                     :generation (:asset-generation job)
+                     :size (:asset-size job)
+                     :content-type (:asset-content-type job)
+                     :profile-version (:asset-profile-version job)
+                     :completed-at (:completed-at job)
+                     :expires-at (:asset-expires-at job)}
+              (:request-id job) (assoc :request-id (:request-id job))
+              (:trace job) (assoc :trace (:trace job))
+              (:revision job) (assoc :revision (:revision job))))))))
   PreparationCache
   (put-preparation-cache! [_ request asset]
     (let [request (normalized-request request)
@@ -573,6 +590,9 @@
                                    :id job-id
                                    :created-at now
                                    :updated-at now
+                                   :request-id (:request-id request)
+                                   :trace (:trace request)
+                                   :revision (:revision request)
                                    :metadata-expires-at
                                    (.plusSeconds now retention-seconds))]
                         (swap! state
@@ -667,7 +687,8 @@
       (preparation-resource retried)))
   (reconcile-preparations! [_]
     (let [now (Instant/now clock)
-          repaired (atom 0)]
+          repaired (atom 0)
+          expired (atom [])]
       (locking state
         (swap! state update :jobs
                (fn [jobs]
@@ -680,11 +701,16 @@
                                    (not= :expired (:state job)))
                             (do
                               (swap! repaired inc)
-                              [job-id (transition
-                                       job {:type :expire :now now})])
+                              (let [updated
+                                    (transition
+                                     job {:type :expire :now now})]
+                                (swap! expired conj
+                                       (preparation-resource updated))
+                                [job-id updated]))
                             [job-id job])))
                        jobs))))
-      {:repairedJobs @repaired}))
+      {:repairedJobs @repaired
+       :expiredJobs @expired}))
   PreparationAttemptService
   (load-preparation-attempt [_ job-id attempt]
     (let [job (exact-attempt-job (get-in @state [:jobs job-id]) attempt)]

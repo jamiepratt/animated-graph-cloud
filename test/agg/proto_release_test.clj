@@ -6,6 +6,67 @@
 (defn- read-json [path]
   (json/read-str (slurp path) :key-fn keyword))
 
+(deftest derivative-observability-is-terraform-owned-and-applied-before-release
+  (let [proto-infra (slurp "infra/proto/main.tf")
+        proto-workflow (slurp ".github/workflows/deploy-proto.yml")
+        bootstrap (slurp "script/bootstrap_proto_terraform.sh")]
+    (doseq [metric
+            ["derivative_preparation_latency_ms"
+             "derivative_cache_hits"
+             "derivative_cache_misses"
+             "derivative_failures"
+             "derivative_timeouts"
+             "derivative_drive_bytes"
+             "derivative_output_bytes"
+             "derivative_cancellation_lag_ms"
+             "derivative_queue_age_ms"
+             "derivative_reserved_minor_units"
+             "derivative_reservation_rejections"]]
+      (is (str/includes?
+           proto-infra
+           (str "\"alpha_compose_proto/" metric "\""))))
+    (doseq [alert
+            ["derivative_latency"
+             "derivative_cache_ratio"
+             "derivative_failures"
+             "derivative_timeouts"
+             "derivative_drive_bytes"
+             "derivative_output_bytes"
+             "derivative_cancellation_lag"
+             "derivative_queue_age"
+             "derivative_backlog_depth"
+             "derivative_reservation_rejections"]]
+      (is (str/includes?
+           proto-infra
+           (str "resource \"google_monitoring_alert_policy\" \""
+                alert "\""))))
+    (doseq [extractor
+            ["EXTRACT(jsonPayload.elapsedMs)"
+             "EXTRACT(jsonPayload.upstreamBytes)"
+             "EXTRACT(jsonPayload.outputBytes)"
+             "EXTRACT(jsonPayload.cancellationLagMs)"
+             "EXTRACT(jsonPayload.queueAgeMs)"
+             "EXTRACT(jsonPayload.reservedMinorUnits)"]]
+      (is (str/includes? proto-infra extractor)))
+    (is (str/includes?
+         proto-infra
+         "cloudtasks.googleapis.com/queue/depth"))
+    (is (str/includes?
+         proto-infra
+         "resource.label.queue_id=\\\"agg-derivative-preview\\\""))
+    (doseq [role ["roles/logging.configWriter" "roles/monitoring.editor"]]
+      (is (str/includes? proto-infra role))
+      (is (str/includes? bootstrap role)))
+    (let [apply-index (str/index-of
+                       proto-workflow "terraform -chdir=infra/proto apply")
+          verify-index (str/index-of
+                        proto-workflow "Verify proto health and landing page")]
+      (is (every? number? [apply-index verify-index]))
+      (is (< apply-index verify-index)))
+    (is (not (re-find
+              #"(?i)jsonPayload\\.(?:fileId|filename|ownerSubject|email|objectKey|signedUrl|token|authority)"
+              proto-infra)))))
+
 (deftest derivative-preview-has-an-isolated-private-execution-plane
   (let [proto-infra (slurp "infra/proto/main.tf")]
     (testing "ephemeral derivative objects stay private and expire after one day"
@@ -158,6 +219,36 @@
     (is (not (re-find
               #"jsonPayload\\.(?:fileId|fileName|account|token|credential|requestBody|telemetry)"
               runbook)))))
+
+(deftest proto-runbook-has-redacted-derivative-lifecycle-queries
+  (let [runbook (slurp "docs/proto-runbook.md")
+        section
+        (second
+         (str/split runbook #"## Derivative preparation observability" 2))]
+    (is (string? section))
+    (is (str/includes?
+         section
+         "jsonPayload.requestId=\"REPLACE_REQUEST_ID\""))
+    (doseq [boundary
+            ["derivative_cache"
+             "derivative_queue"
+             "derivative_encode"
+             "derivative_publication"
+             "derivative_playback"
+             "derivative_reconciliation"]]
+      (is (str/includes? section boundary)))
+    (doseq [field
+            ["requestId" "trace" "revision" "operation" "status" "reason"
+             "elapsedMs" "queueAgeMs" "attempt" "durationBucket"
+             "rangeStart" "rangeEnd" "bytesRequested" "bytesTransferred"
+             "sourceBytes" "upstreamBytes" "outputBytes" "cacheOutcome"
+             "profileVersion" "reservedMinorUnits"]]
+      (is (str/includes? section (str "jsonPayload." field))))
+    (is (str/includes? section "--freshness=24h"))
+    (is (str/includes? section "--limit=100"))
+    (is (not (re-find
+              #"(?i)jsonPayload\\.(?:fileId|filename|ownerSubject|email|objectKey|signedUrl|token|authority|requestBody)"
+              section)))))
 
 (deftest proto-runtime-wiring-is-separate-from-the-main-app
   (let [deps-edn (slurp "deps.edn")

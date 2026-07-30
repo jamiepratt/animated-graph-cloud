@@ -3,6 +3,7 @@
   (:require [agg.derivative.contract :as contract]
             [agg.drive.range-proxy :as range-proxy]
             [agg.errors :as errors]
+            [agg.observability :as observability]
             [agg.render.derivative :as render-derivative]
             [clojure.string :as str])
   (:import (java.io Closeable)
@@ -146,6 +147,19 @@
             "derivative_failed")
           :retryable (retryable-failure? (:type data))})))))
 
+(defn- duration-bucket [duration-seconds]
+  (cond
+    (< duration-seconds 30) "under_30_seconds"
+    (< duration-seconds 120) "30_to_119_seconds"
+    (< duration-seconds 300) "120_to_299_seconds"
+    :else "300_to_480_seconds"))
+
+(defn- elapsed-millis [started-nanos]
+  (quot (- (System/nanoTime) started-nanos) 1000000))
+
+(defn- emit-worker-event! [event fields]
+  (observability/emit-context-event! "derivative" event fields))
+
 (defn run-cloud-attempt!
   "Loads, verifies, immutably publishes, and completes one exact private attempt."
   [{:keys [job-id attempt]}
@@ -173,63 +187,165 @@
         cancelled?
         (bounded-cancellation-check
          cancellation-requested?)
-        published (atom nil)]
-    (Files/deleteIfExists ^Path output-path)
-    (try
-      (let [verified
-            (run!
-             {:classification :derivative-required
-              :source-duration-seconds (:duration-seconds source)
-              :source-bytes (:bytes source)
-              :output-path output-path}
-             (assoc dependencies
-                    :proxy-config access
-                    :cancelled? cancelled?))
-            publication
-            {:job-id job-id
-             :attempt attempt
-             :asset-id (:id asset)
-             :object-key (:object-key asset)
-             :output-path (:output-path verified)
-             :content-type (:content-type verified)
-             :size (:output-bytes verified)
-             :profile-version (:version profile)}
-            stored (publish-derivative! service publication)
-            completion
-            {:asset-id (:id asset)
-             :object-key (:object-key asset)
-             :generation (:generation stored)
-             :size (:size stored)
-             :content-type (:content-type stored)
-             :profile-version (:profile-version stored)
-             :measurements {:output-bytes (:output-bytes verified)}}]
-        (reset! published
-                {:object-key (:object-key asset)
-                 :generation (:generation stored)})
-        (when (cancellation-requested?)
-          (throw
-           (errors/raise! "Derivative publication was cancelled"
-                          {:type ::publication-cancelled
-                           :reason "cancelled"})))
-        (let [completed
-              (complete-preparation-attempt!
-               service job-id attempt completion)]
-          (reset! published nil)
-          completed))
-      (catch Throwable error
-        (when (and @published delete-derivative!)
+        published (atom nil)
+        phase (atom :encode)
+        attempt-started-nanos (System/nanoTime)
+        correlation
+        (merge
+         {:requestId (get-in record [:observability :request-id])
+          :attempt attempt
+          :profileVersion (:version profile)
+          :reservedMinorUnits
+          (long
+           (or (get-in record [:observability :reservation-minor-units]) 0))}
+         (select-keys (get record :observability) [:trace :revision]))]
+    (observability/with-event-context
+      {:fields correlation
+       :event-sink (:event-sink dependencies)}
+      (Files/deleteIfExists ^Path output-path)
+      (try
+        (let [encode-started-nanos (System/nanoTime)
+              _ (emit-worker-event!
+                 "derivative_encode_started"
+                 {:severity "INFO"
+                  :operation "derivative_encode"
+                  :status "started"
+                  :sourceBytes (:bytes source)
+                  :durationBucket
+                  (duration-bucket (:duration-seconds source))})
+              verified
+              (run!
+               {:classification :derivative-required
+                :source-duration-seconds (:duration-seconds source)
+                :source-bytes (:bytes source)
+                :output-path output-path}
+               (assoc dependencies
+                      :proxy-config access
+                      :cancelled? cancelled?))
+              _ (emit-worker-event!
+                 "derivative_encode_exited"
+                 {:severity "INFO"
+                  :operation "derivative_encode"
+                  :status "succeeded"
+                  :elapsedMs (elapsed-millis encode-started-nanos)
+                  :sourceBytes (:bytes source)
+                  :upstreamBytes (get-in verified [:transfer :upstream-bytes])
+                  :outputBytes (:output-bytes verified)})
+              _ (emit-worker-event!
+                 "derivative_verification_succeeded"
+                 {:severity "INFO"
+                  :operation "derivative_verification"
+                  :status "succeeded"
+                  :outputBytes (:output-bytes verified)})
+              _ (reset! phase :publication)
+              publication
+              {:job-id job-id
+               :attempt attempt
+               :asset-id (:id asset)
+               :object-key (:object-key asset)
+               :output-path (:output-path verified)
+               :content-type (:content-type verified)
+               :size (:output-bytes verified)
+               :profile-version (:version profile)}
+              _ (emit-worker-event!
+                 "derivative_publication_started"
+                 {:severity "INFO"
+                  :operation "derivative_publication"
+                  :status "started"
+                  :outputBytes (:output-bytes verified)})
+              stored (publish-derivative! service publication)
+              _ (emit-worker-event!
+                 "derivative_publication_succeeded"
+                 {:severity "INFO"
+                  :operation "derivative_publication"
+                  :status "succeeded"
+                  :outputBytes (:size stored)})
+              _ (reset! phase :completion)
+              completion
+              {:asset-id (:id asset)
+               :object-key (:object-key asset)
+               :generation (:generation stored)
+               :size (:size stored)
+               :content-type (:content-type stored)
+               :profile-version (:profile-version stored)
+               :measurements {:output-bytes (:output-bytes verified)}}]
+          (reset! published
+                  {:object-key (:object-key asset)
+                   :generation (:generation stored)})
+          (when (cancellation-requested?)
+            (throw
+             (errors/raise! "Derivative publication was cancelled"
+                            {:type ::publication-cancelled
+                             :reason "cancelled"})))
+          (let [completed
+                (complete-preparation-attempt!
+                 service job-id attempt completion)]
+            (reset! published nil)
+            (emit-worker-event!
+             "derivative_preparation_terminal"
+             {:severity "INFO"
+              :operation "derivative_preparation"
+              :status "succeeded"
+              :reason "completed"
+              :elapsedMs (elapsed-millis attempt-started-nanos)
+              :outputBytes (:output-bytes verified)})
+            completed))
+        (catch Throwable error
+          (let [data (ex-data error)
+                cancelled?
+                (contains? #{::render-derivative/cancelled
+                             ::publication-cancelled}
+                           (:type data))
+                retryable (retryable-failure? (:type data))
+                failure-code
+                (if (contains? contract/public-error-codes-v1
+                               (:failure-code data))
+                  (:failure-code data)
+                  (cond
+                    cancelled? "cancelled"
+                    (= :publication @phase) "publication_failed"
+                    :else "derivative_failed"))
+                failure-fields
+                (cond->
+                 (merge
+                  {:severity (if cancelled? "WARNING" "ERROR")
+                   :status (if cancelled? "cancelled" "failed")
+                   :reason failure-code
+                   :errorType (some-> (:type data) str)
+                   :retryable retryable
+                   :elapsedMs (elapsed-millis attempt-started-nanos)}
+                  (observability/exception-fields error))
+                  cancelled?
+                  (assoc :cancellationLagMs
+                         (elapsed-millis attempt-started-nanos)))]
+            (case @phase
+              :encode
+              (emit-worker-event!
+               "derivative_encode_exited"
+               (assoc failure-fields :operation "derivative_encode"))
+
+              :publication
+              (emit-worker-event!
+               "derivative_publication_failed"
+               (assoc failure-fields :operation "derivative_publication"))
+
+              nil)
+            (emit-worker-event!
+             "derivative_preparation_terminal"
+             (assoc failure-fields :operation "derivative_preparation")))
+          (when (and @published delete-derivative!)
+            (try
+              (delete-derivative! service @published)
+              (catch Throwable _
+                nil)))
+          (Files/deleteIfExists ^Path output-path)
           (try
-            (delete-derivative! service @published)
+            (report-failure! dependencies job-id attempt error)
             (catch Throwable _
-              nil)))
-        (Files/deleteIfExists ^Path output-path)
-        (try
-          (report-failure! dependencies job-id attempt error)
-          (catch Throwable _
-            nil))
-        (throw error))
-      (finally
-        (Files/deleteIfExists ^Path output-path)))))
+              nil))
+          (throw error))
+        (finally
+          (Files/deleteIfExists ^Path output-path))))))
 
 (defn- required-resolve [symbol]
   (or (requiring-resolve symbol)

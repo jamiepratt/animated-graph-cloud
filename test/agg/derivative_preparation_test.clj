@@ -58,15 +58,28 @@
           :fingerprint-secret "fixture-secret"})
         cached (derivative/put-preparation-cache!
                 service
-                (preparation-request)
+                (preparation-request
+                 {:request-id
+                  "00000000-0000-0000-0000-000000000196"
+                  :trace "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  :revision "old-revision"})
                 {:asset-id "00000000-0000-0000-0000-000000000193"
                  :expires-at (.plusSeconds now (* 2 60 60))})
         result (derivative/submit-preparation!
-                service "cache-hit" (preparation-request))]
+                service "cache-hit"
+                (preparation-request
+                 {:request-id
+                  "00000000-0000-0000-0000-000000000197"
+                  :trace "0123456789abcdef0123456789abcdef"
+                  :revision "agg-proto-00001-test"}))]
     (is (= (select-keys (:job cached) [:state :assetId :expiresAt])
            (select-keys (:job result) [:state :assetId :expiresAt])))
     (is (:cache-hit? result))
     (is (false? (:created? result)))
+    (is (= {:requestId "00000000-0000-0000-0000-000000000197"
+            :trace "0123456789abcdef0123456789abcdef"
+            :revision "agg-proto-00001-test"}
+           (select-keys (:job result) [:requestId :trace :revision])))
     (is (empty? @queued))
     (is (empty? (:admission @state)))))
 

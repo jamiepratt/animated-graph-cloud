@@ -136,6 +136,67 @@
            :filename "private.mp4"
            :requestBody "private"}))))
 
+(deftest derivative-lifecycle-fields-keep-only-bounded-cost-and-media-evidence
+  (is (= {:severity "INFO"
+          :component "derivative"
+          :event "derivative_preparation_terminal"
+          :operation "derivative_preparation"
+          :status "succeeded"
+          :reason "completed"
+          :requestId "00000000-0000-0000-0000-000000000197"
+          :trace "0123456789abcdef0123456789abcdef"
+          :revision "agg-proto-00001-test"
+          :attempt 1
+          :queueAgeMs 42
+          :elapsedMs 9123
+          :cancellationLagMs 0
+          :durationBucket "120_to_299_seconds"
+          :cacheOutcome "miss"
+          :profileVersion "h264-aac-1080p25-v1"
+          :sourceBytes 4096
+          :upstreamBytes 8192
+          :outputBytes 2048
+          :reservedMinorUnits 125}
+         (observability/safe-event-fields
+          {:severity "INFO"
+           :component "derivative"
+           :event "derivative_preparation_terminal"
+           :operation "derivative_preparation"
+           :status "succeeded"
+           :reason "completed"
+           :requestId "00000000-0000-0000-0000-000000000197"
+           :trace "0123456789abcdef0123456789abcdef"
+           :revision "agg-proto-00001-test"
+           :attempt 1
+           :queueAgeMs 42
+           :elapsedMs 9123
+           :cancellationLagMs 0
+           :durationBucket "120_to_299_seconds"
+           :cacheOutcome "miss"
+           :profileVersion "h264-aac-1080p25-v1"
+           :sourceBytes 4096
+           :upstreamBytes 8192
+           :outputBytes 2048
+           :reservedMinorUnits 125
+           :fileId "private-drive-id"
+           :filename "private.mov"
+           :ownerSubject "private-owner"
+           :email "owner@example.com"
+           :objectKey "derivatives/private.mp4"
+           :signedUrl "https://storage.example/private"
+           :token "secret"
+           :authority "Bearer secret"})))
+  (is (= {:component "derivative"
+          :event "derivative_preparation_terminal"}
+         (observability/safe-event-fields
+          {:component "derivative"
+           :event "derivative_preparation_terminal"
+           :operation "private-drive-id"
+           :status "private-owner"
+           :durationBucket "private.mov"
+           :cacheOutcome "owner@example.com"
+           :profileVersion "https://storage.example/private"}))))
+
 (deftest early-access-delivery-event-keeps-only-bounded-operations-data
   (is (= {:severity "ERROR"
           :component "api"

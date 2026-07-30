@@ -153,3 +153,49 @@ gcloud logging read \
   'resource.type="cloud_run_revision" AND resource.labels.service_name="agg-proto" AND jsonPayload.reason="REPLACE_REASON"' \
   --freshness=24h --limit=100 --format=json
 ```
+
+## Derivative preparation observability
+
+Use the request ID returned by the preparation response. Keep the resource
+filter intact. These queries project bounded operational fields only.
+
+Follow one preparation across the API and worker:
+
+```sh
+gcloud logging read \
+  '(resource.type="cloud_run_revision" OR resource.type="cloud_run_job") AND jsonPayload.requestId="REPLACE_REQUEST_ID"' \
+  --freshness=24h --limit=100 \
+  --format='table(timestamp,jsonPayload.event,jsonPayload.operation,jsonPayload.status,jsonPayload.reason,jsonPayload.requestId,jsonPayload.trace,jsonPayload.revision,jsonPayload.elapsedMs,jsonPayload.queueAgeMs,jsonPayload.attempt,jsonPayload.durationBucket,jsonPayload.rangeStart,jsonPayload.rangeEnd,jsonPayload.bytesRequested,jsonPayload.bytesTransferred,jsonPayload.sourceBytes,jsonPayload.upstreamBytes,jsonPayload.outputBytes,jsonPayload.cacheOutcome,jsonPayload.profileVersion,jsonPayload.reservedMinorUnits,jsonPayload.retryable,jsonPayload.errorType,jsonPayload.exceptionClass)'
+```
+
+Distinguish lifecycle boundaries:
+
+| Boundary | `jsonPayload.operation` |
+|---|---|
+| Preparation cache | `derivative_cache` |
+| Task queue | `derivative_queue` |
+| Worker launch | `derivative_dispatch` |
+| FFmpeg and range proxy | `derivative_encode` |
+| Output validation | `derivative_verification` |
+| Private storage publication | `derivative_publication` |
+| Owner-bound byte range | `derivative_playback` |
+| Cancellation | `derivative_cancellation` |
+| Expiry and repair | `derivative_reconciliation` |
+
+Query those boundaries for one request:
+
+```sh
+gcloud logging read \
+  '(resource.type="cloud_run_revision" OR resource.type="cloud_run_job") AND jsonPayload.requestId="REPLACE_REQUEST_ID" AND jsonPayload.operation=("derivative_cache" OR "derivative_queue" OR "derivative_dispatch" OR "derivative_encode" OR "derivative_verification" OR "derivative_publication" OR "derivative_playback" OR "derivative_cancellation" OR "derivative_reconciliation")' \
+  --freshness=24h --limit=100 \
+  --format='table(timestamp,jsonPayload.event,jsonPayload.operation,jsonPayload.status,jsonPayload.reason,jsonPayload.elapsedMs,jsonPayload.queueAgeMs,jsonPayload.rangeStart,jsonPayload.rangeEnd,jsonPayload.bytesRequested,jsonPayload.bytesTransferred,jsonPayload.upstreamBytes,jsonPayload.outputBytes,jsonPayload.cacheOutcome,jsonPayload.reservedMinorUnits)'
+```
+
+Find terminal failures by bounded reason:
+
+```sh
+gcloud logging read \
+  '(resource.type="cloud_run_revision" OR resource.type="cloud_run_job") AND jsonPayload.event="derivative_preparation_terminal" AND jsonPayload.status=("failed" OR "rejected" OR "cancelled" OR "expired")' \
+  --freshness=24h --limit=100 \
+  --format='table(timestamp,jsonPayload.requestId,jsonPayload.trace,jsonPayload.revision,jsonPayload.status,jsonPayload.reason,jsonPayload.attempt,jsonPayload.elapsedMs,jsonPayload.cancellationLagMs,jsonPayload.retryable,jsonPayload.errorType,jsonPayload.exceptionClass)'
+```
