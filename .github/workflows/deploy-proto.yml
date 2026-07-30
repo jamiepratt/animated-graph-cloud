@@ -41,6 +41,10 @@ jobs:
         with:
           terraform_version: 1.15.8
           terraform_wrapper: false
+      - name: Install FFmpeg for derivative media tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg
       # This gate intentionally runs clojure -M:proto-test, not test-all.
       - name: Run proto-only validation gate
         run: test/proto_ci.sh

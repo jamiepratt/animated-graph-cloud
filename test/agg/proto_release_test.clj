@@ -15,6 +15,26 @@
     (when start
       (subs terraform start (or next-resource (count terraform))))))
 
+(deftest proto-media-gate-installs-ffmpeg-before-running-tests
+  (let [workflow (slurp ".github/workflows/deploy-proto.yml")
+        proto-tests-start (str/index-of workflow "  proto-tests:")
+        deploy-start (str/index-of workflow "\n  deploy:")
+        proto-tests
+        (when (and proto-tests-start deploy-start)
+          (subs workflow proto-tests-start deploy-start))
+        install-index (some-> proto-tests
+                              (str/index-of
+                               "sudo apt-get install --yes ffmpeg"))
+        gate-index (some-> proto-tests
+                           (str/index-of
+                            "Run proto-only validation gate"))]
+    (is (string? proto-tests))
+    (is (str/includes? proto-tests "sudo apt-get update"))
+    (is (number? install-index))
+    (is (number? gate-index))
+    (when (and (number? install-index) (number? gate-index))
+      (is (< install-index gate-index)))))
+
 (deftest derivative-observability-is-terraform-owned-and-applied-before-release
   (let [proto-infra (slurp "infra/proto/main.tf")
         proto-workflow (slurp ".github/workflows/deploy-proto.yml")
