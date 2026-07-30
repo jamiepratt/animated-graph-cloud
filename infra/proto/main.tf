@@ -85,7 +85,7 @@ locals {
 
   runtime_secrets = {
     AGG_OAUTH_CLIENT_CREDENTIALS = "oauth-client-secret"
-    AGG_PROTO_SOURCE_FILE_IDS     = "proto-source-file-ids"
+    AGG_PROTO_SOURCE_FILE_IDS    = "proto-source-file-ids"
     AGG_SESSION_KEY              = "session-key"
     AGG_TOKEN_HASH_PEPPER        = "token-hash-pepper"
   }
