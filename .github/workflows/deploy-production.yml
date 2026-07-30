@@ -10,6 +10,11 @@ on:
         required: false
         default: false
         type: boolean
+      import_existing_private_preview:
+        description: Import reviewed existing production private-preview resources into Terraform state
+        required: false
+        default: false
+        type: boolean
       allow_destructive_terraform:
         description: Apply a reviewed Terraform plan containing delete or replacement actions
         required: false
@@ -31,9 +36,14 @@ env:
   OVERLAY_SERVICE: agg-overlay
   DURABLE_JOB: agg-renderer
   SMOKE_JOB: agg-renderer-smoke
+  PRIVATE_PREVIEW_JOB: agg-production-private-preview
   DEPLOYER_SERVICE_ACCOUNT: agg-github-deployer@animated-graph-cloud-prod-jp.iam.gserviceaccount.com
   API_SERVICE_ACCOUNT: agg-api@animated-graph-cloud-prod-jp.iam.gserviceaccount.com
   RENDERER_SERVICE_ACCOUNT: agg-renderer@animated-graph-cloud-prod-jp.iam.gserviceaccount.com
+  PRIVATE_PREVIEW_TASKS_SERVICE_ACCOUNT: agg-prod-preview-tasks@animated-graph-cloud-prod-jp.iam.gserviceaccount.com
+  PRIVATE_PREVIEW_WORKER_SERVICE_ACCOUNT: agg-prod-preview-worker@animated-graph-cloud-prod-jp.iam.gserviceaccount.com
+  PRIVATE_PREVIEW_BUCKET: animated-graph-cloud-prod-jp-production-private-previews
+  PRIVATE_PREVIEW_QUEUE: agg-production-private-preview
   OWNER_EMAIL: me@jamiep.org
   ADMIN_EMAILS: me@jamiep.org;bartoszjakubowiak@gmail.com
   EARLY_ACCESS_SENDER: Alpha Compose <early-access@alphacompose.com>
@@ -126,6 +136,7 @@ jobs:
           ALLOW_DESTRUCTIVE_TERRAFORM: ${{ inputs.allow_destructive_terraform }}
           API_SERVICE_URL: ${{ steps.terraform-context.outputs.service_url }}
           IMPORT_EXISTING_FIRESTORE: ${{ inputs.import_existing_firestore }}
+          IMPORT_EXISTING_PRIVATE_PREVIEW: ${{ inputs.import_existing_private_preview }}
           RENDERER_IMAGE: ${{ steps.terraform-context.outputs.renderer_image }}
         run: |
           set -euo pipefail
@@ -169,6 +180,68 @@ jobs:
               exit 1
             fi
           fi
+
+          import_private_preview_if_present() {
+            local address="$1"
+            local import_id="$2"
+            shift 2
+            if grep -Fxq "$address" <<<"$state_resources"; then
+              return
+            fi
+            if "$@" >/dev/null 2>&1; then
+              {
+                echo "## Existing private-preview resources require reviewed import"
+                echo
+                echo "\`$address\` already exists outside production Terraform state."
+                echo "Do not delete it. Review it, then manually dispatch with \`import_existing_private_preview\` enabled."
+              } >>"$GITHUB_STEP_SUMMARY"
+              if [ "$IMPORT_EXISTING_PRIVATE_PREVIEW" != "true" ]; then
+                echo "::error title=Private-preview Terraform import required::$address exists outside production Terraform state. Do not delete it. Review it, then manually dispatch with import_existing_private_preview enabled."
+                exit 1
+              fi
+              terraform -chdir=infra/prod import \
+                -input=false \
+                -var="renderer_image=$RENDERER_IMAGE" \
+                -var="api_service_url=$API_SERVICE_URL" \
+                "$address" \
+                "$import_id"
+              state_resources="$(terraform -chdir=infra/prod state list)"
+            fi
+          }
+
+          import_private_preview_if_present \
+            google_service_account.production_private_preview_tasks \
+            "projects/$PROJECT_ID/serviceAccounts/$PRIVATE_PREVIEW_TASKS_SERVICE_ACCOUNT" \
+            gcloud iam service-accounts describe "$PRIVATE_PREVIEW_TASKS_SERVICE_ACCOUNT" \
+              --project="$PROJECT_ID"
+          import_private_preview_if_present \
+            google_service_account.production_private_preview_worker \
+            "projects/$PROJECT_ID/serviceAccounts/$PRIVATE_PREVIEW_WORKER_SERVICE_ACCOUNT" \
+            gcloud iam service-accounts describe "$PRIVATE_PREVIEW_WORKER_SERVICE_ACCOUNT" \
+              --project="$PROJECT_ID"
+          import_private_preview_if_present \
+            google_storage_bucket.production_private_previews \
+            "$PRIVATE_PREVIEW_BUCKET" \
+            gcloud storage buckets describe "gs://$PRIVATE_PREVIEW_BUCKET" \
+              --project="$PROJECT_ID"
+          import_private_preview_if_present \
+            google_cloud_tasks_queue.production_private_preview \
+            "projects/$PROJECT_ID/locations/$REGION/queues/$PRIVATE_PREVIEW_QUEUE" \
+            gcloud tasks queues describe "$PRIVATE_PREVIEW_QUEUE" \
+              --project="$PROJECT_ID" \
+              --location="$REGION"
+          import_private_preview_if_present \
+            google_cloud_run_v2_job.production_private_preview \
+            "projects/$PROJECT_ID/locations/$REGION/jobs/$PRIVATE_PREVIEW_JOB" \
+            gcloud run jobs describe "$PRIVATE_PREVIEW_JOB" \
+              --project="$PROJECT_ID" \
+              --region="$REGION"
+          import_private_preview_if_present \
+            google_cloud_scheduler_job.production_private_preview_reconcile \
+            "projects/$PROJECT_ID/locations/$REGION/jobs/agg-production-private-preview-reconcile" \
+            gcloud scheduler jobs describe agg-production-private-preview-reconcile \
+              --project="$PROJECT_ID" \
+              --location="$REGION"
 
           plan_path="$RUNNER_TEMP/prod.tfplan"
           plan_json="$RUNNER_TEMP/prod.tfplan.json"
@@ -347,7 +420,7 @@ jobs:
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --remove-env-vars "AGG_MONTHLY_BUDGET_CENTS,AGG_PREVIEW_RESERVATION_CENTS,AGG_RENDER_RESERVATION_CENTS" \
-            --update-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGG_SERVICE_PROFILE=api,AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=$DURABLE_JOB,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_EARLY_ACCESS_SENDER=$EARLY_ACCESS_SENDER,AGG_EARLY_ACCESS_RECIPIENT=$EARLY_ACCESS_RECIPIENT,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
+            --update-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGG_SERVICE_PROFILE=api,AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=$DURABLE_JOB,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$PUBLIC_BASE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_EARLY_ACCESS_SENDER=$EARLY_ACCESS_SENDER,AGG_EARLY_ACCESS_RECIPIENT=$EARLY_ACCESS_RECIPIENT,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS,AGG_DERIVATIVE_ENVIRONMENT=production,AGG_DERIVATIVE_CONTRACT_VERSION=production-private-preview-contract-v1,AGG_DERIVATIVE_PROFILE_VERSION=h264-aac-1080p25-v1,AGG_DERIVATIVE_BUCKET=$PRIVATE_PREVIEW_BUCKET,AGG_DERIVATIVE_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_DERIVATIVE_TASKS_QUEUE=$PRIVATE_PREVIEW_QUEUE,AGG_DERIVATIVE_TASKS_SERVICE_ACCOUNT=$PRIVATE_PREVIEW_TASKS_SERVICE_ACCOUNT,AGG_DERIVATIVE_WORKER_JOB=$PRIVATE_PREVIEW_JOB,AGG_DERIVATIVE_WORKER_SERVICE_ACCOUNT=$PRIVATE_PREVIEW_WORKER_SERVICE_ACCOUNT,AGG_DERIVATIVE_JOB_COLLECTION=production-derivative-preparation-jobs-v1,AGG_DERIVATIVE_CACHE_COLLECTION=production-derivative-preview-cache-v1,AGG_DERIVATIVE_IDEMPOTENCY_COLLECTION=production-derivative-preparation-idempotency-v1,AGG_DERIVATIVE_ORCHESTRATION_COLLECTION=production-derivative-active-jobs-v1,AGG_DERIVATIVE_OBJECT_PREFIX=production/derivative-previews/v1,AGG_DERIVATIVE_ASSET_TTL_SECONDS=86400,AGG_DERIVATIVE_JOB_METADATA_TTL_SECONDS=86400,AGG_DERIVATIVE_PLAYBACK_AUTHORITY_TTL_SECONDS=3600,AGG_DERIVATIVE_CACHE_MINIMUM_REMAINING_TTL_SECONDS=3600,AGG_DERIVATIVE_MAX_SOURCE_DURATION_SECONDS=480,AGG_DERIVATIVE_MAX_SOURCE_BYTES=2147483648,AGG_DERIVATIVE_MAX_UPSTREAM_BYTES=2415919104,AGG_DERIVATIVE_MAX_REQUEST_COUNT=320,AGG_DERIVATIVE_MAX_RANGE_BYTES=8388608,AGG_DERIVATIVE_MAX_OUTPUT_BYTES=268435456,AGG_DERIVATIVE_ATTEMPT_RESERVATION_MINOR_UNITS=125,AGG_DERIVATIVE_MAX_PROJECT_NONTERMINAL_JOBS=10,AGG_DERIVATIVE_MAX_USER_NONTERMINAL_JOBS=1,AGG_DERIVATIVE_MAX_USER_ATTEMPTS_PER_DAY=5,AGG_DERIVATIVE_MAX_USER_MONTHLY_MINOR_UNITS=2500,AGG_DERIVATIVE_MAX_MONTHLY_MINOR_UNITS=10000" \
             --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest,AGG_RESEND_API_KEY=resend-api-key:latest" \
             --quiet
           gcloud run services update "$OVERLAY_SERVICE" \
@@ -422,18 +495,28 @@ jobs:
 
       - name: Reconcile production runtimes through Terraform
         env:
+          ALLOW_DESTRUCTIVE_TERRAFORM: ${{ inputs.allow_destructive_terraform }}
           IMAGE_DIGEST: ${{ steps.image.outputs.uri }}
           CLOUD_RUN_SERVICE_URL: ${{ steps.service-url.outputs.url }}
         run: |
+          runtime_plan="$RUNNER_TEMP/prod-runtime.tfplan"
+          runtime_plan_json="$RUNNER_TEMP/prod-runtime.tfplan.json"
           terraform -chdir=infra/prod plan -input=false \
             -var="renderer_image=$IMAGE_DIGEST" \
             -var="api_service_url=$CLOUD_RUN_SERVICE_URL" \
             -target=module.application.google_cloud_run_v2_service.api \
             -target=module.application.google_cloud_run_v2_service.overlay \
             -target=module.application.google_cloud_run_v2_job.renderer \
-            -out="$RUNNER_TEMP/prod-runtime.tfplan"
-          terraform -chdir=infra/prod apply -input=false \
-            "$RUNNER_TEMP/prod-runtime.tfplan"
+            -target=google_cloud_run_v2_job.production_private_preview \
+            -out="$runtime_plan"
+          terraform -chdir=infra/prod show -json "$runtime_plan" \
+            >"$runtime_plan_json"
+          runtime_deletes="$(jq '[.resource_changes[]? | select(.change.actions | index("delete"))] | length' "$runtime_plan_json")"
+          if [ "$runtime_deletes" -gt 0 ] && [ "$ALLOW_DESTRUCTIVE_TERRAFORM" != "true" ]; then
+            echo "::error title=Destructive runtime Terraform plan blocked::The runtime reconcile contains delete or replacement actions. Automatic production deployment cannot apply it."
+            exit 1
+          fi
+          terraform -chdir=infra/prod apply -input=false "$runtime_plan"
 
       - name: Verify reconciled private services
         env:

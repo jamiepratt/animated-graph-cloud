@@ -25,3 +25,7 @@ output "api_service_url" {
 output "overlay_service_url" {
   value = google_cloud_run_v2_service.overlay.uri
 }
+
+output "operations_notification_channel" {
+  value = google_monitoring_notification_channel.owner_email.name
+}

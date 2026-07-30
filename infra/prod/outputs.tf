@@ -25,3 +25,15 @@ output "api_service_url" {
 output "overlay_service_url" {
   value = module.application.overlay_service_url
 }
+
+output "production_private_preview_bucket" {
+  value = google_storage_bucket.production_private_previews.url
+}
+
+output "production_private_preview_queue" {
+  value = google_cloud_tasks_queue.production_private_preview.id
+}
+
+output "production_private_preview_job" {
+  value = google_cloud_run_v2_job.production_private_preview.id
+}

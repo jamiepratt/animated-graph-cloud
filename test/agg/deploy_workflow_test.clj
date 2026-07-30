@@ -6,6 +6,9 @@
 (def ^:private dockerfile (slurp "Dockerfile"))
 (def ^:private terraform (slurp "infra/dev/main.tf"))
 (def ^:private terraform-variables (slurp "infra/dev/variables.tf"))
+(def ^:private production-workflow
+  (slurp ".github/workflows/deploy-production.yml"))
+(def ^:private production-terraform (slurp "infra/prod/main.tf"))
 (def ^:private cloud-spike (slurp "script/run_cloud_spike.sh"))
 
 (defn- workflow-section [start-marker end-marker]
@@ -13,6 +16,13 @@
         end (and start (str/index-of workflow end-marker start))]
     (when (and start end)
       (subs workflow start end))))
+
+(defn- production-workflow-section [start-marker end-marker]
+  (let [start (str/index-of production-workflow start-marker)
+        end (and start
+                 (str/index-of production-workflow end-marker start))]
+    (when (and start end)
+      (subs production-workflow start end))))
 
 (deftest docker-build-includes-runtime-resources
   (is (str/includes? dockerfile "COPY resources ./resources"))
@@ -324,3 +334,134 @@
   (is (not (str/includes? cloud-spike "target/spike")))
   (is (str/includes? cloud-spike "PRIOR_ESTIMATED_COST_USD"))
   (is (str/includes? cloud-spike "resume_stage")))
+
+(deftest production-private-preview-infrastructure-is-isolated-and-private
+  (doseq [name ["animated-graph-cloud-prod-jp-production-private-previews"
+                "agg-production-private-preview"
+                "agg-prod-preview-tasks"
+                "agg-prod-preview-worker"]]
+    (is (str/includes? production-terraform name) name))
+  (doseq [proto-name ["name     = \"agg-derivative-preview\""
+                      "account_id   = \"agg-derivative-tasks\""
+                      "account_id   = \"agg-derivative-worker\""
+                      "name                        = \"${local.project_id}-derivative-previews\""]]
+    (is (not (str/includes? production-terraform proto-name)) proto-name))
+  (is (str/includes?
+       production-terraform
+       "resource \"google_storage_bucket\" \"production_private_previews\""))
+  (is (str/includes? production-terraform
+                     "public_access_prevention    = \"enforced\""))
+  (is (str/includes? production-terraform
+                     "uniform_bucket_level_access = true"))
+  (is (str/includes? production-terraform "force_destroy               = false"))
+  (is (str/includes? production-terraform "age = 1"))
+  (is (str/includes? production-terraform "prevent_destroy = true")))
+
+(deftest production-private-preview-capacity-retry-and-retention-match-contract
+  (is (str/includes?
+       production-terraform
+       "resource \"google_cloud_tasks_queue\" \"production_private_preview\""))
+  (is (str/includes? production-terraform
+                     "max_concurrent_dispatches = 1"))
+  (is (str/includes? production-terraform
+                     "max_dispatches_per_second = 1"))
+  (is (str/includes? production-terraform "max_retry_duration = \"3600s\""))
+  (is (str/includes?
+       production-terraform
+       "resource \"google_cloud_run_v2_job\" \"production_private_preview\""))
+  (doseq [contract ["image = var.renderer_image"
+                    "args  = [\"clojure.main\", \"-m\", \"agg.derivative.worker\"]"
+                    "task_count  = 1"
+                    "max_retries           = 0"
+                    "timeout               = \"900s\""
+                    "cpu    = \"4\""
+                    "memory = \"4Gi\""
+                    "AGG_DERIVATIVE_ENVIRONMENT"
+                    "production-private-preview-contract-v1"
+                    "h264-aac-1080p25-v1"
+                    "AGG_DERIVATIVE_ASSET_TTL_SECONDS"
+                    "86400"]]
+    (is (str/includes? production-terraform contract) contract))
+  (doseq [collection
+          ["production-derivative-preparation-jobs-v1"
+           "production-derivative-preview-cache-v1"
+           "production-derivative-preparation-idempotency-v1"
+           "production-derivative-active-jobs-v1"]]
+    (is (str/includes? production-terraform collection) collection))
+  (is (str/includes? production-terraform
+                     "resource \"google_firestore_field\" \"production_private_preview_expiry\""))
+  (is (str/includes? production-terraform "ttl_config {}")))
+
+(deftest production-private-preview-iam-metrics-and-alerts-are-owned
+  (doseq [role ["roles/storage.objectViewer"
+                "roles/storage.objectUser"
+                "roles/cloudtasks.enqueuer"
+                "roles/cloudtasks.taskDeleter"
+                "roles/run.jobsExecutorWithOverrides"
+                "roles/run.viewer"
+                "roles/run.invoker"
+                "roles/datastore.user"
+                "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+                "roles/secretmanager.secretAccessor"]]
+    (is (str/includes? production-terraform role) role))
+  (is (str/includes?
+       production-terraform
+       "service  = \"agg-api\""))
+  (is (str/includes? production-terraform
+                     "module.application.operations_notification_channel"))
+  (is (not (str/includes?
+            production-terraform
+            "resource \"google_monitoring_notification_channel\" \"production_private_preview_owner\"")))
+  (is (str/includes? production-terraform "paused           = true"))
+  (doseq [metric ["production_private_preview_latency_ms"
+                  "production_private_preview_failures"
+                  "production_private_preview_queue_age_ms"
+                  "production_private_preview_reserved_minor_units"]]
+    (is (str/includes?
+         production-terraform
+         (str "resource \"google_logging_metric\" \"" metric "\""))
+        metric))
+  (doseq [alert ["production_private_preview_latency"
+                 "production_private_preview_failures"
+                 "production_private_preview_queue_age"
+                 "production_private_preview_backlog"
+                 "production_private_preview_reserved_cost"]]
+    (is (str/includes?
+         production-terraform
+         (str "resource \"google_monitoring_alert_policy\" \"" alert "\""))
+        alert)))
+
+(deftest production-workflow-keeps-private-preview-on-the-candidate-release
+  (let [terraform-apply
+        (str/index-of production-workflow
+                      "Plan and apply production Terraform")
+        candidate-deploy
+        (str/index-of production-workflow "Deploy private API candidate")
+        runtime-reconcile
+        (or (production-workflow-section
+             "name: Reconcile production runtimes through Terraform"
+             "name: Verify reconciled private services") "")]
+    (is (< terraform-apply candidate-deploy))
+    (is (str/includes? production-workflow
+                       "PRIVATE_PREVIEW_JOB: agg-production-private-preview"))
+    (is (str/includes?
+         production-workflow
+         "AGG_DERIVATIVE_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL"))
+    (is (not (str/includes? production-workflow "agg-proto")))
+    (is (str/includes?
+         runtime-reconcile
+         "-target=google_cloud_run_v2_job.production_private_preview"))
+    (is (str/includes? runtime-reconcile
+                       "-var=\"renderer_image=$IMAGE_DIGEST\""))
+    (is (str/includes? runtime-reconcile
+                       "terraform -chdir=infra/prod show -json"))
+    (is (str/includes? runtime-reconcile
+                       "select(.change.actions | index(\"delete\"))"))
+    (is (str/includes? runtime-reconcile
+                       "Destructive runtime Terraform plan blocked"))
+    (is (str/includes? production-workflow
+                       "select(.change.actions | index(\"delete\"))"))
+    (is (str/includes? production-workflow
+                       "import_existing_private_preview"))
+    (is (str/includes? production-workflow
+                       "Existing private-preview resources require reviewed import"))))
