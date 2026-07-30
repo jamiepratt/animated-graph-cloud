@@ -77,24 +77,6 @@ data "google_project" "production" {
   project_id = local.project_id
 }
 
-data "google_service_account" "production_api" {
-  account_id = local.api_service_account
-
-  depends_on = [module.application]
-}
-
-data "google_service_account" "production_deployer" {
-  account_id = local.deployer_service_account
-
-  depends_on = [module.application]
-}
-
-data "google_service_account" "production_scheduler" {
-  account_id = local.scheduler_service_account
-
-  depends_on = [module.application]
-}
-
 resource "google_service_account" "production_private_preview_tasks" {
   project      = local.project_id
   account_id   = "agg-prod-preview-tasks"
@@ -206,7 +188,7 @@ resource "google_cloud_scheduler_job" "production_private_preview_reconcile" {
     }
 
     oidc_token {
-      service_account_email = data.google_service_account.production_scheduler.email
+      service_account_email = local.scheduler_service_account
       audience              = var.api_service_url
     }
   }
@@ -219,6 +201,8 @@ resource "google_cloud_scheduler_job" "production_private_preview_reconcile" {
       error_message = "The private agg-api Cloud Run origin is required for private-preview reconciliation."
     }
   }
+
+  depends_on = [module.application]
 }
 
 resource "google_cloud_run_v2_job" "production_private_preview" {
@@ -314,7 +298,9 @@ resource "google_firestore_field" "production_private_preview_expiry" {
 resource "google_service_account_iam_member" "production_deployer_uses_private_preview_worker" {
   service_account_id = google_service_account.production_private_preview_worker.name
   role               = "roles/iam.serviceAccountUser"
-  member             = "serviceAccount:${data.google_service_account.production_deployer.email}"
+  member             = "serviceAccount:${local.deployer_service_account}"
+
+  depends_on = [module.application]
 }
 
 resource "time_sleep" "production_private_preview_worker_iam_propagation" {
@@ -328,7 +314,7 @@ resource "time_sleep" "production_private_preview_worker_iam_propagation" {
 resource "google_service_account_iam_member" "production_api_uses_private_preview_tasks" {
   service_account_id = google_service_account.production_private_preview_tasks.name
   role               = "roles/iam.serviceAccountUser"
-  member             = "serviceAccount:${data.google_service_account.production_api.email}"
+  member             = "serviceAccount:${local.api_service_account}"
 }
 
 resource "google_service_account_iam_member" "production_tasks_service_agent_mints_private_preview_oidc" {
@@ -340,7 +326,7 @@ resource "google_service_account_iam_member" "production_tasks_service_agent_min
 resource "google_storage_bucket_iam_member" "production_api_private_preview_reader" {
   bucket = google_storage_bucket.production_private_previews.name
   role   = "roles/storage.objectViewer"
-  member = "serviceAccount:${data.google_service_account.production_api.email}"
+  member = "serviceAccount:${local.api_service_account}"
 }
 
 resource "google_storage_bucket_iam_member" "production_private_preview_worker_objects" {
@@ -354,7 +340,7 @@ resource "google_cloud_tasks_queue_iam_member" "production_api_private_preview_e
   location = local.region
   name     = google_cloud_tasks_queue.production_private_preview.name
   role     = "roles/cloudtasks.enqueuer"
-  member   = "serviceAccount:${data.google_service_account.production_api.email}"
+  member   = "serviceAccount:${local.api_service_account}"
 }
 
 resource "google_cloud_tasks_queue_iam_member" "production_api_private_preview_task_deleter" {
@@ -362,7 +348,7 @@ resource "google_cloud_tasks_queue_iam_member" "production_api_private_preview_t
   location = local.region
   name     = google_cloud_tasks_queue.production_private_preview.name
   role     = "roles/cloudtasks.taskDeleter"
-  member   = "serviceAccount:${data.google_service_account.production_api.email}"
+  member   = "serviceAccount:${local.api_service_account}"
 }
 
 resource "google_cloud_run_v2_job_iam_member" "production_api_private_preview_executor" {
@@ -370,7 +356,7 @@ resource "google_cloud_run_v2_job_iam_member" "production_api_private_preview_ex
   location = local.region
   name     = google_cloud_run_v2_job.production_private_preview.name
   role     = "roles/run.jobsExecutorWithOverrides"
-  member   = "serviceAccount:${data.google_service_account.production_api.email}"
+  member   = "serviceAccount:${local.api_service_account}"
 }
 
 resource "google_cloud_run_v2_job_iam_member" "production_api_private_preview_viewer" {
@@ -378,7 +364,7 @@ resource "google_cloud_run_v2_job_iam_member" "production_api_private_preview_vi
   location = local.region
   name     = google_cloud_run_v2_job.production_private_preview.name
   role     = "roles/run.viewer"
-  member   = "serviceAccount:${data.google_service_account.production_api.email}"
+  member   = "serviceAccount:${local.api_service_account}"
 }
 
 resource "google_cloud_run_service_iam_member" "production_private_preview_tasks_invoke_api" {

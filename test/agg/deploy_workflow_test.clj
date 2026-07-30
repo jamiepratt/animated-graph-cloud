@@ -473,6 +473,39 @@
          "time_sleep.production_private_preview_metrics_propagation")
         alert)))
 
+(deftest production-runtime-reconcile-keeps-worker-iam-known
+  (let [worker-iam
+        (production-resource-section
+         "google_service_account_iam_member"
+         "production_deployer_uses_private_preview_worker")]
+    (is (str/includes?
+         worker-iam
+         "member             = \"serviceAccount:${local.deployer_service_account}\""))
+    (is (str/includes? worker-iam "depends_on = [module.application]"))
+    (is (not (str/includes?
+              worker-iam
+              "data.google_service_account.production_deployer.email")))))
+
+(deftest production-full-reconcile-keeps-runtime-principals-known
+  (is (not (str/includes?
+            production-terraform
+            "data \"google_service_account\" \"production_api\"")))
+  (is (not (str/includes?
+            production-terraform
+            "data \"google_service_account\" \"production_scheduler\"")))
+  (is (= 6
+         (count
+          (re-seq #"member\s*=\s*\"serviceAccount:\$\{local\.api_service_account\}\""
+                  production-terraform))))
+  (let [scheduler
+        (production-resource-section
+         "google_cloud_scheduler_job"
+         "production_private_preview_reconcile")]
+    (is (str/includes?
+         scheduler
+         "service_account_email = local.scheduler_service_account"))
+    (is (str/includes? scheduler "depends_on = [module.application]"))))
+
 (deftest production-workflow-keeps-private-preview-on-the-candidate-release
   (let [terraform-apply
         (str/index-of production-workflow
