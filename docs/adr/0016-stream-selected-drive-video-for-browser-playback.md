@@ -1,6 +1,7 @@
 # 0016: Stream selected Drive video for browser playback
 
-- Status: Accepted
+- Status: Accepted; the no-transcoding consequence for browser-incompatible
+  sources is superseded by ADR 0022
 - Date: 2026-07-23
 
 ## Context
@@ -55,6 +56,7 @@ the previous playback authority.
 
 The player can use additional original selected-source containers and codecs
 when the browser proves direct support. Unsupported codec or container
-combinations are explained as a playback-only limitation without clearing the
-render selection. Transcoding, timeline markers, zoom, and pan remain outside
-this decision.
+combinations do not clear the render selection. ADR 0022 supersedes only this
+decision's exclusion of transcoding by defining an explicit, private
+preparation contract for browser-incompatible but renderable sources. Timeline
+markers, zoom, and pan remain outside this decision.

@@ -31,9 +31,31 @@
         (= path "/ui/tokens")
         (re-matches #"/(?:v1|ui)/tokens/[^/]+/revoke" path)) :tokens
     (or (re-matches #"/(?:v1|ui)/admin/(?:members(?:/revoke)?|logs)" path)) :admin
+    (or (= path "/v1/derivative-preparations")
+        (re-matches
+         (re-pattern
+          (str "/v1/derivative-preparations/" uuid
+               "(?:/(?:cancel|retry|playback-sessions|playback/" uuid "))?"))
+         path)
+        (= path "/internal/v1/derivative-preparations/reconcile")
+        (re-matches
+         (re-pattern
+          (str "/internal/v1/derivative-preparations/" uuid
+               "/attempts/[1-9][0-9]*/dispatch"))
+         path)) :derivative-preparation
     (or (= path "/v1/uploads")
         (= path "/v1/jobs")
         (= path "/ui/jobs")
         (re-matches #"/(?:v1|ui)/jobs/[^/]+(?:/(?:cancel|retry))?" path)
         (re-matches #"/internal/v1/jobs/(?:reconcile|[^/]+/dispatch)" path)) :jobs
     :else :not-found))
+
+(defn available-in-profile?
+  "Returns whether the route contract is enabled for a service profile."
+  [request service-profile]
+  (let [feature (feature-for request)]
+    (case feature
+      :health true
+      :derivative-preparation (= "api" service-profile)
+      :not-found false
+      (not= "overlay" service-profile))))

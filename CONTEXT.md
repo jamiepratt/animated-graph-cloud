@@ -19,6 +19,18 @@ Alpha Compose is the public product. The `animated-graph-cloud` service accepts 
 - Runtime and CI identities use ambient credentials or Workload Identity Federation. Service-account key files are forbidden.
 - Temporary cloud objects expire after 24 hours. Job metadata expires after 90 days.
 - Source video is streamed directly from Google Drive into FFmpeg for durable compositing jobs or through short-lived owner-bound browser playback; it is never persisted by the service.
+- Browser-supported selected videos use private Drive range passthrough and
+  submit no derivative work. Browser-incompatible but renderable sources
+  require explicit private-preview preparation.
+- Production private-preview jobs use
+  `production-private-preview-contract-v1`, the fixed
+  `h264-aac-1080p25-v1` profile, 24-hour asset and metadata retention, and
+  environment-scoped jobs, caches, idempotency, active-job limits,
+  fingerprints, and object paths. Proto and production state cannot collide.
+- Private-preview public state contains only opaque IDs, lifecycle state,
+  attempt, profile, expiry, safe failure code, retryability, and relative
+  routes. Source identity, account identity, object keys, and signed authority
+  remain private.
 - Google Drive upload time is never recording-clock authority.
 - Source recording-clock inspection and browser playback state are never persisted.
 - Compose wizard state and dormant route drafts remain browser-memory-only.

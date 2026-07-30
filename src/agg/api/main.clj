@@ -1864,6 +1864,14 @@
                                   (respond! exchange 404 "application/json; charset=utf-8"
                                             "{\"error\":\"not_found\"}")
 
+                                  (and (= :derivative-preparation feature)
+                                       (not
+                                        (routes/available-in-profile?
+                                         {:method method :path path}
+                                         service-profile)))
+                                  (respond! exchange 404 "application/json; charset=utf-8"
+                                            "{\"error\":\"not_found\"}")
+
                                   (and (= "GET" method) (contains? public-assets path))
                                   (let [[resource content-type] (get public-assets path)]
                                     (respond-asset! exchange resource content-type))
