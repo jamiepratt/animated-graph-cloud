@@ -68,7 +68,8 @@
                        "-c:v" (:encoder prores-4444-contract)
                        "-profile:v" (str (:profile prores-4444-contract))
                        "-pix_fmt" (:encoder-input-pixel-format prores-4444-contract)
-                       "-alpha_bits" (str (:alpha-bits prores-4444-contract))
+                       "-alpha_bits" (str (or (:transparent-alpha-bits render-spec)
+                                              16))
                        "-vendor" "apl0"
                        "-c:a" (:encoder aac-lc-contract)
                        "-profile:a" (:profile aac-lc-contract)
@@ -324,7 +325,7 @@
              :encoder-input-pixel-format
              (:encoder-input-pixel-format prores-4444-contract)
              :pixel-format (:pix_fmt video)
-             :alpha-bits (:alpha-bits prores-4444-contract)
+             :alpha-bits (or (:transparent-alpha-bits render-spec) 16)
              :alpha true
              :width (:width video)
              :height (:height video)

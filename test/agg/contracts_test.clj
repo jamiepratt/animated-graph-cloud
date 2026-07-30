@@ -141,6 +141,40 @@
          (:future-trace-opacity-percent
           (contract/prepare (valid-request))))))
 
+(deftest transparent-alpha-depth-defaults-to-sixteen-bits-and-accepts-eight
+  (is (= 16
+         (:transparent-alpha-bits
+          (contract/prepare (valid-request)))))
+  (is (= 8
+         (:transparent-alpha-bits
+          (contract/prepare
+           (assoc (valid-request) :transparentAlphaBits 8))))))
+
+(deftest transparent-alpha-depth-rejects-invalid-and-composited-requests
+  (doseq [invalid [nil "8" 0 10 32]]
+    (try
+      (contract/prepare
+       (assoc (valid-request) :transparentAlphaBits invalid))
+      (is false (str "accepted invalid alpha depth " (pr-str invalid)))
+      (catch clojure.lang.ExceptionInfo error
+        (is (= ::contract/invalid-transparent-alpha-bits
+               (:type (ex-data error))))
+        (is (= "transparentAlphaBits"
+               (:field (ex-data error)))))))
+  (try
+    (contract/prepare
+     (assoc (valid-request)
+            :transparentAlphaBits 8
+            :sourceVideo {:fileId "drive-video-1"
+                          :recordingStartAt "2026-07-17T09:00:00Z"
+                          :timeZone "Europe/Warsaw"}))
+    (is false "accepted transparent alpha depth for a finished video")
+    (catch clojure.lang.ExceptionInfo error
+      (is (= ::contract/transparent-alpha-requires-overlay
+             (:type (ex-data error))))
+      (is (= "transparentAlphaBits"
+             (:field (ex-data error)))))))
+
 (deftest future-trace-opacity-accepts-percent-boundaries-and-rejects-invalid-values
   (doseq [percent [0 25 100 37.5]]
     (is (= percent
@@ -390,6 +424,14 @@
                  openapi))
     (is (str/includes? openapi
                        "Opacity percentage for the not-yet-reached heart-rate trace"))))
+
+(deftest openapi-documents-transparent-alpha-depth-and-legacy-default
+  (let [openapi (slurp "docs/openapi.yaml")]
+    (is (str/includes? openapi "transparentAlphaBits:"))
+    (is (str/includes? openapi "enum: [8, 16]"))
+    (is (str/includes? openapi "default: 16"))
+    (is (str/includes? openapi
+                       "Only valid without sourceVideo"))))
 
 (deftest openapi-documents-required-display-time-zone-without-a-fallback
   (let [openapi (slurp "docs/openapi.yaml")

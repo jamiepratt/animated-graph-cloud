@@ -308,9 +308,39 @@
   (is (= {:encoder "prores_ks"
           :profile 4
           :encoder-input-pixel-format "yuva444p10le"
-          :decoded-pixel-format "yuva444p12le"
-          :alpha-bits 16}
+          :decoded-pixel-format "yuva444p12le"}
          media/prores-4444-contract)))
+
+(deftest transparent-prores-encoding-uses-the-requested-alpha-depth
+  (doseq [[requested expected] [[8 8] [16 16] [nil 16]]]
+    (let [arguments (Files/createTempFile
+                     "agg-alpha-bits-" ".txt"
+                     (make-array java.nio.file.attribute.FileAttribute 0))
+          ffmpeg (executable-script!
+                  (str "#!/bin/sh\n"
+                       "printf '%s\\n' \"$@\" > \"" arguments "\"\n"
+                       "cat >/dev/null\n"))
+          output (Files/createTempFile
+                  "agg-alpha-output-" ".mov"
+                  (make-array java.nio.file.attribute.FileAttribute 0))]
+      (try
+        (media/encode!
+         (media/ffmpeg-video-encoder (str ffmpeg) "ffprobe")
+         (cond-> {:width 2 :height 2 :fps 25 :duration-seconds 1}
+           requested (assoc :transparent-alpha-bits requested))
+         "/tmp/heartbeat.wav"
+         output
+         (fn [stream] (.write ^OutputStream stream (byte-array 16))))
+        (let [command (str/split-lines (Files/readString arguments))]
+          (is (= (str expected)
+                 (second (drop-while #(not= "-alpha_bits" %) command)))
+              requested)
+          (is (some #{"4"} command) requested)
+          (is (some #{"yuva444p10le"} command) requested))
+        (finally
+          (Files/deleteIfExists arguments)
+          (Files/deleteIfExists ffmpeg)
+          (Files/deleteIfExists output))))))
 
 (deftest aac-command-contract-locks-the-target-not-the-observed-average
   (is (= {:encoder "aac"

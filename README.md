@@ -49,7 +49,27 @@ The renderer streams one reusable Java2D RGBA buffer to the bundled FFmpeg
 8.1.2 process. FFmpeg writes a seekable, non-fragmented ProRes 4444 MOV with
 deterministic AAC-LC heartbeat audio. `prores_ks` receives
 `yuva444p10le`; FFmpeg decodes the resulting `ap4h` stream as
-`yuva444p12le`, the profile's decoder representation.
+`yuva444p12le`, the profile's decoder representation. Transparent requests
+may set `transparentAlphaBits` to `8` for a smaller alpha plane or `16` for
+maximum quality. Omission keeps the existing 16-bit behavior.
+
+Run the repeatable production-path 1080p comparison against a built image:
+
+```sh
+test/transparent_alpha_benchmark.sh animated-graph-cloud:local 4
+```
+
+The benchmark renders the same representative Java2D graph, text, diagonal,
+antialiasing, timer, fade, and partial-future-trace workload through the
+bundled `prores_ks` encoder. It records validated MOV media details, render
+wall time, artifact bytes, and checks for at least 5% size reduction with no
+8-bit render-time regression beyond 1.25x plus one second.
+
+The 2026-07-30 local Linux/ARM64 reference used image
+`sha256:482ef9bb7be750e38409f3321e6b1cf1e5ae68b99acf111632914eebb9334a70`.
+For four seconds at 1080p25, 16-bit alpha rendered in 5.795 seconds to
+56,223,627 bytes. 8-bit alpha rendered in 4.868 seconds to 52,630,041 bytes:
+6.39% smaller with a 0.840 render-time ratio.
 
 Every delivered overlay and finished video also carries the same versioned,
 machine-readable timing contract in its MOV/MP4 container metadata. The
@@ -175,6 +195,7 @@ The render JSON fields are:
 | `spo2` | No | `{ "format": "oxiwear-spo2-csv", "telemetry": "..." }`; CSV is limited to 10 MiB |
 | `timer` | No | `{ "startAt": "...", "endAt": "..." }`, within the requested section |
 | `watermark` | No | `{ "contentBase64": "..." }`, a valid PNG up to 2 MiB and 1024×1024 pixels |
+| `transparentAlphaBits` | No | Without `sourceVideo`: `8` or `16`; defaults to `16` |
 | `sourceVideo` | No | `{ "fileId": "...", "recordingStartAt": "...", "timeZone": "Europe/Warsaw" }`; the shared-clock confirmed or manual-sync derived start is an ISO-8601 instant and the video zone must be IANA; optional client `name` and `mimeType` are ignored |
 | `outputFormat` | No | With `sourceVideo`: `h264-mp4` or `prores-422-mov` |
 | `fitMode` | No | With `sourceVideo`: `letterbox`, `pillarbox`, or `crop` |

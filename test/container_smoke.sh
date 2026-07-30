@@ -45,8 +45,34 @@ case "$image2pipe_muxer_help" in
     exit 1
     ;;
 esac
-docker run --rm --entrypoint ffmpeg "$image" -hide_banner -h encoder=prores_ks 2>&1 | \
+if ! prores_encoder_help="$(docker run --rm --entrypoint ffmpeg "$image" \
+  -hide_banner -h encoder=prores_ks 2>&1)"; then
+  echo "could not inspect the container ProRes encoder" >&2
+  exit 1
+fi
+printf '%s' "$prores_encoder_help" | \
   grep -q 'Supported pixel formats:.*yuva444p10le'
+printf '%s' "$prores_encoder_help" | \
+  grep -q 'alpha_bits.*from 0 to 16'
+for alpha_bits in 8 16; do
+  docker run --rm --entrypoint sh "$image" -ceu '
+    output="$(mktemp --suffix=.mov)"
+    trap "rm -f \"$output\"" EXIT
+    dd if=/dev/zero bs=9216 count=2 2>/dev/null |
+    ffmpeg -hide_banner -nostdin -loglevel error \
+      -f rawvideo -pixel_format rgba -video_size 64x36 -framerate 25 \
+      -i pipe:0 \
+      -frames:v 2 -an -c:v prores_ks -profile:v 4 \
+      -pix_fmt yuva444p10le -alpha_bits "$1" -y "$output"
+    probe="$(ffprobe -v error -select_streams v:0 \
+      -show_entries stream=codec_name,profile,codec_tag_string,pix_fmt \
+      -of default=noprint_wrappers=1 "$output")"
+    printf "%s\n" "$probe" | grep -q "^codec_name=prores$"
+    printf "%s\n" "$probe" | grep -q "^profile=4444$"
+    printf "%s\n" "$probe" | grep -q "^codec_tag_string=ap4h$"
+    printf "%s\n" "$probe" | grep -q "^pix_fmt=yuva444p12le$"
+  ' sh "$alpha_bits"
+done
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -h encoder=libx264 2>&1 | \
   grep -q 'libx264'
 docker run --rm --entrypoint ffmpeg "$image" -hide_banner -filters 2>&1 | grep -q ' overlay '

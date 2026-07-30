@@ -18,7 +18,8 @@
       (wizard/set-route-draft
        :transparent-overlay
        {:sectionStartAt "2026-07-17T09:00:00.000Z"
-        :sectionEndAt "2026-07-17T09:00:02.000Z"})
+        :sectionEndAt "2026-07-17T09:00:02.000Z"
+        :transparentAlphaBits 8})
       (wizard/set-overlay-draft
        :timer
        {:startAt "2026-07-17T09:00:00.400Z"
@@ -51,7 +52,8 @@
             :futureTraceOpacityPercent 25}
            (:sharedInput envelope)))
     (is (= {:sectionStartAt "2026-07-17T09:00:00.000Z"
-            :sectionEndAt "2026-07-17T09:00:02.000Z"}
+            :sectionEndAt "2026-07-17T09:00:02.000Z"
+            :transparentAlphaBits 8}
            (get-in envelope [:routeDrafts :transparent-overlay])))
     (is (= {:timer {:startAt "2026-07-17T09:00:00.400Z"
                     :endAt "2026-07-17T09:00:01.600Z"}
@@ -66,6 +68,7 @@
             :synchronizationMode "shared-clock"
             :sectionStartAt "2026-07-17T09:00:00.000Z"
             :sectionEndAt "2026-07-17T09:00:02.000Z"
+            :transparentAlphaBits 8
             :timer {:startAt "2026-07-17T09:00:00.400Z"
                     :endAt "2026-07-17T09:00:01.600Z"}}
            (:renderRequest envelope)))

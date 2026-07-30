@@ -956,31 +956,33 @@
 (defn- wizard-review-browser-outcome [page window-size]
   (let [request (-> (fixture/render-request)
                     (assoc :synchronizationMode "shared-clock"
+                           :transparentAlphaBits 16
                            :timer {:startAt "2026-07-17T09:00:00.400Z"
                                    :endAt "2026-07-17T09:00:01.600Z"})
                     (dissoc :telemetrySyncAt :cameraSyncAt))
-        finished-request (assoc request
-                                :sourceVideo
-                                {:fileId "drive-source"
-                                 :recordingStartAt
-                                 "2026-07-17T09:00:00.000Z"
-                                 :timeZone "Europe/Warsaw"}
-                                :outputFormat "prores-422-mov"
-                                :fitMode "crop"
-                                :audioMode "source-only")
+        finished-request (-> request
+                             (dissoc :transparentAlphaBits)
+                             (assoc :sourceVideo
+                                    {:fileId "drive-source"
+                                     :recordingStartAt
+                                     "2026-07-17T09:00:00.000Z"
+                                     :timeZone "Europe/Warsaw"}
+                                    :outputFormat "prores-422-mov"
+                                    :fitMode "crop"
+                                    :audioMode "source-only"))
         scenario
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
-         "const workflow=document.getElementById('compose-workflow'),raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),navigation=document.getElementById('wizard-navigation'),next=document.getElementById('wizard-next'),review=document.getElementById('review-step'),reviewSections=document.getElementById('review-sections'),timer=document.getElementById('timer-enabled'),timerStart=document.getElementById('timer-start-at'),timerEnd=document.getElementById('timer-end-at'),input=node=>node.dispatchEvent(new Event('input',{bubbles:true})),current=()=>workflow.dataset.currentStep,navigationSnapshot=()=>({insideCard:navigation.parentElement.classList.contains('card'),afterContent:navigation.parentElement.lastElementChild===navigation,insideOutputSettings:document.getElementById('output-settings-step').contains(navigation),hasCardClass:navigation.classList.contains('card'),count:document.querySelectorAll('#wizard-navigation').length}),reviewSnapshot=()=>({current:current(),steps:[...reviewSections.querySelectorAll('[data-review-step]')].map(section=>section.dataset.reviewStep),titles:[...reviewSections.querySelectorAll('h3')].map(node=>node.textContent),summaries:[...reviewSections.querySelectorAll('p')].map(node=>node.textContent),editSteps:[...reviewSections.querySelectorAll('[data-edit-step]')].map(button=>button.dataset.editStep),nextHidden:next.hidden,actionsInside:review.contains(document.getElementById('preview-button'))&&review.contains(document.getElementById('submit-button')),navigationInsideReview:review.contains(navigation),navigationInsideCard:navigation.parentElement.classList.contains('card'),navigationAfterContent:navigation.parentElement.lastElementChild===navigation,navigationHasCardClass:navigation.classList.contains('card'),navigationCount:document.querySelectorAll('#wizard-navigation').length,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth});"
+         "const workflow=document.getElementById('compose-workflow'),raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),navigation=document.getElementById('wizard-navigation'),next=document.getElementById('wizard-next'),review=document.getElementById('review-step'),reviewSections=document.getElementById('review-sections'),timer=document.getElementById('timer-enabled'),timerStart=document.getElementById('timer-start-at'),timerEnd=document.getElementById('timer-end-at'),alphaBits=document.getElementById('transparent-alpha-bits'),alphaChoice=document.getElementById('transparent-alpha-choice'),input=node=>node.dispatchEvent(new Event('input',{bubbles:true})),current=()=>workflow.dataset.currentStep,navigationSnapshot=()=>({insideCard:navigation.parentElement.classList.contains('card'),afterContent:navigation.parentElement.lastElementChild===navigation,insideOutputSettings:document.getElementById('output-settings-step').contains(navigation),hasCardClass:navigation.classList.contains('card'),count:document.querySelectorAll('#wizard-navigation').length}),reviewSnapshot=()=>({current:current(),steps:[...reviewSections.querySelectorAll('[data-review-step]')].map(section=>section.dataset.reviewStep),titles:[...reviewSections.querySelectorAll('h3')].map(node=>node.textContent),summaries:[...reviewSections.querySelectorAll('p')].map(node=>node.textContent),editSteps:[...reviewSections.querySelectorAll('[data-edit-step]')].map(button=>button.dataset.editStep),nextHidden:next.hidden,actionsInside:review.contains(document.getElementById('preview-button'))&&review.contains(document.getElementById('submit-button')),navigationInsideReview:review.contains(navigation),navigationInsideCard:navigation.parentElement.classList.contains('card'),navigationAfterContent:navigation.parentElement.lastElementChild===navigation,navigationHasCardClass:navigation.classList.contains('card'),navigationCount:document.querySelectorAll('#wizard-navigation').length,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth});"
          "raw.value=JSON.stringify(" (json/write-str request) ");apply.click();"
          "for(let count=0;count<7&&current()!=='review';count++)next.click();"
          "const initialReview=reviewSnapshot(),timerEdit=[...reviewSections.querySelectorAll('[data-edit-step]')].find(button=>button.dataset.editStep==='timer-overlay');timerEdit.click();const edited={current:current(),start:timerStart.value,end:timerEnd.value},previewResult=document.getElementById('preview-result');previewResult.dataset.previewOperation='preview-1';previewResult.className='preview-gallery';"
          "timer.click();const deselected={current:current(),requestTimer:JSON.parse(document.getElementById('render-request').value).timer||null,previewClass:previewResult.className};"
-         "const optionalEdit=[...reviewSections.querySelectorAll('[data-edit-step]')].find(button=>button.dataset.editStep==='optional-overlays');optionalEdit.click();timer.click();next.click();const restored={current:current(),start:timerStart.value,end:timerEnd.value};next.click();const finishLabel=next.textContent,outputSettingsNavigation=navigationSnapshot();next.click();const restoredReview=reviewSnapshot();"
-         "const transparent={summaryHidden:document.getElementById('no-source-output-summary').hidden,sourceControlsHidden:document.getElementById('source-output-controls').hidden,requestOutputFormat:JSON.parse(document.getElementById('render-request').value).outputFormat||null};"
-         "raw.value=JSON.stringify(" (json/write-str finished-request) ");apply.click();for(let count=0;count<12&&current()!=='review';count++)next.click();const finishedReview=reviewSnapshot(),finishedGenerated=JSON.parse(document.getElementById('render-request').value),finished={review:finishedReview,summaryHidden:document.getElementById('no-source-output-summary').hidden,sourceControlsHidden:document.getElementById('source-output-controls').hidden,request:{outputFormat:finishedGenerated.outputFormat,fitMode:finishedGenerated.fitMode,audioMode:finishedGenerated.audioMode}};"
-         "outcome={viewportWidth:innerWidth,initialReview,edited,deselected,restored,finishLabel,outputSettingsNavigation,restoredReview,transparent,finished,advancedOpen:document.querySelector('.advanced-output-settings').open};"
+         "const optionalEdit=[...reviewSections.querySelectorAll('[data-edit-step]')].find(button=>button.dataset.editStep==='optional-overlays');optionalEdit.click();timer.click();next.click();const restored={current:current(),start:timerStart.value,end:timerEnd.value};next.click();const finishLabel=next.textContent,outputSettingsNavigation=navigationSnapshot();alphaBits.value='8';input(alphaBits);const selectedEight=JSON.parse(document.getElementById('render-request').value).transparentAlphaBits;next.click();const restoredReview=reviewSnapshot();"
+         "const transparent={summaryHidden:document.getElementById('no-source-output-summary').hidden,sourceControlsHidden:document.getElementById('source-output-controls').hidden,alphaChoiceHidden:alphaChoice.hidden,alphaBits:JSON.parse(document.getElementById('render-request').value).transparentAlphaBits,requestOutputFormat:JSON.parse(document.getElementById('render-request').value).outputFormat||null};"
+         "raw.value=JSON.stringify(" (json/write-str finished-request) ");apply.click();for(let count=0;count<12&&current()!=='review';count++)next.click();const finishedReview=reviewSnapshot(),finishedGenerated=JSON.parse(document.getElementById('render-request').value),finished={review:finishedReview,summaryHidden:document.getElementById('no-source-output-summary').hidden,sourceControlsHidden:document.getElementById('source-output-controls').hidden,alphaChoiceHidden:alphaChoice.hidden,alphaBits:finishedGenerated.transparentAlphaBits||null,request:{outputFormat:finishedGenerated.outputFormat,fitMode:finishedGenerated.fitMode,audioMode:finishedGenerated.audioMode}};"
+         "outcome={viewportWidth:innerWidth,initialReview,edited,deselected,restored,finishLabel,outputSettingsNavigation,selectedEight,restoredReview,transparent,finished,advancedOpen:document.querySelector('.advanced-output-settings').open};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
          "</script>")
@@ -995,16 +997,17 @@
 
 (defn- project-json-browser-outcome [page]
   (let [request (assoc (fixture/render-request)
-                       :displayTimeZone "Europe/Warsaw")
+                       :displayTimeZone "Europe/Warsaw"
+                       :transparentAlphaBits 8)
         scenario
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "(async()=>{let outcome;try{"
-         "const workflow=document.getElementById('compose-workflow'),raw=document.getElementById('raw-json'),applyRaw=document.getElementById('apply-json'),project=document.getElementById('project-json'),applyProject=document.getElementById('apply-project-json'),copyProject=document.getElementById('copy-project-json'),projectStatus=document.getElementById('project-json-status'),hidden=document.getElementById('render-request');"
+         "const workflow=document.getElementById('compose-workflow'),raw=document.getElementById('raw-json'),applyRaw=document.getElementById('apply-json'),project=document.getElementById('project-json'),applyProject=document.getElementById('apply-project-json'),copyProject=document.getElementById('copy-project-json'),projectStatus=document.getElementById('project-json-status'),hidden=document.getElementById('render-request'),alphaBits=document.getElementById('transparent-alpha-bits');"
          "raw.value=JSON.stringify(" (json/write-str request) ");applyRaw.click();copyProject.click();await new Promise(resolve=>setTimeout(resolve,0));const exported=JSON.parse(project.value);"
-         "const edited={...exported,renderRequest:null,currentStepId:'activity-data',visitedStepIds:['outcome','activity-data'],decisions:{synchronizationMode:'shared-clock',optionalOverlays:[]},sharedInput:{...exported.sharedInput,telemetry:'timestamp,heart_rate\\n2026-07-17T09:00:00Z,111'},routeDrafts:{...exported.routeDrafts,'transparent-overlay':{sectionStartAt:'2026-07-17T09:00:00.000Z',sectionEndAt:'2026-07-17T09:00:02.000Z'}}};project.value=JSON.stringify(edited);applyProject.click();await new Promise(resolve=>setTimeout(resolve,0));const applied={route:workflow.dataset.activeRoute,currentStep:workflow.dataset.currentStep,status:projectStatus.textContent,telemetry:document.getElementById('telemetry').value,renderRequest:hidden.value,project:JSON.parse(project.value)};"
+         "const edited={...exported,renderRequest:null,currentStepId:'activity-data',visitedStepIds:['outcome','activity-data'],decisions:{synchronizationMode:'shared-clock',optionalOverlays:[]},sharedInput:{...exported.sharedInput,telemetry:'timestamp,heart_rate\\n2026-07-17T09:00:00Z,111'},routeDrafts:{...exported.routeDrafts,'transparent-overlay':{sectionStartAt:'2026-07-17T09:00:00.000Z',sectionEndAt:'2026-07-17T09:00:02.000Z',transparentAlphaBits:8}}};project.value=JSON.stringify(edited);applyProject.click();await new Promise(resolve=>setTimeout(resolve,0));const applied={route:workflow.dataset.activeRoute,currentStep:workflow.dataset.currentStep,status:projectStatus.textContent,telemetry:document.getElementById('telemetry').value,alphaBits:alphaBits.value,renderRequest:hidden.value,project:JSON.parse(project.value)};"
          "const preservedBefore={route:workflow.dataset.activeRoute,currentStep:workflow.dataset.currentStep,telemetry:document.getElementById('telemetry').value,renderRequest:hidden.value};project.value=JSON.stringify({...edited,extra:true});applyProject.click();await new Promise(resolve=>setTimeout(resolve,0));const invalid={route:workflow.dataset.activeRoute,currentStep:workflow.dataset.currentStep,status:projectStatus.textContent,telemetry:document.getElementById('telemetry').value,renderRequest:hidden.value,project:project.value,preserved:JSON.stringify(preservedBefore)===JSON.stringify({route:workflow.dataset.activeRoute,currentStep:workflow.dataset.currentStep,telemetry:document.getElementById('telemetry').value,renderRequest:hidden.value})};"
-         "outcome={exported:{schemaVersion:exported.schemaVersion,activeRoute:exported.activeRoute,hasRenderRequest:!!exported.renderRequest,nestedTelemetry:exported.renderRequest?.telemetry||null},applied,invalid};"
+         "outcome={exported:{schemaVersion:exported.schemaVersion,activeRoute:exported.activeRoute,hasRenderRequest:!!exported.renderRequest,nestedTelemetry:exported.renderRequest?.telemetry||null,alphaBits:exported.renderRequest?.transparentAlphaBits||null},applied,invalid};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
          "</script>")
         html (-> page
@@ -1070,7 +1073,7 @@
          "const initial=snapshot();"
          "raw.value=JSON.stringify(manualRequest);apply.click();next.click();next.click();next.click();const manualChoice=snapshot();next.click();const manualStep=snapshot();"
          "raw.value=JSON.stringify(sharedRequest);apply.click();next.click();next.click();next.click();const sharedChoice=snapshot();next.click();const sharedStep=snapshot();"
-         "const missing=validate(without(manualRequest,'synchronizationMode')),unknown=validate({...manualRequest,synchronizationMode:'automatic'}),validation={manualMissingTelemetry:validate(without(manualRequest,'telemetrySyncAt')),manualMissingCamera:validate(without(manualRequest,'cameraSyncAt')),manualMissingBoth:validate(without(manualRequest,'telemetrySyncAt','cameraSyncAt')),manualInvalidTelemetry:validate({...manualRequest,telemetrySyncAt:'invalid'}),manualInvalidCamera:validate({...manualRequest,cameraSyncAt:'invalid'}),manualBlankTelemetry:validate({...manualRequest,telemetrySyncAt:''}),manualNullCamera:validate({...manualRequest,cameraSyncAt:null}),sharedTelemetry:validate({...sharedRequest,telemetrySyncAt:manualRequest.telemetrySyncAt}),sharedCamera:validate({...sharedRequest,cameraSyncAt:manualRequest.cameraSyncAt}),sharedBoth:validate({...sharedRequest,telemetrySyncAt:manualRequest.telemetrySyncAt,cameraSyncAt:manualRequest.cameraSyncAt})};"
+         "const missing=validate(without(manualRequest,'synchronizationMode')),unknown=validate({...manualRequest,synchronizationMode:'automatic'}),validation={manualMissingTelemetry:validate(without(manualRequest,'telemetrySyncAt')),manualMissingCamera:validate(without(manualRequest,'cameraSyncAt')),manualMissingBoth:validate(without(manualRequest,'telemetrySyncAt','cameraSyncAt')),manualInvalidTelemetry:validate({...manualRequest,telemetrySyncAt:'invalid'}),manualInvalidCamera:validate({...manualRequest,cameraSyncAt:'invalid'}),manualBlankTelemetry:validate({...manualRequest,telemetrySyncAt:''}),manualNullCamera:validate({...manualRequest,cameraSyncAt:null}),sharedTelemetry:validate({...sharedRequest,telemetrySyncAt:manualRequest.telemetrySyncAt}),sharedCamera:validate({...sharedRequest,cameraSyncAt:manualRequest.cameraSyncAt}),sharedBoth:validate({...sharedRequest,telemetrySyncAt:manualRequest.telemetrySyncAt,cameraSyncAt:manualRequest.cameraSyncAt}),transparentAlphaWithSource:validate({...sharedRequest,transparentAlphaBits:8})};"
          "const labels=[...document.querySelectorAll('input[name=\"synchronization-mode\"]')].map(input=>input.labels[0].textContent.trim());"
          "outcome={initial,manualChoice,manualStep,sharedChoice,sharedStep,missing,unknown,validation,labels};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}"
@@ -2522,6 +2525,8 @@
       (is (= 1 (get-in outcome [:initialReview :navigationCount])))
       (is (some #(str/includes? % "ProRes 4444 MOV")
                 (get-in outcome [:initialReview :summaries])))
+      (is (some #(str/includes? % "16-bit alpha")
+                (get-in outcome [:initialReview :summaries])))
       (is (some #{(str "Timer start: 2026-07-17T11:00:00.4 · "
                        "Timer end: 2026-07-17T11:00:01.6 · "
                        "IANA timezone: Europe/Warsaw")}
@@ -2535,6 +2540,7 @@
              (get-in outcome [:deselected :previewClass])))
       (is (= (:edited outcome) (:restored outcome)))
       (is (= "Finish" (:finishLabel outcome)))
+      (is (= 8 (:selectedEight outcome)))
       (is (= {:insideCard true
               :afterContent true
               :insideOutputSettings true
@@ -2543,9 +2549,13 @@
              (:outputSettingsNavigation outcome)))
       (is (= (get-in outcome [:initialReview :steps])
              (get-in outcome [:restoredReview :steps])))
+      (is (some #(str/includes? % "8-bit alpha")
+                (get-in outcome [:restoredReview :summaries])))
       (is (false? (:advancedOpen outcome)))
       (is (= {:summaryHidden false
               :sourceControlsHidden true
+              :alphaChoiceHidden false
+              :alphaBits 8
               :requestOutputFormat nil}
              (:transparent outcome)))
       (is (= ["outcome" "source-video" "activity-data"
@@ -2559,6 +2569,8 @@
             choice))
       (is (= {:summaryHidden true
               :sourceControlsHidden false
+              :alphaChoiceHidden true
+              :alphaBits nil
               :request {:outputFormat "prores-422-mov"
                         :fitMode "crop"
                         :audioMode "source-only"}}
@@ -3731,7 +3743,11 @@
              [:sharedBoth "telemetrySyncAt" "omitted"]]]
       (let [message (get-in outcome [:validation case-name])]
         (is (str/includes? message field) case-name)
-        (is (str/includes? message guidance) case-name)))))
+        (is (str/includes? message guidance) case-name)))
+    (let [message (get-in outcome
+                          [:validation :transparentAlphaWithSource])]
+      (is (str/includes? message "transparentAlphaBits"))
+      (is (str/includes? message "only valid without sourceVideo")))))
 
 (deftest manual-video-sync-transitions-from-elapsed-to-derived-recording-time
   (let [page (ui/page {:user {:email "member@example.com" :role :member}
@@ -3897,6 +3913,7 @@
     (is (= 1 (get-in outcome [:exported :schemaVersion])))
     (is (= "transparent-overlay" (get-in outcome [:exported :activeRoute])))
     (is (true? (get-in outcome [:exported :hasRenderRequest])))
+    (is (= 8 (get-in outcome [:exported :alphaBits])))
     (is (= "timestamp,heart_rate\n2026-07-17T10:00:00Z,120\n2026-07-17T10:00:01Z,124\n2026-07-17T10:00:02Z,128\n"
            (get-in outcome [:exported :nestedTelemetry])))
     (is (= "transparent-overlay" (get-in outcome [:applied :route])))
@@ -3905,6 +3922,7 @@
                        "Project JSON applied"))
     (is (= "timestamp,heart_rate\n2026-07-17T09:00:00Z,111"
            (get-in outcome [:applied :telemetry])))
+    (is (= "8" (get-in outcome [:applied :alphaBits])))
     (is (= "{}" (get-in outcome [:applied :renderRequest])))
     (is (= nil (get-in outcome [:applied :project :renderRequest])))
     (is (= "activity-data"

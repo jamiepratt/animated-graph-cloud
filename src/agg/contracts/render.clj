@@ -287,6 +287,20 @@
   (assoc request :futureTraceOpacityPercent
          (future-trace-opacity-percent request)))
 
+(defn- transparent-alpha-bits [request source-video]
+  (let [present? (contains? request :transparentAlphaBits)
+        value (if present? (:transparentAlphaBits request) 16)]
+    (when present?
+      (require! (nil? source-video)
+                "transparentAlphaBits is only valid for transparent overlays"
+                {:type ::transparent-alpha-requires-overlay
+                 :field "transparentAlphaBits"})
+      (require! (contains? #{8 16} value)
+                "transparentAlphaBits must be 8 or 16"
+                {:type ::invalid-transparent-alpha-bits
+                 :field "transparentAlphaBits"}))
+    (when-not source-video value)))
+
 (defn- source-options [source-video output-format fit-mode audio-mode]
   (when source-video
     (require! (and (map? source-video)
@@ -386,6 +400,8 @@
                                (or outputFormat format)
                                (or fitMode fit)
                                (or audioMode audio))
+        transparent-alpha-bits
+        (transparent-alpha-bits request sourceVideo)
         source-clock (source-video-clock sourceVideo)]
     (require! (#{"polar-csv" "garmin-fit" "oxiwear-hr-csv"}
                telemetryFormat)
@@ -513,6 +529,8 @@
                      :synchronization-mode synchronization-mode
                      :future-trace-opacity-percent
                      future-trace-opacity-percent
+                     :transparent-alpha-bits
+                     transparent-alpha-bits
                      :section-start-at section-start
                      :display-time-zone display-time-zone
                      :telemetry (timeline/section samples

@@ -1139,6 +1139,11 @@ components:
           maximum: 100
           default: 25
           description: Opacity percentage for the not-yet-reached heart-rate trace. Zero hides it; 100 makes it fully opaque.
+        transparentAlphaBits:
+          type: integer
+          enum: [8, 16]
+          default: 16
+          description: ProRes 4444 alpha-plane precision. Only valid without sourceVideo. Omission preserves the existing 16-bit-alpha output.
         telemetrySyncAt:
           allOf: [{$ref: "#/components/schemas/Instant"}]
           description: Activity-data timestamp at the synchronization moment.

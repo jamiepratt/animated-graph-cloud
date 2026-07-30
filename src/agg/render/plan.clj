@@ -7,8 +7,7 @@
   {:encoder "prores_ks"
    :profile 4
    :encoder-input-pixel-format "yuva444p10le"
-   :decoded-pixel-format "yuva444p12le"
-   :alpha-bits 16})
+   :decoded-pixel-format "yuva444p12le"})
 
 (def aac-lc-contract
   {:encoder "aac"
