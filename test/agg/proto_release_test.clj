@@ -163,6 +163,13 @@
       (is (str/includes?
            proto-infra
            "resource \"google_service_account\" \"derivative_worker\"")))
+    (testing "timed-out work is reconciled through the proto audience"
+      (is (re-find
+           #"(?s)resource \"google_cloud_scheduler_job\" \"derivative_reconcile\".*?name\s+=\s+\"agg-derivative-reconcile\".*?schedule\s+=\s+\"\* \* \* \* \*\".*?derivative-preparations/reconcile.*?X-CloudScheduler.*?audience\s+=\s+var\.proto_service_url"
+           proto-infra))
+      (is (re-find
+           #"(?s)resource \"google_service_account_iam_member\" \"deployer_uses_scheduler\".*?roles/iam\.serviceAccountUser"
+           proto-infra)))
     (testing "the worker is one bounded, non-retrying task"
       (is (str/includes?
            proto-infra

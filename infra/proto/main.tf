@@ -101,6 +101,10 @@ data "google_service_account" "api" {
   account_id = local.api_service_account
 }
 
+data "google_service_account" "scheduler" {
+  account_id = "agg-scheduler@${local.project_id}.iam.gserviceaccount.com"
+}
+
 resource "google_service_account" "deployer" {
   project      = local.project_id
   account_id   = local.deployer_account_id
@@ -172,6 +176,43 @@ resource "google_cloud_tasks_queue" "derivative_preview" {
   }
 
   depends_on = [google_project_iam_member.deployer]
+}
+
+resource "google_cloud_scheduler_job" "derivative_reconcile" {
+  project          = local.project_id
+  region           = local.region
+  name             = "agg-derivative-reconcile"
+  description      = "Reconciles timed-out and cancelled derivative previews"
+  schedule         = "* * * * *"
+  time_zone        = "Etc/UTC"
+  attempt_deadline = "60s"
+
+  retry_config {
+    retry_count          = 3
+    max_retry_duration   = "300s"
+    min_backoff_duration = "5s"
+    max_backoff_duration = "60s"
+    max_doublings        = 3
+  }
+
+  http_target {
+    uri         = "${var.proto_service_url}/internal/v1/derivative-preparations/reconcile"
+    http_method = "POST"
+
+    headers = {
+      X-CloudScheduler = "true"
+    }
+
+    oidc_token {
+      service_account_email = data.google_service_account.scheduler.email
+      audience              = var.proto_service_url
+    }
+  }
+
+  depends_on = [
+    google_project_iam_member.deployer,
+    google_service_account_iam_member.deployer_uses_scheduler,
+  ]
 }
 
 resource "google_cloud_run_v2_job" "derivative_preview" {
@@ -294,6 +335,12 @@ resource "google_service_account_iam_member" "deployer_uses_api" {
 
 resource "google_service_account_iam_member" "deployer_uses_derivative_worker" {
   service_account_id = google_service_account.derivative_worker.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_service_account_iam_member" "deployer_uses_scheduler" {
+  service_account_id = data.google_service_account.scheduler.name
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${google_service_account.deployer.email}"
 }

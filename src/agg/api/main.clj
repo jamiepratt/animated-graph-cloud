@@ -1003,19 +1003,21 @@
       (respond-json! exchange 200 {:repairedJobs repaired-jobs
                                    :releasedLeases released-leases}))))
 
-(defn- verified-derivative-task?
-  [exchange
-   {:keys [derivative-tasks-service-account
-           derivative-task-token-verifier derivative-task-audience]
+(defn- derivative-verification-dependencies
+  [{:keys [derivative-task-token-verifier derivative-task-audience]
     :as dependencies}]
+  (cond-> dependencies
+    derivative-task-token-verifier
+    (assoc :task-token-verifier derivative-task-token-verifier)
+
+    derivative-task-audience
+    (assoc :task-audience derivative-task-audience)))
+
+(defn- verified-derivative-task?
+  [exchange {:keys [derivative-tasks-service-account] :as dependencies}]
   (verified-internal-caller?
    exchange
-   (cond-> dependencies
-     derivative-task-token-verifier
-     (assoc :task-token-verifier derivative-task-token-verifier)
-
-     derivative-task-audience
-     (assoc :task-audience derivative-task-audience))
+   (derivative-verification-dependencies dependencies)
    "X-CloudTasks-TaskName"
    derivative-tasks-service-account))
 
@@ -1051,7 +1053,9 @@
   [exchange dependencies]
   (if-not
    (verified-internal-caller?
-    exchange dependencies "X-CloudScheduler"
+    exchange
+    (derivative-verification-dependencies dependencies)
+    "X-CloudScheduler"
     (:scheduler-service-account dependencies))
     (respond-json! exchange 401
                    {:error "authenticated_scheduler_required"})

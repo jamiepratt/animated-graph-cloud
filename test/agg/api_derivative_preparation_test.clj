@@ -676,10 +676,14 @@
         derivative-verifier
         (reify auth/TaskTokenVerifier
           (verify-task-token! [_ token]
-            (when (= "derivative-task-token" token)
+            (when-let [email
+                       ({"derivative-task-token"
+                         "derivative-tasks@example.com"
+                         "scheduler-token" "scheduler@example.com"}
+                        token)]
               {:issuer "https://accounts.google.com"
                :audience "https://proto.example.com"
-               :email "derivative-tasks@example.com"
+               :email email
                :email-verified? true})))
         port (test-http/available-port)
         server
