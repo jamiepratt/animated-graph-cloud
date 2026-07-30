@@ -42,7 +42,8 @@
        "w='if(gte(iw,ih),min(iw,1920),min(iw,1080))':"
        "h='if(gte(iw,ih),min(ih,1080),min(ih,1920))':"
        "force_original_aspect_ratio=decrease:"
-       "force_divisible_by=2:reset_sar=1,"
+       "force_divisible_by=2,"
+       "setsar=1,"
        "fps=25"))
 
 (def ^:private audio-filter

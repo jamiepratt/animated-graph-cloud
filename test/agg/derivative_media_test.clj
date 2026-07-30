@@ -111,7 +111,11 @@
       (doseq [argument ["libx264" "high" "4.0" "yuv420p" "25"
                         "fast" "23" "4000000" "8000000" "50"
                         "0" "+faststart"]]
-        (is (some #{argument} command) argument)))
+        (is (some #{argument} command) argument))
+      (let [filter-argument
+            (nth command (inc (.indexOf command "-vf")))]
+        (is (str/includes? filter-argument ",setsar=1,"))
+        (is (not (str/includes? filter-argument "reset_sar=")))))
     (testing "audio is deterministic AAC-LC stereo"
       (doseq [argument ["aac" "aac_low" "48000" "2" "128000"]]
         (is (some #{argument} command) argument)))))
