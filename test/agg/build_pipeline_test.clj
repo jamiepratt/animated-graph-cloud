@@ -33,6 +33,12 @@
          (number? later-index)
          (< earlier-index later-index))))
 
+(defn- section [text start-marker end-marker]
+  (let [start (str/index-of text start-marker)
+        end (str/index-of text end-marker start)]
+    (when (and start end)
+      (subs text start end))))
+
 (deftest ci-runs-fast-affected-feedback-and-complete-production-coverage
   (is (str/includes? ci "name: Alpha Compose CI"))
   (is (str/includes? ci "clojure -M:test-changed"))
@@ -41,6 +47,13 @@
   (is (= (catalogue/shards) (matrix-shards ci)))
   (is (str/includes? ci "clojure -M:test-shard ${{ matrix.shard }}"))
   (is (str/includes? ci "needs: affected-tests")))
+
+(deftest ci-pins-browser-timezone-for-test-jobs
+  (doseq [job [(section ci "  affected-tests:" "  complete-tests:")
+               (section ci "  complete-tests:" "  candidate-image:")]]
+    (is (str/includes? job "    env:\n      TZ: Europe/Warsaw")))
+  (is (not (str/includes? (subs ci (str/index-of ci "  candidate-image:"))
+                          "TZ: Europe/Warsaw"))))
 
 (deftest ci-installs-ffmpeg-before-affected-selector
   (let [install (str "Install FFmpeg for affected-test fallback\n"

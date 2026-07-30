@@ -12,6 +12,8 @@ permissions:
 jobs:
   affected-tests:
     runs-on: ubuntu-latest
+    env:
+      TZ: Europe/Warsaw
     steps:
       - uses: actions/checkout@v7
         with:
@@ -39,6 +41,8 @@ jobs:
   complete-tests:
     needs: affected-tests
     runs-on: ubuntu-latest
+    env:
+      TZ: Europe/Warsaw
     strategy:
       fail-fast: false
       matrix:
