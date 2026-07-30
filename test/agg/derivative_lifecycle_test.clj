@@ -70,7 +70,9 @@
             :profileVersion "h264-aac-1080p25-v1"
             :assetId asset-id
             :expiresAt "2026-07-31T10:05:00Z"}
-           public))
+           (select-keys
+            public
+            [:id :state :attempt :profileVersion :assetId :expiresAt])))
     (is (not-any? #(str/includes? (pr-str public) %)
                   ["private-owner" "private-drive-id" "private.mov"
                    "private-token" "private-signature"
@@ -92,7 +94,11 @@
          requested {:type :complete
                     :outcome :cancelled
                     :now (Instant/parse "2026-07-30T10:00:03Z")})]
-    (is (= :cancelled (:state cancelled)))
+    (is (= {:state "cancelled"
+            :cancellationLagMs 0}
+           (select-keys
+            (lifecycle/public-resource cancelled)
+            [:state :cancellationLagMs])))
     (is (= cancelled
            (lifecycle/transition
             cancelled {:type :cancel
@@ -102,7 +108,11 @@
            (lifecycle/transition
             requested {:type :cancel
                        :now (Instant/parse "2026-07-30T10:00:04Z")})))
-    (is (= :cancelled (:state acknowledged)))))
+    (is (= {:state "cancelled"
+            :cancellationLagMs 1000}
+           (select-keys
+            (lifecycle/public-resource acknowledged)
+            [:state :cancellationLagMs])))))
 
 (deftest successful-publication-cannot-win-after-cancellation-was-requested
   (let [requested
@@ -160,7 +170,9 @@
             :profileVersion "h264-aac-1080p25-v1"
             :failureCode "derivative_encode_failed"
             :retryable true}
-           (lifecycle/public-resource failed)))
+           (select-keys
+            (lifecycle/public-resource failed)
+            [:id :state :attempt :profileVersion :failureCode :retryable])))
     (is (= {:state :queued :attempt 2}
            (select-keys retried [:state :attempt])))
     (is (empty? (select-keys retried
@@ -208,6 +220,12 @@
         (lifecycle/transition
          (running-job)
          {:type :expire :now (Instant/parse "2026-07-31T10:00:00Z")})
+        running-expiry-acknowledged
+        (lifecycle/transition
+         running-expired
+         {:type :complete
+          :outcome :cancelled
+          :now (Instant/parse "2026-07-31T10:00:02Z")})
         asset-expired
         (lifecycle/transition
          (succeeded-job)
@@ -216,13 +234,24 @@
            (:type (ex-data early-error))))
     (is (= :expired (:state queued-expired)))
     (is (= {:state :cancellation-requested
-            :terminal-cause :expired}
-           (select-keys running-expired [:state :terminal-cause])))
+            :terminal-cause :expired
+            :cancellation-requested-at
+            (Instant/parse "2026-07-31T10:00:00Z")}
+           (select-keys
+            running-expired
+            [:state :terminal-cause :cancellation-requested-at])))
+    (is (= {:state "expired"
+            :cancellationLagMs 2000}
+           (select-keys
+            (lifecycle/public-resource running-expiry-acknowledged)
+            [:state :cancellationLagMs])))
     (is (= {:id job-id
             :state "expired"
             :attempt 1
             :profileVersion "h264-aac-1080p25-v1"}
-           (lifecycle/public-resource asset-expired)))
+           (select-keys
+            (lifecycle/public-resource asset-expired)
+            [:id :state :attempt :profileVersion])))
     (is (empty? (select-keys asset-expired
                              [:asset-id :asset-expires-at :object-key])))))
 
@@ -250,6 +279,8 @@
             :profileVersion "h264-aac-1080p25-v1"
             :failureCode "membership_revoked"
             :retryable false}
-           (lifecycle/public-resource succeeded)))
+           (select-keys
+            (lifecycle/public-resource succeeded)
+            [:id :state :attempt :profileVersion :failureCode :retryable])))
     (is (empty? (select-keys succeeded
                              [:asset-id :asset-expires-at :object-key])))))

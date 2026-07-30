@@ -229,13 +229,30 @@
                             (get-in attempt [:asset :object-key]))))
           (is (= "cancellation-requested"
                  (:state (derivative/cancel-preparation! service job-id))))
+          (is (= now
+                 (-> (.get
+                      (.get
+                       (.document
+                        (.collection firestore "derivative-preparations")
+                        job-id)))
+                     (.getDate "cancellationRequestedAt")
+                     .toInstant)))
           (is (= [(str "executions/" job-id "/attempts/1")] @cancelled))
           (is (derivative/preparation-cancellation-requested?
                service job-id 1))
-          (is (= "cancelled"
-                 (:state
-                  (derivative/acknowledge-preparation-cancellation!
-                   service job-id 1))))
+          (let [acknowledged
+                (derivative/acknowledge-preparation-cancellation!
+                 service job-id 1)
+                duplicate
+                (derivative/acknowledge-preparation-cancellation!
+                 service job-id 1)]
+            (is (= {:state "cancelled"
+                    :cancellationLagMs 0}
+                   (select-keys
+                    acknowledged
+                    [:state :cancellationLagMs])))
+            (is (derivative/terminal-transition? acknowledged))
+            (is (false? (derivative/terminal-transition? duplicate))))
           (let [queued-id
                 (get-in
                  (derivative/submit-preparation!
@@ -496,8 +513,17 @@
           (derivative/dispatch-preparation! service job-id 2)
           (is (= "cancellation-requested"
                  (:state (derivative/cancel-preparation! service job-id))))
-          (is (= {:repairedJobs 1}
-                 (derivative/reconcile-preparations! service)))
+          (let [reconciliation
+                (derivative/reconcile-preparations! service)]
+            (is (= 1 (:repairedJobs reconciliation)))
+            (is (= [{:state "cancelled"
+                     :attempt 2
+                     :cancellationLagMs 0}]
+                   (mapv
+                    #(select-keys
+                      %
+                      [:state :attempt :cancellationLagMs])
+                    (:terminalJobs reconciliation)))))
           (is (= "cancelled"
                  (:state (derivative/get-preparation service job-id))))
           (is (= 250

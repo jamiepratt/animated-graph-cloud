@@ -457,11 +457,20 @@
                port :post (:cancelUrl body) {}
                {"Cookie" (str "__session=" cookie)
                 "X-CSRF-Token" csrf})
+              cancelled-again
+              (request!
+               port :post (:cancelUrl body) {}
+               {"Cookie" (str "__session=" cookie)
+                "X-CSRF-Token" csrf})
+              terminal-events
+              (filterv
+               #(= "derivative_preparation_terminal" (first %))
+               @events)
               cancel-event
-              (some
-               #(when (= "derivative_preparation_terminal" (first %)) %)
-               @events)]
+              (first terminal-events)]
           (is (= 200 (.statusCode cancelled)))
+          (is (= 200 (.statusCode cancelled-again)))
+          (is (= 1 (count terminal-events)))
           (is (= request-id
                  (.orElse
                   (.firstValue (.headers cancelled) "X-Request-Id") "")))
@@ -640,12 +649,19 @@
           (reconcile-preparations! [_]
             (swap! calls conj [:reconcile])
             {:repairedJobs 2
-             :expiredJobs
+             :terminalJobs
              [{:id "00000000-0000-0000-0000-000000000198"
                :state "expired"
                :attempt 1
                :profileVersion "h264-aac-1080p25-v1"
-               :requestId operation-request-id}]}))
+               :requestId operation-request-id
+               :cancellationLagMs 2000}
+              {:id "00000000-0000-0000-0000-000000000199"
+               :state "cancelled"
+               :attempt 2
+               :profileVersion "h264-aac-1080p25-v1"
+               :requestId operation-request-id
+               :cancellationLagMs 3000}]}))
         verifier
         (reify auth/TaskTokenVerifier
           (verify-task-token! [_ token]
@@ -706,10 +722,10 @@
               (some #(when (= "derivative_preparation_dispatched" (first %))
                        %)
                     @events)
-              expiry-event
-              (some #(when (= "derivative_preparation_expired" (first %))
-                       %)
-                    @events)
+              terminal-events
+              (filterv
+               #(= "derivative_preparation_terminal" (first %))
+               @events)
               reconciliation-event
               (some #(when (= "derivative_reconciliation_complete" (first %))
                        %)
@@ -723,16 +739,24 @@
                   (second dispatch-event)
                   [:operation :status :requestId :attempt :profileVersion])))
           (is (<= 0 (:queueAgeMs (second dispatch-event))))
-          (is (= {:operation "derivative_reconciliation"
-                  :status "expired"
-                  :reason "expired"
-                  :requestId operation-request-id
-                  :attempt 1
-                  :profileVersion "h264-aac-1080p25-v1"}
-                 (select-keys
-                  (second expiry-event)
-                  [:operation :status :reason :requestId :attempt
-                   :profileVersion])))
+          (is (= [{:operation "derivative_preparation"
+                   :status "expired"
+                   :reason "expired"
+                   :requestId operation-request-id
+                   :attempt 1
+                   :cancellationLagMs 2000}
+                  {:operation "derivative_preparation"
+                   :status "cancelled"
+                   :reason "cancelled"
+                   :requestId operation-request-id
+                   :attempt 2
+                   :cancellationLagMs 3000}]
+                 (mapv
+                  #(select-keys
+                    (second %)
+                    [:operation :status :reason :requestId :attempt
+                     :cancellationLagMs])
+                  terminal-events)))
           (is (= {:operation "derivative_reconciliation"
                   :status "succeeded"
                   :repairedJobs 2}

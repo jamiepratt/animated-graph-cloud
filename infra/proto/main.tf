@@ -446,6 +446,7 @@ resource "google_cloud_run_service_iam_member" "public_invoker" {
 
 resource "google_logging_metric" "derivative_preparation_latency_ms" {
   project         = local.project_id
+  depends_on      = [google_project_iam_member.deployer]
   name            = "alpha_compose_proto/derivative_preparation_latency_ms"
   description     = "Successful derivative preparation latency in milliseconds"
   filter          = "jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.status=\"succeeded\""
@@ -469,6 +470,7 @@ resource "google_logging_metric" "derivative_preparation_latency_ms" {
 
 resource "google_logging_metric" "derivative_cache_hits" {
   project     = local.project_id
+  depends_on  = [google_project_iam_member.deployer]
   name        = "alpha_compose_proto/derivative_cache_hits"
   description = "Eligible derivative preparation cache hits"
   filter      = "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"derivative_cache_hit\" AND jsonPayload.cacheOutcome=\"hit\""
@@ -482,6 +484,7 @@ resource "google_logging_metric" "derivative_cache_hits" {
 
 resource "google_logging_metric" "derivative_cache_misses" {
   project     = local.project_id
+  depends_on  = [google_project_iam_member.deployer]
   name        = "alpha_compose_proto/derivative_cache_misses"
   description = "Derivative preparation cache misses"
   filter      = "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"derivative_cache_miss\" AND jsonPayload.cacheOutcome=\"miss\""
@@ -495,6 +498,7 @@ resource "google_logging_metric" "derivative_cache_misses" {
 
 resource "google_logging_metric" "derivative_failures" {
   project     = local.project_id
+  depends_on  = [google_project_iam_member.deployer]
   name        = "alpha_compose_proto/derivative_failures"
   description = "Terminal derivative failures grouped by bounded reason"
   filter      = "jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.status=\"failed\""
@@ -518,6 +522,7 @@ resource "google_logging_metric" "derivative_failures" {
 
 resource "google_logging_metric" "derivative_timeouts" {
   project     = local.project_id
+  depends_on  = [google_project_iam_member.deployer]
   name        = "alpha_compose_proto/derivative_timeouts"
   description = "Derivative attempts that exceeded a bounded deadline"
   filter      = "jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.reason=\"derivative_timeout\""
@@ -531,6 +536,7 @@ resource "google_logging_metric" "derivative_timeouts" {
 
 resource "google_logging_metric" "derivative_drive_bytes" {
   project         = local.project_id
+  depends_on      = [google_project_iam_member.deployer]
   name            = "alpha_compose_proto/derivative_drive_bytes"
   description     = "Drive bytes transferred through the derivative range proxy"
   filter          = "resource.type=\"cloud_run_job\" AND jsonPayload.event=\"derivative_encode_exited\" AND jsonPayload.status=\"succeeded\""
@@ -554,6 +560,7 @@ resource "google_logging_metric" "derivative_drive_bytes" {
 
 resource "google_logging_metric" "derivative_output_bytes" {
   project         = local.project_id
+  depends_on      = [google_project_iam_member.deployer]
   name            = "alpha_compose_proto/derivative_output_bytes"
   description     = "Verified derivative bytes published to private storage"
   filter          = "resource.type=\"cloud_run_job\" AND jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.status=\"succeeded\""
@@ -577,9 +584,10 @@ resource "google_logging_metric" "derivative_output_bytes" {
 
 resource "google_logging_metric" "derivative_cancellation_lag_ms" {
   project         = local.project_id
+  depends_on      = [google_project_iam_member.deployer]
   name            = "alpha_compose_proto/derivative_cancellation_lag_ms"
   description     = "Lag between cancellation request and terminal acknowledgement"
-  filter          = "jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.status=\"cancelled\""
+  filter          = "jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.status=(\"cancelled\" OR \"expired\")"
   value_extractor = "EXTRACT(jsonPayload.cancellationLagMs)"
 
   metric_descriptor {
@@ -600,6 +608,7 @@ resource "google_logging_metric" "derivative_cancellation_lag_ms" {
 
 resource "google_logging_metric" "derivative_queue_age_ms" {
   project         = local.project_id
+  depends_on      = [google_project_iam_member.deployer]
   name            = "alpha_compose_proto/derivative_queue_age_ms"
   description     = "Queue age when a derivative preparation dispatches"
   filter          = "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"derivative_preparation_dispatched\""
@@ -623,6 +632,7 @@ resource "google_logging_metric" "derivative_queue_age_ms" {
 
 resource "google_logging_metric" "derivative_reserved_minor_units" {
   project         = local.project_id
+  depends_on      = [google_project_iam_member.deployer]
   name            = "alpha_compose_proto/derivative_reserved_minor_units"
   description     = "Minor PLN units reserved by admitted derivative attempts"
   filter          = "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"derivative_preparation_submitted\" AND jsonPayload.reservedMinorUnits>0"
@@ -646,6 +656,7 @@ resource "google_logging_metric" "derivative_reserved_minor_units" {
 
 resource "google_logging_metric" "derivative_reservation_rejections" {
   project     = local.project_id
+  depends_on  = [google_project_iam_member.deployer]
   name        = "alpha_compose_proto/derivative_reservation_rejections"
   description = "Derivative requests rejected by a bounded reservation ceiling"
   filter      = "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.status=\"rejected\" AND jsonPayload.reason=(\"derivative_user_budget_exhausted\" OR \"derivative_pool_budget_exhausted\" OR \"project_budget_exhausted\")"
@@ -659,6 +670,7 @@ resource "google_logging_metric" "derivative_reservation_rejections" {
 
 resource "google_monitoring_notification_channel" "proto_owner_email" {
   project      = local.project_id
+  depends_on   = [google_project_iam_member.deployer]
   display_name = "Alpha Compose proto owner"
   type         = "email"
 
@@ -701,25 +713,41 @@ resource "google_monitoring_alert_policy" "derivative_cache_ratio" {
   ]
 
   conditions {
-    display_name = "Derivative cache misses remain elevated"
+    display_name = "Derivative cache hit ratio remains below fifty percent"
 
-    condition_threshold {
-      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.derivative_cache_misses.name}\" AND resource.type=\"cloud_run_revision\""
-      comparison      = "COMPARISON_GT"
-      threshold_value = 10
-      duration        = "600s"
-
-      aggregations {
-        alignment_period   = "300s"
-        per_series_aligner = "ALIGN_SUM"
-      }
+    condition_prometheus_query_language {
+      query               = <<-EOT
+        # cache_hits / (cache_hits + cache_misses), with ten observations minimum.
+        (
+          sum(increase({"logging.googleapis.com/user/alpha_compose_proto/derivative_cache_hits", monitored_resource="cloud_run_revision"}[10m]))
+          /
+          (
+            sum(increase({"logging.googleapis.com/user/alpha_compose_proto/derivative_cache_hits", monitored_resource="cloud_run_revision"}[10m]))
+            +
+            sum(increase({"logging.googleapis.com/user/alpha_compose_proto/derivative_cache_misses", monitored_resource="cloud_run_revision"}[10m]))
+          )
+        ) < 0.5
+        and
+        (
+          sum(increase({"logging.googleapis.com/user/alpha_compose_proto/derivative_cache_hits", monitored_resource="cloud_run_revision"}[10m]))
+          +
+          sum(increase({"logging.googleapis.com/user/alpha_compose_proto/derivative_cache_misses", monitored_resource="cloud_run_revision"}[10m]))
+        ) >= 10
+      EOT
+      duration            = "600s"
+      evaluation_interval = "300s"
     }
   }
 
   documentation {
-    content   = "Compare derivative cache hit and miss metrics over the same interval before changing cache policy."
+    content   = "The ten-minute cache hit ratio fell below 50% with at least ten resolved cache decisions."
     mime_type = "text/markdown"
   }
+
+  depends_on = [
+    google_logging_metric.derivative_cache_hits,
+    google_logging_metric.derivative_cache_misses,
+  ]
 }
 
 resource "google_monitoring_alert_policy" "derivative_failures" {

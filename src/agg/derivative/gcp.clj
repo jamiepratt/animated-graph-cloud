@@ -134,6 +134,9 @@
     (:execution job) (assoc "execution" (:execution job))
     (:dispatch-started-at job)
     (assoc "dispatchStartedAt" (Date/from (:dispatch-started-at job)))
+    (:cancellation-requested-at job)
+    (assoc "cancellationRequestedAt"
+           (Date/from (:cancellation-requested-at job)))
     (:asset-id job) (assoc "assetId" (:asset-id job))
     (:asset-expires-at job)
     (assoc "assetExpiresAt" (Date/from (:asset-expires-at job)))
@@ -179,6 +182,9 @@
         (get data "dispatchStartedAt")
         (assoc :dispatch-started-at
                (date->instant (get data "dispatchStartedAt")))
+        (get data "cancellationRequestedAt")
+        (assoc :cancellation-requested-at
+               (date->instant (get data "cancellationRequestedAt")))
         (get data "assetId") (assoc :asset-id (get data "assetId"))
         (get data "assetExpiresAt")
         (assoc :asset-expires-at (date->instant (get data "assetExpiresAt")))
@@ -1044,7 +1050,13 @@
           (catch Throwable _ nil)))
       (when-let [execution (get-in requested [:after :execution])]
         (lifecycle/cancel-preparation-execution! launcher execution))
-      (preparation-resource (:after requested))))
+      (cond-> (preparation-resource (:after requested))
+        (and (not (contains? #{:succeeded :failed :cancelled
+                               :expired :revoked}
+                             (get-in requested [:before :state])))
+             (contains? #{:succeeded :failed :cancelled :expired :revoked}
+                        (get-in requested [:after :state])))
+        lifecycle/with-terminal-transition)))
   (retry-preparation! [_ job-id]
     (let [job-ref (.document
                    (.collection firestore "derivative-preparations") job-id)
@@ -1115,7 +1127,7 @@
                (keep snapshot-job)
                vec)
           repaired (atom 0)
-          expired-jobs (atom [])
+          terminal-jobs (atom [])
           now (Instant/now clock)]
       (doseq [job jobs]
         (cond
@@ -1131,7 +1143,7 @@
                  (.collection
                   firestore "derivative-preparation-orchestration")
                  "admission")
-                expired
+                expiration
                 (transaction!
                  firestore
                  (fn [transaction]
@@ -1157,17 +1169,26 @@
                        (.set ^Transaction transaction admission-ref
                              (admission-doc
                               (remove-active admission job-id))))
-                     updated)))]
+                     {:before current :after updated})))]
             (when (= :queued (:state job))
               (try
                 (lifecycle/delete-preparation-task!
                  queue (:id job) (:attempt job))
                 (catch Throwable _ nil)))
-            (when (and (= :cancellation-requested (:state expired))
-                       (:execution expired))
+            (when (and (= :cancellation-requested
+                          (get-in expiration [:after :state]))
+                       (get-in expiration [:after :execution]))
               (lifecycle/cancel-preparation-execution!
-               launcher (:execution expired)))
-            (swap! expired-jobs conj (preparation-resource expired))
+               launcher (get-in expiration [:after :execution])))
+            (when (and
+                   (not (contains? #{:succeeded :failed :cancelled
+                                     :expired :revoked}
+                                   (get-in expiration [:before :state])))
+                   (contains? #{:succeeded :failed :cancelled
+                                :expired :revoked}
+                              (get-in expiration [:after :state])))
+              (swap! terminal-jobs conj
+                     (preparation-resource (:after expiration))))
             (swap! repaired inc))
 
           (= :queued (:state job))
@@ -1222,8 +1243,11 @@
                            (.plusSeconds
                             ^Instant (:dispatch-started-at job) 60))))
                 (if (= :cancellation-requested (:state job))
-                  (lifecycle/acknowledge-preparation-cancellation!
-                   this (:id job) (:attempt job))
+                  (let [terminal
+                        (lifecycle/acknowledge-preparation-cancellation!
+                         this (:id job) (:attempt job))]
+                    (when (lifecycle/terminal-transition? terminal)
+                      (swap! terminal-jobs conj terminal)))
                   (lifecycle/fail-preparation-attempt!
                    this (:id job) (:attempt job)
                    {:failure-code "derivative_failed"
@@ -1237,8 +1261,11 @@
                    launcher (:execution job))]
               (if (= :cancelled state)
                 (do
-                  (lifecycle/acknowledge-preparation-cancellation!
-                   this (:id job) (:attempt job))
+                  (let [terminal
+                        (lifecycle/acknowledge-preparation-cancellation!
+                         this (:id job) (:attempt job))]
+                    (when (lifecycle/terminal-transition? terminal)
+                      (swap! terminal-jobs conj terminal)))
                   (swap! repaired inc))
                 (try
                   (lifecycle/cancel-preparation-execution!
@@ -1259,8 +1286,8 @@
                   "derivative_failed")
                 :retryable true})
               (swap! repaired inc)))))
-      {:repairedJobs @repaired
-       :expiredJobs @expired-jobs}))
+      (cond-> {:repairedJobs @repaired}
+        (seq @terminal-jobs) (assoc :terminalJobs @terminal-jobs))))
   lifecycle/PreparationAttemptService
   (load-preparation-attempt [_ job-id attempt]
     (let [job
@@ -1373,7 +1400,7 @@
           (.document
            (.collection firestore "derivative-preparation-orchestration")
            "admission")
-          cancelled
+          transition-result
           (transaction!
            firestore
            (fn [transaction]
@@ -1383,7 +1410,9 @@
                      (transaction-snapshot transaction job-ref))
                     attempt)]
                (cond
-                 (= :cancelled (:state job)) job
+                 (contains? #{:cancelled :expired} (:state job))
+                 {:before job :after job}
+
                  (= :cancellation-requested (:state job))
                  (let [updated
                        (lifecycle/transition
@@ -1398,9 +1427,15 @@
                    (.set ^Transaction transaction admission-ref
                          (admission-doc
                           (remove-active admission job-id)))
-                   updated)
+                   {:before job :after updated})
                  :else (invalid-attempt!)))))]
-      (preparation-resource cancelled)))
+      (cond-> (preparation-resource (:after transition-result))
+        (and (not (contains? #{:succeeded :failed :cancelled
+                               :expired :revoked}
+                             (get-in transition-result [:before :state])))
+             (contains? #{:succeeded :failed :cancelled :expired :revoked}
+                        (get-in transition-result [:after :state])))
+        lifecycle/with-terminal-transition)))
   (preparation-cancellation-requested? [_ job-id attempt]
     (let [job
           (exact-attempt

@@ -1,6 +1,7 @@
 (ns agg.derivative.worker
   (:refer-clojure :exclude [run!])
   (:require [agg.derivative.contract :as contract]
+            [agg.derivative.lifecycle :as lifecycle]
             [agg.drive.range-proxy :as range-proxy]
             [agg.errors :as errors]
             [agg.observability :as observability]
@@ -306,18 +307,14 @@
                     (= :publication @phase) "publication_failed"
                     :else "derivative_failed"))
                 failure-fields
-                (cond->
-                 (merge
-                  {:severity (if cancelled? "WARNING" "ERROR")
-                   :status (if cancelled? "cancelled" "failed")
-                   :reason failure-code
-                   :errorType (some-> (:type data) str)
-                   :retryable retryable
-                   :elapsedMs (elapsed-millis attempt-started-nanos)}
-                  (observability/exception-fields error))
-                  cancelled?
-                  (assoc :cancellationLagMs
-                         (elapsed-millis attempt-started-nanos)))]
+                (merge
+                 {:severity (if cancelled? "WARNING" "ERROR")
+                  :status (if cancelled? "cancelled" "failed")
+                  :reason failure-code
+                  :errorType (some-> (:type data) str)
+                  :retryable retryable
+                  :elapsedMs (elapsed-millis attempt-started-nanos)}
+                 (observability/exception-fields error))]
             (case @phase
               :encode
               (emit-worker-event!
@@ -330,19 +327,31 @@
                (assoc failure-fields :operation "derivative_publication"))
 
               nil)
-            (emit-worker-event!
-             "derivative_preparation_terminal"
-             (assoc failure-fields :operation "derivative_preparation")))
-          (when (and @published delete-derivative!)
-            (try
-              (delete-derivative! service @published)
-              (catch Throwable _
-                nil)))
-          (Files/deleteIfExists ^Path output-path)
-          (try
-            (report-failure! dependencies job-id attempt error)
-            (catch Throwable _
-              nil))
+            (when (and @published delete-derivative!)
+              (try
+                (delete-derivative! service @published)
+                (catch Throwable _
+                  nil)))
+            (Files/deleteIfExists ^Path output-path)
+            (let [terminal
+                  (try
+                    (report-failure! dependencies job-id attempt error)
+                    (catch Throwable _
+                      nil))
+                  terminal-fields
+                  (cond-> failure-fields
+                    cancelled?
+                    (assoc :status (or (:state terminal) "cancelled")
+                           :reason (or (:state terminal) "cancelled"))
+                    (and cancelled? (contains? terminal :cancellationLagMs))
+                    (assoc :cancellationLagMs
+                           (:cancellationLagMs terminal)))]
+              (when (or (not cancelled?)
+                        (lifecycle/terminal-transition? terminal))
+                (emit-worker-event!
+                 "derivative_preparation_terminal"
+                 (assoc terminal-fields
+                        :operation "derivative_preparation")))))
           (throw error))
         (finally
           (Files/deleteIfExists ^Path output-path))))))

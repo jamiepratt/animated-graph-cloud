@@ -5,7 +5,7 @@
             [agg.errors :as errors]
             [agg.render.derivative :as render-derivative])
   (:import (java.security MessageDigest)
-           (java.time Clock Instant LocalDate YearMonth ZoneOffset)
+           (java.time Clock Duration Instant LocalDate YearMonth ZoneOffset)
            (java.util HexFormat UUID)))
 
 (def ^:private profile-version
@@ -81,10 +81,15 @@
         :queued
         (assoc job
                :state :cancelled
+               :cancellation-requested-at now
                :updated-at now
                :metadata-expires-at
                (.plusSeconds ^Instant now retention-seconds))
-        :running (assoc job :state :cancellation-requested :updated-at now)
+        :running
+        (assoc job
+               :state :cancellation-requested
+               :cancellation-requested-at now
+               :updated-at now)
         :cancellation-requested job
         :cancelled job
         (invalid-transition! job event)))
@@ -133,7 +138,9 @@
            (= :cancelled outcome)
            (instance? Instant now))
       (assoc job
-             :state :cancelled
+             :state (if (= :expired (:terminal-cause job))
+                      :expired
+                      :cancelled)
              :updated-at now
              :metadata-expires-at
              (.plusSeconds ^Instant now retention-seconds))
@@ -153,7 +160,8 @@
                  (.plusSeconds ^Instant now retention-seconds))
           (dissoc :failure-code :retryable :asset-id :asset-expires-at
                   :object-key :asset-generation :asset-size
-                  :asset-content-type :asset-profile-version :completed-at))
+                  :asset-content-type :asset-profile-version :completed-at
+                  :cancellation-requested-at :terminal-cause))
       (invalid-transition! job event))
 
     :expire
@@ -167,12 +175,15 @@
           (assoc job
                  :state :cancellation-requested
                  :terminal-cause :expired
+                 :cancellation-requested-at now
                  :updated-at now)
 
           :cancellation-requested
           (cond-> job
             (nil? (:terminal-cause job))
-            (assoc :terminal-cause :expired :updated-at now))
+            (assoc :terminal-cause :expired :updated-at now)
+            (nil? (:cancellation-requested-at job))
+            (assoc :cancellation-requested-at now))
 
           (:queued :succeeded :failed :cancelled)
           (-> job
@@ -193,6 +204,7 @@
         (assoc job
                :state :cancellation-requested
                :terminal-cause :membership-revoked
+               :cancellation-requested-at now
                :updated-at now
                :failure-code "membership_revoked"
                :retryable false)
@@ -215,18 +227,39 @@
 (defn public-resource
   "Projects a preparation job onto its bounded browser-visible contract."
   [job]
-  (cond-> {:id (:id job)
-           :state (name (:state job))
-           :attempt (:attempt job)
-           :profileVersion (:profile-version job)}
-    (:request-id job) (assoc :requestId (:request-id job))
-    (:trace job) (assoc :trace (:trace job))
-    (:revision job) (assoc :revision (:revision job))
-    (:created-at job) (assoc :createdAt (str (:created-at job)))
-    (:asset-id job) (assoc :assetId (:asset-id job))
-    (:asset-expires-at job) (assoc :expiresAt (str (:asset-expires-at job)))
-    (:failure-code job) (assoc :failureCode (:failure-code job))
-    (contains? job :retryable) (assoc :retryable (boolean (:retryable job)))))
+  (let [cancellation-lag-ms
+        (when (and (contains? #{:cancelled :expired} (:state job))
+                   (instance? Instant (:cancellation-requested-at job))
+                   (instance? Instant (:updated-at job)))
+          (max 0
+               (.toMillis
+                (Duration/between
+                 ^Instant (:cancellation-requested-at job)
+                 ^Instant (:updated-at job)))))]
+    (cond-> {:id (:id job)
+             :state (name (:state job))
+             :attempt (:attempt job)
+             :profileVersion (:profile-version job)}
+      (:request-id job) (assoc :requestId (:request-id job))
+      (:trace job) (assoc :trace (:trace job))
+      (:revision job) (assoc :revision (:revision job))
+      (:created-at job) (assoc :createdAt (str (:created-at job)))
+      (:asset-id job) (assoc :assetId (:asset-id job))
+      (:asset-expires-at job) (assoc :expiresAt (str (:asset-expires-at job)))
+      (:failure-code job) (assoc :failureCode (:failure-code job))
+      (contains? job :retryable) (assoc :retryable (boolean (:retryable job)))
+      (some? cancellation-lag-ms)
+      (assoc :cancellationLagMs cancellation-lag-ms))))
+
+(defn with-terminal-transition
+  "Marks an internal service result as the process that won a terminal transition."
+  [resource]
+  (vary-meta resource assoc ::terminal-transition true))
+
+(defn terminal-transition?
+  "Returns true only for the service call that durably made a job terminal."
+  [resource]
+  (true? (::terminal-transition (meta resource))))
 
 (defprotocol PreparationService
   (submit-preparation! [service idempotency-key request])
@@ -266,6 +299,9 @@
 
 (def ^:private active-states
   #{:queued :running :cancellation-requested})
+
+(def ^:private terminal-states
+  #{:succeeded :failed :cancelled :expired :revoked})
 
 (def ^:private reservation-minor-units
   (get-in contract/contract-v1
@@ -658,7 +694,10 @@
         (try-delete-task! queue before))
       (when (contains? #{:running :cancellation-requested} (:state before))
         (try-cancel-execution! launcher before))
-      (preparation-resource after)))
+      (cond-> (preparation-resource after)
+        (and (not (contains? terminal-states (:state before)))
+             (contains? terminal-states (:state after)))
+        with-terminal-transition)))
   (retry-preparation! [_ job-id]
     (let [raw-job (get-in @state [:jobs job-id])
           request
@@ -688,7 +727,7 @@
   (reconcile-preparations! [_]
     (let [now (Instant/now clock)
           repaired (atom 0)
-          expired (atom [])]
+          terminal-jobs (atom [])]
       (locking state
         (swap! state update :jobs
                (fn [jobs]
@@ -704,13 +743,18 @@
                               (let [updated
                                     (transition
                                      job {:type :expire :now now})]
-                                (swap! expired conj
-                                       (preparation-resource updated))
+                                (when (and
+                                       (not (contains?
+                                             terminal-states (:state job)))
+                                       (contains?
+                                        terminal-states (:state updated)))
+                                  (swap! terminal-jobs conj
+                                         (preparation-resource updated)))
                                 [job-id updated]))
                             [job-id job])))
                        jobs))))
-      {:repairedJobs @repaired
-       :expiredJobs @expired}))
+      (cond-> {:repairedJobs @repaired}
+        (seq @terminal-jobs) (assoc :terminalJobs @terminal-jobs))))
   PreparationAttemptService
   (load-preparation-attempt [_ job-id attempt]
     (let [job (exact-attempt-job (get-in @state [:jobs job-id]) attempt)]
@@ -774,21 +818,26 @@
               updated))]
       (preparation-resource failed)))
   (acknowledge-preparation-cancellation! [_ job-id attempt]
-    (let [cancelled
+    (let [{:keys [before after]}
           (locking state
             (let [job (exact-attempt-job (get-in @state [:jobs job-id])
                                          attempt)]
               (cond
-                (= :cancelled (:state job)) job
+                (contains? #{:cancelled :expired} (:state job))
+                {:before job :after job}
+
                 (= :cancellation-requested (:state job))
                 (let [updated
                       (transition job {:type :complete
                                        :outcome :cancelled
                                        :now (Instant/now clock)})]
                   (swap! state assoc-in [:jobs job-id] updated)
-                  updated)
+                  {:before job :after updated})
                 :else (invalid-derivative-attempt!))))]
-      (preparation-resource cancelled)))
+      (cond-> (preparation-resource after)
+        (and (not (contains? terminal-states (:state before)))
+             (contains? terminal-states (:state after)))
+        with-terminal-transition)))
   (preparation-cancellation-requested? [_ job-id attempt]
     (let [job (exact-attempt-job (get-in @state [:jobs job-id]) attempt)]
       (cond

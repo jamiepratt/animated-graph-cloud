@@ -1045,21 +1045,23 @@
     (:scheduler-service-account dependencies))
     (respond-json! exchange 401
                    {:error "authenticated_scheduler_required"})
-    (let [{:keys [repairedJobs expiredJobs]}
+    (let [{:keys [repairedJobs terminalJobs]}
           (derivative/reconcile-preparations!
            (:derivative-preparation-service dependencies))]
-      (doseq [job expiredJobs]
+      (doseq [job terminalJobs]
         (emit-event!
-         dependencies "derivative_preparation_expired"
+         dependencies "derivative_preparation_terminal"
          (cond-> {:severity "WARNING"
-                  :operation "derivative_reconciliation"
-                  :status "expired"
-                  :reason "expired"
+                  :operation "derivative_preparation"
+                  :status (:state job)
+                  :reason (:state job)
                   :requestId (:requestId job)
                   :attempt (:attempt job)
                   :profileVersion (:profileVersion job)}
            (:trace job) (assoc :trace (:trace job))
-           (:revision job) (assoc :revision (:revision job)))))
+           (:revision job) (assoc :revision (:revision job))
+           (contains? job :cancellationLagMs)
+           (assoc :cancellationLagMs (:cancellationLagMs job)))))
       (emit-event!
        dependencies "derivative_reconciliation_complete"
        {:severity (if (pos? repairedJobs) "WARNING" "INFO")
@@ -2366,18 +2368,20 @@
                 "derivative_preparation_terminal")]
     (when-let [request-id (:requestId resource)]
       (.set (.getResponseHeaders exchange) "X-Request-Id" request-id))
-    (emit-event!
-     dependencies event
-     (cond-> {:severity "WARNING"
-              :operation "derivative_cancellation"
-              :status (if asynchronous? "started" "cancelled")
-              :reason "user_cancelled"
-              :requestId (:requestId resource)
-              :attempt (:attempt resource)
-              :profileVersion (:profileVersion resource)
-              :cancellationLagMs 0}
-       (:trace resource) (assoc :trace (:trace resource))
-       (:revision resource) (assoc :revision (:revision resource))))
+    (when (or asynchronous? (derivative/terminal-transition? resource))
+      (emit-event!
+       dependencies event
+       (cond-> {:severity "WARNING"
+                :operation "derivative_cancellation"
+                :status (if asynchronous? "started" "cancelled")
+                :reason "user_cancelled"
+                :requestId (:requestId resource)
+                :attempt (:attempt resource)
+                :profileVersion (:profileVersion resource)}
+         (:trace resource) (assoc :trace (:trace resource))
+         (:revision resource) (assoc :revision (:revision resource))
+         (contains? resource :cancellationLagMs)
+         (assoc :cancellationLagMs (:cancellationLagMs resource)))))
     (respond-json! exchange
                    (if asynchronous? 202 200)
                    resource)))

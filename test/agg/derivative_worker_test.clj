@@ -580,7 +580,10 @@
            true)
          :acknowledge-preparation-cancellation!
          (fn [service checked-job-id attempt]
-           (swap! calls conj [:ack service checked-job-id attempt]))
+           (swap! calls conj [:ack service checked-job-id attempt])
+           (derivative/with-terminal-transition
+             {:state "cancelled"
+              :cancellationLagMs 4200}))
          :fail-preparation-attempt!
          (fn [& args] (swap! calls conj (into [:fail] args)))
          :start-source-proxy!
@@ -632,7 +635,7 @@
                 fields
                 [:operation :status :reason :requestId :trace :revision
                  :attempt :reservedMinorUnits])))
-        (is (<= 0 (:cancellationLagMs fields))))
+        (is (= 4200 (:cancellationLagMs fields))))
       (is (not (Files/exists
                 output (make-array java.nio.file.LinkOption 0))))
       (finally

@@ -191,7 +191,8 @@ gcloud logging read \
   --format='table(timestamp,jsonPayload.event,jsonPayload.operation,jsonPayload.status,jsonPayload.reason,jsonPayload.elapsedMs,jsonPayload.queueAgeMs,jsonPayload.rangeStart,jsonPayload.rangeEnd,jsonPayload.bytesRequested,jsonPayload.bytesTransferred,jsonPayload.upstreamBytes,jsonPayload.outputBytes,jsonPayload.cacheOutcome,jsonPayload.reservedMinorUnits)'
 ```
 
-Find terminal failures by bounded reason:
+Find terminal non-success outcomes, including reconciled cancellation and
+expiry:
 
 ```sh
 gcloud logging read \

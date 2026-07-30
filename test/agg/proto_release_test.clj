@@ -6,6 +6,15 @@
 (defn- read-json [path]
   (json/read-str (slurp path) :key-fn keyword))
 
+(defn- terraform-resource [terraform type name]
+  (let [marker (str "resource \"" type "\" \"" name "\"")
+        start (str/index-of terraform marker)
+        next-resource
+        (when start
+          (str/index-of terraform "\nresource \"" (+ start (count marker))))]
+    (when start
+      (subs terraform start (or next-resource (count terraform))))))
+
 (deftest derivative-observability-is-terraform-owned-and-applied-before-release
   (let [proto-infra (slurp "infra/proto/main.tf")
         proto-workflow (slurp ".github/workflows/deploy-proto.yml")
@@ -57,6 +66,61 @@
     (doseq [role ["roles/logging.configWriter" "roles/monitoring.editor"]]
       (is (str/includes? proto-infra role))
       (is (str/includes? bootstrap role)))
+    (doseq [metric
+            ["derivative_preparation_latency_ms"
+             "derivative_cache_hits"
+             "derivative_cache_misses"
+             "derivative_failures"
+             "derivative_timeouts"
+             "derivative_drive_bytes"
+             "derivative_output_bytes"
+             "derivative_cancellation_lag_ms"
+             "derivative_queue_age_ms"
+             "derivative_reserved_minor_units"
+             "derivative_reservation_rejections"]]
+      (is (re-find
+           #"depends_on\s*=\s*\[google_project_iam_member\.deployer\]"
+           (terraform-resource proto-infra "google_logging_metric" metric))))
+    (is (re-find
+         #"depends_on\s*=\s*\[google_project_iam_member\.deployer\]"
+         (terraform-resource
+          proto-infra "google_monitoring_notification_channel"
+          "proto_owner_email")))
+    (let [cache-alert
+          (terraform-resource
+           proto-infra "google_monitoring_alert_policy"
+           "derivative_cache_ratio")
+          hit-metric
+          "logging.googleapis.com/user/alpha_compose_proto/derivative_cache_hits"
+          miss-metric
+          "logging.googleapis.com/user/alpha_compose_proto/derivative_cache_misses"]
+      (is (str/includes?
+           cache-alert "condition_prometheus_query_language"))
+      (is (= 3 (dec (count (str/split cache-alert
+                                      (re-pattern
+                                       (java.util.regex.Pattern/quote
+                                        hit-metric)))))))
+      (is (= 2 (dec (count (str/split cache-alert
+                                      (re-pattern
+                                       (java.util.regex.Pattern/quote
+                                        miss-metric)))))))
+      (is (str/includes? cache-alert "cache_hits / (cache_hits + cache_misses)"))
+      (is (str/includes? cache-alert ") < 0.5"))
+      (is (str/includes? cache-alert ") >= 10"))
+      (is (str/includes? cache-alert "[10m]"))
+      (is (not (str/includes?
+                cache-alert "condition_threshold")))
+      (is (str/includes?
+           cache-alert
+           "google_logging_metric.derivative_cache_hits"))
+      (is (str/includes?
+           cache-alert
+           "google_logging_metric.derivative_cache_misses")))
+    (is (str/includes?
+         (terraform-resource
+          proto-infra "google_logging_metric"
+          "derivative_cancellation_lag_ms")
+         "jsonPayload.status=(\\\"cancelled\\\" OR \\\"expired\\\")"))
     (let [apply-index (str/index-of
                        proto-workflow "terraform -chdir=infra/proto apply")
           verify-index (str/index-of
@@ -246,6 +310,14 @@
       (is (str/includes? section (str "jsonPayload." field))))
     (is (str/includes? section "--freshness=24h"))
     (is (str/includes? section "--limit=100"))
+    (is (str/includes?
+         section
+         "jsonPayload.event=\"derivative_preparation_terminal\""))
+    (is (str/includes?
+         section
+         "jsonPayload.status=(\"failed\" OR \"rejected\" OR \"cancelled\" OR \"expired\")"))
+    (is (not (str/includes?
+              section "derivative_preparation_expired")))
     (is (not (re-find
               #"(?i)jsonPayload\\.(?:fileId|filename|ownerSubject|email|objectKey|signedUrl|token|authority|requestBody)"
               section)))))

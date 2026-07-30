@@ -1,5 +1,6 @@
 (ns agg.proto-test-runner
   (:require [agg.api-derivative-preparation-test]
+            [agg.derivative-lifecycle-test]
             [agg.derivative-preparation-test]
             [agg.derivative-worker-test]
             [agg.observability-test]
@@ -11,6 +12,7 @@
 
 (defn -main [& _]
   (let [{:keys [error fail]} (test/run-tests 'agg.api-derivative-preparation-test
+                                             'agg.derivative-lifecycle-test
                                              'agg.derivative-preparation-test
                                              'agg.derivative-worker-test
                                              'agg.observability-test

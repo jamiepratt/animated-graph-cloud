@@ -24,6 +24,12 @@
   ([overrides]
    (merge owner source overrides)))
 
+(defn mutable-clock [current]
+  (proxy [Clock] []
+    (getZone [] ZoneOffset/UTC)
+    (withZone [zone] (Clock/fixed @current zone))
+    (instant [] @current)))
+
 (deftest identical-preparations-admit-one-owner-bound-attempt
   (let [{:keys [service state queued]}
         (derivative/in-memory-preparation-system
@@ -275,13 +281,53 @@
          (derivative/preparation-cancellation-requested? service job-id 1)))
     (derivative/cancel-preparation! service job-id)
     (is (derivative/preparation-cancellation-requested? service job-id 1))
-    (is (= "cancelled"
-           (:state
-            (derivative/acknowledge-preparation-cancellation!
-             service job-id 1))))
+    (let [acknowledged
+          (derivative/acknowledge-preparation-cancellation!
+           service job-id 1)
+          duplicate
+          (derivative/acknowledge-preparation-cancellation!
+           service job-id 1)]
+      (is (= "cancelled" (:state acknowledged)))
+      (is (derivative/terminal-transition? acknowledged))
+      (is (false? (derivative/terminal-transition? duplicate))))
     (is (= ::derivative/invalid-derivative-attempt
            (try
              (derivative/load-preparation-attempt service job-id 2)
              nil
              (catch clojure.lang.ExceptionInfo error
                (:type (ex-data error))))))))
+
+(deftest reconciliation-reports-a-correlated-expiry-terminal-once
+  (let [current-time (atom now)
+        {:keys [service]}
+        (derivative/in-memory-preparation-system
+         {:clock (mutable-clock current-time)
+          :fingerprint-secret "fixture-secret"})
+        request-id "00000000-0000-0000-0000-000000000197"
+        job-id
+        (get-in
+         (derivative/submit-preparation!
+          service "expiry"
+          (preparation-request
+           {:request-id request-id
+            :trace "0123456789abcdef0123456789abcdef"
+            :revision "agg-proto-00001-test"}))
+         [:job :id])]
+    (reset! current-time (.plusSeconds now 86400))
+    (let [first-reconciliation
+          (derivative/reconcile-preparations! service)
+          second-reconciliation
+          (derivative/reconcile-preparations! service)]
+      (is (= 1 (:repairedJobs first-reconciliation)))
+      (is (= [{:id job-id
+               :state "expired"
+               :attempt 1
+               :requestId request-id
+               :trace "0123456789abcdef0123456789abcdef"
+               :revision "agg-proto-00001-test"}]
+             (mapv
+              #(select-keys
+                %
+                [:id :state :attempt :requestId :trace :revision])
+              (:terminalJobs first-reconciliation))))
+      (is (= {:repairedJobs 0} second-reconciliation)))))
