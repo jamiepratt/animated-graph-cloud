@@ -350,9 +350,63 @@
                  (str/replace "<script>(function(){"
                               (str fixture "<script>(function(){"))
                  (str/replace "</body>" (str scenario "</body>")))]
-    (browser-outcome "agg-picker-browser-"
-                     "Browser-level Picker regression requires Chrome or Chromium"
-                     html (str "--window-size=" window-size))))
+    (browser-outcome-with-timeout
+     "agg-picker-browser-"
+     "Browser-level Picker regression requires Chrome or Chromium"
+     html 60000 (str "--window-size=" window-size))))
+
+(defn- direct-upload-browser-outcome [page]
+  (let [fixture
+        (str
+         "<script>"
+         "window.__directUpload={requests:[],diagnostics:[],mode:'success',chunkAttempts:0,session:'https://upload.googleapis.com/session/test',pendingAbort:null};"
+         "const jsonResponse=(body,status=200,headers={})=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json',...headers}});"
+         "window.fetch=(path,options={})=>{const state=window.__directUpload,url=String(path),headers=Object.fromEntries(new Headers(options.headers||{}));"
+         "if(url==='/v1/drive/picker/diagnostic'){state.diagnostics.push(JSON.parse(options.body));return Promise.resolve(jsonResponse({accepted:true}));}"
+         "state.requests.push({url,method:options.method||'GET',headers});"
+         "if(url.includes('/upload/drive/v3/files?uploadType=resumable&fields=id')){"
+         "const failures={storage:[403,{error:{errors:[{reason:'storageQuotaExceeded'}]}}],policy:[403,{error:{errors:[{reason:'domainPolicy'}]}}],authorization:[401,{error:{errors:[{reason:'authError'}]}}],rate:[429,{error:{errors:[{reason:'rateLimitExceeded'}]}}],transient:[503,{error:{errors:[{reason:'backendError'}]}}],unknown:[400,{error:{message:'rejected'}}]};"
+         "if(failures[state.mode]){const [status,body]=failures[state.mode];return Promise.resolve(jsonResponse(body,status));}"
+         "return Promise.resolve(new Response('',{status:200,headers:{Location:state.session}}));}"
+         "if(url===state.session){const range=headers['content-range']||'';"
+         "if(state.mode==='interrupt'&&range.startsWith('bytes ')&&!range.startsWith('bytes */')&&state.chunkAttempts++===0)return Promise.reject(new TypeError('network interrupted'));"
+         "if(state.mode==='cancel'&&range.startsWith('bytes ')&&!range.startsWith('bytes */'))return new Promise((resolve,reject)=>{state.pendingAbort=true;options.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')),{once:true});});"
+         "if(range.startsWith('bytes */'))return Promise.resolve(new Response('',{status:308,headers:{Range:'bytes=0-7'}}));"
+         "return Promise.resolve(jsonResponse({id:'uploaded-drive-id'}));}"
+         "if(url==='/ui/project-source-validation'){if(state.mode==='metadata-mismatch')return Promise.resolve(jsonResponse({error:'invalid_source_video'},400));return Promise.resolve(jsonResponse({fileId:'uploaded-drive-id',fileName:'authoritative.mov',mimeType:'video/quicktime'}));}"
+         "if(url==='/v1/drive/playback-analyses')return Promise.resolve(jsonResponse({fileName:'authoritative.mov',evidence:{container:{format:'mov'},video:{codec:'h264'}}}));"
+         "if(url==='/v1/drive/playback-sessions')return Promise.resolve(jsonResponse({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000115',contentType:'video/quicktime',size:16},201));"
+         "if(url==='/v1/drive/recording-clock-inspections')return Promise.resolve(jsonResponse({fileName:'authoritative.mov',status:'none',candidates:[],durationSeconds:1}));"
+         "return Promise.resolve(jsonResponse({},204));};"
+         "class PickerView{setMimeTypes(){return this;}setIncludeFolders(){return this;}setSelectFolderEnabled(){return this;}setMode(){return this;}setEnableDrives(){return this;}}"
+         "class PickerBuilder{addView(){return this;}setSelectableMimeTypes(){return this;}setOAuthToken(){return this;}setDeveloperKey(){return this;}setAppId(){return this;}setOrigin(){return this;}setCallback(){return this;}build(){return {setVisible(){}};}}"
+         "window.google={picker:{DocsView:PickerView,PickerBuilder,DocsViewMode:{LIST:'list'},Action:{LOADED:'loaded',PICKED:'picked',CANCEL:'cancel'}}};"
+         "window.gapi={load(_module,handlers){handlers.callback();}};"
+         "</script>")
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "(async()=>{let outcome;try{const state=window.__directUpload,input=document.getElementById('source-video-upload'),status=document.getElementById('source-video-upload-status'),retry=document.getElementById('retry-source-video-upload'),cancel=document.getElementById('cancel-source-video-upload'),fileId=document.getElementById('source-video-file-id');"
+         "const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}throw new Error('Timed out: '+status.textContent);};"
+         "const select=(name,type,size)=>{const file=new File([new Uint8Array(16)],name,{type});Object.defineProperty(file,'size',{configurable:true,value:size});Object.defineProperty(input,'files',{configurable:true,value:[file]});input.dispatchEvent(new Event('change',{bubbles:true}));};"
+         "const requestCount=()=>state.requests.length;"
+         "select('not-video.png','image/png',16);await waitFor(()=>status.classList.contains('error'));const unsupported={status:status.textContent,requests:requestCount()};"
+         "state.mode='success';state.requests=[];select('large-without-type.bin','',3*1024*1024*1024);await waitFor(()=>status.classList.contains('success'));const large={status:status.textContent,fileId:fileId.value,requests:[...state.requests],selection:document.getElementById('picker-selection').textContent};"
+         "fileId.value='';state.mode='metadata-mismatch';state.requests=[];select('incorrect.mp4','video/mp4',16);await waitFor(()=>status.classList.contains('error'));const mismatch={status:status.textContent,fileId:fileId.value};"
+         "fileId.value='';state.mode='interrupt';state.chunkAttempts=0;state.requests=[];select('resume.mov','video/quicktime',16);await waitFor(()=>status.textContent.includes('network connection'));const interrupted={status:status.textContent,retryHidden:retry.hidden,postCount:state.requests.filter(request=>request.url.includes('/upload/drive/v3/files')).length};retry.click();await waitFor(()=>status.classList.contains('success'));const resumed={status:status.textContent,fileId:fileId.value,postCount:state.requests.filter(request=>request.url.includes('/upload/drive/v3/files')).length,ranges:state.requests.filter(request=>request.url===state.session).map(request=>request.headers['content-range'])};"
+         "state.mode='cancel';state.requests=[];state.pendingAbort=null;select('pause.mov','video/quicktime',16);await waitFor(()=>state.pendingAbort===true);cancel.click();await waitFor(()=>status.textContent.includes('paused'));const cancelled={status:status.textContent,retryHidden:retry.hidden};"
+         "const mapped={};for(const mode of ['storage','policy','authorization','rate','transient','unknown']){state.mode=mode;state.requests=[];status.className='status';status.textContent='Starting upload';select(mode+'.mov','video/quicktime',16);await waitFor(()=>status.classList.contains('error'));mapped[mode]=status.textContent;}"
+         "outcome={unsupported,large,mismatch,interrupted,resumed,cancelled,mapped,diagnostics:state.diagnostics,directOnly:state.requests.every(request=>!request.url.startsWith('/v1/drive/upload'))};"
+         "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "<script>(function(){"
+                              (str fixture "<script>(function(){"))
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome-with-budget-and-timeout
+     "agg-direct-upload-browser-"
+     "Direct Google Drive upload regression requires Chrome or Chromium"
+     html 10000 30000)))
 
 (defn- video-player-browser-outcome [page window-size]
   (let [fixture
@@ -2462,14 +2516,32 @@
 (deftest source-video-step-keeps-selection-feedback-without-clock-advisory
   (let [page (ui/page {:user {:email "member@example.com" :role :member}
                        :csrf "csrf-test"
+                       :picker-config {:access-token "access-test"
+                                       :api-key "key-test"
+                                       :app-id "app-test"
+                                       :csrf "csrf-test"}
                        :tokens []
                        :members []
                        :logs-enabled? false})]
     (doseq [fragment ["data-step-id=\"source-video\""
                       "id=\"open-picker\""
                       "id=\"picker-selection\""
-                      "Selected:"]]
+                      "Selected:"
+                      "id=\"source-video-upload\""
+                      "id=\"source-video-upload-status\""
+                      "role=\"status\""
+                      "aria-live=\"polite\""
+                      "id=\"cancel-source-video-upload\""
+                      "id=\"retry-source-video-upload\""
+                      "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id"
+                      "Alpha Compose does not support this video type. Choose MP4, MOV, WebM, MPEG, OGG, AVI, or MKV."
+                      "Google Drive does not have enough available storage for this video. Free some space or choose a video already in Drive."
+                      "Google Drive access expired. Reconnect Drive, then try the upload again."
+                      "Google Drive could not finish the upload. Wait a moment, then resume or try again."
+                      "Google Drive rejected the upload without a specific reason. Check your Drive storage and Workspace policy, or upload the video at drive.google.com and return here to select it."]]
       (is (str/includes? page fragment) fragment))
+    (is (not (str/includes? page "DocsUploadView")))
+    (is (not (str/includes? page "source_video_too_large")))
     (doseq [advisory ["id=\"source-clock-advisory\""
                       "Detected recording-clock hint"
                       "review its detected recording-clock hint"
@@ -3983,7 +4055,7 @@
     (is (not (str/includes? page "localStorage")))
     (is (not (str/includes? page "sessionStorage")))))
 
-(deftest picker-supports-root-nested-shared-and-upload-video-flow-in-a-browser
+(deftest picker-supports-root-nested-and-shared-video-flow-in-a-browser
   (let [page (ui/page {:user {:email "owner@example.com" :role :member}
                        :csrf "csrf-test"
                        :picker-config {:access-token "access-test"
@@ -4028,7 +4100,7 @@
       (is (= "activity-data" (get-in outcome [:afterNext :current])))
       (is (= (:afterNext outcome) (:afterNextBackground outcome)))
       (is (false? (:advisoryPresent outcome)))
-      (let [[normal-drive shared-drives upload] (:views outcome)
+      (let [[normal-drive shared-drives] (:views outcome)
             mime-types (str/join "," drive/supported-source-video-mime-types)]
         (is (= {:kind "drive"
                 :mimeTypes mime-types
@@ -4037,7 +4109,6 @@
                 :mode "list"}
                normal-drive))
         (is (= (assoc normal-drive :enableDrives true) shared-drives))
-        (is (= {:kind "upload" :includeFolders false} upload))
         (is (= mime-types (:selectableMimeTypes outcome)))
         (is (not (contains? normal-drive :ownedByMe))))
       (is (= [false true false false false true false] (:visible outcome)))
@@ -4049,6 +4120,73 @@
       (is (:noHorizontalOverflow outcome) outcome))
     (is (<= 1200 (:viewportWidth (first outcomes))))
     (is (<= (:viewportWidth (second outcomes)) 500))))
+
+(deftest local-video-uploads-directly-and-resumably-to-google-drive
+  (let [page (ui/page {:user {:email "owner@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :picker-config {:access-token "access-test"
+                                       :api-key "key-test"
+                                       :app-id "app-test"
+                                       :csrf "csrf-test"}
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})
+        outcome (direct-upload-browser-outcome page)]
+    (is (nil? (:error outcome)) outcome)
+    (is (= {:status
+            "Alpha Compose does not support this video type. Choose MP4, MOV, WebM, MPEG, OGG, AVI, or MKV."
+            :requests 0}
+           (:unsupported outcome)))
+    (is (= "Upload complete. Google Drive validated the video."
+           (get-in outcome [:large :status])))
+    (is (= "uploaded-drive-id" (get-in outcome [:large :fileId])))
+    (is (= "authoritative.mov" (get-in outcome [:large :selection])))
+    (let [requests (get-in outcome [:large :requests])
+          start (first requests)
+          chunk (second requests)]
+      (is (= "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id"
+             (:url start)))
+      (is (= "POST" (:method start)))
+      (is (= "3221225472"
+             (get-in start [:headers :x-upload-content-length])))
+      (is (= "https://upload.googleapis.com/session/test" (:url chunk)))
+      (is (= "bytes 0-8388607/3221225472"
+             (get-in chunk [:headers :content-range])))
+      (is (not-any? #(str/starts-with? (:url %) "/v1/drive/upload")
+                    requests)))
+    (is (= "Alpha Compose does not support this video type. Choose MP4, MOV, WebM, MPEG, OGG, AVI, or MKV."
+           (get-in outcome [:mismatch :status])))
+    (is (= "" (get-in outcome [:mismatch :fileId])))
+    (is (= "The network connection was interrupted. Resume the Google Drive upload when your connection returns."
+           (get-in outcome [:interrupted :status])))
+    (is (false? (get-in outcome [:interrupted :retryHidden])))
+    (is (= 1 (get-in outcome [:interrupted :postCount])))
+    (is (= "uploaded-drive-id" (get-in outcome [:resumed :fileId])))
+    (is (= 1 (get-in outcome [:resumed :postCount])))
+    (is (= ["bytes 0-15/16" "bytes */16" "bytes 8-15/16"]
+           (get-in outcome [:resumed :ranges])))
+    (is (= {:status "Upload paused. Resume when ready."
+            :retryHidden false}
+           (:cancelled outcome)))
+    (is (= {:storage
+            "Google Drive does not have enough available storage for this video. Free some space or choose a video already in Drive."
+            :policy
+            "Your Google Workspace policy blocked this upload. Ask your Workspace administrator, or upload the video at drive.google.com and return here to select it."
+            :authorization
+            "Google Drive access expired. Reconnect Drive, then try the upload again."
+            :rate
+            "Google Drive could not finish the upload. Wait a moment, then resume or try again."
+            :transient
+            "Google Drive could not finish the upload. Wait a moment, then resume or try again."
+            :unknown
+            "Google Drive rejected the upload without a specific reason. Check your Drive storage and Workspace policy, or upload the video at drive.google.com and return here to select it."}
+           (:mapped outcome)))
+    (is (:directOnly outcome))
+    (is (every? #(= #{:phase :view :listState} (set (keys %)))
+                (:diagnostics outcome)))
+    (is (not-any? #(some (set (keys %))
+                         [:filename :fileId :sessionUrl :token :accessToken])
+                  (:diagnostics outcome)))))
 
 (deftest preview-remains-stale-safe-and-retriable-without-gating-submit
   (let [outcome (preview-status-browser-outcome

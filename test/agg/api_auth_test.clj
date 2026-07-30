@@ -44,7 +44,7 @@
                        ".setMode(google.picker.DocsViewMode.LIST)"))
     (is (str/includes? body ".setEnableDrives(true)"))
     (is (str/includes? body ".addView(driveView).addView(sharedDrivesView)"))
-    (is (str/includes? body "new google.picker.DocsUploadView()"))
+    (is (not (str/includes? body "google.picker.DocsUploadView")))
     (is (str/includes? body "pickerMimeTypeSet.has(file.mimeType)"))
     (is (not (str/includes? body "mimeType.startsWith('video/')")))))
 
@@ -1068,11 +1068,13 @@
         (is (re-find #"891643499444" (.body response)))
         (is (re-find #"id=\"picker-selection\"" (.body response)))
         (is (re-find #"selection\.textContent" (.body response)))
-        (is (re-find #"google\.picker\.DocsUploadView" (.body response)))
+        (is (not (re-find #"google\.picker\.DocsUploadView" (.body response))))
         (is (re-find #"setSelectableMimeTypes" (.body response)))
         (assert-supported-video-picker (.body response))
         (doseq [copy ["My Drive" "shared with you" "Shared Drive"
-                      "Folders are for navigation only" "Upload tab"]]
+                      "Folders are for navigation only"
+                      "direct Google Drive uploader"
+                      "drive.google.com"]]
           (is (str/includes? (.body response) copy) copy))
         (is (not (re-find #"setMimeTypes\('video/\*'\)" (.body response))))
         (is (re-find #"/v1/drive/picker/diagnostic" (.body response)))
@@ -1122,11 +1124,25 @@
                             {"Cookie" (str "agg_session=" session)
                              "Content-Type" "application/json"
                              "X-CSRF-Token" csrf})
-            event (second (first @events))]
+            upload-response
+            (post! port "/v1/drive/picker/diagnostic"
+                   {:phase "error"
+                    :view "upload"
+                    :listState "storage"
+                    :filename "private.mov"
+                    :fileId "private-id"
+                    :sessionUrl "https://upload.googleapis.com/private"}
+                   {"Cookie" (str "agg_session=" session)
+                    "Content-Type" "application/json"
+                    "X-CSRF-Token" csrf})
+            event (second (first @events))
+            upload-event (second (second @events))]
         (is (= 403 (.statusCode denied)))
         (is (= 200 (.statusCode response)))
+        (is (= 200 (.statusCode upload-response)))
         (is (= {"accepted" true} (json/read-str (.body response))))
-        (is (= ["picker_diagnostic"] (mapv first @events)))
+        (is (= ["picker_diagnostic" "picker_diagnostic"]
+               (mapv first @events)))
         (is (= "empty" (:phase event)))
         (is (= "drive" (:view event)))
         (is (= "empty" (:listState event)))
@@ -1135,7 +1151,13 @@
         (is (= "supported-source-video-mime-types" (:mimeFilter event)))
         (is (= "video-empty" (:indexStatus event)))
         (is (not-any? #(contains? event %)
-                      [:token :accessToken :email :filename :fileId])))
+                      [:token :accessToken :email :filename :fileId
+                       :sessionUrl]))
+        (is (= "upload" (:view upload-event)))
+        (is (= "storage" (:listState upload-event)))
+        (is (not-any? #(contains? upload-event %)
+                      [:token :accessToken :email :filename :fileId
+                       :sessionUrl])))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
@@ -1193,7 +1215,8 @@
         (doseq [copy ["files shared with you"
                       "folders are only for navigation"
                       "Shared Drive"
-                      "upload a source video"
+                      "Upload a video from this device"
+                      "directly and resumably"
                       "access to that file only"]]
           (is (str/includes? (.body authenticated) copy) copy))
         (is (not (str/includes? (.body authenticated) "2 GiB limit")))

@@ -42,7 +42,8 @@
   #{"drive" "upload" "unknown"})
 
 (def ^:private picker-diagnostic-list-states
-  #{"unknown" "empty" "selected"})
+  #{"unknown" "empty" "selected" "unsupported" "storage" "authorization"
+    "rate" "transient" "network" "policy" "cancelled"})
 
 (def max-request-bytes contract/max-render-request-bytes)
 
@@ -1191,7 +1192,7 @@
       (.set "Referrer-Policy" "no-referrer")
       (.set "Content-Security-Policy"
             (if picker-config
-              "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://apis.google.com https://www.gstatic.com; frame-src https://docs.google.com https://accounts.google.com; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' https://www.googleapis.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+              "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://apis.google.com https://www.gstatic.com; frame-src https://docs.google.com https://accounts.google.com; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' https://www.googleapis.com https://*.googleapis.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
               "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")))
     (respond! exchange 200 "text/html; charset=utf-8" body)))
 
@@ -1239,7 +1240,8 @@
                ".picker-card{margin-top:clamp(1rem,5vw,3rem);padding:clamp(1.25rem,4vw,2.5rem);border-radius:1.1rem}"
                ".picker-card h1{font-size:clamp(2rem,6vw,3.5rem);line-height:1.05;letter-spacing:-.04em;margin:.5rem 0 1rem}"
                "</style></head><body data-theme=\"telemetry\"><main class=\"shell\"><section class=\"card picker-card\"><div class=\"eyebrow\">Google Drive</div><h1>Select a video</h1><p>Opening Google Drive Picker…</p>"
-               "<p>Choose a supported video from My Drive, a file shared with you, or a Shared Drive. Folders are for navigation only. You can also use the Upload tab.</p>"
+               "<p>Choose a supported video from My Drive, a file shared with you, or a Shared Drive. Folders are for navigation only.</p>"
+               "<p>Google Picker upload errors can be opaque. For actionable upload progress and recovery, return to Alpha Compose and use its direct Google Drive uploader, or <a href=\"https://drive.google.com\" target=\"_blank\" rel=\"noopener\">upload at drive.google.com</a> and select the video here.</p>"
                "<p>Selected: <output id=\"picker-selection\">None</output></p>"
                "<button id=\"report-empty\" type=\"button\">Report an empty Drive list</button>"
                "<script>"
@@ -1264,7 +1266,7 @@
                "function openPicker(){gapi.load('picker',()=>{"
                (ui/picker-views-script)
                "new google.picker.PickerBuilder()"
-               ".addView(driveView).addView(sharedDrivesView).addView(upload)"
+               ".addView(driveView).addView(sharedDrivesView)"
                ".setSelectableMimeTypes(pickerMimeTypes)"
                ".setOAuthToken(" token ").setDeveloperKey(" api-key ")"
                ".setAppId(" app-id ").setOrigin(location.origin)"

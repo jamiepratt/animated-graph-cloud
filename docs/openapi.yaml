@@ -8,7 +8,11 @@ info:
     but this API accepts only the nested `RenderRequest`. Successful H.264 jobs
     can later open owner-bound completed-output playback sessions. Browser
     sessions require `X-CSRF-Token` on writes; personal bearer tokens do not.
-    Google Drive delivery uses only the `drive.file` scope.
+    Google Drive delivery uses only the `drive.file` scope. The Compose UI
+    uploads local source videos resumably from the browser directly to Google
+    Drive, never through this API. The API validates the resulting Drive object
+    before playback and applies processing admission only to selected source
+    work, not the whole uploaded file.
   contact:
     email: me@jamiep.org
   license:
@@ -146,9 +150,13 @@ paths:
         returns a no-store HTML Picker page. The normal list view includes My
         Drive and files shared with the user; a separate list view enables
         Shared Drives. Results contain only supported video MIME types, while
-        non-selectable folders remain visible for navigation. The Upload tab
-        accepts supported source videos. Selecting a file grants per-file
-        access and does not broaden the OAuth scope.
+        non-selectable folders remain visible for navigation. Google Picker's
+        opaque Upload tab is not used. The Compose page instead uploads local
+        videos resumably and directly from the browser to Google Drive, then
+        validates the created Drive object through the normal selected-source
+        flow. Source bytes never pass through Alpha Compose, and no Alpha
+        Compose whole-file upload size limit is applied. Selecting or creating
+        a file grants per-file access and does not broaden the OAuth scope.
       security:
         - sessionCookie: []
       responses:
@@ -167,8 +175,8 @@ paths:
     post:
       operationId: reportGoogleDrivePickerDiagnostic
       tags: [Browser authorization]
-      summary: Report a privacy-safe Google Drive Picker state.
-      description: Records bounded Picker status categories without tokens, account values, filenames, or file IDs.
+      summary: Report a privacy-safe Google Drive selection or upload state.
+      description: Records bounded Picker and direct-upload status categories without tokens, account values, filenames, file IDs, or resumable session URLs.
       security:
         - sessionCookie: []
       parameters:
@@ -183,7 +191,9 @@ paths:
               properties:
                 phase: {type: string, enum: [opened, loaded, empty, selected, cancelled, error]}
                 view: {type: string, enum: [drive, upload, unknown]}
-                listState: {type: string, enum: [unknown, empty, selected]}
+                listState:
+                  type: string
+                  enum: [unknown, empty, selected, unsupported, storage, authorization, rate, transient, network, policy, cancelled]
       responses:
         "200":
           description: Diagnostic accepted.
@@ -1587,7 +1597,6 @@ components:
             - drive_playback_unavailable
             - compositing_requires_durable_job
             - synchronous_overlay_duration_exceeded
-            - source_video_too_large
             - invalid_source_video
             - drive_source_unavailable
             - invalid_idempotency_key
