@@ -781,7 +781,7 @@
          "const format=document.getElementById('telemetry-format'),input=document.getElementById('telemetry-file'),telemetry=document.getElementById('telemetry'),status=document.getElementById('telemetry-status'),next=document.getElementById('wizard-next');"
          "document.querySelector('input[name=\"wizard-outcome\"][value=\"transparent-overlay\"]').click();next.click();document.getElementById('timezone').value='UTC';document.getElementById('section-start-at').value='2026-07-17T10:00:00';document.getElementById('section-end-at').value='2026-07-17T10:00:02';next.click();"
          "const waitForStatus=node=>new Promise((resolve,reject)=>{const deadline=Date.now()+5000,check=()=>{if(node.classList.contains('success')||node.classList.contains('error'))resolve();else if(Date.now()>deadline)reject(new Error('Timed out waiting for activity-file status'));else setTimeout(check,5);};check();});"
-         "const upload=async(target,file,statusNode)=>{const transfer=new DataTransfer();if(file)transfer.items.add(file);target.files=transfer.files;target.dispatchEvent(new Event('change',{bubbles:true}));const clearedImmediately=telemetry.value==='';if(file)await waitForStatus(statusNode);return {clearedImmediately,format:format.value,content:telemetry.value,status:statusNode.textContent,success:statusNode.classList.contains('success'),error:statusNode.classList.contains('error')};};"
+         "const upload=async(target,file,statusNode)=>{const transfer=new DataTransfer();if(file)transfer.items.add(file);target.files=transfer.files;target.dispatchEvent(new Event('change',{bubbles:true}));const clearedImmediately=telemetry.value==='',nextHiddenImmediately=next.hidden;if(file)await waitForStatus(statusNode);return {clearedImmediately,format:format.value,content:telemetry.value,status:statusNode.textContent,success:statusNode.classList.contains('success'),error:statusNode.classList.contains('error'),...(file?{nextHiddenImmediately,nextHiddenAfter:next.hidden}:{})};};"
          "const fitBytes=Uint8Array.from(atob(" (json/write-str fit-base64) "),character=>character.charCodeAt(0));"
          "const fit=await upload(input,new File([fitBytes],'input.fit',{type:'application/octet-stream'}),status);fit.matches=fit.content===" (json/write-str fit-base64) ";fit.formValid=document.getElementById('render-form').checkValidity();fit.invalidIds=[...document.getElementById('render-form').querySelectorAll(':invalid')].map(node=>node.id||node.getAttribute('name')||node.tagName.toLowerCase());"
          "const polar=await upload(input,new File([" (json/write-str csv-text) "],'polar.csv',{type:'text/csv'}),status);polar.matches=polar.content===" (json/write-str csv-text) ";"
@@ -922,6 +922,36 @@
      html
      60000
      (str "--window-size=" window-size))))
+
+(defn- wizard-next-readiness-browser-outcome
+  [page window-size reduced-motion?]
+  (let [scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "(async()=>{let outcome;try{"
+         "const workflow=document.getElementById('compose-workflow'),next=document.getElementById('wizard-next'),transparent=document.querySelector('input[name=\"wizard-outcome\"][value=\"transparent-overlay\"]'),telemetryFormat=document.getElementById('telemetry-format'),telemetry=document.getElementById('telemetry'),zone=document.getElementById('timezone'),start=document.getElementById('section-start-at'),end=document.getElementById('section-end-at'),timer=document.getElementById('timer-enabled'),timerStart=document.getElementById('timer-start-at'),timerEnd=document.getElementById('timer-end-at'),input=node=>node.dispatchEvent(new Event('input',{bubbles:true})),settle=()=>new Promise(resolve=>setTimeout(resolve,30)),snapshot=()=>{const style=getComputedStyle(next);return {current:workflow.dataset.currentStep,hidden:next.hidden,label:next.textContent,readyClass:next.classList.contains('wizard-next-ready'),animationName:style.animationName,animationIterationCount:style.animationIterationCount,focus:document.activeElement===next,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};};"
+         "const initial=snapshot();next.focus();const initialFocusable=document.activeElement===next;"
+         "transparent.click();await settle();const routeReady=snapshot();"
+         "next.click();const activityIncomplete=snapshot();telemetryFormat.value='polar-csv';telemetry.value='timestamp,heart_rate\\n2026-07-17T09:00:00Z,120';input(telemetry);await settle();const activityReady=snapshot();input(telemetry);await settle();const activityStable=snapshot();"
+         "telemetry.value='';input(telemetry);const activityInvalidated=snapshot();telemetry.value='timestamp,heart_rate\\n2026-07-17T09:00:00Z,120';input(telemetry);await settle();const activityRestored=snapshot();"
+         "next.click();const timespanIncomplete=snapshot();zone.value='UTC';start.value='2026-07-17T09:00:00';end.value='2026-07-17T09:00:02';input(end);await settle();const timespanReady=snapshot();"
+         "const activityButton=[...document.querySelectorAll('#wizard-step-list button')].find(button=>button.dataset.stepId==='activity-data');activityButton.click();await settle();const activityRevisited=snapshot();next.click();next.click();await settle();const optionalReady=snapshot();timer.click();await settle();const branchedReady=snapshot();next.click();await settle();const timerReady=snapshot();const savedTimerStart=timerStart.value;timerStart.value='';input(timerStart);const timerInvalidated=snapshot();timerStart.value=savedTimerStart;input(timerStart);await settle();const timerRestored=snapshot();"
+         "next.click();await settle();const finishReady=snapshot();next.click();const review=snapshot();"
+         "outcome={viewportWidth:innerWidth,initial,initialFocusable,routeReady,activityIncomplete,activityReady,activityStable,activityInvalidated,activityRestored,timespanIncomplete,timespanReady,activityRevisited,optionalReady,branchedReady,timerReady,timerInvalidated,timerRestored,finishReady,review};"
+         "}catch(error){outcome={error:error.message,stack:error.stack};}"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "</body>" (str scenario "</body>")))
+        flags (cond-> [(str "--window-size=" window-size)]
+                reduced-motion?
+                (conj "--force-prefers-reduced-motion=reduce"))]
+    (apply browser-outcome
+           "agg-wizard-next-readiness-browser-"
+           "Wizard Next readiness regression requires Chrome or Chromium"
+           html
+           flags)))
 
 (defn- wizard-review-browser-outcome [page window-size]
   (let [request (-> (fixture/render-request)
@@ -2554,7 +2584,7 @@
               :currentSemantic "step"
               :currentButtons []
               :backDisabled true
-              :nextHidden false
+              :nextHidden true
               :focus nil
               :navigationParent "wizard-outcome-step"
               :navigationInsideCard true
@@ -2628,6 +2658,64 @@
         (is (true? (:navigationNoOverlap snapshot)) snapshot)))
     (is (= 1280 (:viewportWidth (first outcomes))))
     (is (<= (:viewportWidth (second outcomes)) 500))))
+
+(deftest wizard-next-appears-only-for-a-complete-step-with-a-destination
+  (let [page (ui/page {:user {:email "member@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})
+        desktop (wizard-next-readiness-browser-outcome
+                 page "1280,900" false)
+        mobile (wizard-next-readiness-browser-outcome
+                page "390,844" false)
+        reduced (wizard-next-readiness-browser-outcome
+                 page "390,844" true)]
+    (doseq [outcome [desktop mobile reduced]]
+      (is (nil? (:error outcome)) outcome)
+      (is (true? (get-in outcome [:initial :hidden])))
+      (is (false? (:initialFocusable outcome)))
+      (is (true? (get-in outcome [:routeReady :readyClass])))
+      (is (false? (get-in outcome [:routeReady :focus])))
+      (is (true? (get-in outcome [:activityIncomplete :hidden])))
+      (is (false? (get-in outcome [:activityReady :hidden])))
+      (is (true? (get-in outcome [:activityStable :readyClass])))
+      (is (true? (get-in outcome [:activityInvalidated :hidden])))
+      (is (true? (get-in outcome [:activityRestored :readyClass])))
+      (is (true? (get-in outcome [:timespanIncomplete :hidden])))
+      (is (false? (get-in outcome [:timespanReady :hidden])))
+      (is (= "activity-data"
+             (get-in outcome [:activityRevisited :current])))
+      (is (false? (get-in outcome [:activityRevisited :hidden])))
+      (is (false? (get-in outcome [:activityRevisited :readyClass])))
+      (is (= "optional-overlays"
+             (get-in outcome [:optionalReady :current])))
+      (is (true? (get-in outcome [:branchedReady :readyClass])))
+      (is (= "timer-overlay" (get-in outcome [:timerReady :current])))
+      (is (true? (get-in outcome [:timerInvalidated :hidden])))
+      (is (true? (get-in outcome [:timerRestored :readyClass])))
+      (is (= "Finish" (get-in outcome [:finishReady :label])))
+      (is (false? (get-in outcome [:finishReady :hidden])))
+      (is (= "review" (get-in outcome [:review :current])))
+      (is (true? (get-in outcome [:review :hidden])))
+      (is (every? true?
+                  (map :noHorizontalOverflow
+                       [(:routeReady outcome)
+                        (:activityReady outcome)
+                        (:activityInvalidated outcome)
+                        (:timespanReady outcome)
+                        (:optionalReady outcome)
+                        (:timerReady outcome)
+                        (:timerInvalidated outcome)
+                        (:finishReady outcome)
+                        (:review outcome)]))))
+    (is (= 1280 (:viewportWidth desktop)))
+    (is (<= (:viewportWidth mobile) 500))
+    (is (= "none" (get-in reduced [:routeReady :animationName])))
+    (is (= "wizard-next-ready"
+           (get-in desktop [:routeReady :animationName])))
+    (is (= "1" (get-in desktop
+                       [:routeReady :animationIterationCount])))))
 
 (deftest timeline-linked-fields-share-one-persistent-fullscreen-dock
   (let [page (ui/page {:user {:email "member@example.com" :role :member}
@@ -4411,6 +4499,8 @@
         (is (str/includes? (get-in outcome [result :status])
                            "Detected Polar CSV")))
       (is (true? (get-in outcome [:polar :clearedImmediately])))
+      (is (true? (get-in outcome [:polar :nextHiddenImmediately])))
+      (is (false? (get-in outcome [:polar :nextHiddenAfter])))
       (is (= {:clearedImmediately true
               :format ""
               :content ""

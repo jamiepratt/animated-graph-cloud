@@ -215,6 +215,18 @@
               :synchronization-decision)))
     (is (= :activity-data (:current-step invalidated)))))
 
+(deftest advance-readiness-requires-completion-and-an-active-destination
+  (let [initial (wizard/initial-state)
+        chosen (wizard/choose-route initial :finished-video)
+        at-review (assoc chosen :current-step :review)
+        no-destination (assoc initial
+                              :completion {:completed-steps
+                                           #{:outcome}})]
+    (is (false? (wizard/advance-ready? initial)))
+    (is (true? (wizard/advance-ready? chosen)))
+    (is (false? (wizard/advance-ready? at-review)))
+    (is (false? (wizard/advance-ready? no-destination)))))
+
 (deftest synchronization-change-invalidates-finished-video-downstream-state
   (let [shared (-> (wizard/initial-state)
                    (wizard/choose-route :finished-video)
