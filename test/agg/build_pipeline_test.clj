@@ -9,6 +9,17 @@
   (is (str/includes? proto "affected-tests:"))
   (is (str/includes? proto "fetch-depth: 0"))
   (is (str/includes? proto "clojure -M:test-changed"))
+  (let [affected-start (str/index-of proto "  affected-tests:")
+        proto-start (str/index-of proto "  proto-tests:")
+        affected (when (and affected-start proto-start)
+                   (subs proto affected-start proto-start))
+        ffmpeg (some-> affected
+                       (str/index-of "sudo apt-get install --yes ffmpeg"))
+        selector (some-> affected
+                         (str/index-of "clojure -M:test-changed"))]
+    (is (every? number? [affected-start proto-start ffmpeg selector]))
+    (when (every? number? [ffmpeg selector])
+      (is (< ffmpeg selector))))
   (is (str/includes? proto "proto-tests:"))
   (is (str/includes? proto "needs: affected-tests"))
   (is (str/includes? proto "Run complete proto-area gate"))

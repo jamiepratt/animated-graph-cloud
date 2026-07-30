@@ -37,6 +37,10 @@ jobs:
       - uses: DeLaGuardo/setup-clojure@13.6.1
         with:
           cli: 1.12.5.1654
+      - name: Install FFmpeg for selected media tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg
       - name: Run affected proto feedback
         env:
           BASE_SHA: ${{ github.event.before }}
