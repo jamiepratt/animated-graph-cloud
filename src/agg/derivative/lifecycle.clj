@@ -766,7 +766,7 @@
   (preparation-cancellation-requested? [_ job-id attempt]
     (let [job (exact-attempt-job (get-in @state [:jobs job-id]) attempt)]
       (cond
-        (= :running (:state job)) false
+        (contains? #{:running :succeeded} (:state job)) false
         (contains? #{:cancellation-requested :cancelled :expired :revoked}
                    (:state job)) true
         :else (invalid-derivative-attempt!))))

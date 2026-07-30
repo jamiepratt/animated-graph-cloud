@@ -1,6 +1,8 @@
 (ns agg.derivative-worker-test
   (:refer-clojure :exclude [proxy])
-  (:require [agg.derivative.worker :as worker]
+  (:require [agg.derivative.lifecycle :as derivative]
+            [agg.derivative.storage :as storage]
+            [agg.derivative.worker :as worker]
             [agg.drive.range-proxy :as range-proxy]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]])
@@ -369,6 +371,98 @@
                 output (make-array java.nio.file.LinkOption 0))))
       (finally
         (Files/deleteIfExists output)))))
+
+(deftest duplicate-worker-after-publication-keeps-winning-generation-playable
+  (let [{:keys [service]}
+        (derivative/in-memory-preparation-system
+         {:fingerprint-secret "fixture-secret"})
+        request {:subject "private-owner"
+                 :email "owner@example.com"
+                 :membership-version "membership-v1"
+                 :file-id "private-id"
+                 :drive-version "17"
+                 :source-bytes 4096
+                 :source-duration-seconds 10.0}
+        job-id
+        (get-in (derivative/submit-preparation!
+                 service "duplicate-worker" request)
+                [:job :id])
+        _ (derivative/dispatch-preparation! service job-id)
+        asset-store (storage/in-memory-asset-store)
+        output (Files/createTempFile
+                "agg-worker-duplicate-" ".mp4"
+                (make-array FileAttribute 0))
+        bytes (.getBytes "0123456789abcdef")
+        published (atom nil)
+        dependencies
+        {:service service
+         :output-path output
+         :load-preparation-attempt derivative/load-preparation-attempt
+         :source-access!
+         (fn [_ _ _]
+           {:gateway :gateway
+            :access-token "private-authority"
+            :file-id "private-id"})
+         :preparation-cancellation-requested?
+         derivative/preparation-cancellation-requested?
+         :start-source-proxy!
+         (fn [_]
+           (proxy {:upstream-bytes 4096
+                   :request-count 1
+                   :retry-count 0
+                   :cache-hit-count 0
+                   :failure-reason nil}))
+         :inspect-source! (fn [_] {:width 320 :height 180 :audio? true})
+         :encode!
+         (fn [encode-request]
+           (Files/write ^Path (:output-path encode-request)
+                        ^bytes bytes
+                        (make-array java.nio.file.OpenOption 0))
+           {:output-path (:output-path encode-request)
+            :content-type "video/mp4"
+            :output-bytes (alength ^bytes bytes)
+            :duration-seconds 10.0
+            :video {:codec "h264"}
+            :audio {:codec "aac"}
+            :fast-start? true})
+         :publish-derivative!
+         (fn [_ publication]
+           (let [stored (storage/publish-verified! asset-store publication)
+                 completion
+                 (merge stored
+                        {:asset-id (:asset-id publication)
+                         :object-key (:object-key publication)
+                         :measurements {:output-bytes (:size publication)}})]
+             (reset! published
+                     (merge stored
+                            {:object-key (:object-key publication)}))
+             (derivative/complete-preparation-attempt!
+              service job-id 1 completion)
+             stored))
+         :delete-derivative!
+         (fn [_ asset]
+           (storage/delete-generation! asset-store asset))
+         :complete-preparation-attempt!
+         derivative/complete-preparation-attempt!
+         :fail-preparation-attempt!
+         derivative/fail-preparation-attempt!
+         :acknowledge-preparation-cancellation!
+         derivative/acknowledge-preparation-cancellation!}
+        result
+        (try
+          (worker/run-cloud-attempt!
+           {:job-id job-id :attempt 1}
+           dependencies)
+          (finally
+            (Files/deleteIfExists output)))
+        response
+        (storage/open-range! asset-store @published {:start 3 :end 7})]
+    (is (= "succeeded" (:state result)))
+    (is (= "34567"
+           (with-open [body (:body response)]
+             (String. (.readAllBytes body)))))
+    (is (= "succeeded"
+           (:state (derivative/get-preparation service job-id))))))
 
 (deftest proxy-budget-failure-wins-over-ffmpeg-symptoms
   (let [data
