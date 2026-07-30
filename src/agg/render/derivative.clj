@@ -90,12 +90,19 @@
                        "-i" "anullsrc=r=48000:cl=stereo"])
         mapping (if source-has-audio?
                   ["-map" "0:v:0" "-map" "0:a:0"]
-                  ["-map" "0:v:0" "-map" "1:a:0"])]
+                  ["-map" "0:v:0" "-map" "1:a:0"])
+        stream-isolation
+        ["-map_metadata" "-1"
+         "-map_chapters" "-1"
+         "-write_tmcd" "0"
+         "-sn"
+         "-dn"]]
     (into []
           (concat
            source-input
            audio-input
            mapping
+           stream-isolation
            ["-t" duration
             "-vf" video-filter
             "-r" "25"

@@ -69,6 +69,19 @@
     "-y" (str path)])
   path)
 
+(defn- timecoded-hvc1-fixture! [^Path path]
+  (run-command!
+   ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
+    "-f" "lavfi" "-i" "testsrc2=size=320x180:rate=30"
+    "-f" "lavfi" "-i" "sine=frequency=440:sample_rate=44100"
+    "-t" "1"
+    "-map" "0:v:0" "-map" "1:a:0"
+    "-c:v" "libx265" "-preset" "ultrafast" "-tag:v" "hvc1"
+    "-c:a" "aac"
+    "-timecode" "01:00:00:00"
+    "-y" (str path)])
+  path)
+
 (defn- local-file-gateway [^bytes source]
   (let [size (alength source)]
     (reify drive/PlaybackGateway
@@ -131,6 +144,10 @@
         (is (not (str/includes? filter-argument "reset_sar=")))))
     (testing "audio is deterministic AAC-LC stereo"
       (doseq [argument ["aac" "aac_low" "48000" "2" "128000"]]
+        (is (some #{argument} command) argument)))
+    (testing "source metadata cannot create extra output streams"
+      (doseq [argument ["-map_metadata" "-map_chapters"
+                        "-write_tmcd" "-sn" "-dn"]]
         (is (some #{argument} command) argument)))))
 
 (deftest encode-command-generates-bounded-silence-when-audio-is-missing
@@ -272,6 +289,41 @@
         (is (= :derivative-ready (:classification result)))
         (is (= [320 180]
                ((juxt :width :height) (:video result))))
+        (is (= {:codec "aac"
+                :profile "LC"
+                :sample-rate 48000
+                :channels 2}
+               (:audio result))))
+      (finally
+        (Files/deleteIfExists source)
+        (Files/deleteIfExists output)))))
+
+(deftest timecoded-source-produces-only-the-fixed-video-and-audio-streams
+  (let [source (temp-path! "agg-generated-timecoded-hvc1-" ".mp4")
+        output (temp-path! "agg-generated-timecode-free-derivative-" ".mp4")]
+    (try
+      (timecoded-hvc1-fixture! source)
+      (Files/deleteIfExists output)
+      (let [source-bytes (Files/readAllBytes source)
+            result
+            (worker/run!
+             {:classification :derivative-required
+              :source-duration-seconds 1
+              :source-bytes (alength source-bytes)
+              :output-path output}
+             {:proxy-config
+              {:gateway (local-file-gateway source-bytes)
+               :access-token "opaque"
+               :file-id "opaque"}})]
+        (is (= :derivative-ready (:classification result)))
+        (is (= {:codec "h264"
+                :profile "High"
+                :level 40
+                :pixel-format "yuv420p"
+                :width 320
+                :height 180
+                :fps "25/1"}
+               (:video result)))
         (is (= {:codec "aac"
                 :profile "LC"
                 :sample-rate 48000
