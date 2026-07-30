@@ -2267,6 +2267,10 @@
          (when (satisfies? drive/PlaybackGateway gateway)
            (:durationSeconds
             (drive-gcp/inspect-recording-clock!
+             gateway access-token file-id metadata)))
+         (when (satisfies? drive/PlaybackAnalysisGateway gateway)
+           (:durationSeconds
+            (drive/inspect-playback!
              gateway access-token file-id metadata))))
         authoritative-source-bytes
         (let [reported (:size metadata)]

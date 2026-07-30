@@ -591,6 +591,7 @@
                       :codecTag "avc1"
                       :profile "High"
                       :pixelFormat "yuv420p"}
+              :durationSeconds 1.0
               :audio {:codec "aac"}}
              (drive/inspect-playback!
               gateway "access" "private-file"
@@ -659,6 +660,7 @@
              {:size source-size :mimeType "video/mp4"})]
         (is (= {:container {:format "mp4" :majorBrand "isom"}
                 :video {:codec "h264" :codecTag "avc1"}
+                :durationSeconds 1.0
                 :audio {:codec "aac"}}
                (update evidence :video select-keys [:codec :codecTag]))))
       (is (every?

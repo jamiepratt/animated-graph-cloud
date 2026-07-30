@@ -371,8 +371,9 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
-(deftest preparation-admission-uses-bounded-duration-when-drive-omits-it
-  (let [inspections (atom [])
+(deftest preparation-admission-uses-bounded-playback-duration-when-drive-omits-it
+  (let [clock-inspections (atom [])
+        playback-inspections (atom [])
         drive-gateway
         (reify
           drive/SourceGateway
@@ -386,7 +387,15 @@
           (stream-source! [_ _ _ _])
           drive/PlaybackGateway
           (open-source-range! [_ _ _ _]
-            (throw (UnsupportedOperationException.))))
+            (throw (UnsupportedOperationException.)))
+          drive/PlaybackAnalysisGateway
+          (inspect-playback! [_ access-token file-id metadata]
+            (swap! playback-inspections conj
+                   [access-token file-id
+                    (select-keys metadata [:size :mimeType])])
+            {:durationSeconds 84.5
+             :container {:format "mp4" :majorBrand "isom"}
+             :video {:codec "hevc" :codecTag "hvc1"}}))
         {:keys [system cookie csrf]} (auth-fixture drive-gateway)
         preparation
         (derivative/in-memory-preparation-system
@@ -400,10 +409,10 @@
       (with-redefs
        [drive-gcp/inspect-recording-clock!
         (fn [_ access-token file-id metadata]
-          (swap! inspections conj
+          (swap! clock-inspections conj
                  [access-token file-id
                   (select-keys metadata [:size :mimeType])])
-          {:durationSeconds 84.5})]
+          {:durationSeconds nil})]
         (let [response
               (request! port :post "/v1/derivative-preparations"
                         {:fileId "private-id"}
@@ -413,7 +422,10 @@
           (is (= 202 (.statusCode response)) (.body response))
           (is (= [["private-access" "private-id"
                    {:size 4096 :mimeType "video/quicktime"}]]
-                 @inspections))))
+                 @clock-inspections))
+          (is (= [["private-access" "private-id"
+                   {:size 4096 :mimeType "video/quicktime"}]]
+                 @playback-inspections))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

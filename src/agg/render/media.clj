@@ -363,6 +363,12 @@
     (try
       (let [probe (json/read-str output :key-fn keyword)
             format (:format probe)
+            duration-seconds
+            (let [duration (some-> (:duration format) parse-double)]
+              (when (and duration
+                         (Double/isFinite duration)
+                         (pos? duration))
+                duration))
             video
             (first (filter #(= "video" (:codec_type %)) (:streams probe)))
             audio
@@ -382,6 +388,8 @@
                          :codecTag (:codec_tag_string video)
                          :profile (:profile video)
                          :pixelFormat (:pix_fmt video)}}
+          duration-seconds
+          (assoc :durationSeconds duration-seconds)
           audio
           (assoc :audio {:codec (:codec_name audio)})))
       (catch Throwable error
@@ -417,7 +425,8 @@
      "-analyzeduration" "10000000"
      "-probesize" "67108864"
      "-show_entries"
-     (str "format=format_name:format_tags=major_brand,compatible_brands:"
+     (str "format=format_name,duration:"
+          "format_tags=major_brand,compatible_brands:"
           "stream=codec_type,codec_name,codec_tag_string,profile,pix_fmt")
      "-of" "json"
      url]
@@ -435,7 +444,8 @@
      "-analyzeduration" "10000000"
      "-probesize" "67108864"
      "-show_entries"
-     (str "format=format_name:format_tags=major_brand,compatible_brands:"
+     (str "format=format_name,duration:"
+          "format_tags=major_brand,compatible_brands:"
           "stream=codec_type,codec_name,codec_tag_string,profile,pix_fmt")
      "-of" "json"
      (str path)]
