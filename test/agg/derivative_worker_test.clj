@@ -781,3 +781,75 @@
         (is (not (str/includes? (pr-str terminal) "private-object-key"))))
       (finally
         (Files/deleteIfExists output)))))
+
+(deftest cloud-attempt-emits-only-failed-verification-constraint-keys
+  (let [job-id "00000000-0000-0000-0000-000000000221"
+        output (Files/createTempFile
+                "agg-worker-verification-failure-" ".mp4"
+                (make-array FileAttribute 0))
+        events (atom [])
+        failures (atom [])]
+    (try
+      (with-redefs
+       [worker/run!
+        (fn [_ _]
+          (throw
+           (ex-info
+            "private verification symptom"
+            {:type :agg.render.derivative/verification-failed
+             :failure-code "derivative_verification_failed"
+             :verification-failures
+             ["video_duration_match" "fast_start"]
+             :output-path "/tmp/private-source.mov"
+             :probe {:codec_name "private-codec"}})))]
+        (is (thrown?
+             clojure.lang.ExceptionInfo
+             (worker/run-cloud-attempt!
+              {:job-id job-id :attempt 1}
+              {:service :service
+               :output-path output
+               :load-preparation-attempt
+               (fn [_ _ _]
+                 {:job-id job-id
+                  :attempt 1
+                  :profile worker/profile
+                  :asset {:id job-id
+                          :object-key "derivatives/opaque-final.mp4"}
+                  :source {:file-id "private-id"
+                           :bytes 4096
+                           :duration-seconds 10}
+                  :owner {:subject "private-owner"}
+                  :observability {:request-id job-id}})
+               :source-access!
+               (fn [_ _ _]
+                 {:gateway :gateway
+                  :access-token "private-authority"
+                  :file-id "private-id"})
+               :preparation-cancellation-requested? (fn [& _] false)
+               :fail-preparation-attempt!
+               (fn [_ _ _ failure]
+                 (swap! failures conj failure))
+               :event-sink
+               (fn [event fields]
+                 (swap! events conj [event fields]))}))))
+      (is (= [{:failure-code "derivative_verification_failed"
+               :retryable false}]
+             @failures))
+      (let [failed-events
+            (filterv
+             #(contains?
+               #{"derivative_encode_exited"
+                 "derivative_preparation_terminal"}
+               (first %))
+             @events)]
+        (is (= 2 (count failed-events)))
+        (is (every?
+             #(= ["video_duration_match" "fast_start"]
+                 (:verificationFailures (second %)))
+             failed-events))
+        (is (not
+             (re-find
+              #"private|output-path|probe|codec"
+              (pr-str failed-events)))))
+      (finally
+        (Files/deleteIfExists output)))))

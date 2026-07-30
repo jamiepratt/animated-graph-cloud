@@ -37,6 +37,24 @@
     (is (thrown? IllegalArgumentException
                  (errors/raise! "Invalid" {})))))
 
+(deftest raise-keeps-only-allowlisted-verification-failures
+  (let [data
+        (fn [failures]
+          (try
+            (errors/raise!
+             "Verification failed"
+             {:type ::verification-failed
+              :verification-failures failures})
+            (catch clojure.lang.ExceptionInfo error
+              (ex-data error))))]
+    (is (= ["video_duration_match" "fast_start"]
+           (:verification-failures
+            (data ["video_duration_match" "fast_start"]))))
+    (is (not
+         (contains?
+          (data ["video_duration_match" "private-source.mov"])
+          :verification-failures)))))
+
 (deftest wrapping-adds-source-and-preserves-cause
   (let [inner (try
                 (errors/raise! "Inner" {:type ::inner :line 12})

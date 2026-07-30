@@ -336,36 +336,60 @@
         output (temp-path! "agg-generated-failure-output-" ".mp4")]
     (try
       (hevc-fixture! source 320 180 true)
-      (doseq [[expected-type overrides]
+      (doseq [[expected-type expected-failures overrides]
               [[::derivative/cancelled
+                nil
                 {:cancelled? (constantly true)}]
                [::derivative/timeout
+                nil
                 {:timeout-ms 1}]
                [::derivative/verification-failed
+                ["probe_readable"]
                 {:ffprobe "/usr/bin/false"}]]]
         (Files/deleteIfExists output)
         (with-source-server
           source
           (fn [source-url]
-            (is (= expected-type
-                   (:type
-                    (caught-data
-                     #(derivative/encode!
-                       (merge
-                        {:ffmpeg "ffmpeg"
-                         :ffprobe "ffprobe"
-                         :source-url source-url
-                         :source-duration-seconds 1
-                         :source-width 320
-                         :source-height 180
-                         :source-has-audio? true
-                         :output-path output}
-                        overrides))))))))
+            (let [data
+                  (caught-data
+                   #(derivative/encode!
+                     (merge
+                      {:ffmpeg "ffmpeg"
+                       :ffprobe "ffprobe"
+                       :source-url source-url
+                       :source-duration-seconds 1
+                       :source-width 320
+                       :source-height 180
+                       :source-has-audio? true
+                       :output-path output}
+                      overrides)))]
+              (is (= expected-type (:type data)))
+              (when expected-failures
+                (is (= expected-failures
+                       (:verification-failures data)))))))
         (is (not (Files/exists
                   output (make-array java.nio.file.LinkOption 0)))))
       (finally
         (Files/deleteIfExists source)
         (Files/deleteIfExists output)))))
+
+(deftest missing-output-reports-only-the-failed-presence-constraint
+  (let [output (temp-path! "agg-missing-derivative-output-" ".mp4")]
+    (Files/deleteIfExists output)
+    (let [data
+          (caught-data
+           #(derivative/verify!
+             {:ffprobe "ffprobe"
+              :output-path output
+              :source-duration-seconds 1
+              :source-width 320
+              :source-height 180}))]
+      (is (= ::derivative/verification-failed (:type data)))
+      (is (= "derivative_verification_failed" (:failure-code data)))
+      (is (= ["output_present"] (:verification-failures data)))
+      (is (= #{:type :source :failure-code :verification-failures}
+             (set (keys data))))
+      (is (not (str/includes? (pr-str data) (str output)))))))
 
 (deftest invalid-or-premature-source-fails-with-bounded-diagnostics
   (let [source (temp-path! "agg-generated-invalid-source-" ".bin")
@@ -407,18 +431,22 @@
       (with-source-server
         source
         (fn [source-url]
-          (is (= ::derivative/verification-failed
-                 (:type
-                  (caught-data
-                   #(derivative/encode!
-                     {:ffmpeg "ffmpeg"
-                      :ffprobe "ffprobe"
-                      :source-url source-url
-                      :source-duration-seconds 2
-                      :source-width 320
-                      :source-height 180
-                      :source-has-audio? false
-                      :output-path output})))))))
+          (let [data
+                (caught-data
+                 #(derivative/encode!
+                   {:ffmpeg "ffmpeg"
+                    :ffprobe "ffprobe"
+                    :source-url source-url
+                    :source-duration-seconds 2
+                    :source-width 320
+                    :source-height 180
+                    :source-has-audio? false
+                    :output-path output}))]
+            (is (= ::derivative/verification-failed (:type data)))
+            (is (= ["video_duration_match"]
+                   (:verification-failures data)))
+            (is (= #{:type :source :failure-code :verification-failures}
+                   (set (keys data)))))))
       (is (not (Files/exists
                 output (make-array java.nio.file.LinkOption 0))))
       (finally

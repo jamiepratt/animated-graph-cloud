@@ -343,14 +343,18 @@
                     (= :publication @phase) "publication_failed"
                     :else "derivative_failed"))
                 failure-fields
-                (merge
-                 {:severity (if cancelled? "WARNING" "ERROR")
-                  :status (if cancelled? "cancelled" "failed")
-                  :reason failure-code
-                  :errorType (some-> (:type data) str)
-                  :retryable retryable
-                  :elapsedMs (elapsed-millis attempt-started-nanos)}
-                 (observability/exception-fields error))]
+                (cond->
+                 (merge
+                  {:severity (if cancelled? "WARNING" "ERROR")
+                   :status (if cancelled? "cancelled" "failed")
+                   :reason failure-code
+                   :errorType (some-> (:type data) str)
+                   :retryable retryable
+                   :elapsedMs (elapsed-millis attempt-started-nanos)}
+                  (observability/exception-fields error))
+                  (= ::render-derivative/verification-failed (:type data))
+                  (assoc :verificationFailures
+                         (:verification-failures data)))]
             (case @phase
               :encode
               (emit-worker-event!

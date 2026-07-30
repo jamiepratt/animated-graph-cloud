@@ -222,12 +222,22 @@
 (defn- parse-rate [rate]
   (when-let [[_ numerator denominator]
              (and (string? rate) (re-matches #"(\d+)/(\d+)" rate))]
-    (let [denominator (parse-long denominator)]
-      (when (pos? denominator)
-        (/ (double (parse-long numerator)) denominator)))))
+    (try
+      (let [denominator (parse-long denominator)]
+        (when (pos? denominator)
+          (/ (double (parse-long numerator)) denominator)))
+      (catch NumberFormatException _
+        nil))))
+
+(defn- parse-double-safe [value]
+  (when (string? value)
+    (try
+      (parse-double value)
+      (catch NumberFormatException _
+        nil))))
 
 (defn- duration [probe]
-  (some-> (get-in probe [:format :duration]) parse-double))
+  (parse-double-safe (get-in probe [:format :duration])))
 
 (defn- atom-order [^Path output-path]
   (with-open [file (RandomAccessFile. (.toFile output-path) "r")]
@@ -254,26 +264,45 @@
 
 (defn- fitting-dimensions?
   [source-width source-height width height]
-  (let [landscape? (>= source-width source-height)
-        max-width (if landscape? 1920 1080)
-        max-height (if landscape? 1080 1920)
-        source-ratio (/ (double source-width) source-height)
-        output-ratio (/ (double width) height)]
-    (and (pos-int? width)
-         (pos-int? height)
-         (even? width)
-         (even? height)
-         (<= width source-width)
-         (<= width max-width)
-         (<= height source-height)
-         (<= height max-height)
-         (< (Math/abs (- source-ratio output-ratio)) 0.02))))
+  (and (pos-int? width)
+       (pos-int? height)
+       (let [landscape? (>= source-width source-height)
+             max-width (if landscape? 1920 1080)
+             max-height (if landscape? 1080 1920)
+             source-ratio (/ (double source-width) source-height)
+             output-ratio (/ (double width) height)]
+         (and
+          (even? width)
+          (even? height)
+          (<= width source-width)
+          (<= width max-width)
+          (<= height source-height)
+          (<= height max-height)
+          (< (Math/abs (- source-ratio output-ratio)) 0.02)))))
 
-(defn- verification-failure! []
+(def verification-diagnostic-keys
+  errors/derivative-verification-diagnostic-keys)
+
+(defn- verification-failure! [failures]
   (throw
    (errors/raise! "Derivative artifact verification failed"
                   {:type ::verification-failed
-                   :failure-code "derivative_verification_failed"})))
+                   :failure-code "derivative_verification_failed"
+                   :verification-failures
+                   (->> failures
+                        (filter verification-diagnostic-keys)
+                        distinct
+                        vec)})))
+
+(defn- failed-verification-checks [checks]
+  (into []
+        (keep (fn [[diagnostic passed?]]
+                (when-not passed? diagnostic)))
+        checks))
+
+(defn- duration-match? [expected actual]
+  (or (not (number? actual))
+      (<= (Math/abs (- (double expected) actual)) 0.08)))
 
 (defn inspect-source!
   "Returns only the media shape needed by the encoder from its local proxy."
@@ -331,13 +360,17 @@
            source-height timeout-ms]
     :or {timeout-ms max-wall-time-ms}}]
   (let [output-path ^Path output-path
-        output-bytes (output-size output-path)]
+        output-bytes (output-size output-path)
+        output-failures
+        (failed-verification-checks
+         [["output_present" (pos? output-bytes)]
+          ["output_size" (<= output-bytes max-output-bytes)]])]
     (when-not (and (integer? timeout-ms)
                    (pos? timeout-ms)
-                   (<= timeout-ms max-wall-time-ms)
-                   (pos? output-bytes)
-                   (<= output-bytes max-output-bytes))
-      (verification-failure!))
+                   (<= timeout-ms max-wall-time-ms))
+      (verification-failure! ["verification_deadline"]))
+    (when (seq output-failures)
+      (verification-failure! output-failures))
     (let [probe
           (try
             (json/read-str
@@ -364,7 +397,8 @@
                 (throw
                  (errors/raise! "Derivative artifact verification failed"
                                 {:type ::verification-failed
-                                 :failure-code "derivative_verification_failed"}
+                                 :failure-code "derivative_verification_failed"
+                                 :verification-failures ["probe_readable"]}
                                 error)))))
           streams (:streams probe)
           videos (filterv #(= "video" (:codec_type %)) streams)
@@ -372,47 +406,56 @@
           video (first videos)
           audio (first audios)
           actual-duration (duration probe)
-          video-duration (some-> (:duration video) parse-double)
-          audio-duration (some-> (:duration audio) parse-double)
-          atoms (atom-order output-path)
+          video-duration (parse-double-safe (:duration video))
+          audio-duration (parse-double-safe (:duration audio))
+          atoms
+          (try
+            (atom-order output-path)
+            (catch Throwable _
+              []))
           moov-index (.indexOf atoms "moov")
           mdat-index (.indexOf atoms "mdat")
-          valid?
-          (and (str/includes? (or (get-in probe [:format :format_name]) "")
-                              "mp4")
-               (= 2 (count streams))
-               (= 1 (count videos))
-               (= 1 (count audios))
-               (= "h264" (:codec_name video))
-               (= "High" (:profile video))
-               (= 40 (:level video))
-               (= "yuv420p" (:pix_fmt video))
-               (= 25.0 (parse-rate (:r_frame_rate video)))
-               (= 25.0 (parse-rate (:avg_frame_rate video)))
-               (fitting-dimensions?
-                source-width source-height (:width video) (:height video))
-               (= "aac" (:codec_name audio))
-               (= "LC" (:profile audio))
-               (= "48000" (:sample_rate audio))
-               (= 2 (:channels audio))
-               (= "stereo" (:channel_layout audio))
-               (number? actual-duration)
-               (number? video-duration)
-               (number? audio-duration)
-               (<= (Math/abs
-                    (- (double source-duration-seconds) actual-duration))
-                   0.08)
-               (<= (Math/abs
-                    (- (double source-duration-seconds) video-duration))
-                   0.08)
-               (<= (Math/abs
-                    (- (double source-duration-seconds) audio-duration))
-                   0.08)
-               (<= actual-duration max-duration-seconds)
-               (<= 0 moov-index)
-               (< moov-index mdat-index))]
-      (when-not valid?
-        (verification-failure!))
+          failures
+          (failed-verification-checks
+           [["container"
+             (let [format-name (get-in probe [:format :format_name])]
+               (and (string? format-name)
+                    (str/includes? format-name "mp4")))]
+            ["stream_count" (= 2 (count streams))]
+            ["video_stream_count" (= 1 (count videos))]
+            ["audio_stream_count" (= 1 (count audios))]
+            ["video_codec" (= "h264" (:codec_name video))]
+            ["video_profile" (= "High" (:profile video))]
+            ["video_level" (= 40 (:level video))]
+            ["video_pixel_format" (= "yuv420p" (:pix_fmt video))]
+            ["video_frame_rate"
+             (= 25.0 (parse-rate (:r_frame_rate video)))]
+            ["video_average_frame_rate"
+             (= 25.0 (parse-rate (:avg_frame_rate video)))]
+            ["video_dimensions"
+             (fitting-dimensions?
+              source-width source-height (:width video) (:height video))]
+            ["audio_codec" (= "aac" (:codec_name audio))]
+            ["audio_profile" (= "LC" (:profile audio))]
+            ["audio_sample_rate" (= "48000" (:sample_rate audio))]
+            ["audio_channels" (= 2 (:channels audio))]
+            ["audio_channel_layout" (= "stereo" (:channel_layout audio))]
+            ["duration" (number? actual-duration)]
+            ["video_duration" (number? video-duration)]
+            ["audio_duration" (number? audio-duration)]
+            ["duration_match"
+             (duration-match? source-duration-seconds actual-duration)]
+            ["video_duration_match"
+             (duration-match? source-duration-seconds video-duration)]
+            ["audio_duration_match"
+             (duration-match? source-duration-seconds audio-duration)]
+            ["duration_limit"
+             (or (not (number? actual-duration))
+                 (<= actual-duration max-duration-seconds))]
+            ["fast_start"
+             (and (<= 0 moov-index) (< moov-index mdat-index))]])]
+      (when (seq failures)
+        (verification-failure! failures))
       {:output-path output-path
        :content-type "video/mp4"
        :output-bytes output-bytes

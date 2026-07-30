@@ -5,6 +5,7 @@ set -eu
 # Keep the proto branch gate scoped to proto surfaces only.
 # Do not expand this script to clojure -M:test-all.
 clj-kondo --lint \
+  src/agg/errors.clj \
   src/agg/observability.clj \
   src/agg/derivative/worker.clj \
   src/agg/drive/range_proxy.clj \

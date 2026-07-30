@@ -197,6 +197,27 @@
            :cacheOutcome "owner@example.com"
            :profileVersion "https://storage.example/private"}))))
 
+(deftest derivative-verification-fields-keep-only-the-finite-vocabulary
+  (is (= {:component "derivative"
+          :event "derivative_encode_exited"
+          :operation "derivative_encode"
+          :status "failed"
+          :verificationFailures
+          ["video_duration_match" "fast_start"]}
+         (observability/safe-event-fields
+          {:component "derivative"
+           :event "derivative_encode_exited"
+           :operation "derivative_encode"
+           :status "failed"
+           :verificationFailures
+           ["video_duration_match" "fast_start"]})))
+  (is (not
+       (contains?
+        (observability/safe-event-fields
+         {:verificationFailures
+          ["video_duration_match" "private-source.mov"]})
+        :verificationFailures))))
+
 (deftest early-access-delivery-event-keeps-only-bounded-operations-data
   (is (= {:severity "ERROR"
           :component "api"

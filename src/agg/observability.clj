@@ -1,5 +1,6 @@
 (ns agg.observability
-  (:require [clojure.data.json :as json]
+  (:require [agg.errors :as errors]
+            [clojure.data.json :as json]
             [clojure.string :as str]
             [taoensso.telemere :as tel]
             [taoensso.tufte :as tufte]
@@ -18,7 +19,7 @@
     :operation :bytesRequested :bytesTransferred :exceptionStack
     :cancellationLagMs :durationBucket :cacheOutcome :profileVersion
     :sourceBytes :upstreamBytes :outputBytes :reservedMinorUnits
-    :queueDepth})
+    :queueDepth :verificationFailures})
 
 (def ^:private safe-value-keys
   #{:severity :component :event :message :reason :failureCode :errorType
@@ -110,6 +111,11 @@
     (and (vector? value)
          (<= 1 (count value) 24)
          (every? safe-stack-frame? value))
+    (= :verificationFailures key)
+    (and (vector? value)
+         (<= 1 (count value)
+             (count errors/derivative-verification-diagnostic-keys))
+         (every? errors/derivative-verification-diagnostic-keys value))
     (contains? safe-value-keys key) (safe-string? value)
     (contains? #{:cleanupErrors :components} key)
     (and (vector? value) (<= (count value) 16) (every? safe-string? value))
