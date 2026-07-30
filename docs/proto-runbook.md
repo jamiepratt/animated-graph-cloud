@@ -181,12 +181,26 @@ Distinguish lifecycle boundaries:
 | Owner-bound byte range | `derivative_playback` |
 | Cancellation | `derivative_cancellation` |
 | Expiry and repair | `derivative_reconciliation` |
+| Worker cleanup | `derivative_cleanup` |
+
+The worker keeps one 840-second compute deadline inside the 900-second Cloud
+Run task limit. The remaining minute is reserved for process termination,
+failure persistence, proxy shutdown, and output cleanup. Successful attempts
+emit ordered, identity-free transitions for streaming startup, source
+inspection, FFmpeg startup and exit, verification, streaming shutdown,
+publication, terminal persistence, and cleanup.
+
+A focused media regression generates a 2048x1152 HVC1/AAC source larger than
+one 8 MiB transfer window. It must complete the real loopback proxy, inspection,
+downscale, encode, verification, and cleanup path in under 60 seconds. This
+leaves at least 14 minutes of local evidence margin without a live preparation
+reservation.
 
 Query those boundaries for one request:
 
 ```sh
 gcloud logging read \
-  '(resource.type="cloud_run_revision" OR resource.type="cloud_run_job") AND jsonPayload.requestId="REPLACE_REQUEST_ID" AND jsonPayload.operation=("derivative_cache" OR "derivative_queue" OR "derivative_dispatch" OR "derivative_encode" OR "derivative_verification" OR "derivative_publication" OR "derivative_playback" OR "derivative_cancellation" OR "derivative_reconciliation")' \
+  '(resource.type="cloud_run_revision" OR resource.type="cloud_run_job") AND jsonPayload.requestId="REPLACE_REQUEST_ID" AND jsonPayload.operation=("derivative_cache" OR "derivative_queue" OR "derivative_dispatch" OR "derivative_encode" OR "derivative_verification" OR "derivative_publication" OR "derivative_playback" OR "derivative_cancellation" OR "derivative_reconciliation" OR "derivative_cleanup")' \
   --freshness=24h --limit=100 \
   --format='table(timestamp,jsonPayload.event,jsonPayload.operation,jsonPayload.status,jsonPayload.reason,jsonPayload.elapsedMs,jsonPayload.queueAgeMs,jsonPayload.rangeStart,jsonPayload.rangeEnd,jsonPayload.bytesRequested,jsonPayload.bytesTransferred,jsonPayload.upstreamBytes,jsonPayload.outputBytes,jsonPayload.cacheOutcome,jsonPayload.reservedMinorUnits)'
 ```

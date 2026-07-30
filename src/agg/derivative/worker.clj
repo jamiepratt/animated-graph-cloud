@@ -16,6 +16,13 @@
 
 (declare run!)
 
+(def ^:private cloud-timeout-ms
+  (* 1000
+     (get-in contract/contract-v1 [:limits :compute :timeout-seconds])))
+(def ^:private cleanup-margin-ms 60000)
+(def ^:private worker-compute-timeout-ms
+  (- cloud-timeout-ms cleanup-margin-ms))
+
 (def ^:private runtime-limit-contract
   [["AGG_DERIVATIVE_MAX_SOURCE_DURATION_SECONDS"
     :source-duration-seconds [:limits :source :max-duration-seconds]]
@@ -161,6 +168,40 @@
 (defn- emit-worker-event! [event fields]
   (observability/emit-context-event! "derivative" event fields))
 
+(defn- emit-worker-stage! [stage]
+  (when-let [[event operation status]
+             (get
+              {:streaming-started
+               ["derivative_streaming_started"
+                "derivative_encode" "started"]
+               :inspection-started
+               ["derivative_inspection_started"
+                "derivative_encode" "started"]
+               :inspection-completed
+               ["derivative_inspection_succeeded"
+                "derivative_encode" "succeeded"]
+               :ffmpeg-started
+               ["derivative_ffmpeg_started"
+                "derivative_encode" "started"]
+               :ffmpeg-completed
+               ["derivative_ffmpeg_exited"
+                "derivative_encode" "succeeded"]
+               :verification-started
+               ["derivative_verification_started"
+                "derivative_verification" "started"]
+               :verification-completed
+               ["derivative_verification_succeeded"
+                "derivative_verification" "succeeded"]
+               :streaming-stopped
+               ["derivative_streaming_stopped"
+                "derivative_encode" "succeeded"]}
+              stage)]
+    (emit-worker-event!
+     event
+     {:severity "INFO"
+      :operation operation
+      :status status})))
+
 (defn run-cloud-attempt!
   "Loads, verifies, immutably publishes, and completes one exact private attempt."
   [{:keys [job-id attempt]}
@@ -222,7 +263,8 @@
                 :output-path output-path}
                (assoc dependencies
                       :proxy-config access
-                      :cancelled? cancelled?))
+                      :cancelled? cancelled?
+                      :stage! emit-worker-stage!))
               _ (emit-worker-event!
                  "derivative_encode_exited"
                  {:severity "INFO"
@@ -231,12 +273,6 @@
                   :elapsedMs (elapsed-millis encode-started-nanos)
                   :sourceBytes (:bytes source)
                   :upstreamBytes (get-in verified [:transfer :upstream-bytes])
-                  :outputBytes (:output-bytes verified)})
-              _ (emit-worker-event!
-                 "derivative_verification_succeeded"
-                 {:severity "INFO"
-                  :operation "derivative_verification"
-                  :status "succeeded"
                   :outputBytes (:output-bytes verified)})
               _ (reset! phase :publication)
               publication
@@ -354,7 +390,12 @@
                         :operation "derivative_preparation")))))
           (throw error))
         (finally
-          (Files/deleteIfExists ^Path output-path))))))
+          (Files/deleteIfExists ^Path output-path)
+          (emit-worker-event!
+           "derivative_cleanup_completed"
+           {:severity "INFO"
+            :operation "derivative_cleanup"
+            :status "succeeded"}))))))
 
 (defn- required-resolve [symbol]
   (or (requiring-resolve symbol)
@@ -424,6 +465,17 @@
   (when (instance? Path output-path)
     (Files/deleteIfExists ^Path output-path)))
 
+(defn- remaining-time-ms [deadline-nanos timeout-ms]
+  (let [remaining
+        (quot (- deadline-nanos (System/nanoTime)) 1000000)]
+    (when-not (pos? remaining)
+      (throw
+       (errors/raise! "Derivative worker exceeded its compute deadline"
+                      {:type ::render-derivative/timeout
+                       :failure-code "derivative_timeout"
+                       :timeout-ms timeout-ms})))
+    remaining))
+
 (defn- proxy-failure!
   [stats cause]
   (let [reason (:failure-reason stats)
@@ -466,32 +518,48 @@
   [{:keys [classification source-duration-seconds output-path]
     :as request}
    {:keys [proxy-config start-source-proxy! inspect-source! encode! cancelled?
-           ffmpeg ffprobe]
+           ffmpeg ffprobe timeout-ms stage!]
     :or {start-source-proxy! range-proxy/start!
          inspect-source! render-derivative/inspect-source!
          encode! render-derivative/encode!
          cancelled? (constantly false)
          ffmpeg "ffmpeg"
-         ffprobe "ffprobe"}}]
+         ffprobe "ffprobe"
+         timeout-ms worker-compute-timeout-ms
+         stage! (fn [_])}}]
   (if (= :direct-passthrough classification)
     {:classification :direct-passthrough}
     (do
       (require-derivative! classification)
       (validate-source! request)
-      (with-open [proxy
-                  ^Closeable
-                  (start-source-proxy!
-                   (assoc proxy-config :size (:source-bytes request)
-                          :limits range-proxy/derivative-limits-v1))]
+      (when-not (and (integer? timeout-ms)
+                     (pos? timeout-ms)
+                     (<= timeout-ms worker-compute-timeout-ms))
+        (throw
+         (errors/raise! "Derivative worker deadline is invalid"
+                        {:type ::invalid-runtime-contract
+                         :field "timeout-ms"
+                         :limit worker-compute-timeout-ms})))
+      (let [deadline-nanos
+            (+ (System/nanoTime) (* timeout-ms 1000000))
+            proxy
+            ^Closeable
+            (start-source-proxy!
+             (assoc proxy-config :size (:source-bytes request)
+                    :stream-open-ended? true
+                    :limits
+                    (assoc range-proxy/derivative-limits-v1
+                           :lifetime-ms timeout-ms)))]
+        (stage! :streaming-started)
         (try
+          (stage! :inspection-started)
           (let [{:keys [width height audio?]}
                 (inspect-source!
                  {:ffprobe ffprobe
                   :source-url (:url proxy)
                   :timeout-ms
-                  (* 1000
-                     (get-in contract/contract-v1
-                             [:limits :compute :timeout-seconds]))})
+                  (remaining-time-ms deadline-nanos timeout-ms)})
+                _ (stage! :inspection-completed)
                 result
                 (encode!
                  {:ffmpeg ffmpeg
@@ -502,7 +570,10 @@
                   :source-height height
                   :source-has-audio? audio?
                   :output-path output-path
-                  :cancelled? cancelled?})
+                  :timeout-ms
+                  (remaining-time-ms deadline-nanos timeout-ms)
+                  :cancelled? cancelled?
+                  :stage! stage!})
                 stats ((:stats proxy))]
             (validate-result! result stats)
             (assoc (select-keys result safe-result-keys)
@@ -510,4 +581,7 @@
                    :transfer (transfer-result stats)))
           (catch Throwable error
             (delete-output! output-path)
-            (proxy-failure! ((:stats proxy)) error)))))))
+            (proxy-failure! ((:stats proxy)) error))
+          (finally
+            (.close proxy)
+            (stage! :streaming-stopped)))))))

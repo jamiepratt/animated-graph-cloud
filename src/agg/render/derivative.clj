@@ -262,8 +262,10 @@
          (pos-int? height)
          (even? width)
          (even? height)
-         (<= width source-width max-width)
-         (<= height source-height max-height)
+         (<= width source-width)
+         (<= width max-width)
+         (<= height source-height)
+         (<= height max-height)
          (< (Math/abs (- source-ratio output-ratio)) 0.02))))
 
 (defn- verification-failure! []
@@ -290,7 +292,7 @@
         (try
           (json/read-str
            (process/run-captured-as!
-            [ffprobe "-v" "error"
+            [ffprobe "-v" "quiet"
              "-show_entries" "stream=codec_type,width,height"
              "-of" "json" source-url]
             timeout-ms ::inspection-failed ::inspection-timeout)
@@ -430,9 +432,10 @@
 (defn encode!
   "Encodes and verifies one bounded derivative from an opaque loopback proxy."
   [{:keys [output-path source-duration-seconds source-width source-height
-           timeout-ms cancelled?]
+           timeout-ms cancelled? stage!]
     :or {timeout-ms max-wall-time-ms
-         cancelled? (constantly false)}
+         cancelled? (constantly false)
+         stage! (fn [_])}
     :as request}]
   (let [output-path (if (instance? Path output-path)
                       output-path
@@ -446,7 +449,8 @@
                    (integer? timeout-ms)
                    (pos? timeout-ms)
                    (<= timeout-ms max-wall-time-ms)
-                   (ifn? cancelled?))
+                   (ifn? cancelled?)
+                   (ifn? stage!))
       (throw
        (errors/raise! "Derivative encode request is invalid"
                       {:type ::invalid-encode-request
@@ -454,9 +458,11 @@
     (predicted-maximum-output-bytes source-duration-seconds)
     (Files/deleteIfExists output-path)
     (try
+      (stage! :ffmpeg-started)
       (run-encode!
        (encode-command (assoc request :output-path output-path))
        output-path timeout-ms cancelled?)
+      (stage! :ffmpeg-completed)
       (when (cancelled?)
         (throw
          (errors/raise! "Derivative encoding was cancelled"
@@ -471,10 +477,15 @@
                                  :failure-code "derivative_timeout"
                                  :timeout-ms timeout-ms})))
             result
-            (verify!
-             (assoc request
-                    :output-path output-path
-                    :timeout-ms (- timeout-ms elapsed-ms)))
+            (do
+              (stage! :verification-started)
+              (let [verified
+                    (verify!
+                     (assoc request
+                            :output-path output-path
+                            :timeout-ms (- timeout-ms elapsed-ms)))]
+                (stage! :verification-completed)
+                verified))
             total-elapsed-ms
             (quot (- (System/nanoTime) started) 1000000)]
         (validate-runtime!

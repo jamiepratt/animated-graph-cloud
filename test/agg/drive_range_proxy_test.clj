@@ -129,6 +129,61 @@
         (is (= [{:start 0 :end 15 :timeout-ms 1000}]
                @upstream-ranges))))))
 
+(deftest open-ended-range-remains-bounded-by-default
+  (let [gateway
+        (reify drive/PlaybackGateway
+          (open-source-range! [_ _ _ {:keys [start end]}]
+            {:status 206
+             :headers {"content-range" (str "bytes " start "-" end "/100")
+                       "content-length" (str (inc (- end start)))}
+             :body (ByteArrayInputStream.
+                    (byte-array (inc (- end start))))}))]
+    (with-open [proxy (range-proxy/start!
+                        {:gateway gateway
+                         :access-token "access"
+                         :file-id "file"
+                         :size 100
+                         :limits (limits)})]
+      (let [response (get-range (:url proxy) "bytes=0-")]
+        (is (= "bytes 0-15/100"
+               (.orElse
+                (.firstValue (.headers response) "Content-Range") "")))
+        (is (= 16 (alength ^bytes (.body response))))))))
+
+(deftest open-ended-range-streams-the-complete-source-in-bounded-windows
+  (let [upstream-ranges (atom [])
+        source (byte-array (map byte (range 100)))
+        gateway
+        (reify drive/PlaybackGateway
+          (open-source-range! [_ _ _ {:keys [start end] :as byte-range}]
+            (swap! upstream-ranges conj byte-range)
+            (let [length (inc (- end start))
+                  body (byte-array length)]
+              (System/arraycopy source (int start) body 0 (int length))
+              {:status 206
+               :headers {"content-range" (str "bytes " start "-" end "/100")
+                         "content-length" (str length)}
+               :body (ByteArrayInputStream. body)})))]
+    (with-open [proxy (range-proxy/start!
+                        {:gateway gateway
+                         :access-token "access"
+                         :file-id "file"
+                         :size 100
+                         :stream-open-ended? true
+                         :limits (limits {:max-upstream-bytes 100
+                                          :max-request-count 7})})]
+      (let [response (get-range (:url proxy) "bytes=0-")]
+        (is (= 206 (.statusCode response)))
+        (is (= (seq source) (seq ^bytes (.body response))))
+        (is (= [{:start 0 :end 15 :timeout-ms 1000}
+                {:start 16 :end 31 :timeout-ms 1000}
+                {:start 32 :end 47 :timeout-ms 1000}
+                {:start 48 :end 63 :timeout-ms 1000}
+                {:start 64 :end 79 :timeout-ms 1000}
+                {:start 80 :end 95 :timeout-ms 1000}
+                {:start 96 :end 99 :timeout-ms 1000}]
+               @upstream-ranges))))))
+
 (deftest malformed-drive-range-and-early-eof-fail-closed
   (doseq [response
           [{:status 206

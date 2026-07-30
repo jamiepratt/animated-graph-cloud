@@ -59,7 +59,8 @@
     "derivative_publication"
     "derivative_playback"
     "derivative_cancellation"
-    "derivative_reconciliation"})
+    "derivative_reconciliation"
+    "derivative_cleanup"})
 
 (def ^:private safe-operation-statuses
   #{"started" "succeeded" "failed" "received" "resolved" "queued"

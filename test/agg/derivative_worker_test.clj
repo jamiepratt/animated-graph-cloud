@@ -80,6 +80,8 @@
           (fn [_] {:width 320 :height 180 :audio? true})
           :cancelled? (constantly false)})]
     (is (= "private-source-id" (:file-id @proxy-request)))
+    (is (true? (:stream-open-ended? @proxy-request)))
+    (is (= 840000 (get-in @proxy-request [:limits :lifetime-ms])))
     (is (= {:classification :derivative-ready
             :output-path (:output-path derivative-request)
             :content-type "video/mp4"
@@ -141,6 +143,46 @@
               (catch clojure.lang.ExceptionInfo caught caught))]
         (is (= failure-code (:failure-code (ex-data error))))))))
 
+(deftest derivative-worker-shares-one-bounded-compute-deadline
+  (let [proxy-request (atom nil)
+        inspection-timeout (atom nil)
+        encode-timeout (atom nil)
+        result
+        (worker/run!
+         derivative-request
+         {:timeout-ms 1000
+          :proxy-config {:gateway :gateway
+                         :file-id "opaque"
+                         :access-token "opaque"}
+          :start-source-proxy!
+          (fn [request]
+            (reset! proxy-request request)
+            (proxy {:upstream-bytes 4096
+                    :request-count 1
+                    :retry-count 0
+                    :cache-hit-count 0
+                    :failure-reason nil}))
+          :inspect-source!
+          (fn [{:keys [timeout-ms]}]
+            (reset! inspection-timeout timeout-ms)
+            (Thread/sleep 10)
+            {:width 320 :height 180 :audio? true})
+          :encode!
+          (fn [{:keys [timeout-ms output-path]}]
+            (reset! encode-timeout timeout-ms)
+            {:output-path output-path
+             :content-type "video/mp4"
+             :output-bytes 2048
+             :duration-seconds 10.0
+             :video {:codec "h264"}
+             :audio {:codec "aac"}
+             :fast-start? true})})]
+    (is (= :derivative-ready (:classification result)))
+    (is (= 1000 (get-in @proxy-request [:limits :lifetime-ms])))
+    (is (<= 1 @inspection-timeout 1000))
+    (is (<= 1 @encode-timeout))
+    (is (< @encode-timeout @inspection-timeout))))
+
 (deftest worker-cli-and-runtime-limits-match-the-cloud-run-contract
   (is (= {:job-id "00000000-0000-0000-0000-000000000194"
           :attempt 2}
@@ -183,11 +225,13 @@
   (is (= {:max-upstream-bytes 2415919104
           :max-request-count 320
           :max-range-bytes 8388608
+          :max-concurrent-requests 4
           :max-cache-bytes 8388608
           :lifetime-ms 900000}
          (select-keys range-proxy/derivative-limits-v1
                       [:max-upstream-bytes :max-request-count
-                       :max-range-bytes :max-cache-bytes :lifetime-ms]))))
+                       :max-range-bytes :max-concurrent-requests
+                       :max-cache-bytes :lifetime-ms]))))
 
 (deftest cloud-attempt-consumes-only-the-exact-private-worker-record
   (let [job-id "00000000-0000-0000-0000-000000000194"
@@ -247,6 +291,11 @@
               (is (= "http://127.0.0.1:43123/source/opaque"
                      (:source-url request)))
               (is (false? ((:cancelled? request))))
+              (doseq [stage [:ffmpeg-started
+                             :ffmpeg-completed
+                             :verification-started
+                             :verification-completed]]
+                ((:stage! request) stage))
               {:output-path (:output-path request)
                :content-type "video/mp4"
                :output-bytes 2048
@@ -301,11 +350,19 @@
               output (make-array java.nio.file.LinkOption 0))))
     (is (not (str/includes? (pr-str result) "private")))
     (is (= ["derivative_encode_started"
-            "derivative_encode_exited"
+            "derivative_streaming_started"
+            "derivative_inspection_started"
+            "derivative_inspection_succeeded"
+            "derivative_ffmpeg_started"
+            "derivative_ffmpeg_exited"
+            "derivative_verification_started"
             "derivative_verification_succeeded"
+            "derivative_streaming_stopped"
+            "derivative_encode_exited"
             "derivative_publication_started"
             "derivative_publication_succeeded"
-            "derivative_preparation_terminal"]
+            "derivative_preparation_terminal"
+            "derivative_cleanup_completed"]
            (mapv first @events)))
     (is (every?
          #(= {:requestId operation-request-id
@@ -323,7 +380,10 @@
             :upstreamBytes 4096
             :outputBytes 2048}
            (select-keys
-            (second (nth @events 1))
+            (second
+             (first
+              (filter #(= "derivative_encode_exited" (first %))
+                      @events)))
             [:operation :status :sourceBytes :upstreamBytes :outputBytes])))
     (is (= {:operation "derivative_preparation"
             :status "succeeded"
@@ -331,7 +391,10 @@
             :outputBytes 2048
             :reservedMinorUnits 125}
            (select-keys
-            (second (last @events))
+            (second
+             (first
+              (filter #(= "derivative_preparation_terminal" (first %))
+                      @events)))
             [:operation :status :reason :outputBytes
              :reservedMinorUnits])))
     (is (not (re-find

@@ -1,8 +1,11 @@
 (ns agg.derivative-media-test
-  (:require [agg.render.derivative :as derivative]
+  (:require [agg.derivative.worker :as worker]
+            [agg.drive.core :as drive]
+            [agg.render.derivative :as derivative]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]])
   (:import (com.sun.net.httpserver HttpHandler HttpServer)
+           (java.io ByteArrayInputStream)
            (java.lang ProcessBuilder$Redirect)
            (java.net InetSocketAddress)
            (java.nio.file Files Path)
@@ -40,6 +43,30 @@
                 ["-an"])
               ["-y" (str path)]))))
   path)
+
+(defn- large-hvc1-fixture! [^Path path]
+  (run-command!
+   ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
+    "-f" "lavfi" "-i" "testsrc2=size=2048x1152:rate=30"
+    "-f" "lavfi" "-i" "sine=frequency=440:sample_rate=44100"
+    "-t" "3"
+    "-c:v" "libx265" "-preset" "ultrafast"
+    "-x265-params" "lossless=1" "-tag:v" "hvc1"
+    "-c:a" "aac"
+    "-y" (str path)])
+  path)
+
+(defn- local-file-gateway [^bytes source]
+  (let [size (alength source)]
+    (reify drive/PlaybackGateway
+      (open-source-range! [_ _ _ {:keys [start end]}]
+        (let [length (inc (- end start))
+              body (byte-array length)]
+          (System/arraycopy source (int start) body 0 (int length))
+          {:status 206
+           :headers {"content-range" (str "bytes " start "-" end "/" size)
+                     "content-length" (str length)}
+           :body (ByteArrayInputStream. body)})))))
 
 (defn- with-source-server [^Path path operation]
   (let [body (Files/readAllBytes path)
@@ -159,6 +186,51 @@
                 (update :output-bytes
                         #(if (pos? %) :positive :not-positive))
                 (dissoc :output-path))))))
+      (finally
+        (Files/deleteIfExists source)
+        (Files/deleteIfExists output)))))
+
+(deftest representative-hvc1-source-completes-the-worker-path-with-safe-margin
+  (let [source (temp-path! "agg-generated-large-hvc1-" ".mp4")
+        output (temp-path! "agg-generated-large-derivative-" ".mp4")]
+    (try
+      (large-hvc1-fixture! source)
+      (Files/deleteIfExists output)
+      (let [source-bytes (Files/readAllBytes source)
+            stages (atom [])
+            started (System/nanoTime)
+            result
+            (worker/run!
+             {:classification :derivative-required
+              :source-duration-seconds 3
+              :source-bytes (alength source-bytes)
+              :output-path output}
+             {:proxy-config
+              {:gateway (local-file-gateway source-bytes)
+               :access-token "opaque"
+               :file-id "opaque"}
+              :inspect-source!
+              #(derivative/inspect-source!
+                (assoc % :timeout-ms 10000))
+              :stage! #(swap! stages conj %)})
+            elapsed-ms (quot (- (System/nanoTime) started) 1000000)]
+        (is (= :derivative-ready (:classification result)))
+        (is (= [1920 1080]
+               ((juxt :width :height) (:video result))))
+        (is (> (get-in result [:transfer :upstream-bytes])
+               (* 8 1024 1024)))
+        (is (> (get-in result [:transfer :request-count]) 1))
+        (is (= [:streaming-started
+                :inspection-started
+                :inspection-completed
+                :ffmpeg-started
+                :ffmpeg-completed
+                :verification-started
+                :verification-completed
+                :streaming-stopped]
+               @stages))
+        (is (< elapsed-ms 60000)
+            "synthetic HVC1 worker path must keep 14 minutes of headroom"))
       (finally
         (Files/deleteIfExists source)
         (Files/deleteIfExists output)))))

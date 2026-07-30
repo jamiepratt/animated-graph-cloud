@@ -5,11 +5,12 @@
             [agg.errors :as errors]
             [clojure.string :as str])
   (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
-           (java.io Closeable InputStream)
+           (java.io Closeable IOException InputStream)
            (java.net InetSocketAddress)
            (java.util UUID)
-           (java.util.concurrent Callable ExecutionException FutureTask
-                                 TimeUnit TimeoutException)))
+           (java.util.concurrent Callable ExecutionException ExecutorService
+                                 Executors FutureTask TimeUnit
+                                 TimeoutException)))
 
 (def ^:private required-limit-keys
   #{:max-upstream-bytes
@@ -32,6 +33,7 @@
            :max-upstream-bytes (:max-upstream-bytes transfer)
            :max-request-count (:max-request-count transfer)
            :max-range-bytes (:max-range-bytes transfer)
+           :max-concurrent-requests 4
            :max-cache-bytes (:max-range-bytes transfer)
            :lifetime-ms (* 1000 timeout-seconds))))
 
@@ -44,7 +46,8 @@
        (<= (:max-cache-bytes limits) (:max-range-bytes limits))))
 
 (defn- require-configuration!
-  [{:keys [gateway access-token file-id size limits]}]
+  [{:keys [gateway access-token file-id size limits
+           stream-open-ended?]}]
   (when-not (and (satisfies? drive/PlaybackGateway gateway)
                  (string? access-token)
                  (not (str/blank? access-token))
@@ -52,6 +55,7 @@
                  (not (str/blank? file-id))
                  (integer? size)
                  (pos? size)
+                 (boolean? stream-open-ended?)
                  (valid-limits? limits))
     (throw (errors/raise! "Renderer range proxy configuration is invalid"
                           {:type ::invalid-configuration}))))
@@ -60,7 +64,8 @@
   (throw (errors/raise! "Renderer source range is not satisfiable"
                         {:type ::invalid-range :size size})))
 
-(defn- requested-range [header size max-range-bytes]
+(defn- requested-range
+  [header size max-range-bytes stream-open-ended?]
   (if (str/blank? header)
     {:start 0
      :end (dec (min size max-range-bytes))}
@@ -77,7 +82,9 @@
           (let [length (min size suffix max-range-bytes)]
             {:start (- size length) :end (dec size)}))
         (let [start (parse-long start-text)
-              end (if (str/blank? end-text)
+              open-ended? (str/blank? end-text)
+              stream? (and open-ended? stream-open-ended?)
+              end (if open-ended?
                     (dec size)
                     (parse-long end-text))]
           (when-not (and start end (< start size) (<= start end))
@@ -85,7 +92,10 @@
           {:start start
            :end (min (dec size)
                      end
-                     (dec (+ start max-range-bytes)))})))))
+                     (if stream?
+                       (dec size)
+                       (dec (+ start max-range-bytes))))
+           :stream? stream?})))))
 
 (defn- write-response!
   [^HttpExchange exchange status headers ^bytes body]
@@ -225,11 +235,34 @@
             (throw error))
           (:value result))))))
 
+(defn- write-streaming-response!
+  [^HttpExchange exchange status headers state start end]
+  (doseq [[key value] headers]
+    (.set (.getResponseHeaders exchange) key value))
+  (.sendResponseHeaders exchange status (long (inc (- end start))))
+  (with-open [output (.getResponseBody exchange)]
+    (try
+      (loop [offset start]
+        (when (<= offset end)
+          (let [chunk-end
+                (min end
+                     (dec (+ offset
+                             (get-in state [:limits :max-range-bytes]))))
+                loaded (load-range! state offset chunk-end)
+                bytes (cached-bytes loaded offset chunk-end)]
+            (.write output ^bytes bytes)
+            (.flush output)
+            (recur (inc chunk-end)))))
+      (catch IOException _
+        nil))))
+
 (defn- acquire! [active limit]
   (<= (swap! active inc) limit))
 
 (defn- handler
-  [{:keys [path size limits started-nanos active cache failure] :as state}]
+  [{:keys [path size limits started-nanos active cache failure
+           stream-open-ended?]
+    :as state}]
   (reify HttpHandler
     (^void handle [_ ^HttpExchange exchange]
       (let [acquired? (acquire! active (:max-concurrent-requests limits))]
@@ -255,25 +288,31 @@
 
             :else
             (try
-              (let [{:keys [start end]}
+              (let [{:keys [start end stream?]}
                     (requested-range
                      (some-> exchange .getRequestHeaders (.getFirst "Range"))
-                     size (:max-range-bytes limits))
-                    cached (cached-bytes @cache start end)
-                    bytes
-                    (if cached
-                      (do
-                        (swap! (:counters state) update :cache-hit-count inc)
-                        cached)
-                      (cached-bytes (load-range! state start end) start end))]
-                (write-response!
-                 exchange 206
-                 {"Content-Type" "video/mp4"
-                  "Content-Range" (str "bytes " start "-" end "/" size)
-                  "Accept-Ranges" "bytes"
-                  "Cache-Control" "no-store"
-                  "Content-Length" (str (alength bytes))}
-                 bytes))
+                     size (:max-range-bytes limits)
+                     stream-open-ended?)
+                    headers
+                    {"Content-Type" "video/mp4"
+                     "Content-Range" (str "bytes " start "-" end "/" size)
+                     "Accept-Ranges" "bytes"
+                     "Cache-Control" "no-store"
+                     "Content-Length" (str (inc (- end start)))}]
+                (if stream?
+                  (write-streaming-response!
+                   exchange 206 (assoc headers "Connection" "close")
+                   state start end)
+                  (let [cached (cached-bytes @cache start end)
+                        bytes
+                        (if cached
+                          (do
+                            (swap! (:counters state)
+                                   update :cache-hit-count inc)
+                            cached)
+                          (cached-bytes
+                           (load-range! state start end) start end))]
+                    (write-response! exchange 206 headers bytes))))
               (catch clojure.lang.ExceptionInfo error
                 (let [data (ex-data error)
                       type (:type data)]
@@ -308,15 +347,21 @@
 
 (defn start!
   "Starts a task-scoped loopback HTTP range proxy for one Drive source."
-  [{:keys [gateway access-token file-id size limits]}]
+  [{:keys [gateway access-token file-id size limits stream-open-ended?]
+    :or {stream-open-ended? false}}]
   (require-configuration!
    {:gateway gateway
     :access-token access-token
     :file-id file-id
     :size size
-    :limits limits})
+    :limits limits
+    :stream-open-ended? stream-open-ended?})
   (let [path (str "/source/" (UUID/randomUUID))
         server (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)
+        executor
+        ^ExecutorService
+        (Executors/newFixedThreadPool
+         (:max-concurrent-requests limits))
         counters (atom {:upstream-bytes 0
                         :request-count 0
                         :retry-count 0
@@ -330,6 +375,7 @@
                :file-id file-id
                :size size
                :limits limits
+               :stream-open-ended? stream-open-ended?
                :path path
                :started-nanos started-nanos
                :counters counters
@@ -337,11 +383,13 @@
                :active active
                :failure failure}]
     (.createContext server path (handler state))
+    (.setExecutor server executor)
     (.start server)
     (reify
       Closeable
       (close [_]
-        (.stop server 0))
+        (.stop server 0)
+        (.shutdownNow executor))
       Object
       (toString [_]
         (str "#<range-proxy " path ">"))
