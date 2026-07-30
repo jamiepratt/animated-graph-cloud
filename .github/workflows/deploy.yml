@@ -43,10 +43,19 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Build image
-        run: docker build --tag "$IMAGE" .
+        env:
+          IMAGE_TAG: ${{ env.IMAGE }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: >-
+          docker build
+          --build-arg BUILD_COMMIT="$RELEASE_COMMIT"
+          --tag "$IMAGE_TAG" .
 
       - name: Test image entry points
-        run: test/container_smoke.sh "$IMAGE"
+        env:
+          IMAGE_TAG: ${{ env.IMAGE }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: test/container_smoke.sh "$IMAGE_TAG" "$RELEASE_COMMIT"
 
       - name: Scan image
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0

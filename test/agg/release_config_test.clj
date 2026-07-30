@@ -14,6 +14,33 @@
     (when (and start end)
       (subs text start end))))
 
+(deftest release-images-and-workflows-carry-and-verify-the-exact-main-commit
+  (let [dockerfile (slurp "Dockerfile")
+        build (slurp "build.clj")
+        production (slurp ".github/workflows/deploy-production.yml")
+        development (slurp ".github/workflows/deploy.yml")
+        smoke (slurp "test/container_smoke.sh")]
+    (doseq [contract ["ARG BUILD_COMMIT=dev"
+                      "ARG RELEASE_MODE=development"
+                      "COPY CHANGELOG.md ./CHANGELOG.md"
+                      "AGG_BUILD_COMMIT=$BUILD_COMMIT"
+                      "AGG_RELEASE_MODE=$RELEASE_MODE"]]
+      (testing contract
+        (is (str/includes? dockerfile contract))))
+    (is (str/includes? build "{:src \"CHANGELOG.md\""))
+    (doseq [workflow [production development]]
+      (is (str/includes? workflow "--build-arg BUILD_COMMIT=\"$RELEASE_COMMIT\""))
+      (is (str/includes? workflow "test/container_smoke.sh \"$IMAGE_TAG\" \"$RELEASE_COMMIT\"")))
+    (is (str/includes? production "--build-arg RELEASE_MODE=production"))
+    (is (str/includes? production "\"$PUBLIC_BASE_URL/changelog\""))
+    (is (str/includes? production "v0.6.0 · build $SHORT_RELEASE_COMMIT"))
+    (is (str/includes? smoke "expected_build=\"${2:-dev}\""))
+    (is (str/includes? smoke "\"http://127.0.0.1:$api_host_port/changelog\""))
+    (is (str/includes? smoke "v0.6.0 · build $short_build"))
+    (is (not (str/includes? (slurp "CHANGELOG.md") "Alpha Compose Proto")))
+    (is (not (str/includes? (slurp "resources/agg/main-version.edn")
+                            "0.8.0")))))
+
 (deftest production-infrastructure-is-isolated-and-main-only
   (let [production (slurp "infra/prod/main.tf")
         backend (slurp "infra/prod/versions.tf")

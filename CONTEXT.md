@@ -5,6 +5,12 @@ Alpha Compose is the public product. The `animated-graph-cloud` service accepts 
 ## Invariants
 
 - One deployable Clojure application exposes `agg.api.main` and `agg.renderer.main` entry points.
+- Main and proto have independent semantic versions, changelogs, deployment
+  verification, and tag namespaces. Before 1.0, additions and breaking changes
+  bump minor, fixes bump patch, and internal-only changes do not require a bump.
+- Every complete main HTML page links its main semantic version and immutable
+  seven-character build identity to `/changelog`; local builds show `build dev`.
+  Production rejects missing, malformed, or development build identity.
 - The API is a scale-to-zero Cloud Run service; rendering uses Cloud Run Jobs.
 - Supported cloud resources live in Warsaw (`europe-central2`).
 - Firestore is Native mode in `europe-central2`.

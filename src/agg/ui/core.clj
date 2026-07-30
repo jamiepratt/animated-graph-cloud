@@ -2,6 +2,7 @@
   (:require [agg.admin.core :as admin]
             [agg.drive.core :as drive]
             [agg.jobs.lifecycle :as jobs]
+            [agg.main-release :as main-release]
             [agg.ui.project :as project]
             [agg.ui.wizard :as wizard]
             [clojure.data.json :as json]
@@ -408,12 +409,24 @@
    [:privacy "/privacy" "Privacy"]
    [:terms "/terms" "Terms"]])
 
+(defn product-identity []
+  (str "<div class=\"product-identity\">"
+       "<a class=\"brand\" href=\"/\">Alpha Compose</a>"
+       "<a class=\"release-identity\" href=\"/changelog\">"
+       (escape-html (:label main-release/current))
+       "</a></div>"))
+
+(defn picker-product-header []
+  (str "<header class=\"product-header picker-product-header\">"
+       (product-identity)
+       "</header>"))
+
 (defn product-header
   ([]
    (product-header nil))
   ([active-nav]
    (str
-    "<header class=\"product-header\"><a class=\"brand\" href=\"/\">Alpha Compose</a>"
+    "<header class=\"product-header\">" (product-identity)
     "<nav aria-label=\"Product\">"
     (apply str
            (for [[nav-key path label] product-nav-items]
@@ -447,7 +460,9 @@
    ".shell,.shell>*{min-width:0}.shell>header{padding:clamp(.9rem,2vw,1.25rem);background:var(--color-surface);border:1px solid var(--color-border);border-radius:1rem;box-shadow:var(--shadow-surface)}.muted,.hint{color:var(--color-muted)}"
    ".field-hint{display:block;color:var(--color-muted);font-weight:400;margin-top:.2rem}"
    ".product-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin:1rem 0 2rem}"
+   ".product-identity{display:flex;flex-direction:column;align-items:flex-start;min-width:0}"
    ".product-header .brand{color:var(--color-text);font-weight:800;letter-spacing:-.03em;text-decoration:none}"
+   ".release-identity{display:block;color:var(--color-muted);font-size:.78rem;line-height:1.35;overflow-wrap:anywhere}"
    ".product-header nav{display:flex;gap:1rem;flex-wrap:wrap}.product-header nav a{color:var(--color-link)}"
    ".product-header nav a[aria-current=\"page\"]{color:var(--color-text);font-weight:800;text-decoration-line:underline;text-decoration-thickness:.18rem;text-underline-offset:.28rem}"
    ".help-heading,.toggle-help{display:flex}.help-label{display:inline-flex}.help-heading,.help-label,.toggle-help{align-items:center;gap:.4rem;max-width:100%;min-width:0}"
@@ -1446,6 +1461,13 @@
         "<main>" body "</main>"
         "<footer><small>© 2026 Alpha Compose · <a href=\"mailto:me@jamiep.org\">Contact</a></small></footer>"
         "</div></body></html>")))
+
+(def changelog-page
+  (public-page
+   "Changelog"
+   (str "<article class=\"card changelog\">"
+        (main-release/public-changelog-html)
+        "</article>")))
 
 (def anonymous-page
   (public-page

@@ -3,9 +3,21 @@
 set -eu
 
 image="${1:-animated-graph-cloud:smoke-test}"
+expected_build="${2:-dev}"
 root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 expected_health='{"status":"ok"}'
 expected_renderer='{"severity":"INFO","component":"renderer","event":"smoke_complete","message":"Renderer smoke job completed"}'
+
+case "$expected_build" in
+  dev) short_build=dev ;;
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+    short_build="$(printf '%s' "$expected_build" | cut -c1-7)"
+    ;;
+  *)
+    echo "expected build must be dev or an exact lowercase Git commit" >&2
+    exit 2
+    ;;
+esac
 
 if [ "$(docker run --rm --entrypoint id "$image" -u)" = "0" ]; then
   echo "container must not run as root" >&2
@@ -252,6 +264,17 @@ health_body="$(cat "$health_file")"
 if [ "$health_body" != "$expected_health" ]; then
   echo "unexpected API health response: $health_body" >&2
   docker logs "$api_container_id" >&2
+  exit 1
+fi
+
+changelog="$(curl --fail --silent --show-error \
+  "http://127.0.0.1:$api_host_port/changelog")"
+if ! printf '%s' "$changelog" | grep -Fq "v0.6.0 · build $short_build"; then
+  echo "container changelog does not identify the expected release build" >&2
+  exit 1
+fi
+if printf '%s' "$changelog" | grep -Fq 'Unreleased'; then
+  echo "container changelog exposed repository-only Unreleased notes" >&2
   exit 1
 fi
 

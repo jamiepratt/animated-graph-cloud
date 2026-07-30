@@ -9,6 +9,7 @@
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
             [agg.logs.core :as logs]
+            [agg.main-release :as main-release]
             [agg.observability :as observability]
             [agg.preview.core :as preview]
             [agg.proto.core :as proto]
@@ -425,6 +426,18 @@
           (.write response-body ^bytes bytes))))
     (respond! exchange 404 "application/json; charset=utf-8"
               "{\"error\":\"not_found\"}")))
+
+(defn- respond-public-html! [^HttpExchange exchange body]
+  (let [bytes (.getBytes ^String body StandardCharsets/UTF_8)]
+    (doto (.getResponseHeaders exchange)
+      (.set "Content-Type" "text/html; charset=utf-8")
+      (.set "Cache-Control" "public, max-age=300")
+      (.set "Content-Security-Policy"
+            "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+      (.set "X-Content-Type-Options" "nosniff"))
+    (.sendResponseHeaders exchange 200 (alength ^bytes bytes))
+    (with-open [response-body (.getResponseBody exchange)]
+      (.write response-body ^bytes bytes))))
 
 (defn- respond-json! [exchange status body]
   (respond! exchange status "application/json; charset=utf-8"
@@ -1239,7 +1252,9 @@
                ".shell{max-width:48rem;margin:0 auto;padding:clamp(1rem,5vw,3rem)}"
                ".picker-card{margin-top:clamp(1rem,5vw,3rem);padding:clamp(1.25rem,4vw,2.5rem);border-radius:1.1rem}"
                ".picker-card h1{font-size:clamp(2rem,6vw,3.5rem);line-height:1.05;letter-spacing:-.04em;margin:.5rem 0 1rem}"
-               "</style></head><body data-theme=\"telemetry\"><main class=\"shell\"><section class=\"card picker-card\"><div class=\"eyebrow\">Google Drive</div><h1>Select a video</h1><p>Opening Google Drive Picker…</p>"
+               "</style></head><body data-theme=\"telemetry\"><div class=\"shell\">"
+               (ui/picker-product-header)
+               "<main><section class=\"card picker-card\"><div class=\"eyebrow\">Google Drive</div><h1>Select a video</h1><p>Opening Google Drive Picker…</p>"
                "<p>Choose a supported video from My Drive, a file shared with you, or a Shared Drive. Folders are for navigation only.</p>"
                "<p>Google Picker upload errors can be opaque. For actionable upload progress and recovery, return to Alpha Compose and use its direct Google Drive uploader, or <a href=\"https://drive.google.com\" target=\"_blank\" rel=\"noopener\">upload at drive.google.com</a> and select the video here.</p>"
                "<p>Selected: <output id=\"picker-selection\">None</output></p>"
@@ -1274,7 +1289,7 @@
                "reportDiagnostic('opened','drive','unknown');});}"
                "document.getElementById('report-empty').addEventListener('click',()=>{"
                "reportDiagnostic('empty','drive','empty');});"
-               "openPicker();</script></section></main></body></html>")]
+               "openPicker();</script></section></main></div></body></html>")]
       (doto (.getResponseHeaders exchange)
         (.set "Cache-Control" "no-store")
         (.set "Referrer-Policy" "no-referrer")
@@ -1852,6 +1867,11 @@
                                   (and (= "GET" method) (contains? public-assets path))
                                   (let [[resource content-type] (get public-assets path)]
                                     (respond-asset! exchange resource content-type))
+
+                                  (and (= "api" service-profile)
+                                       (= "GET" method)
+                                       (= "/changelog" path))
+                                  (respond-public-html! exchange ui/changelog-page)
 
                                   (and (= "proto" service-profile)
                                        auth-system
@@ -2446,6 +2466,7 @@
                           (.getPort (.getAddress server))))))
 
 (defn -main [& _]
+  (main-release/assert-valid!)
   (let [port (parse-long (get (System/getenv) "PORT" "8080"))
         service-profile (get (System/getenv) "AGG_SERVICE_PROFILE" "api")
         dependencies (if (= "true" (get (System/getenv)

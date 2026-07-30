@@ -486,6 +486,32 @@ The canonical public OpenAPI contract URL is
 `https://alphacompose.com/openapi.yaml`; the production workflow checks its
 `application/yaml` response and versioned document marker.
 
+### Post-deployment main release tag
+
+The production workflow builds with the exact pushed commit, rejects a
+development or malformed identity, and verifies that
+`https://alphacompose.com/changelog` displays the matching seven-character
+build before it succeeds. No database migration, Terraform import, secret,
+OAuth, Firebase, DNS, or console action is required for the `v0.6.0` identity
+and changelog change.
+
+After the workflow for the intended release commit succeeds, verify the exact
+remote commit and public identity, then create and push the main tag:
+
+```sh
+release_sha="$(git rev-parse refs/remotes/origin/main)"
+short_release_sha="$(printf '%s' "$release_sha" | cut -c1-7)"
+test "$(git rev-parse HEAD)" = "$release_sha"
+curl --fail --silent --show-error https://alphacompose.com/changelog |
+  grep -F "v0.6.0 · build $short_release_sha"
+git tag --annotate v0.6.0 "$release_sha" --message "Alpha Compose v0.6.0"
+git push origin v0.6.0
+```
+
+Do not tag before successful deployment, retag a different commit, or create a
+GitHub Release. Later main versions follow the same checkpoint with the version
+resource and newest released changelog heading updated together.
+
 ## Rollback
 
 Normal rollback is a reviewed revert or restoration commit pushed to protected

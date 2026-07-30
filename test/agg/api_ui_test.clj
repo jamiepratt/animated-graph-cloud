@@ -2320,7 +2320,14 @@
                             :logs []
                             :view "formatted"})
         pages
-        {"public desktop" [ui/privacy-page "/privacy" "1280,900"]
+        {"Picker compact mobile"
+         [(str "<!doctype html><html><head><style>"
+               (ui/theme-style)
+               "</style></head><body><div class=\"shell\">"
+               (ui/picker-product-header)
+               "</div></body></html>")
+          nil "390,844"]
+         "public desktop" [ui/privacy-page "/privacy" "1280,900"]
          "public mobile" [ui/terms-page "/terms" "390,844"]
          "signed-in desktop" [compose nil "1280,900"]
          "signed-in mobile" [compose nil "390,844"]
@@ -2332,7 +2339,9 @@
       (testing surface
         (let [outcome (product-header-browser-outcome page window-size)]
           (is (nil? (:error outcome)) (:error outcome))
-          (is (= ["/" "/faq" "/privacy" "/terms"]
+          (is (= (if (str/includes? surface "Picker")
+                   ["/" "/changelog"]
+                   ["/" "/changelog" "/faq" "/privacy" "/terms"])
                  (:keyboardOrder outcome)))
           (is (= active-path (:activeNav outcome)))
           (is (true? (:activeNavStyled outcome)))
@@ -2376,7 +2385,7 @@
     (is (= "early-access-instagram" (:instagramLabel retry)))
     (is (= "early-access-message" (:messageLabel retry)))
     (is (true? (:keyboardReachable retry)))
-    (is (= ["/" "/faq" "/privacy" "/terms" "early-access-email"
+    (is (= ["/" "/changelog" "/faq" "/privacy" "/terms" "early-access-email"
             "early-access-instagram" "early-access-message" "button"
             "mailto:me@jamiep.org" "/v1/auth/login/start"
             "mailto:me@jamiep.org"]

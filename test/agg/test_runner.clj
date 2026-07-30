@@ -27,6 +27,7 @@
             [agg.oxiwear-test]
             [agg.polar-test]
             [agg.render-test]
+            [agg.release-test]
             [agg.release-config-test]
             [agg.renderer-drive-test]
             [agg.smoke-test]
@@ -68,6 +69,7 @@
                                              'agg.oxiwear-test
                                              'agg.polar-test
                                              'agg.render-test
+                                             'agg.release-test
                                              'agg.release-config-test
                                              'agg.renderer-drive-test
                                              'agg.smoke-test

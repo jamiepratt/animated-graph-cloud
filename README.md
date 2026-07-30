@@ -23,6 +23,27 @@ Targeted TDD keeps the normal test classpath but skips the full runner:
 clojure -M:test -m agg.test-targeted agg.api-auth-test
 ```
 
+## Release identity and changelog
+
+Main's semantic-version source is `resources/agg/main-version.edn`; its
+Keep a Changelog-style source is `CHANGELOG.md`. The public
+[`/changelog`](https://alphacompose.com/changelog) renders released entries
+only and escapes raw HTML. `Unreleased` stays repository-only.
+
+Complete main HTML pages display `vX.Y.Z · build abc1234` below the Alpha
+Compose name. A normal local build uses `build dev`. Deployment workflows pass
+the exact 40-character commit through Docker's `BUILD_COMMIT` argument, retain
+it in the image, and display its first seven characters. Production also passes
+`RELEASE_MODE=production`, so a missing, malformed, or `dev` identity stops the
+container.
+
+Before 1.0, additions and breaking changes bump minor, fixes bump patch, and
+internal-only changes do not require a version bump. Update the version resource
+and newest released changelog heading together, deploy, verify `/changelog`
+shows the exact deployed commit, then tag that commit `vX.Y.Z`. Do not move the
+tag to another commit and do not create a GitHub Release. Proto follows the same
+convention independently on its own release stream with `proto-vX.Y.Z` tags.
+
 The versioned production OpenAPI contract is publicly available at
 [`https://alphacompose.com/openapi.yaml`](https://alphacompose.com/openapi.yaml).
 This is the canonical published contract URL; its source is `docs/openapi.yaml`.
@@ -463,7 +484,8 @@ checkpoints and `docs/release-acceptance.md` for the evidence matrix.
 Pushes to `main` authenticate through GitHub Workload Identity Federation,
 scan and push an immutable commit-tagged image, deploy the private `agg-api`
 service, and execute `agg-renderer-smoke`. The workflow verifies the health
-response, runtime identities, and the renderer's structured completion log.
+response, runtime identities, renderer completion log, and exact public
+version/build identity at `/changelog`.
 Production follows the same protected-`main` model through its separate
 automatic deployment workflow; each successful push can promote the public
 application after the private candidate and smoke checks pass.

@@ -1060,8 +1060,13 @@
         (is (str/includes? (.body response) ":focus-visible"))
         (is (str/includes? (.body response)
                            "<meta name=\"color-scheme\" content=\"dark\">"))
-        (is (not (str/includes? (.body response)
-                                "<header class=\"product-header\">")))
+        (is (str/includes? (.body response)
+                           "<header class=\"product-header picker-product-header\">"))
+        (is (= 1 (count (re-seq #"class=\"release-identity\""
+                                (.body response)))))
+        (is (str/includes?
+             (.body response)
+             "class=\"release-identity\" href=\"/changelog\">v0.6.0 · build dev</a>"))
         (is (re-find #"google\.picker\.PickerBuilder" (.body response)))
         (is (re-find #"picker-access-token" (.body response)))
         (is (re-find #"picker-key" (.body response)))

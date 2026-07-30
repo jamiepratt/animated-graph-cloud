@@ -9,6 +9,7 @@
             [agg.jobs.lifecycle :as jobs]
             [agg.logs.core :as logs]
             [agg.logs.gcp :as logs-gcp]
+            [agg.main-release :as main-release]
             [agg.observability :as observability]
             [agg.preview.core :as preview]
             [agg.render.audio :as audio]
@@ -638,6 +639,7 @@
       true)))
 
 (defn -main [& args]
+  (main-release/assert-valid!)
   (configure-log-persistence!)
   (if (some #{"--job-id"} args)
     (try
