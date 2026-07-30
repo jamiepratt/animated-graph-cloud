@@ -413,18 +413,19 @@
 
 (defn- playback-capability-browser-outcomes [page cases window-size]
   (let [browser-cases
-        (mapv (fn [{:keys [label webcodecs? can-play-type
+        (mapv (fn [{:keys [label webcodecs? can-play-type analysis-delay-ms
                            inspected-duration]}]
                 {:label label
                  :webcodecs webcodecs?
                  :canPlayType can-play-type
+                 :analysisDelayMs (or analysis-delay-ms 0)
                  :inspectedDuration inspected-duration})
               cases)
         fixture
         (str
          "<script>"
          "window.__capabilityState={callback:null,loads:[],currentCase:null,analysisRequests:[],sessionRequests:[],canPlayTypeCalls:[],videoDecoderCalls:[]};"
-         "window.fetch=(path,options={})=>{const state=window.__capabilityState;if(path==='/v1/drive/playback-analyses'){state.analysisRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:'supported-source.mov',evidence:{container:{format:'mov',majorBrand:'qt  '},video:{codec:'hevc',codecTag:'hvc1',profile:'Main',pixelFormat:'yuv420p'},audio:{codec:'aac'}}})});}if(path==='/v1/drive/playback-sessions'){state.sessionRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000155',contentType:'video/quicktime',size:2048})});}if(path==='/v1/drive/recording-clock-inspections'){return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:'supported-source.mov',status:'manual',candidates:[],recommendedIndex:null,ambiguous:false,durationSeconds:state.currentCase.inspectedDuration,limits:{maxBytes:524288,maxRanges:2,timeoutMillis:3000}})});}return Promise.resolve({ok:true,status:204,json:()=>Promise.resolve({})});};"
+         "window.fetch=(path,options={})=>{const state=window.__capabilityState;if(path==='/v1/drive/playback-analyses'){state.analysisRequests.push(JSON.parse(options.body));const response={ok:true,status:200,json:()=>Promise.resolve({fileName:'supported-source.mov',evidence:{container:{format:'mov',majorBrand:'qt  '},video:{codec:'hevc',codecTag:'hvc1',profile:'Main',pixelFormat:'yuv420p'},audio:{codec:'aac'}}})};return state.currentCase.analysisDelayMs?new Promise(resolve=>setTimeout(()=>resolve(response),state.currentCase.analysisDelayMs)):Promise.resolve(response);}if(path==='/v1/drive/playback-sessions'){state.sessionRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000155',contentType:'video/quicktime',size:2048})});}if(path==='/v1/drive/recording-clock-inspections'){return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:'supported-source.mov',status:'manual',candidates:[],recommendedIndex:null,ambiguous:false,durationSeconds:state.currentCase.inspectedDuration,limits:{maxBytes:524288,maxRanges:2,timeoutMillis:3000}})});}return Promise.resolve({ok:true,status:204,json:()=>Promise.resolve({})});};"
          "class PickerView{setMimeTypes(){return this;}setIncludeFolders(){return this;}setSelectFolderEnabled(){return this;}setMode(){return this;}setEnableDrives(){return this;}}"
          "class UploadView extends PickerView{}"
          "class PickerBuilder{addView(){return this;}setSelectableMimeTypes(){return this;}setOAuthToken(){return this;}setDeveloperKey(){return this;}setAppId(){return this;}setOrigin(){return this;}setCallback(callback){window.__capabilityState.callback=callback;return this;}build(){return {setVisible(){}};}}"
@@ -440,7 +441,7 @@
          "<pre id=\"browser-result\">pending</pre><script>"
          "(async()=>{let outcome;try{"
          "const state=window.__capabilityState,outcomes=[];state.loads[0].callback();"
-         "async function waitForTerminal(){const deadline=performance.now()+750;while(performance.now()<=deadline){const status=document.getElementById('video-player-status').textContent,inspection=document.getElementById('video-clock-inspection-status').textContent;if((status==='Ready. Click or drag the timeline to seek.'||status.startsWith('This video cannot play in this browser because '))&&!inspection.startsWith('Inspecting'))return;await new Promise(resolve=>setTimeout(resolve,5));}throw new Error('Playback capability case did not reach a terminal state');}"
+         "function waitForTerminal(){const status=document.getElementById('video-player-status'),inspection=document.getElementById('video-clock-inspection-status'),terminal=()=>((status.textContent==='Ready. Click or drag the timeline to seek.'||status.textContent.startsWith('This video cannot play in this browser because '))&&!inspection.textContent.startsWith('Inspecting'));if(terminal())return Promise.resolve();return new Promise(resolve=>{const observer=new MutationObserver(()=>{if(terminal()){observer.disconnect();resolve();}});observer.observe(status,{childList:true,subtree:true,characterData:true});observer.observe(inspection,{childList:true,subtree:true,characterData:true});});}"
          "for(const testCase of " (json/write-str browser-cases) "){state.currentCase=testCase;state.analysisRequests=[];state.sessionRequests=[];state.canPlayTypeCalls=[];state.videoDecoderCalls=[];configureCapability(testCase);state.callback({action:google.picker.Action.PICKED,docs:[{id:'hevc-source',name:'ride.mov',mimeType:'video/quicktime'}]});await waitForTerminal();document.getElementById('video-recording-start').value='2026-07-26T07:12:05';document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();const video=document.getElementById('source-video-player');outcomes.push({label:testCase.label,selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,analysisRequests:[...state.analysisRequests],sessionRequests:[...state.sessionRequests],canPlayTypeCalls:[...state.canPlayTypeCalls],videoDecoderCalls:[...state.videoDecoderCalls],status:document.getElementById('video-player-status').textContent,stageHidden:document.getElementById('video-stage').hidden,transportHidden:document.querySelector('.video-transport').hidden,summaryHidden:document.getElementById('no-source-output-summary').hidden,sourceEnd:document.getElementById('video-source-end').textContent,src:video.getAttribute('src'),viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth});}outcome={outcomes};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
          "</script>")
@@ -3195,6 +3196,7 @@
         cases [{:label "webcodecs present + canPlayType supported"
                 :webcodecs? true
                 :can-play-type "probably"
+                :analysis-delay-ms 800
                 :inspected-duration 42
                 :supported? true
                 :reason nil}
