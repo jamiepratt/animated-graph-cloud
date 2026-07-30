@@ -77,8 +77,10 @@ locals {
   }, local.derivative_contract_environment)
 
   derivative_worker_environment = merge({
+    AGG_ADMIN_EMAILS         = var.admin_emails
     AGG_DERIVATIVE_BUCKET    = google_storage_bucket.derivative_previews.name
     AGG_DRIVE_SOURCE_ENABLED = "true"
+    AGG_OWNER_EMAIL          = var.owner_email
     AGG_REGION               = local.region
     GOOGLE_CLOUD_PROJECT     = local.project_id
   }, local.derivative_contract_environment)
@@ -210,6 +212,16 @@ resource "google_cloud_run_v2_job" "derivative_preview" {
           }
         }
 
+        env {
+          name = "AGG_TOKEN_HASH_PEPPER"
+          value_source {
+            secret_key_ref {
+              secret  = "token-hash-pepper"
+              version = "latest"
+            }
+          }
+        }
+
         resources {
           limits = {
             cpu    = "4"
@@ -230,6 +242,8 @@ resource "google_cloud_run_v2_job" "derivative_preview" {
 
   depends_on = [
     google_service_account_iam_member.deployer_uses_derivative_worker,
+    google_secret_manager_secret_iam_member.derivative_worker_oauth_access,
+    google_secret_manager_secret_iam_member.derivative_worker_token_hash_pepper_access,
   ]
 }
 
@@ -365,6 +379,15 @@ resource "google_kms_crypto_key_iam_member" "derivative_worker_drive_token_ciphe
 resource "google_secret_manager_secret_iam_member" "derivative_worker_oauth_access" {
   project   = local.project_id
   secret_id = "oauth-client-secret"
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.derivative_worker.email}"
+
+  depends_on = [google_project_iam_member.deployer]
+}
+
+resource "google_secret_manager_secret_iam_member" "derivative_worker_token_hash_pepper_access" {
+  project   = local.project_id
+  secret_id = "token-hash-pepper"
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.derivative_worker.email}"
 

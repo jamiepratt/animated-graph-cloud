@@ -176,6 +176,13 @@
       (is (str/includes? proto-infra "cpu    = \"4\""))
       (is (str/includes? proto-infra "memory = \"4Gi\""))
       (is (str/includes? proto-infra "image = var.proto_image"))
+      (is (re-find #"AGG_ADMIN_EMAILS\s+=\s+var\.admin_emails"
+                   proto-infra))
+      (is (re-find #"AGG_OWNER_EMAIL\s+=\s+var\.owner_email"
+                   proto-infra))
+      (is (re-find
+           #"(?s)resource \"google_cloud_run_v2_job\" \"derivative_preview\".*?name = \"AGG_TOKEN_HASH_PEPPER\".*?secret\s+=\s+\"token-hash-pepper\""
+           proto-infra))
       (is (str/includes?
            proto-infra
            "args  = [\"clojure.main\", \"-m\", \"agg.derivative.worker\"]")))))
@@ -220,6 +227,8 @@
       (is (re-find #"(?s)resource \"google_kms_crypto_key_iam_member\" \"derivative_worker_drive_token_cipher\".*?drive-refresh-tokens.*?roles/cloudkms\.cryptoKeyEncrypterDecrypter.*?google_service_account\.derivative_worker\.email"
                    proto-infra))
       (is (re-find #"(?s)resource \"google_secret_manager_secret_iam_member\" \"derivative_worker_oauth_access\".*?oauth-client-secret.*?roles/secretmanager\.secretAccessor.*?google_service_account\.derivative_worker\.email"
+                   proto-infra))
+      (is (re-find #"(?s)resource \"google_secret_manager_secret_iam_member\" \"derivative_worker_token_hash_pepper_access\".*?token-hash-pepper.*?roles/secretmanager\.secretAccessor.*?google_service_account\.derivative_worker\.email"
                    proto-infra))
       (is (not (re-find #"(?s)google_service_account\\.derivative_worker\\.email.*?roles/(?:owner|editor|storage\\.admin|run\\.admin)"
                         proto-infra))))
