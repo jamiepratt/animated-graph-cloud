@@ -655,7 +655,7 @@
           (send! (authorized
                   {:method :get
                    :url (str (source-url file-id)
-                             "?fields=id,name,mimeType,size,trashed,"
+                             "?fields=id,name,mimeType,size,version,trashed,"
                              "videoMediaMetadata(durationMillis,width,height)"
                              "&supportsAllDrives=true")
                    :headers {}}

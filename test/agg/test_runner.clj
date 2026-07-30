@@ -17,6 +17,9 @@
             [agg.drive-test]
             [agg.drive-gcp-test]
             [agg.drive-range-proxy-test]
+            [agg.derivative-gcp-test]
+            [agg.derivative-preparation-test]
+            [agg.api-derivative-preparation-test]
             [agg.early-access-resend-test]
             [agg.early-access-test]
             [agg.gcp-jobs-test]
@@ -58,6 +61,9 @@
                                              'agg.drive-test
                                              'agg.drive-gcp-test
                                              'agg.drive-range-proxy-test
+                                             'agg.derivative-gcp-test
+                                             'agg.derivative-preparation-test
+                                             'agg.api-derivative-preparation-test
                                              'agg.early-access-resend-test
                                              'agg.early-access-test
                                              'agg.gcp-jobs-test

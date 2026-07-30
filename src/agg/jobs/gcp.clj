@@ -2,7 +2,9 @@
   (:require [agg.errors :as errors]
             [agg.admin.core :as admin]
             [agg.contracts.render :as contract]
+            [agg.auth.core :as auth]
             [agg.auth.gcp :as auth-gcp]
+            [agg.derivative.gcp :as derivative-gcp]
             [agg.jobs.lifecycle :as lifecycle]
             [agg.logs.core :as logs]
             [agg.logs.gcp :as logs-gcp]
@@ -1173,6 +1175,7 @@
                    "Alpha Compose <early-access@alphacompose.com>")
               :early-access-recipient
               (env "AGG_EARLY_ACCESS_RECIPIENT" "me@jamiep.org")}))
+          derivative-config (derivative-gcp/runtime-config)
           service
           (job-service
            {:firestore firestore
@@ -1198,10 +1201,43 @@
             (env-long "AGG_RENDER_RESERVATION_MINOR_UNITS"
                       lifecycle/default-render-reservation-minor-units)
             :member-directory (:member-directory auth-dependencies)})
-          job-dependencies {:upload-signer store
-                            :job-service service
-                            :preview-job-service service
-                            :preview-asset-store store}]
+          derivative-service
+          (when (and auth-enabled?
+                     (:dispatcher-url derivative-config))
+            (let [worker-job (:worker-job derivative-config)
+                  worker-job
+                  (if (str/starts-with? (or worker-job "") "projects/")
+                    worker-job
+                    (str "projects/" project "/locations/" region
+                         "/jobs/" worker-job))]
+              (derivative-gcp/preparation-service
+               {:firestore firestore
+                :queue
+                (derivative-gcp/task-queue
+                 {:project project
+                  :region region
+                  :queue-name (:queue-name derivative-config)
+                  :dispatcher-url (:dispatcher-url derivative-config)
+                  :tasks-service-account
+                  (:tasks-service-account derivative-config)})
+                :launcher (derivative-gcp/run-launcher worker-job)
+                :member-directory (:member-directory auth-dependencies)
+                :fingerprint-secret (env "AGG_TOKEN_HASH_PEPPER" nil)
+                :source-gateway (:drive (:auth-system auth-dependencies))
+                :access-provider
+                #(auth/drive-access!
+                  (:auth-system auth-dependencies) %)
+                :limits (:admission-limits derivative-config)})))
+          job-dependencies
+          (cond-> {:upload-signer store
+                   :job-service service
+                   :preview-job-service service
+                   :preview-asset-store store}
+            derivative-service
+            (assoc
+             :derivative-preparation-service derivative-service
+             :derivative-tasks-service-account
+             (:tasks-service-account derivative-config)))]
       (if auth-enabled?
         (assoc (merge job-dependencies auth-dependencies)
                :log-store log-store
@@ -1211,7 +1247,9 @@
                  :token-administration (:token-service auth-dependencies)
                  :credential-administration
                  (:credential-administration auth-dependencies)
-                 :job-administration service
+                 :job-administration
+                 (admin/combine-job-administrations
+                  service derivative-service)
                  :event-sink observability/emit-event!}))
         (assoc job-dependencies :log-store log-store)))))
 

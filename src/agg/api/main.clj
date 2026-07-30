@@ -3,6 +3,8 @@
             [agg.admin.core :as admin]
             [agg.contracts.render :as contract]
             [agg.auth.core :as auth]
+            [agg.derivative.contract :as derivative-contract]
+            [agg.derivative.lifecycle :as derivative]
             [agg.drive.core :as drive]
             [agg.drive.gcp :as drive-gcp]
             [agg.early-access.core :as early-access]
@@ -73,6 +75,14 @@
 (def ^:private completed-playback-path-pattern
   (re-pattern (str "/v1/jobs/" uuid-path-component "/playback/"
                    uuid-path-component)))
+
+(def ^:private derivative-preparation-path-pattern
+  (re-pattern (str "/v1/derivative-preparations/"
+                   uuid-path-component)))
+
+(def ^:private derivative-preparation-action-path-pattern
+  (re-pattern (str "/v1/derivative-preparations/"
+                   uuid-path-component "/(?:cancel|retry)")))
 
 (def ^:private public-assets
   {"/openapi.yaml" ["openapi.yaml" "application/yaml; charset=utf-8"]
@@ -982,6 +992,35 @@
                     :releasedLeases released-leases})
       (respond-json! exchange 200 {:repairedJobs repaired-jobs
                                    :releasedLeases released-leases}))))
+
+(defn- verified-derivative-task?
+  [exchange {:keys [derivative-tasks-service-account] :as dependencies}]
+  (verified-internal-caller?
+   exchange dependencies "X-CloudTasks-TaskName"
+   derivative-tasks-service-account))
+
+(defn- dispatch-derivative-preparation!
+  [exchange dependencies job-id attempt]
+  (if-not (verified-derivative-task? exchange dependencies)
+    (respond-json! exchange 401 {:error "authenticated_task_required"})
+    (let [{:keys [started? job]}
+          (derivative/dispatch-preparation!
+           (:derivative-preparation-service dependencies)
+           job-id attempt)]
+      (respond-json! exchange (if started? 202 200) job))))
+
+(defn- reconcile-derivative-preparations!
+  [exchange dependencies]
+  (if-not
+   (verified-internal-caller?
+    exchange dependencies "X-CloudScheduler"
+    (:scheduler-service-account dependencies))
+    (respond-json! exchange 401
+                   {:error "authenticated_scheduler_required"})
+    (respond-json!
+     exchange 200
+     (derivative/reconcile-preparations!
+      (:derivative-preparation-service dependencies)))))
 
 (defn- begin-auth! [exchange auth-system flow]
   (let [recovery-requested? (contains? #{"1" "true"}
@@ -1946,6 +1985,96 @@
 (defn- retry-job! [exchange job-service job-id]
   (respond-json! exchange 202 (jobs/retry-job! job-service job-id)))
 
+(defn- source-duration-seconds [metadata]
+  (when-let [duration-millis
+             (get-in metadata [:videoMediaMetadata :durationMillis])]
+    (try
+      (/ (double (parse-long (str duration-millis))) 1000.0)
+      (catch Throwable _
+        nil))))
+
+(defn- derivative-source-request!
+  [exchange auth-system user]
+  (let [request (request-json exchange)
+        file-id (:fileId request)
+        _ (when-not (and (= #{:fileId} (set (keys request)))
+                         (string? file-id)
+                         (<= 1 (count file-id) 256))
+            (throw
+             (errors/raise! "Derivative source is invalid"
+                            {:type ::invalid-playback-source})))
+        {:keys [access-token]} (auth/drive-access! auth-system
+                                                   (:subject user))
+        gateway (:drive auth-system)
+        _ (when-not (satisfies? drive/SourceGateway gateway)
+            (throw
+             (errors/raise! "Derivative source dependencies are incomplete"
+                            {:type ::drive/source-unavailable})))
+        metadata (drive/source-metadata! gateway access-token file-id)
+        duration-seconds (source-duration-seconds metadata)
+        authoritative-source-bytes
+        (let [reported (:size metadata)]
+          (if (string? reported)
+            (parse-long reported)
+            reported))
+        _ (derivative-contract/validate-work!
+           {:source-duration-seconds duration-seconds
+            :source-bytes authoritative-source-bytes})
+        prepared (contract/attach-source-selection-metadata
+                  {:source-video {:file-id file-id}}
+                  (assoc metadata :size authoritative-source-bytes))
+        source-metadata (get-in prepared [:source-video :metadata])
+        source-bytes (:size source-metadata)]
+    {:subject (:subject user)
+     :email (:email user)
+     :membership-version (:membership-version user)
+     :file-id file-id
+     :drive-version (some-> (:version metadata) str)
+     :source-bytes source-bytes
+     :source-duration-seconds duration-seconds}))
+
+(defn- submit-derivative-preparation!
+  [exchange service auth-system user]
+  (let [idempotency-key
+        (some-> exchange .getRequestHeaders (.getFirst "Idempotency-Key"))
+        request (derivative-source-request! exchange auth-system user)
+        {:keys [created? cache-hit? job]}
+        (derivative/submit-preparation! service idempotency-key request)]
+    (respond-json! exchange
+                   (if (or created?
+                           (not= "succeeded" (:state job))
+                           (not cache-hit?))
+                     (if created? 202 200)
+                     200)
+                   job)))
+
+(defn- require-derivative-owner!
+  [service user job-id]
+  (when-not (derivative/owns-preparation?
+             service job-id (:subject user))
+    (throw
+     (errors/raise! "Derivative preparation does not exist"
+                    {:type ::derivative/preparation-not-found}))))
+
+(defn- require-derivative-preparation!
+  [service job-id]
+  (or (derivative/get-preparation service job-id)
+      (throw
+       (errors/raise! "Derivative preparation does not exist"
+                      {:type ::derivative/preparation-not-found}))))
+
+(defn- cancel-derivative-preparation! [exchange service job-id]
+  (let [resource (derivative/cancel-preparation! service job-id)]
+    (respond-json! exchange
+                   (if (= "cancellation-requested" (:state resource))
+                     202
+                     200)
+                   resource)))
+
+(defn- retry-derivative-preparation! [exchange service job-id]
+  (respond-json! exchange 202
+                 (derivative/retry-preparation! service job-id)))
+
 (defn- issue-upload! [exchange upload-signer]
   (let [{:keys [contentType contentLength]} (request-json exchange)]
     (when-not (and (= "application/json" contentType)
@@ -2119,6 +2248,7 @@
 
 (defn- route-handler [{:keys [frame-renderer video-encoder job-service
                               preview-job-service preview-asset-store
+                              derivative-preparation-service
                               upload-signer auth-system picker-api-key
                               picker-app-id token-service admin-service log-store
                               early-access-system service-profile clock]
@@ -2416,6 +2546,60 @@
                                     (submit-job! exchange job-service
                                                  auth-system user))
 
+                                  (and derivative-preparation-service
+                                       (= "POST" method)
+                                       (= "/v1/derivative-preparations" path))
+                                  (let [user
+                                        (authenticated-user!
+                                         exchange auth-system token-service)]
+                                    (require-csrf! exchange auth-system user)
+                                    (submit-derivative-preparation!
+                                     exchange derivative-preparation-service
+                                     auth-system user))
+
+                                  (and derivative-preparation-service
+                                       (= "GET" method)
+                                       (re-matches
+                                        derivative-preparation-path-pattern
+                                        path))
+                                  (let [user
+                                        (authenticated-user!
+                                         exchange auth-system token-service)
+                                        job-id (last (.split path "/"))]
+                                    (require-derivative-owner!
+                                     derivative-preparation-service user job-id)
+                                    (respond-json!
+                                     exchange 200
+                                     (require-derivative-preparation!
+                                      derivative-preparation-service job-id)))
+
+                                  (and derivative-preparation-service
+                                       (= "POST" method)
+                                       (re-matches
+                                        derivative-preparation-action-path-pattern
+                                        path))
+                                  (let [user
+                                        (authenticated-user!
+                                         exchange auth-system token-service)
+                                        parts (.split path "/")
+                                        job-id (nth parts 3)
+                                        action (nth parts 4)]
+                                    (require-csrf! exchange auth-system user)
+                                    (require-derivative-owner!
+                                     derivative-preparation-service user job-id)
+                                    (require-derivative-preparation!
+                                     derivative-preparation-service job-id)
+                                    (if (= "cancel" action)
+                                      (cancel-derivative-preparation!
+                                       exchange derivative-preparation-service
+                                       job-id)
+                                      (do
+                                        (require-drive-access!
+                                         auth-system user)
+                                        (retry-derivative-preparation!
+                                         exchange derivative-preparation-service
+                                         job-id))))
+
                                   (and upload-signer (= "POST" method) (= "/v1/uploads" path))
                                   (do (->> (authenticated-user! exchange auth-system token-service)
                                            (require-csrf! exchange auth-system))
@@ -2449,6 +2633,28 @@
                                   (and job-service (= "POST" method)
                                        (= "/internal/v1/jobs/reconcile" path))
                                   (reconcile-jobs! exchange dependencies)
+
+                                  (and derivative-preparation-service
+                                       (= "POST" method)
+                                       (re-matches
+                                        (re-pattern
+                                         (str
+                                          "/internal/v1/derivative-preparations/"
+                                          uuid-path-component
+                                          "/attempts/[1-9][0-9]*/dispatch"))
+                                        path))
+                                  (let [parts (.split path "/")]
+                                    (dispatch-derivative-preparation!
+                                     exchange dependencies
+                                     (nth parts 4)
+                                     (parse-long (nth parts 6))))
+
+                                  (and derivative-preparation-service
+                                       (= "POST" method)
+                                       (= path
+                                          "/internal/v1/derivative-preparations/reconcile"))
+                                  (reconcile-derivative-preparations!
+                                   exchange dependencies)
 
                                   (and job-service (= "POST" method)
                                        (re-matches #"/v1/jobs/[^/]+/cancel" path))
@@ -2701,6 +2907,82 @@
                     (respond-preview-failure! dependencies exchange request-id error)
                     (respond-json! exchange 400 {:error "invalid_request"
                                                  :field "sectionEndAt"}))
+
+                  ::derivative-contract/limit-exceeded
+                  (respond-json!
+                   exchange 422
+                   {:error (or (:failure-code (ex-data error))
+                               "derivative_source_not_renderable")
+                    :requestId request-id
+                    :retryable false})
+
+                  ::derivative/invalid-idempotency-key
+                  (respond-json! exchange 400
+                                 {:error "invalid_idempotency_key"
+                                  :requestId request-id
+                                  :retryable false})
+
+                  ::derivative/idempotency-conflict
+                  (respond-json! exchange 409
+                                 {:error "idempotency_conflict"
+                                  :requestId request-id
+                                  :retryable false})
+
+                  ::derivative/user-job-active
+                  (respond-json! exchange 409
+                                 {:error "derivative_user_job_active"
+                                  :requestId request-id
+                                  :retryable false})
+
+                  ::derivative/project-backlog-exhausted
+                  (respond-json!
+                   exchange 429
+                   {:error "derivative_project_backlog_exhausted"
+                    :requestId request-id
+                    :retryable true})
+
+                  ::derivative/daily-attempt-limit-exhausted
+                  (respond-json!
+                   exchange 429
+                   {:error "derivative_daily_attempt_limit_exhausted"
+                    :requestId request-id
+                    :retryable false})
+
+                  ::derivative/user-budget-exhausted
+                  (respond-json! exchange 429
+                                 {:error "derivative_user_budget_exhausted"
+                                  :requestId request-id
+                                  :retryable false})
+
+                  ::derivative/derivative-budget-exhausted
+                  (respond-json! exchange 429
+                                 {:error "derivative_pool_budget_exhausted"
+                                  :requestId request-id
+                                  :retryable false})
+
+                  ::derivative/project-budget-exhausted
+                  (respond-json! exchange 429
+                                 {:error "project_budget_exhausted"
+                                  :requestId request-id
+                                  :retryable false})
+
+                  ::derivative/preparation-not-found
+                  (respond-json! exchange 404
+                                 {:error "derivative_preparation_not_found"
+                                  :requestId request-id
+                                  :retryable false})
+
+                  ::derivative/invalid-transition
+                  (respond-json! exchange 409
+                                 {:error "invalid_derivative_transition"
+                                  :requestId request-id
+                                  :retryable false})
+
+                  ::derivative/member-not-allowlisted
+                  (respond-json! exchange 403
+                                 {:error "not_allowlisted"
+                                  :requestId request-id
+                                  :retryable false})
 
                   ::contract/invalid-source-metadata
                   (if (preview-path? path)

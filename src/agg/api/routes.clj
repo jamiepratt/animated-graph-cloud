@@ -33,7 +33,19 @@
     (or (re-matches #"/(?:v1|ui)/admin/(?:members(?:/revoke)?|logs)" path)) :admin
     (or (= path "/v1/uploads")
         (= path "/v1/jobs")
+        (= path "/v1/derivative-preparations")
         (= path "/ui/jobs")
+        (re-matches
+         (re-pattern
+          (str "/v1/derivative-preparations/" uuid
+               "(?:/(?:cancel|retry))?"))
+         path)
+        (= path "/internal/v1/derivative-preparations/reconcile")
+        (re-matches
+         (re-pattern
+          (str "/internal/v1/derivative-preparations/" uuid
+               "/attempts/[1-9][0-9]*/dispatch"))
+         path)
         (re-matches #"/(?:v1|ui)/jobs/[^/]+(?:/(?:cancel|retry))?" path)
         (re-matches #"/internal/v1/jobs/(?:reconcile|[^/]+/dispatch)" path)) :jobs
     :else :not-found))
