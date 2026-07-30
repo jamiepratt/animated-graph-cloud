@@ -84,6 +84,17 @@ jobs:
           terraform_version: 1.15.8
           terraform_wrapper: false
 
+      - name: Verify enabled private proto fixture source secret
+        run: |
+          state="$(gcloud secrets versions describe latest \
+            --project="$PROJECT_ID" \
+            --secret=proto-source-file-ids \
+            --format='value(state)')"
+          if [ "$state" != "ENABLED" ]; then
+            echo "::error title=Private proto fixture bootstrap required::Create an enabled proto-source-file-ids secret version before deployment."
+            exit 1
+          fi
+
       - id: service-url
         name: Discover current API dispatcher audience
         run: |

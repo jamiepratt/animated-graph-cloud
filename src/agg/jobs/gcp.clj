@@ -1131,6 +1131,21 @@
       (throw (errors/raise! (str name " must be an integer")
                             {:type ::invalid-environment :name name}))))
 
+(defn- proto-source-bootstrap []
+  (when-let [configured (some-> (env "AGG_PROTO_SOURCE_FILE_IDS" nil)
+                                not-empty)]
+    (let [file-ids (->> (str/split configured #",")
+                        (map str/trim)
+                        (remove str/blank?)
+                        vec)]
+      (when-not (and (= 3 (count file-ids))
+                     (= 3 (count (set file-ids))))
+        (throw (errors/raise!
+                "AGG_PROTO_SOURCE_FILE_IDS must contain three unique values"
+                {:type ::invalid-environment
+                 :name "AGG_PROTO_SOURCE_FILE_IDS"})))
+      file-ids)))
+
 (defn api-system []
   (let [project (env "GOOGLE_CLOUD_PROJECT" "animated-graph-cloud-jp")
         region (env "AGG_REGION" "europe-central2")
@@ -1141,7 +1156,8 @@
              (str "agg-tasks@" project ".iam.gserviceaccount.com"))
         scheduler-service-account
         (env "AGG_SCHEDULER_SERVICE_ACCOUNT"
-             (str "agg-scheduler@" project ".iam.gserviceaccount.com"))]
+             (str "agg-scheduler@" project ".iam.gserviceaccount.com"))
+        proto-source-bootstrap (proto-source-bootstrap)]
     (when-not dispatcher-url
       (throw (errors/raise! "AGG_DISPATCHER_URL is required"
                             {:type ::missing-dispatcher-url})))
@@ -1240,6 +1256,10 @@
                    :job-service service
                    :preview-job-service service
                    :preview-asset-store store}
+            (seq proto-source-bootstrap)
+            (assoc :proto-source-bootstrap proto-source-bootstrap
+                   :proto-source-bootstrap-only? true)
+
             derivative-service
             (assoc
              :derivative-preparation-service derivative-service

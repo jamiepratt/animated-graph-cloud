@@ -85,6 +85,7 @@ locals {
 
   runtime_secrets = {
     AGG_OAUTH_CLIENT_CREDENTIALS = "oauth-client-secret"
+    AGG_PROTO_SOURCE_FILE_IDS     = "proto-source-file-ids"
     AGG_SESSION_KEY              = "session-key"
     AGG_TOKEN_HASH_PEPPER        = "token-hash-pepper"
   }
@@ -370,6 +371,15 @@ resource "google_secret_manager_secret_iam_member" "derivative_worker_oauth_acce
   depends_on = [google_project_iam_member.deployer]
 }
 
+resource "google_secret_manager_secret_iam_member" "proto_source_file_ids_access" {
+  project   = local.project_id
+  secret_id = "proto-source-file-ids"
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${data.google_service_account.api.email}"
+
+  depends_on = [google_project_iam_member.deployer]
+}
+
 resource "google_cloud_run_v2_service" "proto" {
   project             = local.project_id
   location            = local.region
@@ -434,6 +444,10 @@ resource "google_cloud_run_v2_service" "proto" {
       client_version,
     ]
   }
+
+  depends_on = [
+    google_secret_manager_secret_iam_member.proto_source_file_ids_access,
+  ]
 }
 
 resource "google_cloud_run_service_iam_member" "public_invoker" {

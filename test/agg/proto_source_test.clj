@@ -141,3 +141,35 @@
              :width 1920
              :height 1080}]
            (:sources listing)))))
+
+(deftest configured-proto-fixtures-bypass-folder-enumeration
+  (let [listed? (atom false)
+        loaded (atom [])
+        gateway
+        (reify drive/FolderSourceListingGateway
+          (list-folder-sources! [_ _ _]
+            (reset! listed? true)
+            (throw (AssertionError. "must not enumerate the old folder")))
+          drive/SourceGateway
+          (source-metadata! [_ _ file-id]
+            (swap! loaded conj file-id)
+            {:id file-id
+             :name (str file-id ".mp4")
+             :mimeType "video/mp4"
+             :size 4096
+             :trashed false
+             :videoMediaMetadata {:durationMillis "61000"
+                                  :width 1920
+                                  :height 1080}})
+          (stream-source! [_ _ _ _]
+            (throw (UnsupportedOperationException.))))
+        listing (proto/list-sources!
+                 {:auth-system (auth-system gateway)
+                  :proto-source-bootstrap ["fixture-a" "fixture-b" "fixture-c"]
+                  :proto-source-bootstrap-only? true}
+                 {:subject "owner-subject"})]
+    (is (false? @listed?))
+    (is (= ["fixture-a" "fixture-b" "fixture-c"] @loaded))
+    (is (= "fixed-bootstrap" (:listingMode listing)))
+    (is (= ["fixture-a.mp4" "fixture-b.mp4" "fixture-c.mp4"]
+           (mapv :fileName (:sources listing))))))

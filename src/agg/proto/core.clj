@@ -115,15 +115,24 @@
                       {:type ::invalid-configuration})))))
 
 (defn list-sources!
-  [{:keys [proto-source-loader proto-folder-id proto-source-bootstrap auth-system]}
+  [{:keys [proto-source-loader proto-folder-id proto-source-bootstrap
+           proto-source-bootstrap-only? auth-system]}
    user]
   (if proto-source-loader
     (proto-source-loader {:user user
                           :folder-id (or proto-folder-id fixed-folder-id)})
-    (default-source-listing auth-system
-                            (:subject user)
-                            proto-folder-id
-                            proto-source-bootstrap)))
+    (let [folder-id (or proto-folder-id fixed-folder-id)]
+      (if proto-source-bootstrap-only?
+        (let [{:keys [access-token]} (auth/drive-access!
+                                      auth-system (:subject user))]
+          (fallback-listing (:drive auth-system)
+                            access-token
+                            folder-id
+                            proto-source-bootstrap))
+        (default-source-listing auth-system
+                                (:subject user)
+                                folder-id
+                                proto-source-bootstrap)))))
 
 (def signed-out-page
   (str
