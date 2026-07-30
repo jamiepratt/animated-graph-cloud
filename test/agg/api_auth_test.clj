@@ -10,15 +10,19 @@
             [agg.jobs.lifecycle :as jobs]
             [clojure.data.json :as json]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]))
+            [clojure.test :refer [deftest is testing]])
+  (:import (java.util.concurrent.atomic AtomicInteger)))
 
 (defn- available-port []
-  (test-http/available-port))
+  ;; Filled only after HttpServer has atomically bound the OS-assigned port.
+  (AtomicInteger. 0))
 
 (defn- start-api!
   ([port] (start-api! port {}))
   ([port dependencies]
-   (api/start! port dependencies)))
+   (let [server (api/start! 0 dependencies)]
+     (.set ^AtomicInteger port (int (:port server)))
+     server)))
 
 (defn- post! [port path body headers]
   (test-http/send-string! :post (str "http://127.0.0.1:" port path)
@@ -130,6 +134,19 @@
        :access-token "drive-access"
        :refresh-token "drive-refresh"
        :granted-scopes (set auth/approved-scopes)})))
+
+(deftest api-server-binds-an-ephemeral-port-for-its-bounded-lifecycle
+  (let [server (api/start! 0)
+        port (:port server)]
+    (try
+      (is (pos-int? port))
+      (when (pos-int? port)
+        (is (= 200 (.statusCode (get! port "/health" {})))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))
+    (when (pos-int? port)
+      (with-open [replacement (java.net.ServerSocket. port)]
+        (is (= port (.getLocalPort replacement)))))))
 
 (deftest configured-user-routes-require-an-allowlisted-session
   (let [port (available-port)

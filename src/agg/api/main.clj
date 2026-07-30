@@ -2412,6 +2412,11 @@
                   (respond! exchange 500 "application/json; charset=utf-8"
                             "{\"error\":\"render_failed\"}"))))))))))
 
+(defrecord RunningHttpServer [^HttpServer server port]
+  java.lang.AutoCloseable
+  (close [_]
+    (.stop server 0)))
+
 (defn start!
   ([port]
    (start! port {}))
@@ -2435,9 +2440,8 @@
          server (HttpServer/create (InetSocketAddress. (int port)) 0)]
      (.createContext server "/" (route-handler dependencies))
      (.start server)
-     (reify java.lang.AutoCloseable
-       (close [_]
-         (.stop server 0))))))
+     (->RunningHttpServer server
+                          (.getPort (.getAddress server))))))
 
 (defn -main [& _]
   (let [port (parse-long (get (System/getenv) "PORT" "8080"))
