@@ -30,6 +30,30 @@
 (defprotocol JobAdministration
   (cancel-member-jobs! [administration cleanup-identity]))
 
+(defn combine-job-administrations
+  [& administrations]
+  (let [administrations (vec (remove nil? administrations))]
+    (reify JobAdministration
+      (cancel-member-jobs! [_ cleanup-identity]
+        (let [results
+              (mapv
+               (fn [administration]
+                 (try
+                   {:count
+                    (long
+                     (or (cancel-member-jobs!
+                          administration cleanup-identity)
+                         0))}
+                   (catch Throwable error
+                     {:error error})))
+               administrations)]
+          (if-let [error (some :error results)]
+            (throw
+             (errors/raise! "One or more job cleanups failed"
+                            {:type ::revocation-incomplete}
+                            error))
+            (reduce + (map :count results))))))))
+
 (defprotocol OwnerRotationCleanup
   (pending-owner-rotation-cleanups [directory])
   (complete-owner-rotation-cleanup! [directory cleanup]))
@@ -50,13 +74,13 @@
                    (<= 3 (count normalized) 254)
                    (re-matches #"[^\s@]+@[^\s@]+" normalized))
       (throw (errors/raise! "A valid member email is required"
-                      {:type ::invalid-email})))
+                            {:type ::invalid-email})))
     normalized))
 
 (defn require-subject [subject]
   (when (str/blank? subject)
     (throw (errors/raise! "A Google subject is required"
-                    {:type ::invalid-subject})))
+                          {:type ::invalid-subject})))
   subject)
 
 (defn cleanup-generation?
@@ -81,7 +105,7 @@
 (defn- require-administrator! [actor]
   (when-not (administrator? (:role actor))
     (throw (errors/raise! "Administrator access is required"
-                    {:type ::admin-required})))
+                          {:type ::admin-required})))
   actor)
 
 (defn- require-active-administrator! [directory actor]
@@ -109,7 +133,7 @@
                          (or (nil? (:subject member))
                              (= subject (:subject member))))
             (throw (errors/raise! "Member is not allowlisted"
-                            {:type ::not-allowlisted})))
+                                  {:type ::not-allowlisted})))
           (let [authorized (assoc member :subject subject)]
             (swap! records assoc email authorized)
             authorized)))))
@@ -143,7 +167,7 @@
             (throw (errors/raise! "Member does not exist" {:type ::member-not-found})))
           (when (= :owner (:role member))
             (throw (errors/raise! "The owner cannot be revoked"
-                            {:type ::owner-cannot-be-revoked})))
+                                  {:type ::owner-cannot-be-revoked})))
           (let [revoked (assoc member :status :revoked)]
             (swap! records assoc email revoked)
             revoked))))))
@@ -166,8 +190,8 @@
    #(if administration
       (action administration)
       (throw (errors/raise! "Owner rotation cleanup dependency is unavailable"
-                      {:type ::invalid-configuration
-                       :component component})))))
+                            {:type ::invalid-configuration
+                             :component component})))))
 
 (defn- reconcile-owner-rotation!
   [directory token-administration credential-administration
@@ -232,8 +256,8 @@
                vec)]
       (when (seq failures)
         (throw (errors/raise! "Owner rotation cleanup is incomplete"
-                        {:type ::revocation-incomplete
-                         :components failures}))))))
+                              {:type ::revocation-incomplete
+                               :components failures}))))))
 
 (defrecord AdminService [directory token-administration
                          credential-administration job-administration
@@ -288,8 +312,8 @@
              event)
       (when (seq errors)
         (throw (errors/raise! "Member was revoked but cleanup is incomplete"
-                        {:type ::revocation-incomplete
-                         :components errors})))
+                              {:type ::revocation-incomplete
+                               :components errors})))
       (public-member member))))
 
 (defn service [{:keys [directory token-administration

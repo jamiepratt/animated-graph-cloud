@@ -42,7 +42,6 @@ RUN curl --fail --location --silent --show-error \
        --disable-debug \
        --disable-doc \
        --disable-everything \
-       --disable-network \
        --disable-shared \
        --enable-static \
        --enable-gpl \
@@ -55,14 +54,14 @@ RUN curl --fail --location --silent --show-error \
        --enable-avformat \
        --enable-swresample \
        --enable-swscale \
-       --enable-protocol=file,pipe \
+       --enable-protocol=file,pipe,http,tcp \
        --enable-demuxers \
        --enable-muxer=image2pipe,mov,mp4 \
        --enable-decoders \
        --enable-parsers \
        --enable-bsfs \
        --enable-encoder=aac,libx264,png,prores_ks \
-       --enable-filter=aformat,alimiter,amix,aresample,crop,fps,format,hstack,overlay,pad,scale,select,setpts,setsar,split,volume \
+       --enable-filter=aformat,alimiter,amix,anullsrc,aresample,crop,fps,format,hstack,overlay,pad,scale,select,setpts,setsar,split,volume \
     && make --jobs="$(nproc)" \
     && make install \
     && mkdir --parents /opt/ffmpeg/lib \

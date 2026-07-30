@@ -6,6 +6,7 @@
             [agg.api-admin-test]
             [agg.auth-gcp-test]
             [agg.api-auth-test]
+            [agg.api-derivative-preparation-test]
             [agg.api-tokens-test]
             [agg.api-preview-test]
             [agg.api-profile-test]
@@ -13,7 +14,12 @@
             [agg.contracts-test]
             [agg.deploy-workflow-test]
             [agg.derivative-contract-test]
+            [agg.derivative-gcp-test]
             [agg.derivative-lifecycle-test]
+            [agg.derivative-media-test]
+            [agg.derivative-preparation-test]
+            [agg.derivative-storage-test]
+            [agg.derivative-worker-test]
             [agg.derivative-keys-test]
             [agg.errors-test]
             [agg.garmin-test]
@@ -49,6 +55,7 @@
                                              'agg.admin-gcp-test
                                              'agg.api-admin-test
                                              'agg.api-auth-test
+                                             'agg.api-derivative-preparation-test
                                              'agg.api-tokens-test
                                              'agg.api-preview-test
                                              'agg.api-profile-test
@@ -58,7 +65,12 @@
                                              'agg.browser-process-test
                                              'agg.deploy-workflow-test
                                              'agg.derivative-contract-test
+                                             'agg.derivative-gcp-test
                                              'agg.derivative-lifecycle-test
+                                             'agg.derivative-media-test
+                                             'agg.derivative-preparation-test
+                                             'agg.derivative-storage-test
+                                             'agg.derivative-worker-test
                                              'agg.derivative-keys-test
                                              'agg.errors-test
                                              'agg.garmin-test

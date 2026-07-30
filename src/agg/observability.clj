@@ -1,5 +1,7 @@
 (ns agg.observability
-  (:require [clojure.data.json :as json]
+  (:require [agg.errors :as errors]
+            [clojure.data.json :as json]
+            [clojure.string :as str]
             [taoensso.telemere :as tel]
             [taoensso.tufte :as tufte]
             [taoensso.tufte.telemere :as tufte-telemere]))
@@ -12,12 +14,19 @@
     :accountStatus :mimeFilter :indexStatus :stage :elapsedMs :timeoutMs
     :progressPercent :retryable :attempt :requestedMomentCount
     :generatedMomentCount :omittedMomentCount :requestedDurationSeconds
-    :upstreamStatus :sourceFile :sourceLine :sourceColumn})
+    :upstreamStatus :sourceFile :sourceLine :sourceColumn :exceptionClass
+    :rangeStart :rangeEnd :rangeSource :receivedRange :trace :revision
+    :operation :bytesRequested :bytesTransferred :exceptionStack
+    :cancellationLagMs :durationBucket :cacheOutcome :profileVersion
+    :sourceBytes :upstreamBytes :outputBytes :reservedMinorUnits
+    :queueDepth :verificationFailures})
 
 (def ^:private safe-value-keys
   #{:severity :component :event :message :reason :failureCode :errorType
     :requestId :category :phase :view :listState :tokenStatus :accountStatus
-    :mimeFilter :indexStatus :stage :sourceFile})
+    :mimeFilter :indexStatus :stage :sourceFile :exceptionClass :rangeSource
+    :trace :revision :operation :status :durationBucket :cacheOutcome
+    :profileVersion})
 
 (def ^:private early-access-delivery-event-keys
   #{:severity :component :event :requestId :category :upstreamStatus
@@ -33,6 +42,38 @@
   [:requestedMomentCount :generatedMomentCount :omittedMomentCount
    :requestedDurationSeconds])
 
+(def ^:private safe-operations
+  #{"playback_analysis"
+    "recording_clock_inspection"
+    "playback_session_creation"
+    "drive_playback_range"
+    "drive_playback_open"
+    "drive_playback_upstream_validation"
+    "drive_playback_transfer"
+    "ffprobe"
+    "derivative_preparation"
+    "derivative_cache"
+    "derivative_queue"
+    "derivative_dispatch"
+    "derivative_encode"
+    "derivative_verification"
+    "derivative_publication"
+    "derivative_playback"
+    "derivative_cancellation"
+    "derivative_reconciliation"
+    "derivative_cleanup"})
+
+(def ^:private safe-operation-statuses
+  #{"started" "succeeded" "failed" "received" "resolved" "queued"
+    "cancelled" "expired" "rejected"})
+
+(def ^:private safe-duration-buckets
+  #{"under_30_seconds" "30_to_119_seconds" "120_to_299_seconds"
+    "300_to_480_seconds"})
+
+(def ^:private safe-cache-outcomes
+  #{"hit" "miss" "replay" "not_applicable"})
+
 (defn- safe-string? [value]
   (and (string? value)
        (<= (count value) 128)
@@ -44,16 +85,64 @@
        (not (re-find #"(?i)telemetry|token|credential|signed.?url|https?://"
                      value))))
 
+(defn- safe-stack-frame? [value]
+  (and (string? value)
+       (<= (count value) 256)
+       (re-matches
+        #"[A-Za-z0-9_.$-]+/[A-Za-z0-9_.$-]+:[A-Za-z0-9_.$-]+:-?[0-9]+"
+        value)))
+
 (defn- safe-event-value? [key value]
   (cond
     (= :message key) (safe-message? value)
     (= :stage key) (contains? safe-stages value)
+    (= :operation key) (contains? safe-operations value)
+    (= :durationBucket key) (contains? safe-duration-buckets value)
+    (= :cacheOutcome key) (contains? safe-cache-outcomes value)
+    (= :profileVersion key)
+    (and (string? value)
+         (<= 1 (count value) 64)
+         (re-matches #"[A-Za-z0-9._-]+" value))
+    (= :status key)
+    (or (contains? safe-operation-statuses value)
+        (and (number? value)
+             (<= (Math/abs (double value)) 1000000000000)))
+    (= :exceptionStack key)
+    (and (vector? value)
+         (<= 1 (count value) 24)
+         (every? safe-stack-frame? value))
+    (= :verificationFailures key)
+    (and (vector? value)
+         (<= 1 (count value)
+             (count errors/derivative-verification-diagnostic-keys))
+         (every? errors/derivative-verification-diagnostic-keys value))
     (contains? safe-value-keys key) (safe-string? value)
     (contains? #{:cleanupErrors :components} key)
     (and (vector? value) (<= (count value) 16) (every? safe-string? value))
     (number? value) (<= (Math/abs (double value)) 1000000000000)
     (boolean? value) true
     :else false))
+
+(defn exception-fields
+  "Returns bounded exception identity and stack frames without messages or data."
+  [error]
+  (let [error
+        (loop [current error]
+          (if-let [cause (some-> ^Throwable current .getCause)]
+            (recur cause)
+            current))
+        frames
+        (->> (.getStackTrace ^Throwable error)
+             (take 24)
+             (mapv
+              (fn [^StackTraceElement frame]
+                (-> (str (.getClassName frame)
+                         "/" (.getMethodName frame)
+                         ":" (or (.getFileName frame) "unknown")
+                         ":" (.getLineNumber frame))
+                    (str/replace #"[^A-Za-z0-9_.$:/-]" "_")))))]
+    (cond-> {:exceptionClass (.getName (class error))}
+      (seq frames) (assoc :exceptionStack frames))))
 
 (defn- valid-preview-counts? [fields]
   (let [{:keys [requestedMomentCount generatedMomentCount omittedMomentCount
@@ -117,6 +206,14 @@
 
 (defonce ^:private persistence-sink (atom nil))
 
+(def ^:dynamic *event-context* nil)
+
+(defmacro with-event-context
+  "Propagates safe correlation and an optional event sink through nested calls."
+  [context & body]
+  `(binding [*event-context* ~context]
+     ~@body))
+
 (defn configure-persistence!
   "Configures an optional best-effort sink for the safe console event record."
   [sink]
@@ -162,6 +259,14 @@
    (emit-event! (:component event-record)
                 (:event event-record)
                 event-record)))
+
+(defn emit-context-event!
+  "Emits through the active request sink while inheriting safe correlation."
+  [component event fields]
+  (let [fields (merge (:fields *event-context*) fields)]
+    (if-let [event-sink (:event-sink *event-context*)]
+      (event-sink event fields)
+      (emit-event! component event fields))))
 
 (defn emit-error!
   "Emits one boundary error event without attaching exception data or causes."

@@ -2,6 +2,16 @@
 
 (def ^:private max-diagnostic-number 1000000000000)
 (def ^:private max-diagnostic-string-length 128)
+(def derivative-verification-diagnostic-keys
+  #{"audio_channel_layout" "audio_channels" "audio_codec"
+    "audio_duration" "audio_duration_match" "audio_profile"
+    "audio_sample_rate" "audio_stream_count" "container" "duration"
+    "duration_limit" "duration_match" "fast_start" "output_present"
+    "output_size" "probe_readable" "stream_count"
+    "video_average_frame_rate" "video_codec" "video_dimensions"
+    "video_duration" "video_duration_match" "video_frame_rate"
+    "video_level" "video_pixel_format" "video_profile"
+    "video_stream_count" "verification_deadline"})
 (def ^:private safe-stages
   #{"source_metadata" "frame_compose"
     "request_load" "request_prepare" "source_content" "overlay_render"
@@ -9,8 +19,10 @@
     "completion_persistence"})
 (def ^:private safe-context-keys
   #{:status :offset :size :reported :sent-through :line :limit :limits
+    :range-start :range-end
     :retryable :job-id :field :component :exit-status :failure-code
-    :state :components :reason :stage :attempt :elapsed-ms :timeout-ms})
+    :state :components :reason :stage :attempt :elapsed-ms :timeout-ms
+    :verification-failures})
 
 (defn- finite-number? [value]
   (and (number? value)
@@ -40,6 +52,10 @@
     :components (and (vector? value)
                      (<= (count value) 16)
                      (every? safe-string? value))
+    :verification-failures
+    (and (vector? value)
+         (<= (count value) (count derivative-verification-diagnostic-keys))
+         (every? derivative-verification-diagnostic-keys value))
     :retryable (boolean? value)
     (finite-number? value)))
 

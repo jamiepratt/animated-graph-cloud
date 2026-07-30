@@ -47,6 +47,11 @@
                                     :asset-id asset-id
                                     :object-key
                                     "production/derivative-previews/v1/private.mp4"
+                                    :asset-generation 42
+                                    :asset-size 1024
+                                    :asset-content-type "video/mp4"
+                                    :asset-profile-version
+                                    "h264-aac-1080p25-v1"
                                     :now completed-at}))
         resource (derivative/public-resource completed)
         expired (derivative/transition
