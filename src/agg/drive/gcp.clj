@@ -424,6 +424,16 @@
                               {:type ::resumable-upload-failed
                                :status (:status response)}))))))
 
+(def ^:private playback-range-proxy-failure-reasons
+  #{"concurrency_exhausted"
+    "lifetime_exhausted"
+    "work_budget_exhausted"
+    "invalid_upstream_response"
+    "upstream_timeout"
+    "invalid-playback-response"
+    "source-download-failed"
+    "unexpected_failure"})
+
 (defn- inspect-playback-through-proxy!
   [gateway access-token file-id metadata stream-open-ended?]
   (with-open
@@ -435,7 +445,15 @@
        :size (:size metadata)
        :limits drive-limits/playback-analysis-range-limits-v1
        :stream-open-ended? stream-open-ended?})]
-    (media/inspect-browser-playback! "ffprobe" (:url proxy))))
+    (try
+      (media/inspect-browser-playback! "ffprobe" (:url proxy))
+      (catch Throwable error
+        (let [failure-reason (:failure-reason ((:stats proxy)))]
+          (if (contains? playback-range-proxy-failure-reasons failure-reason)
+            (errors/raise! "Playback source range proxy failed"
+                           {:type ::playback-range-proxy-failed}
+                           error)
+            (throw error)))))))
 
 (def ^:private inconclusive-playback-inspection-types
   #{:agg.render.media/media-tool-failed

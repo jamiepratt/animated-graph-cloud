@@ -37,7 +37,8 @@
   #{"source_metadata" "frame_compose"
     "request_load" "request_prepare" "source_content" "overlay_render"
     "composition_encode" "artifact_upload" "drive_delivery"
-    "completion_persistence"})
+    "completion_persistence" "playback_analysis"
+    "playback_media_inspection" "playback_source_range"})
 
 (def ^:private preview-count-keys
   [:requestedMomentCount :generatedMomentCount :omittedMomentCount

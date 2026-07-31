@@ -124,6 +124,65 @@
                types))
       types)))
 
+(defn- cancellation-error? [error]
+  (loop [current error]
+    (when current
+      (or (instance? java.util.concurrent.CancellationException current)
+          (instance? InterruptedException current)
+          (recur (.getCause ^Throwable current))))))
+
+(defn- playback-analysis-failure-diagnostics [error]
+  (let [types (error-types error)
+        fallback-stage
+        (cond
+          (contains? types ::playback-analysis-source-metadata-failed)
+          "source_metadata"
+
+          (contains? types ::playback-analysis-inspection-failed)
+          "playback_media_inspection"
+
+          :else
+          "playback_analysis")]
+    (cond
+      (cancellation-error? error)
+      {:reason "playback_analysis_cancelled"
+       :stage fallback-stage}
+
+      (contains? types :agg.drive.gcp/source-metadata-failed)
+      {:reason "playback_source_metadata_failure"
+       :stage "source_metadata"
+       :errorType ":agg.drive.gcp/source-metadata-failed"}
+
+      (contains? types :agg.drive.gcp/playback-range-proxy-failed)
+      {:reason "playback_source_range_failure"
+       :stage "playback_source_range"
+       :errorType ":agg.drive.gcp/playback-range-proxy-failed"}
+
+      (contains? types :agg.render.media/media-tool-failed)
+      {:reason "playback_media_tool_failure"
+       :stage "playback_media_inspection"
+       :errorType ":agg.render.media/media-tool-failed"}
+
+      (contains? types :agg.render.media/invalid-source-inspection)
+      {:reason "playback_invalid_inspection"
+       :stage "playback_media_inspection"
+       :errorType ":agg.render.media/invalid-source-inspection"}
+
+      (contains? types :agg.render.media/media-tool-timeout)
+      {:reason "playback_analysis_timeout"
+       :stage "playback_media_inspection"
+       :errorType ":agg.render.media/media-tool-timeout"}
+
+      :else
+      {:reason "unexpected_application_error"
+       :stage fallback-stage})))
+
+(defn- request-failure-diagnostics [path error fallback-reason]
+  (if (= "/v1/drive/playback-analyses" path)
+    (playback-analysis-failure-diagnostics error)
+    {:reason fallback-reason
+     :errorType (some-> error ex-data :type str)}))
+
 (defn- preview-path? [path]
   (contains? #{"/v1/preview" "/ui/preview"} path))
 
@@ -1541,11 +1600,24 @@
                          (satisfies? drive/PlaybackAnalysisGateway gateway))
             (throw (errors/raise! "Drive playback analysis dependencies are incomplete"
                                   {:type ::drive/source-unavailable})))
-        metadata (drive/source-metadata! gateway access-token file-id)
-        prepared (contract/attach-source-selection-metadata
-                  {:source-video {:file-id file-id}} metadata)
-        source-metadata (get-in prepared [:source-video :metadata])
-        evidence (drive/inspect-playback! gateway access-token file-id source-metadata)]
+        source-metadata
+        (try
+          (let [metadata (drive/source-metadata! gateway access-token file-id)
+                prepared
+                (contract/attach-source-selection-metadata
+                 {:source-video {:file-id file-id}} metadata)]
+            (get-in prepared [:source-video :metadata]))
+          (catch Throwable error
+            (errors/raise! "Playback analysis source metadata failed"
+                           {:type ::playback-analysis-source-metadata-failed}
+                           error)))
+        evidence
+        (try
+          (drive/inspect-playback! gateway access-token file-id source-metadata)
+          (catch Throwable error
+            (errors/raise! "Playback media inspection failed"
+                           {:type ::playback-analysis-inspection-failed}
+                           error)))]
     (respond-json! exchange 200
                    {:fileName (:name source-metadata)
                     :evidence evidence})))
@@ -3059,10 +3131,12 @@
                     (respond-preview-failure! dependencies exchange request-id error)
                     (do
                       (emit-event! dependencies "request_failed"
-                                   {:severity "ERROR"
-                                    :requestId request-id
-                                    :reason "unexpected_application_error"
-                                    :errorType (some-> error ex-data :type str)})
+                                   (merge
+                                    {:severity "ERROR"
+                                     :requestId request-id}
+                                    (request-failure-diagnostics
+                                     path error
+                                     "unexpected_application_error")))
                       (respond! exchange 500 "application/json; charset=utf-8"
                                 "{\"error\":\"render_failed\"}")))))))
           (catch Throwable error
@@ -3077,10 +3151,11 @@
                 (respond-preview-failure! dependencies exchange request-id error)
                 (do
                   (emit-event! dependencies "request_failed"
-                               {:severity "ERROR"
-                                :requestId request-id
-                                :reason "unexpected_error"
-                                :errorType (some-> error ex-data :type str)})
+                               (merge
+                                {:severity "ERROR"
+                                 :requestId request-id}
+                                (request-failure-diagnostics
+                                 path error "unexpected_error")))
                   (respond! exchange 500 "application/json; charset=utf-8"
                             "{\"error\":\"render_failed\"}"))))))))))
 

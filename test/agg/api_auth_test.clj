@@ -1722,29 +1722,76 @@
         (.close ^java.lang.AutoCloseable server)))))
 
 (deftest playback-analysis-failures-are-safe-and-correlated-to-the-response
-  (doseq [[label failure expected-error-type expected-reason]
+  (doseq [[label failure injection-stage expected-error-type
+           expected-reason expected-stage]
           [["media tool failure"
             (ex-info "Media tool failed"
                      {:type :agg.render.media/media-tool-failed
                       :exit-status 7})
+            :inspection
             ":agg.render.media/media-tool-failed"
-            "unexpected_application_error"]
+            "playback_media_tool_failure"
+            "playback_media_inspection"]
            ["media tool timeout"
             (ex-info "Media tool exceeded its deadline"
                      {:type :agg.render.media/media-tool-timeout
                       :timeout-ms 30000})
+            :inspection
             ":agg.render.media/media-tool-timeout"
-            "unexpected_application_error"]
+            "playback_analysis_timeout"
+            "playback_media_inspection"]
            ["unsupported media evidence"
             (ex-info "Playback evidence was incomplete"
                      {:type :agg.render.media/invalid-source-inspection})
+            :inspection
             ":agg.render.media/invalid-source-inspection"
-            "unexpected_application_error"]
+            "playback_invalid_inspection"
+            "playback_media_inspection"]
            ["request cancellation"
             (java.util.concurrent.CancellationException.
              "playback analysis cancelled")
+            :inspection
             nil
-            "unexpected_error"]]]
+            "playback_analysis_cancelled"
+            "playback_media_inspection"]
+           ["source metadata failure"
+            (ex-info "Source metadata failed"
+                     {:type :agg.drive.gcp/source-metadata-failed
+                      :status 503})
+            :source-metadata
+            ":agg.drive.gcp/source-metadata-failed"
+            "playback_source_metadata_failure"
+            "source_metadata"]
+           ["unexpected source metadata failure"
+            (IllegalStateException. "private source metadata detail")
+            :source-metadata
+            nil
+            "unexpected_application_error"
+            "source_metadata"]
+           ["source range proxy failure"
+            (ex-info "Source range proxy failed"
+                     {:type :agg.drive.gcp/playback-range-proxy-failed}
+                     (ex-info "Media tool failed"
+                              {:type :agg.render.media/media-tool-failed
+                               :exit-status 1}))
+            :inspection
+            ":agg.drive.gcp/playback-range-proxy-failed"
+            "playback_source_range_failure"
+            "playback_source_range"]
+           ["unknown application error type"
+            (ex-info "Private implementation detail"
+                     {:type :private.integration/private-failure
+                      :fileId "private-source"})
+            :inspection
+            nil
+            "unexpected_application_error"
+            "playback_media_inspection"]
+           ["unexpected failure"
+            (IllegalStateException. "private implementation detail")
+            :inspection
+            nil
+            "unexpected_application_error"
+            "playback_media_inspection"]]]
     (testing label
       (let [port (available-port)
             events (atom [])
@@ -1753,16 +1800,20 @@
             (reify
               drive/SourceGateway
               (source-metadata! [_ _ file-id]
-                {:id file-id
-                 :name "fixture.mp4"
-                 :mimeType "video/mp4"
-                 :size 4096
-                 :trashed false})
+                (if (= :source-metadata injection-stage)
+                  (throw failure)
+                  {:id file-id
+                   :name "fixture.mp4"
+                   :mimeType "video/mp4"
+                   :size 4096
+                   :trashed false}))
               (stream-source! [_ _ _ _]
                 (throw (AssertionError. "Analysis must stay range-bounded")))
               drive/PlaybackAnalysisGateway
               (inspect-playback! [_ _ _ _]
-                (throw failure)))
+                (if (= :inspection injection-stage)
+                  (throw failure)
+                  (throw (AssertionError. "Unexpected analysis inspection")))))
             auth-system (assoc system :drive gateway)
             csrf (auth/issue-csrf-token auth-system
                                         {:subject "google-subject-1"})
@@ -1785,9 +1836,12 @@
                    (json/read-str (.body response))))
             (is (re-matches #"[0-9a-f-]{36}" request-id))
             (is (= "request_failed" event))
+            (is (= 1 (count @events)))
             (is (= request-id (:requestId fields)))
             (is (= expected-reason (:reason fields)))
             (is (= expected-error-type (:errorType fields)))
+            (when expected-stage
+              (is (= expected-stage (:stage fields))))
             (is (not-any? #(contains? fields %)
                           [:fileId :accountId :subject :fileName])))
           (finally

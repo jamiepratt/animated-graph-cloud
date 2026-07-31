@@ -256,6 +256,29 @@
                gateway "access" "private-file" {:size 3000000}))))
     (is (= [false true] @stream-modes))))
 
+(deftest playback-analysis-preserves-range-proxy-failure-class
+  (let [gateway
+        (assoc
+         (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+         :stream-source-request!
+         (fn [_]
+           {:status 502
+            :headers {}
+            :body (ByteArrayInputStream. (byte-array 0))}))
+        error
+        (try
+          (drive/inspect-playback!
+           gateway "access" "private-file"
+           {:size 4096 :mimeType "video/quicktime"})
+          nil
+          (catch clojure.lang.ExceptionInfo error
+            error))]
+    (is (= :agg.drive.gcp/playback-range-proxy-failed
+           (:type (ex-data error))))
+    (is (= :agg.render.media/media-tool-failed
+           (some-> error .getCause ex-data :type)))
+    (is (= #{:type :source} (set (keys (ex-data error)))))))
+
 (deftest playback-analysis-normalizes-drive-confirmed-incompatible-video
   (doseq [failure-type [:agg.render.media/media-tool-failed
                         :agg.render.media/invalid-source-inspection]]

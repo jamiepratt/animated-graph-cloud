@@ -80,6 +80,32 @@
            fields))
     (is (empty? (observability/safe-event-fields {:stage "private.mov"})))))
 
+(deftest playback-analysis-failure-event-keeps-only-safe-cause-and-stage
+  (let [fields
+        (observability/safe-event-fields
+         {:severity "ERROR"
+          :component "api"
+          :event "request_failed"
+          :requestId "00000000-0000-0000-0000-000000000233"
+          :reason "playback_source_range_failure"
+          :stage "playback_source_range"
+          :errorType ":agg.drive.gcp/playback-range-proxy-failed"
+          :fileId "private-source"
+          :accountId "private-account"
+          :fileName "private.mov"
+          :accessToken "private-token"
+          :url "https://private.example/source"
+          :exceptionMessage "private exception detail"
+          :arbitraryData {:private true}})]
+    (is (= {:severity "ERROR"
+            :component "api"
+            :event "request_failed"
+            :requestId "00000000-0000-0000-0000-000000000233"
+            :reason "playback_source_range_failure"
+            :stage "playback_source_range"
+            :errorType ":agg.drive.gcp/playback-range-proxy-failed"}
+           fields))))
+
 (deftest early-access-delivery-event-keeps-only-bounded-operations-data
   (is (= {:severity "ERROR"
           :component "api"

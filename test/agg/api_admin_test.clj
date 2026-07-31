@@ -151,6 +151,16 @@
            log-store
            (logs/entry
             {:severity "ERROR"
+             :component "api"
+             :event "request_failed"
+             :requestId "00000000-0000-0000-0000-000000000233"
+             :reason "playback_source_range_failure"
+             :stage "playback_source_range"}
+            "{\"severity\":\"ERROR\",\"component\":\"api\",\"event\":\"request_failed\",\"requestId\":\"00000000-0000-0000-0000-000000000233\",\"reason\":\"playback_source_range_failure\",\"stage\":\"playback_source_range\"}"))
+        _ (logs/append-log!
+           log-store
+           (logs/entry
+            {:severity "ERROR"
              :component "derivative"
              :event "derivative_preparation_terminal"
              :failureCode "derivative_verification_failed"
@@ -208,6 +218,12 @@
         (is (str/includes? (.body formatted) "Formatted events"))
         (is (str/includes? (.body formatted) "Job failed"))
         (is (str/includes? (.body formatted) "Render request failed"))
+        (doseq [safe-playback-diagnostic
+                ["00000000-0000-0000-0000-000000000233"
+                 "playback_source_range_failure"
+                 "playback_source_range"]]
+          (is (str/includes? (.body formatted) safe-playback-diagnostic)
+              safe-playback-diagnostic))
         (is (not (str/includes? (.body formatted) "Wrong component")))
         (is (not (str/includes? (.body formatted) "Wrong severity")))
         (is (= 200 (.statusCode raw)))
