@@ -83,6 +83,70 @@
                         {:output output}))))
     path))
 
+(defn- browser-incompatible-delayed-program-mpeg-ts! []
+  (let [path (Files/createTempFile
+              "agg-playback-analysis-" ".ts"
+              (make-array java.nio.file.attribute.FileAttribute 0))
+        process
+        (.start
+         (doto
+          (ProcessBuilder.
+           ^java.util.List
+           (into ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
+                  "-f" "lavfi" "-i" "testsrc2=s=64x36:r=25:d=1"
+                  "-f" "lavfi" "-i" "anullsrc=r=48000:cl=stereo"
+                  "-shortest" "-t" "1"]
+                 ["-c:v" "mpeg2video" "-c:a" "mp2" "-f" "mpegts"
+                  "-y" (str path)]))
+           (.redirectErrorStream true)))]
+    (when-not (zero? (.waitFor process))
+      (let [output (slurp (.getInputStream process))]
+        (Files/deleteIfExists path)
+        (throw (ex-info "Video fixture generation failed" {:output output}))))
+    (let [media-bytes (Files/readAllBytes path)
+          packet-count 12000
+          packet-size 188
+          prefix-size (* packet-count packet-size)
+          prefixed (byte-array (+ prefix-size (alength media-bytes)))]
+      (dotimes [packet packet-count]
+        (let [offset (* packet packet-size)]
+          (aset-byte prefixed offset (unchecked-byte 0x47))
+          (aset-byte prefixed (inc offset) (unchecked-byte 0x1f))
+          (aset-byte prefixed (+ offset 2) (unchecked-byte 0xff))
+          (aset-byte prefixed (+ offset 3) (unchecked-byte 0x10))))
+      (System/arraycopy media-bytes 0 prefixed prefix-size
+                        (alength media-bytes))
+      (Files/write path prefixed (make-array OpenOption 0)))
+    path))
+
+(defn- inspect-generated-video! [path]
+  (let [source-bytes (Files/readAllBytes path)
+        requested-lengths (atom [])
+        gateway
+        (assoc
+         (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+         :stream-source-request!
+         (fn [request]
+           (let [[_ start-text end-text]
+                 (re-matches #"bytes=(\d+)-(\d+)"
+                             (get-in request [:headers "Range"]))
+                 start (parse-long start-text)
+                 end (parse-long end-text)
+                 length (inc (- end start))]
+             (swap! requested-lengths conj length)
+             {:status 206
+              :headers {"content-range"
+                        (str "bytes " start "-" end "/"
+                             (alength source-bytes))
+                        "content-length" (str length)
+                        "content-type" "application/octet-stream"}
+              :body (ByteArrayInputStream.
+                     source-bytes (int start) (int length))})))]
+    {:evidence (drive/inspect-playback!
+                gateway "access" "private-file"
+                {:size (alength source-bytes)})
+     :requested-lengths @requested-lengths}))
+
 (deftest playback-analysis-classifies-supported-media-with-bounded-range-reads
   (let [path (browser-supported-mp4!)]
     (try
@@ -167,6 +231,35 @@
         (is (= "pcm_s16le" (get-in evidence [:audio :codec])))
         (is (seq @requested-lengths))
         (is (every? #(<= % (* 1024 1024)) @requested-lengths)))
+      (finally
+        (Files/deleteIfExists path)))))
+
+(deftest playback-analysis-classifies-valid-incompatible-delayed-program-stream
+  (let [path (browser-incompatible-delayed-program-mpeg-ts!)]
+    (try
+      (let [local-probe
+            (.start
+             (doto
+              (ProcessBuilder.
+               ^java.util.List
+               ["ffprobe" "-v" "quiet" "-show_entries"
+                "stream=codec_type,codec_name" "-of" "json" (str path)])
+               (.redirectErrorStream true)))
+            local-output (slurp (.getInputStream local-probe))]
+        (is (zero? (.waitFor local-probe)))
+        (is (= #{"mpeg2video" "mp2"}
+               (->> (json/read-str local-output :key-fn keyword)
+                    :streams
+                    (map :codec_name)
+                    set))))
+      (let [{:keys [evidence requested-lengths]}
+            (inspect-generated-video! path)]
+        (is (= "mpegts" (get-in evidence [:container :format])))
+        (is (= "mpeg2video" (get-in evidence [:video :codec])))
+        (is (= "mp2" (get-in evidence [:audio :codec])))
+        (is (< (* 1024 1024) (Files/size path)))
+        (is (seq requested-lengths))
+        (is (every? #(<= % (* 1024 1024)) requested-lengths)))
       (finally
         (Files/deleteIfExists path)))))
 

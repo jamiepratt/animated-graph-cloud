@@ -424,6 +424,19 @@
                               {:type ::resumable-upload-failed
                                :status (:status response)}))))))
 
+(defn- inspect-playback-through-proxy!
+  [gateway access-token file-id metadata stream-open-ended?]
+  (with-open
+   [proxy
+    (range-proxy/start!
+      {:gateway gateway
+       :access-token access-token
+       :file-id file-id
+       :size (:size metadata)
+       :limits drive-limits/playback-analysis-range-limits-v1
+       :stream-open-ended? stream-open-ended?})]
+    (media/inspect-browser-playback! "ffprobe" (:url proxy))))
+
 (defrecord RestDriveGateway [send! chunk-size]
   auth/DriveClient
   (ensure-output-folder! [_ access-token existing-folder]
@@ -579,15 +592,15 @@
        (assoc-in render-spec [:source-video :input-url] (:url proxy)))))
   drive/PlaybackAnalysisGateway
   (inspect-playback! [gateway access-token file-id metadata]
-    (with-open
-     [proxy
-      (range-proxy/start!
-        {:gateway gateway
-         :access-token access-token
-         :file-id file-id
-         :size (:size metadata)
-         :limits drive-limits/playback-analysis-range-limits-v1})]
-      (media/inspect-browser-playback! "ffprobe" (:url proxy))))
+    (try
+      (inspect-playback-through-proxy!
+       gateway access-token file-id metadata false)
+      (catch clojure.lang.ExceptionInfo error
+        (if (= :agg.render.media/media-tool-failed
+               (:type (ex-data error)))
+          (inspect-playback-through-proxy!
+           gateway access-token file-id metadata true)
+          (throw error)))))
   drive/FolderSourceListingGateway
   (list-folder-sources! [_ access-token folder-id]
     (loop [page-token nil
