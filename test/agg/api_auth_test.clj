@@ -1678,6 +1678,49 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest selected-drive-playback-analysis-propagates-authoritative-video-duration
+  (let [port (available-port)
+        {:keys [system session]} (auth-fixture)
+        metadata
+        {:id "renderable-private-mov"
+         :name "selected.mov"
+         :mimeType "video/quicktime"
+         :size 3000000
+         :trashed false
+         :videoMediaMetadata {:durationMillis "125500"}}
+        gateway
+        (reify
+          drive/SourceGateway
+          (source-metadata! [_ _ _] metadata)
+          (stream-source! [_ _ _ _]
+            (throw (AssertionError. "Analysis must stay range-bounded")))
+          drive/PlaybackAnalysisGateway
+          (inspect-playback! [_ _ file-id propagated]
+            (is (= "renderable-private-mov" file-id))
+            (is (= metadata propagated))
+            {:container {:format "unknown"}
+             :video {:codec "unknown" :codecTag "unknown"}}))
+        auth-system (assoc system :drive gateway)
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        server (start-api! port {:auth-system auth-system})]
+    (try
+      (let [response
+            (post! port "/v1/drive/playback-analyses"
+                   {:fileId "renderable-private-mov"}
+                   {"Content-Type" "application/json"
+                    "Cookie" (str "agg_session=" session)
+                    "X-CSRF-Token" csrf})]
+        (is (= 200 (.statusCode response)))
+        (is (= {"fileName" "selected.mov"
+                "evidence" {"container" {"format" "unknown"}
+                            "video" {"codec" "unknown"
+                                     "codecTag" "unknown"}}}
+               (json/read-str (.body response))))
+        (is (.isEmpty (.firstValue (.headers response) "Set-Cookie"))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest playback-analysis-failures-are-safe-and-correlated-to-the-response
   (doseq [[label failure expected-error-type expected-reason]
           [["media tool failure"

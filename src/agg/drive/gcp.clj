@@ -451,12 +451,10 @@
       (when (and parsed (pos? parsed)) parsed))
     (catch Throwable _ nil)))
 
-(defn- drive-confirmed-video?
+(defn- drive-duration-confirmed-video?
   [{:keys [mimeType videoMediaMetadata]}]
   (and (drive/supported-source-video-mime-type? mimeType)
-       (positive-long (:durationMillis videoMediaMetadata))
-       (positive-long (:width videoMediaMetadata))
-       (positive-long (:height videoMediaMetadata))))
+       (positive-long (:durationMillis videoMediaMetadata))))
 
 (def ^:private unknown-playback-evidence
   {:container {:format "unknown"}
@@ -627,7 +625,7 @@
              gateway access-token file-id metadata true)
             (catch clojure.lang.ExceptionInfo retry-error
               (if (and (inconclusive-playback-inspection? retry-error)
-                       (drive-confirmed-video? metadata))
+                       (drive-duration-confirmed-video? metadata))
                 unknown-playback-evidence
                 (throw retry-error))))
           (throw error)))))

@@ -280,6 +280,41 @@
                                        :height 1080}}))))
       (is (= [false true] @stream-modes)))))
 
+(deftest playback-analysis-normalizes-drive-duration-confirmed-video
+  (let [metadata-requests (atom [])
+        stream-modes (atom [])
+        gateway
+        (gcp/->RestDriveGateway
+         (fn [request]
+           (swap! metadata-requests conj request)
+           {:status 200
+            :body (json/write-str
+                   {:id "private-file"
+                    :name "selected.mov"
+                    :mimeType "video/quicktime"
+                    :size "3000000"
+                    :trashed false
+                    :videoMediaMetadata {:durationMillis "125500"}})})
+         (* 8 1024 1024))
+        inspect!
+        (fn [_gateway _access-token _file-id _metadata stream-open-ended?]
+          (swap! stream-modes conj stream-open-ended?)
+          (throw
+           (ex-info "Bounded inspection had no complete stream evidence"
+                    {:type :agg.render.media/invalid-source-inspection})))
+        metadata (drive/source-metadata! gateway "access" "private-file")]
+    (is (= {:container {:format "unknown"}
+            :video {:codec "unknown" :codecTag "unknown"}}
+           (with-redefs-fn
+             {#'agg.drive.gcp/inspect-playback-through-proxy! inspect!}
+             #(drive/inspect-playback!
+               gateway "access" "private-file" metadata))))
+    (is (= [false true] @stream-modes))
+    (is (= "125500"
+           (get-in metadata [:videoMediaMetadata :durationMillis])))
+    (is (str/includes? (:url (first @metadata-requests))
+                       "videoMediaMetadata(durationMillis,width,height)"))))
+
 (deftest playback-analysis-classifies-valid-incompatible-delayed-program-stream
   (let [path (browser-incompatible-delayed-program-mpeg-ts!)]
     (try
