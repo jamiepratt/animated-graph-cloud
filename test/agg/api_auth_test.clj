@@ -1678,6 +1678,78 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest playback-analysis-failures-are-safe-and-correlated-to-the-response
+  (doseq [[label failure expected-error-type expected-reason]
+          [["media tool failure"
+            (ex-info "Media tool failed"
+                     {:type :agg.render.media/media-tool-failed
+                      :exit-status 7})
+            ":agg.render.media/media-tool-failed"
+            "unexpected_application_error"]
+           ["media tool timeout"
+            (ex-info "Media tool exceeded its deadline"
+                     {:type :agg.render.media/media-tool-timeout
+                      :timeout-ms 30000})
+            ":agg.render.media/media-tool-timeout"
+            "unexpected_application_error"]
+           ["unsupported media evidence"
+            (ex-info "Playback evidence was incomplete"
+                     {:type :agg.render.media/invalid-source-inspection})
+            ":agg.render.media/invalid-source-inspection"
+            "unexpected_application_error"]
+           ["request cancellation"
+            (java.util.concurrent.CancellationException.
+             "playback analysis cancelled")
+            nil
+            "unexpected_error"]]]
+    (testing label
+      (let [port (available-port)
+            events (atom [])
+            {:keys [system session]} (auth-fixture)
+            gateway
+            (reify
+              drive/SourceGateway
+              (source-metadata! [_ _ file-id]
+                {:id file-id
+                 :name "fixture.mp4"
+                 :mimeType "video/mp4"
+                 :size 4096
+                 :trashed false})
+              (stream-source! [_ _ _ _]
+                (throw (AssertionError. "Analysis must stay range-bounded")))
+              drive/PlaybackAnalysisGateway
+              (inspect-playback! [_ _ _ _]
+                (throw failure)))
+            auth-system (assoc system :drive gateway)
+            csrf (auth/issue-csrf-token auth-system
+                                        {:subject "google-subject-1"})
+            server
+            (start-api! port {:auth-system auth-system
+                              :event-sink #(swap! events conj [%1 %2])})]
+        (try
+          (let [response
+                (post! port "/v1/drive/playback-analyses"
+                       {:fileId "fixture-source"}
+                       {"Content-Type" "application/json"
+                        "Cookie" (str "agg_session=" session)
+                        "X-CSRF-Token" csrf})
+                request-id (some-> response .headers
+                                   (.firstValue "x-request-id")
+                                   (.orElse nil))
+                [event fields] (first @events)]
+            (is (= 500 (.statusCode response)))
+            (is (= {"error" "render_failed"}
+                   (json/read-str (.body response))))
+            (is (re-matches #"[0-9a-f-]{36}" request-id))
+            (is (= "request_failed" event))
+            (is (= request-id (:requestId fields)))
+            (is (= expected-reason (:reason fields)))
+            (is (= expected-error-type (:errorType fields)))
+            (is (not-any? #(contains? fields %)
+                          [:fileId :accountId :subject :fileName])))
+          (finally
+            (.close ^java.lang.AutoCloseable server)))))))
+
 (deftest renderable-non-mp4-source-keeps-its-original-content-type-for-playback
   (let [port (available-port)
         {:keys [system session]} (auth-fixture)

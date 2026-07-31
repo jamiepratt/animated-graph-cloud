@@ -142,6 +142,50 @@
         (is (= 502 (.statusCode response)))
         (is (< elapsed-ms 1000))))))
 
+(deftest transient-drive-http-timeout-is-retried-within-the-range-budget
+  (let [requests (atom 0)
+        gateway
+        (reify drive/PlaybackGateway
+          (open-source-range! [_ _ _ {:keys [start end]}]
+            (if (= 1 (swap! requests inc))
+              (throw (java.net.http.HttpTimeoutException.
+                      "deterministic Drive timeout"))
+              {:status 206
+               :headers {"content-range" (str "bytes " start "-" end "/100")
+                         "content-length" (str (inc (- end start)))}
+               :body (ByteArrayInputStream.
+                      (byte-array (repeat (inc (- end start)) 1)))})))]
+    (with-open [proxy (range-proxy/start!
+                        {:gateway gateway
+                         :access-token "access"
+                         :file-id "file"
+                         :size 100
+                         :limits (limits {:max-retries 1})})]
+      (is (= 206 (.statusCode (get-range (:url proxy) "bytes=0-9"))))
+      (is (= 2 @requests))
+      (is (= 1 (:retry-count ((:stats proxy))))))))
+
+(deftest exhausted-drive-http-timeout-fails-with-a-bounded-proxy-response
+  (let [requests (atom 0)
+        gateway
+        (reify drive/PlaybackGateway
+          (open-source-range! [_ _ _ _]
+            (swap! requests inc)
+            (throw (java.net.http.HttpTimeoutException.
+                    "deterministic Drive timeout"))))]
+    (with-open [proxy (range-proxy/start!
+                        {:gateway gateway
+                         :access-token "access"
+                         :file-id "file"
+                         :size 100
+                         :limits (limits {:max-retries 1})})]
+      (is (= 502 (.statusCode (get-range (:url proxy) "bytes=0-9"))))
+      (is (= 2 @requests))
+      (is (= {:retry-count 1
+              :failure-reason "upstream_timeout"}
+             (select-keys ((:stats proxy))
+                          [:retry-count :failure-reason]))))))
+
 (deftest upstream-work-budget-stops-new-range-requests
   (let [requests (atom 0)
         gateway

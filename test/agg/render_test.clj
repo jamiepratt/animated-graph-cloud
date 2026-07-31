@@ -393,6 +393,39 @@
         (Files/deleteIfExists failure)
         (Files/deleteIfExists timeout)))))
 
+(deftest cancelling-a-captured-media-probe-stops-its-child-process
+  (let [pid-path (Files/createTempFile
+                  "agg-cancelled-probe-" ".pid"
+                  (make-array java.nio.file.attribute.FileAttribute 0))
+        _ (Files/deleteIfExists pid-path)
+        probe
+        (executable-script!
+         (str "#!/bin/sh\nprintf '%s\\n' $$ > '" pid-path
+              "'\nexec sleep 30\n"))
+        call-finished (promise)
+        call
+        (future
+          (try
+            (process/run-captured! [(str probe)] 60000)
+            (catch Throwable _)
+            (finally
+              (deliver call-finished true))))]
+    (try
+      (is (eventually? 2000 #(Files/exists
+                              pid-path
+                              (make-array java.nio.file.LinkOption 0))))
+      (let [pid (Long/parseLong (str/trim (Files/readString pid-path)))
+            child (.get (ProcessHandle/of pid))]
+        (is (.isAlive child))
+        (is (true? (future-cancel call)))
+        (is (= true (deref call-finished 2000 false)))
+        (is (eventually? 2000 #(not (.isAlive child))))
+        (when (.isAlive child)
+          (.destroyForcibly child)))
+      (finally
+        (Files/deleteIfExists pid-path)
+        (Files/deleteIfExists probe)))))
+
 (deftest gallery-decoding-is-bounded-behind-a-public-seam
   (let [first-png (png-bytes 8 4 false)
         second-png (png-bytes 8 4 true)

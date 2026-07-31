@@ -3060,6 +3060,7 @@
                     (do
                       (emit-event! dependencies "request_failed"
                                    {:severity "ERROR"
+                                    :requestId request-id
                                     :reason "unexpected_application_error"
                                     :errorType (some-> error ex-data :type str)})
                       (respond! exchange 500 "application/json; charset=utf-8"
@@ -3077,6 +3078,7 @@
                 (do
                   (emit-event! dependencies "request_failed"
                                {:severity "ERROR"
+                                :requestId request-id
                                 :reason "unexpected_error"
                                 :errorType (some-> error ex-data :type str)})
                   (respond! exchange 500 "application/json; charset=utf-8"

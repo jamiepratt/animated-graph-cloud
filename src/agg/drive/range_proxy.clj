@@ -7,6 +7,7 @@
   (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
            (java.io Closeable IOException InputStream)
            (java.net InetSocketAddress)
+           (java.net.http HttpTimeoutException)
            (java.util UUID)
            (java.util.concurrent Callable ExecutionException ExecutorService
                                  Executors FutureTask TimeUnit
@@ -167,7 +168,12 @@
         (.interrupt (Thread/currentThread))
         (throw error))
       (catch ExecutionException error
-        (throw (.getCause error))))))
+        (let [cause (.getCause error)]
+          (if (instance? HttpTimeoutException cause)
+            (throw (errors/raise! "Drive range request exceeded its deadline"
+                                  {:type ::upstream-timeout}
+                                  cause))
+            (throw cause)))))))
 
 (defn- reserve-upstream!
   [counters {:keys [max-upstream-bytes max-request-count]} length]
@@ -224,7 +230,7 @@
                           loaded {:start start :end fetch-end :bytes bytes}]
                       (reset! cache loaded)
                       loaded))))}
-              (catch Throwable error
+              (catch clojure.lang.ExceptionInfo error
                 {:error error}))]
         (if-let [error (:error result)]
           (if (and (< attempt max-retries)
@@ -313,7 +319,7 @@
                           (cached-bytes
                            (load-range! state start end) start end))]
                     (write-response! exchange 206 headers bytes))))
-              (catch clojure.lang.ExceptionInfo error
+              (catch Throwable error
                 (let [data (ex-data error)
                       type (:type data)]
                   (cond

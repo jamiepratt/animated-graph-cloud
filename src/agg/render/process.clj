@@ -8,6 +8,15 @@
 (def ^:private process-stop-grace-ms 1000)
 (def ^:private timed-out (Object.))
 
+(declare stop-process!)
+
+(defn- stop-captured-process! [process captured error]
+  (stop-process! process)
+  (deref captured process-stop-grace-ms "")
+  (when (instance? InterruptedException error)
+    (.interrupt (Thread/currentThread)))
+  (throw error))
+
 (defn process-builder [command]
   (doto (ProcessBuilder. ^java.util.List command)
     (.redirectErrorStream true)))
@@ -30,32 +39,34 @@
   "Runs a media command, returning stdout while exposing only bounded errors."
   ([command]
    (let [process (.start (process-builder command))
-         captured (capture-output (.getInputStream process))
-         exit-status (.waitFor process)
-         output @captured]
-     (when-not (zero? exit-status)
-       (throw (errors/raise! "Media tool failed"
-                             {:type ::tool-failed
-                              :exit-status exit-status})))
-     output))
-  ([command timeout-ms]
-   (let [process (.start (process-builder command))
          captured (capture-output (.getInputStream process))]
-     (if-not (.waitFor process (long timeout-ms) TimeUnit/MILLISECONDS)
-       (do
-         (.destroyForcibly process)
-         (.waitFor process process-stop-grace-ms TimeUnit/MILLISECONDS)
-         (deref captured process-stop-grace-ms "")
-         (throw (errors/raise! "Media tool exceeded its deadline"
-                               {:type ::tool-timeout
-                                :timeout-ms timeout-ms})))
-       (let [exit-status (.exitValue process)
+     (try
+       (let [exit-status (.waitFor process)
              output @captured]
          (when-not (zero? exit-status)
            (throw (errors/raise! "Media tool failed"
                                  {:type ::tool-failed
                                   :exit-status exit-status})))
-         output)))))
+         output)
+       (catch Throwable error
+         (stop-captured-process! process captured error)))))
+  ([command timeout-ms]
+   (let [process (.start (process-builder command))
+         captured (capture-output (.getInputStream process))]
+     (try
+       (if-not (.waitFor process (long timeout-ms) TimeUnit/MILLISECONDS)
+         (throw (errors/raise! "Media tool exceeded its deadline"
+                               {:type ::tool-timeout
+                                :timeout-ms timeout-ms}))
+         (let [exit-status (.exitValue process)
+               output @captured]
+           (when-not (zero? exit-status)
+             (throw (errors/raise! "Media tool failed"
+                                   {:type ::tool-failed
+                                    :exit-status exit-status})))
+           output))
+       (catch Throwable error
+         (stop-captured-process! process captured error))))))
 
 (defn run-captured-as!
   "Runs a command while preserving a caller's established error taxonomy."

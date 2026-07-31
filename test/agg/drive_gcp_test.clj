@@ -38,6 +38,71 @@
       (.write output ^bytes chunk))
     (.toByteArray output)))
 
+(defn- browser-supported-mp4! []
+  (let [path (Files/createTempFile
+              "agg-playback-analysis-" ".mp4"
+              (make-array java.nio.file.attribute.FileAttribute 0))
+        process
+        (.start
+         (doto
+          (ProcessBuilder.
+           ^java.util.List
+           ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
+            "-f" "lavfi" "-i" "color=c=black:s=64x36:d=1"
+            "-f" "lavfi" "-i" "anullsrc=r=48000:cl=stereo"
+            "-shortest" "-c:v" "libx264" "-pix_fmt" "yuv420p"
+            "-c:a" "aac" "-movflags" "+faststart" "-y" (str path)])
+           (.redirectErrorStream true)))]
+    (when-not (zero? (.waitFor process))
+      (let [output (slurp (.getInputStream process))]
+        (Files/deleteIfExists path)
+        (throw (ex-info "Browser-supported fixture generation failed"
+                        {:output output}))))
+    path))
+
+(deftest playback-analysis-classifies-supported-media-with-bounded-range-reads
+  (let [path (browser-supported-mp4!)]
+    (try
+      (let [media-bytes (Files/readAllBytes path)
+            source-bytes (byte-array (* 12 1024 1024))
+            _ (System/arraycopy media-bytes 0 source-bytes 0
+                                (alength media-bytes))
+            requested-lengths (atom [])
+            gateway
+            (assoc
+             (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+             :stream-source-request!
+             (fn [request]
+               (let [[_ start-text end-text]
+                     (re-matches #"bytes=(\d+)-(\d+)"
+                                 (get-in request [:headers "Range"]))
+                     start (parse-long start-text)
+                     end (parse-long end-text)
+                     length (inc (- end start))]
+                 (swap! requested-lengths conj length)
+                 (when (> length (* 2 1024 1024))
+                   (throw (java.net.http.HttpTimeoutException.
+                           "deterministic oversized range timeout")))
+                 {:status 206
+                  :headers
+                  {"content-range"
+                   (str "bytes " start "-" end "/" (alength source-bytes))
+                   "content-length" (str length)
+                   "content-type" "video/mp4"}
+                  :body (ByteArrayInputStream.
+                         source-bytes (int start) (int length))})))
+            evidence
+            (drive/inspect-playback!
+             gateway "access" "private-file" {:size (alength source-bytes)})]
+        (is (= "mp4" (get-in evidence [:container :format])))
+        (is (= "h264" (get-in evidence [:video :codec])))
+        (is (= "avc1" (get-in evidence [:video :codecTag])))
+        (is (= "aac" (get-in evidence [:audio :codec])))
+        (is (seq @requested-lengths))
+        (is (every? #(<= % (* 2 1024 1024)) @requested-lengths)))
+      (finally
+        (Files/deleteIfExists path)))))
+
 (deftest recording-clock-inspection-is-bounded-and-prefers-explicit-offsets
   (let [requests (atom [])
         explicit
