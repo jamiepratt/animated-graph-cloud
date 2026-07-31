@@ -484,8 +484,9 @@
         fixture
         (str
          "<script>"
-         "window.__capabilityState={callback:null,loads:[],currentCase:null,analysisRequests:[],sessionRequests:[],canPlayTypeCalls:[],videoDecoderCalls:[]};"
-         "window.fetch=(path,options={})=>{const state=window.__capabilityState;if(path==='/v1/drive/playback-analyses'){state.analysisRequests.push(JSON.parse(options.body));const response={ok:true,status:200,json:()=>Promise.resolve({fileName:'supported-source.mov',evidence:{container:{format:'mov',majorBrand:'qt  '},video:{codec:'hevc',codecTag:'hvc1',profile:'Main',pixelFormat:'yuv420p'},audio:{codec:'aac'}}})};return state.currentCase.analysisDelayMs?new Promise(resolve=>setTimeout(()=>resolve(response),state.currentCase.analysisDelayMs)):Promise.resolve(response);}if(path==='/v1/drive/playback-sessions'){state.sessionRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000155',contentType:'video/quicktime',size:2048})});}if(path==='/v1/drive/recording-clock-inspections'){return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:'supported-source.mov',status:'manual',candidates:[],recommendedIndex:null,ambiguous:false,durationSeconds:state.currentCase.inspectedDuration,limits:{maxBytes:524288,maxRanges:2,timeoutMillis:3000}})});}return Promise.resolve({ok:true,status:204,json:()=>Promise.resolve({})});};"
+         "window.__capabilityState={callback:null,loads:[],currentCase:null,analysisRequests:[],sessionRequests:[],preparationRequests:[],canPlayTypeCalls:[],videoDecoderCalls:[]};"
+         "crypto.randomUUID=()=> '00000000-0000-4000-8000-000000000215';"
+         "window.fetch=(path,options={})=>{const state=window.__capabilityState;if(path==='/v1/drive/playback-analyses'){state.analysisRequests.push(JSON.parse(options.body));const response={ok:true,status:200,json:()=>Promise.resolve({fileName:'supported-source.mov',evidence:{container:{format:'mov',majorBrand:'qt  '},video:{codec:'hevc',codecTag:'hvc1',profile:'Main',pixelFormat:'yuv420p'},audio:{codec:'aac'}}})};return state.currentCase.analysisDelayMs?new Promise(resolve=>setTimeout(()=>resolve(response),state.currentCase.analysisDelayMs)):Promise.resolve(response);}if(path==='/v1/drive/playback-sessions'){state.sessionRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000155',contentType:'video/quicktime',size:2048})});}if(path==='/v1/derivative-preparations'){state.preparationRequests.push({body:JSON.parse(options.body),idempotency:options.headers['Idempotency-Key']});return Promise.resolve({ok:true,status:202,json:()=>Promise.resolve({id:'00000000-0000-0000-0000-000000000215',state:'queued',attempt:1,profileVersion:'h264-aac-1080p25-v1',statusUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000215',cancelUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000215/cancel',retryUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000215/retry'})});}if(path==='/v1/drive/recording-clock-inspections'){return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:'supported-source.mov',status:'manual',candidates:[],recommendedIndex:null,ambiguous:false,durationSeconds:state.currentCase.inspectedDuration,limits:{maxBytes:524288,maxRanges:2,timeoutMillis:3000}})});}return Promise.resolve({ok:true,status:204,json:()=>Promise.resolve({})});};"
          "class PickerView{setMimeTypes(){return this;}setIncludeFolders(){return this;}setSelectFolderEnabled(){return this;}setMode(){return this;}setEnableDrives(){return this;}}"
          "class UploadView extends PickerView{}"
          "class PickerBuilder{addView(){return this;}setSelectableMimeTypes(){return this;}setOAuthToken(){return this;}setDeveloperKey(){return this;}setAppId(){return this;}setOrigin(){return this;}setCallback(callback){window.__capabilityState.callback=callback;return this;}build(){return {setVisible(){}};}}"
@@ -501,8 +502,8 @@
          "<pre id=\"browser-result\">pending</pre><script>"
          "(async()=>{let outcome;try{"
          "const state=window.__capabilityState,outcomes=[],next=document.getElementById('wizard-next');state.loads[0].callback();document.querySelector('input[name=\"wizard-outcome\"][value=\"finished-video\"]').click();next.click();"
-         "function waitForTerminal(){const status=document.getElementById('video-player-status'),inspection=document.getElementById('video-clock-inspection-status'),terminal=()=>((status.textContent==='Ready. Click or drag the timeline to seek.'||status.textContent.startsWith('This video cannot play in this browser because '))&&!inspection.textContent.startsWith('Inspecting'));if(terminal())return Promise.resolve();return new Promise(resolve=>{const observer=new MutationObserver(()=>{if(terminal()){observer.disconnect();resolve();}});observer.observe(status,{childList:true,subtree:true,characterData:true});observer.observe(inspection,{childList:true,subtree:true,characterData:true});});}"
-         "for(const testCase of " (json/write-str browser-cases) "){state.currentCase=testCase;state.analysisRequests=[];state.sessionRequests=[];state.canPlayTypeCalls=[];state.videoDecoderCalls=[];configureCapability(testCase);state.callback({action:google.picker.Action.PICKED,docs:[{id:'hevc-source',name:'ride.mov',mimeType:'video/quicktime'}]});await waitForTerminal();document.getElementById('video-recording-start').value='2026-07-26T07:12:05';document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();const video=document.getElementById('source-video-player');outcomes.push({label:testCase.label,selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,analysisRequests:[...state.analysisRequests],sessionRequests:[...state.sessionRequests],canPlayTypeCalls:[...state.canPlayTypeCalls],videoDecoderCalls:[...state.videoDecoderCalls],status:document.getElementById('video-player-status').textContent,stageHidden:document.getElementById('video-stage').hidden,transportHidden:document.querySelector('.video-transport').hidden,summaryHidden:document.getElementById('no-source-output-summary').hidden,sourceEnd:document.getElementById('video-source-end').textContent,src:video.getAttribute('src'),viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth});}outcome={outcomes};"
+         "function waitForTerminal(){const status=document.getElementById('video-player-status'),inspection=document.getElementById('video-clock-inspection-status'),terminal=()=>((status.textContent==='Ready. Click or drag the timeline to seek.'||status.textContent==='This video needs to be prepared before it can play here.')&&!inspection.textContent.startsWith('Inspecting'));if(terminal())return Promise.resolve();return new Promise(resolve=>{const observer=new MutationObserver(()=>{if(terminal()){observer.disconnect();resolve();}});observer.observe(status,{childList:true,subtree:true,characterData:true});observer.observe(inspection,{childList:true,subtree:true,characterData:true});});}"
+         "for(const testCase of " (json/write-str browser-cases) "){state.currentCase=testCase;state.analysisRequests=[];state.sessionRequests=[];state.preparationRequests=[];state.canPlayTypeCalls=[];state.videoDecoderCalls=[];configureCapability(testCase);state.callback({action:google.picker.Action.PICKED,docs:[{id:'hevc-source',name:'ride.mov',mimeType:'video/quicktime'}]});await waitForTerminal();document.getElementById('video-recording-start').value='2026-07-26T07:12:05';document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();const video=document.getElementById('source-video-player'),panel=document.getElementById('private-preview-panel'),prepare=document.getElementById('prepare-private-preview'),offered={panelHidden:panel.hidden,message:document.getElementById('private-preview-message').textContent,disclosureHidden:document.getElementById('private-preview-disclosure').hidden,actions:[...panel.querySelectorAll('button:not([hidden])')].map(button=>button.textContent)};if(!testCase.canPlayType){prepare.click();await new Promise(resolve=>setTimeout(resolve,0));}outcomes.push({label:testCase.label,selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,analysisRequests:[...state.analysisRequests],sessionRequests:[...state.sessionRequests],preparationRequests:[...state.preparationRequests],canPlayTypeCalls:[...state.canPlayTypeCalls],videoDecoderCalls:[...state.videoDecoderCalls],status:document.getElementById('video-player-status').textContent,offered,stageHidden:document.getElementById('video-stage').hidden,transportHidden:document.querySelector('.video-transport').hidden,summaryHidden:document.getElementById('no-source-output-summary').hidden,sourceEnd:document.getElementById('video-source-end').textContent,src:video.getAttribute('src'),viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth});}outcome={outcomes};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
          "</script>")
         html (-> page
@@ -560,6 +561,66 @@
        "Browser-level playback preparation regression requires Chrome or Chromium"
        html
        (str "--window-size=" (or window-size "1280,900"))))))
+
+(defn- private-preview-lifecycle-browser-outcome [page window-size]
+  (let [fixture
+        (str
+         "<script>"
+         "window.__privatePreviewState={callback:null,loads:[],statusReads:0,requests:[],messages:[],confirmations:[]};"
+         "crypto.randomUUID=()=> '00000000-0000-4000-8000-000000000215';"
+         "const preparation=(state,extra={})=>({id:'00000000-0000-0000-0000-000000000215',state,attempt:1,profileVersion:'h264-aac-1080p25-v1',statusUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000215',cancelUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000215/cancel',retryUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000215/retry',...extra});"
+         "window.fetch=(path,options={})=>{const state=window.__privatePreviewState;state.requests.push({path,method:options.method||'GET',body:options.body?JSON.parse(options.body):null,idempotency:options.headers?.['Idempotency-Key']||null});if(path==='/v1/drive/playback-analyses')return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({evidence:{container:{format:'mov'},video:{codec:'hevc',codecTag:'hvc1'},audio:{codec:'aac'}}})});if(path==='/v1/drive/recording-clock-inspections')return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:'ride.mov',status:'manual',candidates:[],recommendedIndex:null,ambiguous:false,durationSeconds:42,limits:{maxBytes:524288,maxRanges:2,timeoutMillis:3000}})});if(path==='/v1/derivative-preparations')return Promise.resolve({ok:true,status:202,json:()=>Promise.resolve(preparation('queued'))});if(path.endsWith('/cancel'))return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve(preparation('cancelled',{retryable:true}))});if(path.endsWith('/retry'))return Promise.resolve({ok:true,status:202,json:()=>Promise.resolve(preparation('queued',{attempt:2}))});if(path.endsWith('/playback-sessions'))return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000215/playback/00000000-0000-0000-0000-000000000216',contentType:'video/mp4',size:4096})});if(path==='/v1/derivative-preparations/00000000-0000-0000-0000-000000000215'){state.statusReads++;return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve(state.statusReads===1?preparation('running'):preparation('succeeded',{assetId:'00000000-0000-0000-0000-000000000217',expiresAt:'2026-08-01T12:00:00Z'}))});}return Promise.resolve({ok:true,status:204,json:()=>Promise.resolve({})});};"
+         "window.confirm=message=>{window.__privatePreviewState.confirmations.push(message);return true;};"
+         "class PickerView{setMimeTypes(){return this;}setIncludeFolders(){return this;}setSelectFolderEnabled(){return this;}setMode(){return this;}setEnableDrives(){return this;}}class UploadView extends PickerView{}class PickerBuilder{addView(){return this;}setSelectableMimeTypes(){return this;}setOAuthToken(){return this;}setDeveloperKey(){return this;}setAppId(){return this;}setOrigin(){return this;}setCallback(callback){window.__privatePreviewState.callback=callback;return this;}build(){return {setVisible(){}};}}"
+         "window.google={picker:{DocsView:PickerView,DocsUploadView:UploadView,PickerBuilder,DocsViewMode:{LIST:'list'},Action:{LOADED:'loaded',PICKED:'picked',CANCEL:'cancel'}}};window.gapi={load(_module,handlers){window.__privatePreviewState.loads.push(handlers);}};"
+         "Object.defineProperties(HTMLMediaElement.prototype,{src:{configurable:true,get(){return this.__src||'';},set(value){this.__src=String(value);}},duration:{configurable:true,get(){return this.__duration??42;}},currentTime:{configurable:true,get(){return this.__currentTime??0;},set(value){this.__currentTime=Number(value);this.dispatchEvent(new Event('timeupdate'));}},paused:{configurable:true,get(){return true;}},buffered:{configurable:true,get(){return {length:0,start(){return 0;},end(){return 0;}};}}});Object.defineProperty(window,'VideoDecoder',{configurable:true,value:undefined});HTMLMediaElement.prototype.canPlayType=function(){return '';};HTMLMediaElement.prototype.load=function(){if(this.src)this.dispatchEvent(new Event('loadedmetadata'));};HTMLMediaElement.prototype.pause=function(){};"
+         "</script>")
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "(async()=>{let outcome;try{const state=window.__privatePreviewState,panel=document.getElementById('private-preview-panel'),message=document.getElementById('private-preview-message'),visibleActions=()=>[...panel.querySelectorAll('button:not([hidden])')].map(button=>button.textContent),snapshot=()=>({message:message.textContent,actions:visibleActions(),activity:!document.getElementById('private-preview-activity').hidden,panelHidden:panel.hidden});new MutationObserver(()=>state.messages.push(message.textContent)).observe(message,{childList:true,subtree:true,characterData:true});state.loads[0].callback();document.querySelector('input[name=\"wizard-outcome\"][value=\"finished-video\"]').click();document.getElementById('wizard-next').click();state.callback({action:google.picker.Action.PICKED,docs:[{id:'source-one',name:'ride.mov',mimeType:'video/quicktime'}]});await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));const offered=snapshot();document.getElementById('prepare-private-preview').click();await new Promise(resolve=>setTimeout(resolve,0));const queued=snapshot();document.getElementById('cancel-private-preview').click();await new Promise(resolve=>setTimeout(resolve,0));const cancelled=snapshot();document.getElementById('retry-private-preview').click();await new Promise(resolve=>setTimeout(resolve,0));const retried=snapshot();const video=document.getElementById('source-video-player');await new Promise((resolve,reject)=>{const deadline=Date.now()+5000,check=()=>{if(video.src)resolve();else if(Date.now()>deadline)reject(new Error('Prepared playback was not attached'));else setTimeout(check,25);};check();});const beforeCanplay=snapshot(),preparedSrc=video.src;video.dispatchEvent(new Event('canplay'));const usable=snapshot();await new Promise(resolve=>setTimeout(resolve,1600));const cleared=snapshot(),support=document.getElementById('private-preview-support');outcome={offered,queued,cancelled,retried,beforeCanplay,usable,cleared,messages:state.messages,confirmations:state.confirmations,requests:state.requests,supportHidden:support.hidden,supportOpen:support.open,src:preparedSrc,live:document.getElementById('video-player-status').getAttribute('aria-live'),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth,reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches?getComputedStyle(document.getElementById('private-preview-activity')).animationName:null};}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "<script>(function(){"
+                              (str fixture "<script>(function(){"))
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome*
+     "agg-private-preview-lifecycle-browser-"
+     "Browser-level private preview lifecycle regression requires Chrome"
+     html
+     8000
+     (str "--window-size=" window-size)
+     "--force-prefers-reduced-motion=reduce")))
+
+(defn- private-preview-source-switch-browser-outcome [page]
+  (let [fixture
+        (str
+         "<script>"
+         "window.__privatePreviewSwitch={callback:null,loads:[],requests:[],creates:0};"
+         "const nativeSetTimeout=window.setTimeout.bind(window),sleep=milliseconds=>new Promise(resolve=>nativeSetTimeout(resolve,milliseconds));window.setTimeout=(callback,delay,...args)=>nativeSetTimeout(callback,delay===1500?80:delay,...args);"
+         "const preparation=(id,state,extra={})=>({id,state,attempt:1,profileVersion:'h264-aac-1080p25-v1',statusUrl:'/v1/derivative-preparations/'+id,cancelUrl:'/v1/derivative-preparations/'+id+'/cancel',retryUrl:'/v1/derivative-preparations/'+id+'/retry',...extra}),firstId='00000000-0000-4000-8000-000000000221',secondId='00000000-0000-4000-8000-000000000222';"
+         "window.fetch=(path,options={})=>{const state=window.__privatePreviewSwitch,method=options.method||'GET';state.requests.push({path,method,body:options.body?JSON.parse(options.body):null});if(path==='/v1/drive/playback-analyses')return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({evidence:{container:{format:'mov'},video:{codec:'hevc',codecTag:'hvc1'},audio:{codec:'aac'}}})});if(path==='/v1/drive/recording-clock-inspections')return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:'ride.mov',status:'manual',candidates:[],recommendedIndex:null,ambiguous:false,durationSeconds:42,limits:{maxBytes:524288,maxRanges:2,timeoutMillis:3000}})});if(path==='/v1/derivative-preparations'&&method==='POST'){state.creates++;return state.creates===1?Promise.resolve({ok:true,status:200,json:()=>Promise.resolve(preparation(firstId,'succeeded',{assetId:'00000000-0000-4000-8000-000000000223',expiresAt:'2026-08-01T12:00:00Z'}))}):Promise.resolve({ok:true,status:202,json:()=>Promise.resolve(preparation(secondId,'queued'))});}if(path==='/v1/derivative-preparations/'+firstId+'/playback-sessions')return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/derivative-preparations/'+firstId+'/playback/00000000-0000-4000-8000-000000000224',contentType:'video/mp4',size:4096})});if(path==='/v1/derivative-preparations/'+secondId)return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve(preparation(secondId,'succeeded',{assetId:'00000000-0000-4000-8000-000000000225',expiresAt:'2026-08-01T12:00:00Z'}))});return Promise.resolve({ok:true,status:204,json:()=>Promise.resolve({})});};"
+         "class PickerView{setMimeTypes(){return this;}setIncludeFolders(){return this;}setSelectFolderEnabled(){return this;}setMode(){return this;}setEnableDrives(){return this;}}class UploadView extends PickerView{}class PickerBuilder{addView(){return this;}setSelectableMimeTypes(){return this;}setOAuthToken(){return this;}setDeveloperKey(){return this;}setAppId(){return this;}setOrigin(){return this;}setCallback(callback){window.__privatePreviewSwitch.callback=callback;return this;}build(){return {setVisible(){}};}}"
+         "window.google={picker:{DocsView:PickerView,DocsUploadView:UploadView,PickerBuilder,DocsViewMode:{LIST:'list'},Action:{LOADED:'loaded',PICKED:'picked',CANCEL:'cancel'}}};window.gapi={load(_module,handlers){window.__privatePreviewSwitch.loads.push(handlers);}};"
+         "Object.defineProperties(HTMLMediaElement.prototype,{src:{configurable:true,get(){return this.getAttribute('src')||'';},set(value){this.setAttribute('src',String(value));}},duration:{configurable:true,get(){return 42;}},currentTime:{configurable:true,get(){return this.__currentTime??0;},set(value){this.__currentTime=Number(value);}},paused:{configurable:true,get(){return true;}},buffered:{configurable:true,get(){return {length:0,start(){return 0;},end(){return 0;}};}}});Object.defineProperty(window,'VideoDecoder',{configurable:true,value:undefined});HTMLMediaElement.prototype.canPlayType=function(){return '';};HTMLMediaElement.prototype.load=function(){};HTMLMediaElement.prototype.pause=function(){};"
+         "</script>")
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "(async()=>{let outcome;const state=window.__privatePreviewSwitch,video=document.getElementById('source-video-player'),fileId=document.getElementById('source-video-file-id'),message=document.getElementById('private-preview-message'),prepare=document.getElementById('prepare-private-preview');try{const pick=id=>state.callback({action:google.picker.Action.PICKED,docs:[{id,name:id+'.mov',mimeType:'video/quicktime'}]}),waitUntil=async(label,predicate)=>{const deadline=Date.now()+7000;while(!predicate()){if(Date.now()>deadline)throw new Error('Timed out waiting for '+label);await sleep(10);}};state.loads[0].callback();document.querySelector('input[name=\"wizard-outcome\"][value=\"finished-video\"]').click();document.getElementById('wizard-next').click();pick('source-one');await waitUntil('the first preparation offer',()=>!prepare.hidden);prepare.click();await waitUntil('the prepared playback attachment',()=>!!video.getAttribute('src'));const attachedSrc=video.getAttribute('src');pick('source-two');await waitUntil('the second preparation offer',()=>fileId.value==='source-two'&&!prepare.hidden);const afterAttachmentSwitch={selected:fileId.value,src:video.getAttribute('src'),message:message.textContent};prepare.click();await waitUntil('the queued second preparation',()=>state.creates===2);pick('source-three');await waitUntil('the final preparation offer',()=>fileId.value==='source-three'&&!prepare.hidden);await sleep(140);const statusPath='/v1/derivative-preparations/00000000-0000-4000-8000-000000000222';outcome={attachedSrc,afterAttachmentSwitch,final:{selected:fileId.value,src:video.getAttribute('src'),message:message.textContent},staleStatusReads:state.requests.filter(request=>request.path===statusPath&&request.method==='GET').length,cancelRequests:state.requests.filter(request=>request.path.endsWith('/cancel')&&request.method==='POST'),requests:state.requests};}catch(error){outcome={error:error.message,stack:error.stack,selected:fileId.value,message:message.textContent,prepareHidden:prepare.hidden,requests:state.requests};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
+         "</script>")
+        html (-> page
+                 (str/replace #"<script src=\"[^\"]+\"[^>]*></script>" "")
+                 (str/replace "<script>(function(){"
+                              (str fixture "<script>(function(){"))
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome*
+     "agg-private-preview-source-switch-browser-"
+     "Browser-level private preview source-switch regression requires Chrome"
+     html
+     15000
+     "--window-size=1280,900")))
 
 (defn- preview-status-browser-outcome [page]
   (let [terminal-fragment
@@ -1180,12 +1241,12 @@
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "let outcome;try{"
-         "const workflow=document.getElementById('compose-workflow'),raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),next=document.getElementById('wizard-next'),video=document.getElementById('source-video-player'),videoStage=document.getElementById('video-stage'),controlsDock=document.getElementById('video-controls-dock'),timeContext=document.getElementById('video-time-context'),timeContextVisual=document.getElementById('video-time-context-visual'),dateRow=document.getElementById('video-dates'),timeline=document.getElementById('video-timeline'),modeLabel=document.getElementById('timeline-mode-label'),modeStatus=document.getElementById('timeline-mode-status'),marker=document.getElementById('manual-sync-marker'),sourceElapsed=document.getElementById('manual-sync-source-seconds'),sourceElapsedText=document.getElementById('manual-sync-elapsed'),activity=document.getElementById('telemetry-sync-at'),camera=document.getElementById('camera-sync-at'),submit=document.getElementById('submit-button'),transportNode=document.getElementById('video-time'),visibleContext=()=>[...(timeContextVisual?.children||[])].filter(node=>!node.hidden).map(node=>node.textContent.trim()).join(' '),input=node=>node.dispatchEvent(new Event('input',{bubbles:true})),snapshot=()=>({current:workflow.dataset.currentStep,mode:modeLabel?.textContent||null,status:modeStatus?.textContent||null,context:{visual:timeContextVisual?visibleContext():null,accessible:timeContext?.getAttribute('aria-label')||null},dates:[...(dateRow?.children||[])].map(node=>node.textContent),transport:transportNode.textContent,transportAccessible:transportNode.getAttribute('aria-label'),ticks:[...document.getElementById('video-ticks').children].map(node=>node.textContent),timelineText:timeline.getAttribute('aria-valuetext'),marker:{hidden:marker.hidden,disabled:marker.disabled,value:marker.getAttribute('aria-valuenow'),text:marker.getAttribute('aria-valuetext')},sourceSeconds:sourceElapsed?.value??null,sourceText:sourceElapsedText?.textContent||null,videoCurrent:video.currentTime,cameraType:camera.type,clockPanelHidden:document.getElementById('video-clock-confirmation').hidden,submitDisabled:submit.disabled,browserOption:document.getElementById('timezone').options[0].textContent});"
+         "const workflow=document.getElementById('compose-workflow'),raw=document.getElementById('raw-json'),apply=document.getElementById('apply-json'),next=document.getElementById('wizard-next'),video=document.getElementById('source-video-player'),videoStage=document.getElementById('video-stage'),privatePreviewPanel=document.getElementById('private-preview-panel'),controlsDock=document.getElementById('video-controls-dock'),timeContext=document.getElementById('video-time-context'),timeContextVisual=document.getElementById('video-time-context-visual'),dateRow=document.getElementById('video-dates'),timeline=document.getElementById('video-timeline'),modeLabel=document.getElementById('timeline-mode-label'),modeStatus=document.getElementById('timeline-mode-status'),marker=document.getElementById('manual-sync-marker'),sourceElapsed=document.getElementById('manual-sync-source-seconds'),sourceElapsedText=document.getElementById('manual-sync-elapsed'),activity=document.getElementById('telemetry-sync-at'),camera=document.getElementById('camera-sync-at'),submit=document.getElementById('submit-button'),transportNode=document.getElementById('video-time'),visibleContext=()=>[...(timeContextVisual?.children||[])].filter(node=>!node.hidden).map(node=>node.textContent.trim()).join(' '),input=node=>node.dispatchEvent(new Event('input',{bubbles:true})),snapshot=()=>({current:workflow.dataset.currentStep,mode:modeLabel?.textContent||null,status:modeStatus?.textContent||null,context:{visual:timeContextVisual?visibleContext():null,accessible:timeContext?.getAttribute('aria-label')||null},dates:[...(dateRow?.children||[])].map(node=>node.textContent),transport:transportNode.textContent,transportAccessible:transportNode.getAttribute('aria-label'),ticks:[...document.getElementById('video-ticks').children].map(node=>node.textContent),timelineText:timeline.getAttribute('aria-valuetext'),marker:{hidden:marker.hidden,disabled:marker.disabled,value:marker.getAttribute('aria-valuenow'),text:marker.getAttribute('aria-valuetext')},sourceSeconds:sourceElapsed?.value??null,sourceText:sourceElapsedText?.textContent||null,videoCurrent:video.currentTime,cameraType:camera.type,clockPanelHidden:document.getElementById('video-clock-confirmation').hidden,submitDisabled:submit.disabled,browserOption:document.getElementById('timezone').options[0].textContent});"
          "raw.value=JSON.stringify(" (json/write-str request) ");apply.click();next.click();next.click();next.click();document.querySelector('input[name=\"synchronization-mode\"][value=\"manual-anchor\"]').click();next.click();const unavailable=snapshot();Object.defineProperty(video,'duration',{configurable:true,value:125.5});Object.defineProperty(video,'paused',{configurable:true,value:true});video.dispatchEvent(new Event('loadedmetadata'));const elapsed=snapshot();"
          "marker.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));const selected=snapshot();activity.value='2026-10-25T01:30:00';input(activity);const synced=snapshot(),generated=JSON.parse(document.getElementById('render-request').value);"
          "activity.value='';input(activity);const reversed=snapshot();sourceElapsed.value='';const pointerStartedEmpty=sourceElapsed.value===''&&camera.value==='';const rect=timeline.getBoundingClientRect(),clientX=rect.left+rect.width*.4;marker.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX,pointerId:14}));marker.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,clientX,pointerId:14}));const pointer=snapshot();"
          "const clockSnapshot=()=>({context:{visual:visibleContext(),accessible:timeContext.getAttribute('aria-label')},dates:[...dateRow.children].map(node=>node.textContent),transport:transportNode.textContent,timelineText:timeline.getAttribute('aria-valuetext'),ticks:[...document.getElementById('video-ticks').children].map(node=>node.textContent)}),clockCase=request=>{raw.value=JSON.stringify(request);apply.click();Object.defineProperty(video,'duration',{configurable:true,value:2});video.__clockTime=0;Object.defineProperty(video,'currentTime',{configurable:true,get(){return this.__clockTime;},set(value){this.__clockTime=Number(value);this.dispatchEvent(new Event('timeupdate'));}});video.currentTime=0;video.dispatchEvent(new Event('loadedmetadata'));const start=clockSnapshot();video.currentTime=1;const transition=clockSnapshot();video.currentTime=2;const end=clockSnapshot();return {start,transition,end};},gap=clockCase(" (json/write-str gap-request) "),repeat=clockCase(" (json/write-str repeat-request) "),kathmandu=clockCase(" (json/write-str kathmandu-request) ");"
-         "outcome={viewportWidth:innerWidth,stepCount:document.querySelectorAll('#wizard-step-list li').length,unavailable,elapsed,selected,synced,reversed,pointerStartedEmpty,pointer,gap,repeat,kathmandu,generated:{mode:generated.synchronizationMode,telemetrySyncAt:generated.telemetrySyncAt,cameraSyncAt:generated.cameraSyncAt,sourceVideo:generated.sourceVideo,sectionStartAt:generated.sectionStartAt,sectionEndAt:generated.sectionEndAt},contextOrder:videoStage?.nextElementSibling===timeContext&&timeContext?.nextElementSibling===controlsDock,modeInsideContext:timeContext?.contains(modeLabel)&&timeContext?.contains(modeStatus),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+         "outcome={viewportWidth:innerWidth,stepCount:document.querySelectorAll('#wizard-step-list li').length,unavailable,elapsed,selected,synced,reversed,pointerStartedEmpty,pointer,gap,repeat,kathmandu,generated:{mode:generated.synchronizationMode,telemetrySyncAt:generated.telemetrySyncAt,cameraSyncAt:generated.cameraSyncAt,sourceVideo:generated.sourceVideo,sectionStartAt:generated.sectionStartAt,sectionEndAt:generated.sectionEndAt},contextOrder:videoStage?.nextElementSibling===privatePreviewPanel&&privatePreviewPanel?.nextElementSibling===timeContext&&timeContext?.nextElementSibling===controlsDock,modeInsideContext:timeContext?.contains(modeLabel)&&timeContext?.contains(modeStatus),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
          "</script>")
@@ -2706,6 +2767,8 @@
       (is (= 9 (get-in outcome [:manual :stepCount])))
       (is (= "matching-moment" (get-in outcome [:matching :current])))
       (is (true? (get-in outcome [:matchingError :errorFocused])))
+      (is (= "Wait until the private video preview can play before matching a source frame."
+             (get-in outcome [:matchingError :message])))
       (is (= "synchronization-decision"
              (get-in outcome [:browserBack :current])))
       (is (true? (get-in outcome [:browserBack :noOverflow])))
@@ -3426,8 +3489,8 @@
              (get-in outcome [:fullscreen :buttonExit])))
       (is (= "ride.mp4" (get-in outcome [:unsupported :selection])))
       (is (= "private-mp4" (get-in outcome [:unsupported :fileId])))
-      (is (str/includes? (get-in outcome [:unsupported :message])
-                         "remains selected for rendering"))
+      (is (= "This video is outside the supported preview limits. Your original video is unchanged. Choose another video to preview here."
+             (get-in outcome [:unsupported :message])))
       (is (= {:disabledStart 65.5
               :disabledSeekPrevented false
               :afterDisabledSeek 65.5
@@ -3534,6 +3597,13 @@
         (if supported?
           (do
             (is (= [{:fileId "hevc-source"}] (:sessionRequests outcome)) label)
+            (is (= [] (:preparationRequests outcome)) label)
+            (is (= {:panelHidden false
+                    :message "Ready. Click or drag the timeline to seek."
+                    :disclosureHidden true
+                    :actions []}
+                   (:offered outcome))
+                label)
             (is (= "/v1/drive/playback/00000000-0000-0000-0000-000000000155"
                    (:src outcome))
                 label)
@@ -3545,13 +3615,133 @@
           (do
             (is (= [] (:sessionRequests outcome)) label)
             (is (nil? (:src outcome)) label)
-            (is (= (str "This video cannot play in this browser because "
-                        reason
-                        " (MOV, HEVC, hvc1, AAC). It remains selected for rendering.")
+            (is (= [{:body {:fileId "hevc-source"}
+                     :idempotency "00000000-0000-4000-8000-000000000215"}]
+                   (:preparationRequests outcome))
+                label)
+            (is (= {:panelHidden false
+                    :message "This video needs to be prepared before it can play here."
+                    :disclosureHidden false
+                    :actions ["Prepare private video preview"]}
+                   (:offered outcome))
+                label)
+            (is (= "Your private video preview is waiting to be prepared."
                    (:status outcome))
                 label)
             (is (true? (:stageHidden outcome)) label)
             (is (false? (:transportHidden outcome)) label)))))))
+
+(deftest timing-workspace-private-preview-panel-has-approved-placement-and-copy
+  (let [page (ui/page {:user {:email "owner@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :picker-config {:access-token "access-test"
+                                       :api-key "key-test"
+                                       :app-id "app-test"
+                                       :csrf "csrf-test"}
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})
+        stage-index (.indexOf page "id=\"video-stage\"")
+        panel-index (.indexOf page "id=\"private-preview-panel\"")
+        controls-index (.indexOf page "id=\"video-controls-dock\"")]
+    (is (< stage-index panel-index controls-index))
+    (doseq [fragment
+            ["Prepare private video preview"
+             (str "This video needs to be prepared before it can play here. "
+                  "Preparing a private video preview may take several minutes "
+                  "and reserves up to PLN 1.25 from your monthly processing "
+                  "allowance. The reservation remains counted if preparation "
+                  "fails or is cancelled. Retrying uses another reservation. "
+                  "The preview expires after 24 hours. Your original video "
+                  "will not be changed.")
+             "Information for support"
+             "id=\"private-preview-message\""
+             "aria-live=\"polite\""]]
+      (is (str/includes? page fragment) fragment))))
+
+(deftest private-preview-lifecycle-is-truthful-accessible-and-responsive
+  (let [page (ui/page {:user {:email "owner@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :picker-config {:access-token "access-test"
+                                       :api-key "key-test"
+                                       :app-id "app-test"
+                                       :csrf "csrf-test"}
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})]
+    (doseq [window-size ["1280,900" "390,844"]]
+      (let [outcome (private-preview-lifecycle-browser-outcome page window-size)
+            derivative-requests
+            (filterv #(str/starts-with? (:path %)
+                                        "/v1/derivative-preparations")
+                     (:requests outcome))]
+        (is (nil? (:error outcome)) [window-size (:error outcome)])
+        (is (= {:message "This video needs to be prepared before it can play here."
+                :actions ["Prepare private video preview"]
+                :activity false
+                :panelHidden false}
+               (:offered outcome)))
+        (is (= {:message "Your private video preview is waiting to be prepared."
+                :actions ["Cancel"]
+                :activity true
+                :panelHidden false}
+               (:queued outcome)))
+        (is (= {:message (str "Preparation stopped. This attempt still counts "
+                              "toward your monthly processing allowance.")
+                :actions ["Retry"]
+                :activity false
+                :panelHidden false}
+               (:cancelled outcome)))
+        (is (= "Your private video preview is waiting to be prepared."
+               (get-in outcome [:retried :message])))
+        (is (= "Your private video preview is ready. Loading it now..."
+               (get-in outcome [:beforeCanplay :message])))
+        (is (= "Private video preview ready."
+               (get-in outcome [:usable :message])))
+        (is (false? (get-in outcome [:usable :panelHidden])))
+        (is (true? (get-in outcome [:cleared :panelHidden])))
+        (is (= [(str "Stop preparing this private video preview? This attempt "
+                     "will still count toward your monthly processing allowance.")]
+               (:confirmations outcome)))
+        (is (some #{"Preparing your private video preview. This may take several minutes."}
+                  (:messages outcome)))
+        (is (= ["POST" "POST" "POST" "GET" "GET" "POST"]
+               (mapv :method derivative-requests)))
+        (is (= "polite" (:live outcome)))
+        (is (:supportHidden outcome))
+        (is (false? (:supportOpen outcome)))
+        (is (:noHorizontalOverflow outcome))
+        (is (= "none" (:reducedMotion outcome)))
+        (is (str/starts-with?
+             (:src outcome)
+             "/v1/derivative-preparations/00000000-0000-0000-0000-000000000215/playback/"))))))
+
+(deftest private-preview-source-switch-clears-client-state-without-cancelling-server-work
+  (let [page (ui/page {:user {:email "owner@example.com" :role :member}
+                       :csrf "csrf-test"
+                       :picker-config {:access-token "access-test"
+                                       :api-key "key-test"
+                                       :app-id "app-test"
+                                       :csrf "csrf-test"}
+                       :tokens []
+                       :members []
+                       :logs-enabled? false})
+        outcome (private-preview-source-switch-browser-outcome page)]
+    (is (nil? (:error outcome)) outcome)
+    (when-not (:error outcome)
+      (is (str/starts-with?
+           (:attachedSrc outcome)
+           "/v1/derivative-preparations/00000000-0000-4000-8000-000000000221/playback/"))
+      (is (= {:selected "source-two"
+              :src nil
+              :message "This video needs to be prepared before it can play here."}
+             (:afterAttachmentSwitch outcome)))
+      (is (= {:selected "source-three"
+              :src nil
+              :message "This video needs to be prepared before it can play here."}
+             (:final outcome)))
+      (is (zero? (:staleStatusReads outcome)))
+      (is (= [] (:cancelRequests outcome))))))
 
 (deftest selected-drive-playback-preparation-failures-expose-bounded-details
   (let [page (ui/page {:user {:email "owner@example.com" :role :member}
