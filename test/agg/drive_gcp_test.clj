@@ -60,6 +60,29 @@
                         {:output output}))))
     path))
 
+(defn- browser-incompatible-mov! []
+  (let [path (Files/createTempFile
+              "agg-playback-analysis-" ".mov"
+              (make-array java.nio.file.attribute.FileAttribute 0))
+        process
+        (.start
+         (doto
+          (ProcessBuilder.
+           ^java.util.List
+           ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
+            "-f" "lavfi" "-i" "testsrc2=s=640x360:r=25:d=1"
+            "-f" "lavfi" "-i" "anullsrc=r=48000:cl=stereo"
+            "-shortest" "-c:v" "prores_ks" "-profile:v" "2"
+            "-pix_fmt" "yuv422p10le" "-c:a" "pcm_s16le"
+            "-y" (str path)])
+           (.redirectErrorStream true)))]
+    (when-not (zero? (.waitFor process))
+      (let [output (slurp (.getInputStream process))]
+        (Files/deleteIfExists path)
+        (throw (ex-info "Browser-incompatible fixture generation failed"
+                        {:output output}))))
+    path))
+
 (deftest playback-analysis-classifies-supported-media-with-bounded-range-reads
   (let [path (browser-supported-mp4!)]
     (try
@@ -102,6 +125,85 @@
         (is (every? #(<= % (* 2 1024 1024)) @requested-lengths)))
       (finally
         (Files/deleteIfExists path)))))
+
+(deftest playback-analysis-classifies-valid-incompatible-media
+  (let [path (browser-incompatible-mov!)]
+    (try
+      (let [source-bytes (Files/readAllBytes path)
+            moov-offset (.indexOf (String. source-bytes
+                                           StandardCharsets/ISO_8859_1)
+                                  "moov")
+            requested-lengths (atom [])
+            gateway
+            (assoc
+             (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+             :stream-source-request!
+             (fn [request]
+               (let [[_ start-text end-text]
+                     (re-matches #"bytes=(\d+)-(\d+)"
+                                 (get-in request [:headers "Range"]))
+                     start (parse-long start-text)
+                     end (parse-long end-text)
+                     length (inc (- end start))]
+                 (swap! requested-lengths conj length)
+                 (when (> length (* 2 1024 1024))
+                   (throw (java.net.http.HttpTimeoutException.
+                           "deterministic oversized range timeout")))
+                 {:status 206
+                  :headers
+                  {"content-range"
+                   (str "bytes " start "-" end "/" (alength source-bytes))
+                   "content-length" (str length)
+                   "content-type" "video/quicktime"}
+                  :body (ByteArrayInputStream.
+                         source-bytes (int start) (int length))})))
+            evidence
+            (drive/inspect-playback!
+             gateway "access" "private-file" {:size (alength source-bytes)})]
+        (is (> moov-offset (* 1024 1024)))
+        (is (= "mov" (get-in evidence [:container :format])))
+        (is (= "prores" (get-in evidence [:video :codec])))
+        (is (= "apcn" (get-in evidence [:video :codecTag])))
+        (is (= "pcm_s16le" (get-in evidence [:audio :codec])))
+        (is (seq @requested-lengths))
+        (is (every? #(<= % (* 1024 1024)) @requested-lengths)))
+      (finally
+        (Files/deleteIfExists path)))))
+
+(deftest playback-analysis-still-rejects-malformed-media-with-bounded-reads
+  (let [source-bytes (byte-array (* 2 1024 1024))
+        requested-lengths (atom [])
+        gateway
+        (assoc
+         (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+         :stream-source-request!
+         (fn [request]
+           (let [[_ start-text end-text]
+                 (re-matches #"bytes=(\d+)-(\d+)"
+                             (get-in request [:headers "Range"]))
+                 start (parse-long start-text)
+                 end (parse-long end-text)
+                 length (inc (- end start))]
+             (swap! requested-lengths conj length)
+             {:status 206
+              :headers
+              {"content-range"
+               (str "bytes " start "-" end "/" (alength source-bytes))
+               "content-length" (str length)
+               "content-type" "video/quicktime"}
+              :body (ByteArrayInputStream.
+                     source-bytes (int start) (int length))})))
+        error
+        (try
+          (drive/inspect-playback!
+           gateway "access" "private-file" {:size (alength source-bytes)})
+          nil
+          (catch clojure.lang.ExceptionInfo failure
+            failure))]
+    (is (= :agg.render.media/media-tool-failed
+           (:type (ex-data error))))
+    (is (seq @requested-lengths))
+    (is (every? #(<= % (* 1024 1024)) @requested-lengths))))
 
 (deftest recording-clock-inspection-is-bounded-and-prefers-explicit-offsets
   (let [requests (atom [])

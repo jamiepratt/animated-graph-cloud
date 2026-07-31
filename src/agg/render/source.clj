@@ -100,7 +100,7 @@
   [ffprobe url]
   (let [output (process/run-captured-as!
                 [ffprobe
-                 "-v" "error"
+                 "-v" "quiet"
                  "-protocol_whitelist" "http,tcp"
                  "-analyzeduration" "10000000"
                  "-probesize" "67108864"
