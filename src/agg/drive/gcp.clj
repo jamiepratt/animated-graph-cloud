@@ -477,6 +477,7 @@
 (def ^:private inconclusive-playback-inspection-types
   #{:agg.render.media/media-tool-failed
     :agg.render.media/invalid-source-inspection
+    ::playback-range-proxy-failed
     ::playback-inspection-lifecycle-failed})
 
 (defn- inconclusive-playback-inspection? [error]

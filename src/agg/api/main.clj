@@ -196,6 +196,13 @@
 
 (declare respond! respond-json!)
 
+(defn- respond-unexpected-failure! [exchange path request-id]
+  (respond-json!
+   exchange 500
+   (cond-> {:error "render_failed"}
+     (= "/v1/drive/playback-analyses" path)
+     (assoc :requestId request-id))))
+
 (defn- error-data [error]
   (loop [current error
          data []]
@@ -3142,8 +3149,8 @@
                                     (request-failure-diagnostics
                                      path error
                                      "unexpected_application_error")))
-                      (respond! exchange 500 "application/json; charset=utf-8"
-                                "{\"error\":\"render_failed\"}")))))))
+                      (respond-unexpected-failure!
+                       exchange path request-id)))))))
           (catch Throwable error
             (if (= "/v1/auth/login/callback" path)
               (do
@@ -3161,8 +3168,8 @@
                                  :requestId request-id}
                                 (request-failure-diagnostics
                                  path error "unexpected_error")))
-                  (respond! exchange 500 "application/json; charset=utf-8"
-                            "{\"error\":\"render_failed\"}"))))))))))
+                  (respond-unexpected-failure!
+                   exchange path request-id))))))))))
 
 (defrecord RunningHttpServer [^HttpServer server port]
   java.lang.AutoCloseable

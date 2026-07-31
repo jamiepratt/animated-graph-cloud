@@ -553,7 +553,7 @@
           (str
            "<pre id=\"browser-result\">pending</pre><script>"
            "(async()=>{let outcome;try{"
-           "const state=window.__prepFailureState,next=document.getElementById('wizard-next');document.querySelector('input[name=\"wizard-outcome\"][value=\"finished-video\"]').click();next.click();state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'broken-source',name:'broken.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();await new Promise(resolve=>setTimeout(resolve,0));const video=document.getElementById('source-video-player'),failureState={status:document.getElementById('video-player-status').textContent,stageHidden:document.getElementById('video-stage').hidden,transportHidden:document.querySelector('.video-transport').hidden,src:video.getAttribute('src')};"
+           "const state=window.__prepFailureState,next=document.getElementById('wizard-next');document.querySelector('input[name=\"wizard-outcome\"][value=\"finished-video\"]').click();next.click();state.loads[0].callback();state.callback({action:google.picker.Action.PICKED,docs:[{id:'broken-source',name:'broken.mp4',mimeType:'video/mp4'}]});await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();await new Promise(resolve=>setTimeout(resolve,0));const video=document.getElementById('source-video-player'),support=document.getElementById('private-preview-support'),failureState={status:document.getElementById('video-player-status').textContent,stageHidden:document.getElementById('video-stage').hidden,transportHidden:document.querySelector('.video-transport').hidden,src:video.getAttribute('src'),support:{hidden:support.hidden,requestId:document.getElementById('private-preview-request-id').textContent}};"
            "next.click();document.getElementById('telemetry-format').value='polar-csv';document.getElementById('telemetry').value='timestamp,heart_rate\\n2026-07-26T06:54:33Z,120\\n2026-07-26T06:56:39Z,124';next.click();document.querySelector('input[name=\"synchronization-mode\"][value=\"shared-clock\"]').click();next.click();next.click();next.click();document.getElementById('timer-enabled').click();next.click();"
            "const timeline=document.getElementById('video-timeline'),startMarker=document.getElementById('timer-start-marker'),endMarker=document.getElementById('timer-end-marker'),rect=timeline.getBoundingClientRect(),initialValues=[startMarker.getAttribute('aria-valuenow'),endMarker.getAttribute('aria-valuenow')],videoTime=video.currentTime,startPointer=new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX:rect.left+rect.width*.25,pointerId:31}),endPointer=new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX:rect.left+rect.width*.75,pointerId:32});startMarker.dispatchEvent(startPointer);startMarker.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,clientX:rect.left+rect.width*.25,pointerId:31}));endMarker.dispatchEvent(endPointer);endMarker.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,clientX:rect.left+rect.width*.75,pointerId:32}));const pointerValues=[startMarker.getAttribute('aria-valuenow'),endMarker.getAttribute('aria-valuenow')],startKey=new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'ArrowRight'}),endKey=new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'ArrowLeft'});startMarker.dispatchEvent(startKey);endMarker.dispatchEvent(endKey);const visible=node=>!node.hidden&&getComputedStyle(node).display!=='none'&&node.getBoundingClientRect().height>0,timerFailure={current:document.getElementById('compose-workflow').dataset.currentStep,fieldsVisible:visible(document.getElementById('timer-fields')),timezoneVisible:visible(document.getElementById('display-time-zone-field')),outputFieldsVisible:visible(document.getElementById('output-start-field'))||visible(document.getElementById('output-end-field')),optionalOverlaysVisible:visible(document.getElementById('optional-overlays-step')),markersDisabled:[startMarker.disabled,endMarker.disabled],initialValues,pointerPrevented:[startPointer.defaultPrevented,endPointer.defaultPrevented],pointerValues,captures:state.pointerCaptures,releases:state.pointerReleases,keyboardPrevented:[startKey.defaultPrevented,endKey.defaultPrevented],keyboardValues:[startMarker.getAttribute('aria-valuenow'),endMarker.getAttribute('aria-valuenow')],fields:[document.getElementById('timer-start-at').value,document.getElementById('timer-end-at').value],request:JSON.parse(document.getElementById('render-request').value).timer,videoUnchanged:video.currentTime===videoTime};"
            "outcome={selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,analysisRequests:state.analysisRequests,sessionRequests:state.sessionRequests,...failureState,timerFailure,viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
@@ -3597,13 +3597,21 @@
                 :can-play-type "maybe"
                 :inspected-duration 42
                 :supported? false
-                :reason "WebCodecs cannot decode the selected codec"}]
+                :reason "WebCodecs cannot decode the selected codec"}
+               {:label "normalized unknown evidence offers preparation"
+                :webcodecs? true
+                :can-play-type "probably"
+                :inspected-duration 42
+                :evidence {:container {:format "unknown"}
+                           :video {:codec "unknown" :codecTag "unknown"}}
+                :supported? false
+                :reason "the source container or video codec could not be identified"}]
         result (playback-capability-browser-outcomes page cases "1280,900")
         outcomes (:outcomes result)]
     (is (nil? (:error result)) (:error result))
     (is (= (count cases) (count outcomes)))
     (doseq [[{:keys [label webcodecs? inspected-duration supported? reason
-                     expected-mime expected-codec]}
+                     expected-mime expected-codec evidence]}
              outcome]
             (map vector cases outcomes)]
       (testing label
@@ -3611,10 +3619,13 @@
         (is (= "ride.mov" (:selection outcome)) label)
         (is (= "hevc-source" (:fileId outcome)) label)
         (is (= [{:fileId "hevc-source"}] (:analysisRequests outcome)) label)
-        (is (= [(or expected-mime "video/quicktime; codecs=\"hvc1\"")]
+        (is (= (if (= "unknown" (get-in evidence [:container :format]))
+                 []
+                 [(or expected-mime "video/quicktime; codecs=\"hvc1\"")])
                (:canPlayTypeCalls outcome))
             label)
-        (if webcodecs?
+        (if (and webcodecs?
+                 (not= "unknown" (get-in evidence [:container :format])))
           (is (= [{:codec (or expected-codec "hvc1")}]
                  (:videoDecoderCalls outcome))
               label)
@@ -3789,6 +3800,7 @@
                 :analysis-response {:ok false
                                     :status 503
                                     :body {:error "drive_source_unavailable"
+                                           :requestId "00000000-0000-4000-8000-000000000235"
                                            :retryable true}}
                 :session-response {:ok true
                                    :status 201
@@ -3798,6 +3810,8 @@
                 :expected-status
                 (str "The selected video remains selected for rendering, but playback could not be prepared. "
                      "Playback analysis failed (503, drive_source_unavailable).")
+                :expected-support {:hidden false
+                                   :requestId "00000000-0000-4000-8000-000000000235"}
                 :expected-session-requests []}
                {:label "session failure with guidance"
                 :analysis-response {:ok true
@@ -3835,7 +3849,7 @@
                      "Playback session returned an invalid browser playback URL.")
                 :expected-session-requests [{:fileId "broken-source"}]}]]
     (doseq [{:keys [label analysis-response session-response expected-status
-                    expected-session-requests]} cases]
+                    expected-support expected-session-requests]} cases]
       (let [outcome (playback-preparation-failure-browser-outcome
                      page
                      {:window-size "1280,900"
@@ -3847,6 +3861,8 @@
         (is (= [{:fileId "broken-source"}] (:analysisRequests outcome)) label)
         (is (= expected-session-requests (:sessionRequests outcome)) label)
         (is (= expected-status (:status outcome)) label)
+        (when expected-support
+          (is (= expected-support (:support outcome)) label))
         (is (true? (:stageHidden outcome)) label)
         (is (false? (:transportHidden outcome)) label)
         (is (nil? (:src outcome)) label)

@@ -1765,6 +1765,50 @@
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
+(deftest renderable-playback-analysis-normalizes-range-proxy-failure
+  (let [port (available-port)
+        events (atom [])
+        {:keys [system session]} (auth-fixture)
+        gateway
+        (assoc
+         (gcp/->RestDriveGateway
+          (fn [_]
+            {:status 200
+             :body (json/write-str
+                    {:id "private-source"
+                     :name "selected.mov"
+                     :mimeType "video/quicktime"
+                     :size "4096"
+                     :trashed false
+                     :videoMediaMetadata {:durationMillis "125500"}})})
+          (* 8 1024 1024))
+         :stream-source-request!
+         (fn [_]
+           {:status 502
+            :headers {}
+            :body (java.io.ByteArrayInputStream. (byte-array 0))}))
+        auth-system (assoc system :drive gateway)
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        server (start-api! port {:auth-system auth-system
+                                 :event-sink #(swap! events conj [%1 %2])})]
+    (try
+      (let [response
+            (post! port "/v1/drive/playback-analyses"
+                   {:fileId "private-source"}
+                   {"Content-Type" "application/json"
+                    "Cookie" (str "agg_session=" session)
+                    "X-CSRF-Token" csrf})]
+        (is (= 200 (.statusCode response)))
+        (is (= {"fileName" "selected.mov"
+                "evidence" {"container" {"format" "unknown"}
+                            "video" {"codec" "unknown"
+                                     "codecTag" "unknown"}}}
+               (json/read-str (.body response))))
+        (is (empty? @events)))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
 (deftest uninspectable-playback-analysis-reports-safe-lifecycle-failure
   (let [port (available-port)
         events (atom [])
@@ -1801,7 +1845,8 @@
                                (.orElse nil))
             [event fields] (first @events)]
         (is (= 500 (.statusCode response)))
-        (is (= {"error" "render_failed"}
+        (is (= {"error" "render_failed"
+                "requestId" request-id}
                (json/read-str (.body response))))
         (is (= 1 (count @events)))
         (is (= "request_failed" event))
@@ -1926,7 +1971,8 @@
                                    (.orElse nil))
                 [event fields] (first @events)]
             (is (= 500 (.statusCode response)))
-            (is (= {"error" "render_failed"}
+            (is (= {"error" "render_failed"
+                    "requestId" request-id}
                    (json/read-str (.body response))))
             (is (re-matches #"[0-9a-f-]{36}" request-id))
             (is (= "request_failed" event))
