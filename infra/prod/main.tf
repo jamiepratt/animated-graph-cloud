@@ -603,10 +603,17 @@ resource "time_sleep" "production_private_preview_metrics_propagation" {
   create_duration = "660s"
 
   triggers = {
-    failures_metric       = google_logging_metric.production_private_preview_failures.id
-    latency_metric        = google_logging_metric.production_private_preview_latency_ms.id
-    queue_age_metric      = google_logging_metric.production_private_preview_queue_age_ms.id
-    reserved_cost_metric  = google_logging_metric.production_private_preview_reserved_minor_units.id
+    failures_metric      = google_logging_metric.production_private_preview_failures.id
+    latency_metric       = google_logging_metric.production_private_preview_latency_ms.id
+    queue_age_metric     = google_logging_metric.production_private_preview_queue_age_ms.id
+    reserved_cost_metric = google_logging_metric.production_private_preview_reserved_minor_units.id
+  }
+}
+
+resource "time_sleep" "production_private_preview_lifecycle_metrics_propagation" {
+  create_duration = "660s"
+
+  triggers = {
     cache_metric          = google_logging_metric.production_private_preview_cache_outcomes.id
     terminal_metric       = google_logging_metric.production_private_preview_terminal_reasons.id
     verification_metric   = google_logging_metric.production_private_preview_verification_failures.id
@@ -793,7 +800,7 @@ resource "google_monitoring_alert_policy" "production_private_preview_terminal_r
     mime_type = "text/markdown"
   }
 
-  depends_on = [time_sleep.production_private_preview_metrics_propagation]
+  depends_on = [time_sleep.production_private_preview_lifecycle_metrics_propagation]
 }
 
 resource "google_monitoring_alert_policy" "production_private_preview_cache_outcomes" {
@@ -826,7 +833,7 @@ resource "google_monitoring_alert_policy" "production_private_preview_cache_outc
     mime_type = "text/markdown"
   }
 
-  depends_on = [time_sleep.production_private_preview_metrics_propagation]
+  depends_on = [time_sleep.production_private_preview_lifecycle_metrics_propagation]
 }
 
 resource "google_monitoring_alert_policy" "production_private_preview_verification_failures" {
@@ -858,7 +865,7 @@ resource "google_monitoring_alert_policy" "production_private_preview_verificati
     mime_type = "text/markdown"
   }
 
-  depends_on = [time_sleep.production_private_preview_metrics_propagation]
+  depends_on = [time_sleep.production_private_preview_lifecycle_metrics_propagation]
 }
 
 resource "google_monitoring_alert_policy" "production_private_preview_cancellations" {
@@ -891,7 +898,7 @@ resource "google_monitoring_alert_policy" "production_private_preview_cancellati
     mime_type = "text/markdown"
   }
 
-  depends_on = [time_sleep.production_private_preview_metrics_propagation]
+  depends_on = [time_sleep.production_private_preview_lifecycle_metrics_propagation]
 }
 
 resource "google_monitoring_alert_policy" "production_private_preview_infrastructure_failures" {
@@ -939,7 +946,7 @@ resource "google_monitoring_alert_policy" "production_private_preview_infrastruc
     mime_type = "text/markdown"
   }
 
-  depends_on = [time_sleep.production_private_preview_metrics_propagation]
+  depends_on = [time_sleep.production_private_preview_lifecycle_metrics_propagation]
 }
 
 import {

@@ -37,6 +37,12 @@
     (when start
       (subs production-terraform start (or end (count production-terraform))))))
 
+(defn- production-trigger-map [resource-name]
+  (some->> (production-resource-section "time_sleep" resource-name)
+           (re-seq #"(?m)^    ([a-z_]+)\s+=\s+([^\n]+)$")
+           (map (fn [[_ trigger value]] [trigger value]))
+           (into {})))
+
 (deftest docker-build-includes-runtime-resources
   (is (str/includes? dockerfile "COPY resources ./resources"))
   (is (str/includes? dockerfile "RUN clojure -T:build uber")))
@@ -498,7 +504,7 @@
                 "duration        = \"0s\""
                 "per_series_aligner"
                 "\"ALIGN_SUM\""
-                "time_sleep.production_private_preview_metrics_propagation"]
+                "time_sleep.production_private_preview_lifecycle_metrics_propagation"]
                expected-fragments)]
         (is (and policy (str/includes? policy fragment))
             (str alert " requires " fragment))))))
@@ -508,7 +514,8 @@
                      "source  = \"hashicorp/time\""))
   (doseq [[wait-name duration]
           [["production_private_preview_worker_iam_propagation" "480s"]
-           ["production_private_preview_metrics_propagation" "660s"]]]
+           ["production_private_preview_metrics_propagation" "660s"]
+           ["production_private_preview_lifecycle_metrics_propagation" "660s"]]]
     (let [wait-resource
           (production-resource-section "time_sleep" wait-name)]
       (is (some? wait-resource) wait-name)
@@ -521,21 +528,53 @@
         "google_cloud_run_v2_job"
         "production_private_preview")
        "time_sleep.production_private_preview_worker_iam_propagation"))
-  (doseq [alert ["production_private_preview_latency"
-                 "production_private_preview_failures"
-                 "production_private_preview_queue_age"
-                 "production_private_preview_reserved_cost"
-                 "production_private_preview_terminal_reasons"
-                 "production_private_preview_cache_outcomes"
-                 "production_private_preview_verification_failures"
-                 "production_private_preview_cancellations"
-                 "production_private_preview_infrastructure_failures"]]
-    (is (str/includes?
-         (production-resource-section
-          "google_monitoring_alert_policy"
-          alert)
-         "time_sleep.production_private_preview_metrics_propagation")
-        alert)))
+  (is (= {"failures_metric"
+          "google_logging_metric.production_private_preview_failures.id"
+          "latency_metric"
+          "google_logging_metric.production_private_preview_latency_ms.id"
+          "queue_age_metric"
+          "google_logging_metric.production_private_preview_queue_age_ms.id"
+          "reserved_cost_metric"
+          "google_logging_metric.production_private_preview_reserved_minor_units.id"}
+         (production-trigger-map
+          "production_private_preview_metrics_propagation")))
+  (is (= {"cache_metric"
+          "google_logging_metric.production_private_preview_cache_outcomes.id"
+          "terminal_metric"
+          "google_logging_metric.production_private_preview_terminal_reasons.id"
+          "verification_metric"
+          "google_logging_metric.production_private_preview_verification_failures.id"
+          "cancellation_metric"
+          "google_logging_metric.production_private_preview_cancellations.id"
+          "infrastructure_metric"
+          "google_logging_metric.production_private_preview_infrastructure_failures.id"}
+         (production-trigger-map
+          "production_private_preview_lifecycle_metrics_propagation")))
+  (doseq [[wait-name alerts]
+          {"production_private_preview_metrics_propagation"
+           ["production_private_preview_latency"
+            "production_private_preview_failures"
+            "production_private_preview_queue_age"
+            "production_private_preview_reserved_cost"]
+           "production_private_preview_lifecycle_metrics_propagation"
+           ["production_private_preview_terminal_reasons"
+            "production_private_preview_cache_outcomes"
+            "production_private_preview_verification_failures"
+            "production_private_preview_cancellations"
+            "production_private_preview_infrastructure_failures"]}]
+    (doseq [alert alerts]
+      (let [policy (production-resource-section
+                    "google_monitoring_alert_policy"
+                    alert)]
+        (is (str/includes? policy (str "time_sleep." wait-name)) alert)
+        (is (not (str/includes?
+                  policy
+                  (str "time_sleep."
+                       (if (= wait-name
+                              "production_private_preview_metrics_propagation")
+                         "production_private_preview_lifecycle_metrics_propagation"
+                         "production_private_preview_metrics_propagation"))))
+            alert)))))
 
 (deftest production-runtime-reconcile-keeps-worker-iam-known
   (let [worker-iam
