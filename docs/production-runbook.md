@@ -302,14 +302,41 @@ signed URL. Confirm the candidate revision and environment first, then inspect
 Cloud Tasks and Cloud Run execution health by resource name without private
 payloads.
 
-Terraform owns the private-preview metrics for successful latency, queue age,
-Cloud Tasks queue depth, terminal reasons, cache outcomes, capacity, processing
-allowance reservations, verification failures, cancellations, and
-infrastructure failures. Alerts cover latency, queue age/backlog capacity,
-unexpected reservation size, and every failed terminal reason, including
-verification, cancellation, publication, dispatch, and reconciliation
-failures. Verify metric and alert existence before any costed acceptance; alert
-notification delivery remains manual evidence.
+Terraform owns the private-preview metrics and routes every policy through the
+shared operations notification channel. The policies are:
+
+| Policy | Alert condition |
+|---|---|
+| Latency | Worker p99 successful latency exceeds 720,000 ms in a five-minute aligned window. |
+| Generic failure | At least one worker failed-terminal event in a five-minute aligned window. |
+| Queue age | API p99 queue age exceeds 300,000 ms in a five-minute aligned window. |
+| Backlog capacity | Cloud Tasks queue depth remains above zero for five minutes. |
+| Reserved cost | API p99 attempt reservation exceeds the 125-minor-unit contract value in a five-minute aligned window. |
+| Failed terminal reasons | At least one failed terminal-reason event from the API or worker in a five-minute aligned window. |
+| Cache outcomes | More than five API cache misses in a 15-minute aligned window. Hits and replays do not alert. |
+| Verification failures | At least one worker verification failure in a five-minute aligned window. |
+| Cancellations | More than five API cancellation-resolution events in a 15-minute aligned window. Idempotent request retries can contribute more than one event. |
+| Infrastructure failures | At least one failed dispatch, publication, playback, or reconciliation event from the API or worker in a five-minute aligned window. |
+
+Before any costed acceptance, verify that the Terraform-owned metrics and alert
+policies exist without creating a preview:
+
+```sh
+gcloud logging metrics list \
+  --project=animated-graph-cloud-prod-jp \
+  --filter='name:alpha_compose_production/private_preview_' \
+  --format='table(name)'
+
+gcloud monitoring policies list \
+  --project=animated-graph-cloud-prod-jp \
+  --filter='displayName:Production private-preview' \
+  --format='table(displayName,enabled)'
+```
+
+The failed-terminal and verification policies intentionally overlap: the first
+preserves bounded terminal-reason coverage while the second identifies media
+verification specifically. Alert notification delivery remains manual release
+evidence.
 
 The original video is unchanged. A prepared asset expires after 24 hours.
 Submitting or retrying consumes the documented processing allowance even when

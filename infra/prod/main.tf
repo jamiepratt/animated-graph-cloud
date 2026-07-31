@@ -748,6 +748,200 @@ resource "google_monitoring_alert_policy" "production_private_preview_reserved_c
   depends_on = [time_sleep.production_private_preview_metrics_propagation]
 }
 
+resource "google_monitoring_alert_policy" "production_private_preview_terminal_reasons" {
+  project      = local.project_id
+  display_name = "Production private-preview failed terminal reasons"
+  combiner     = "OR"
+  notification_channels = [
+    module.application.operations_notification_channel,
+  ]
+
+  conditions {
+    display_name = "A private-preview worker emitted a failed terminal reason"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.production_private_preview_terminal_reasons.name}\" AND metric.labels.status=\"failed\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  conditions {
+    display_name = "The private-preview API emitted a failed terminal reason"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_revision\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.production_private_preview_terminal_reasons.name}\" AND metric.labels.status=\"failed\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  documentation {
+    content   = "Use the safe request ID to inspect the bounded terminal reason and lifecycle events."
+    mime_type = "text/markdown"
+  }
+
+  depends_on = [time_sleep.production_private_preview_metrics_propagation]
+}
+
+resource "google_monitoring_alert_policy" "production_private_preview_cache_outcomes" {
+  project      = local.project_id
+  display_name = "Production private-preview cache-miss spike"
+  combiner     = "OR"
+  notification_channels = [
+    module.application.operations_notification_channel,
+  ]
+
+  conditions {
+    display_name = "More than five private-preview cache misses in 15 minutes"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_revision\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.production_private_preview_cache_outcomes.name}\" AND metric.labels.cache_outcome=\"miss\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 5
+      duration        = "0s"
+
+      aggregations {
+        alignment_period     = "900s"
+        per_series_aligner   = "ALIGN_SUM"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  documentation {
+    content   = "A cache miss reserves a new processing attempt. Compare the bounded submission and cache events by safe request ID."
+    mime_type = "text/markdown"
+  }
+
+  depends_on = [time_sleep.production_private_preview_metrics_propagation]
+}
+
+resource "google_monitoring_alert_policy" "production_private_preview_verification_failures" {
+  project      = local.project_id
+  display_name = "Production private-preview verification failures"
+  combiner     = "OR"
+  notification_channels = [
+    module.application.operations_notification_channel,
+  ]
+
+  conditions {
+    display_name = "A private-preview worker failed media verification"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.production_private_preview_verification_failures.name}\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  documentation {
+    content   = "Inspect the bounded verification failure and terminal events by safe request ID."
+    mime_type = "text/markdown"
+  }
+
+  depends_on = [time_sleep.production_private_preview_metrics_propagation]
+}
+
+resource "google_monitoring_alert_policy" "production_private_preview_cancellations" {
+  project      = local.project_id
+  display_name = "Production private-preview cancellation spike"
+  combiner     = "OR"
+  notification_channels = [
+    module.application.operations_notification_channel,
+  ]
+
+  conditions {
+    display_name = "More than five private-preview cancellation resolutions in 15 minutes"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_revision\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.production_private_preview_cancellations.name}\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 5
+      duration        = "0s"
+
+      aggregations {
+        alignment_period     = "900s"
+        per_series_aligner   = "ALIGN_SUM"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  documentation {
+    content   = "Cancellation resolutions can include idempotent request retries. Correlate bounded cancellation and terminal events by safe request ID."
+    mime_type = "text/markdown"
+  }
+
+  depends_on = [time_sleep.production_private_preview_metrics_propagation]
+}
+
+resource "google_monitoring_alert_policy" "production_private_preview_infrastructure_failures" {
+  project      = local.project_id
+  display_name = "Production private-preview infrastructure failures"
+  combiner     = "OR"
+  notification_channels = [
+    module.application.operations_notification_channel,
+  ]
+
+  conditions {
+    display_name = "A private-preview worker infrastructure operation failed"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.production_private_preview_infrastructure_failures.name}\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  conditions {
+    display_name = "A private-preview API infrastructure operation failed"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_revision\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.production_private_preview_infrastructure_failures.name}\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  documentation {
+    content   = "Inspect bounded dispatch, publication, playback, and reconciliation events by safe request ID."
+    mime_type = "text/markdown"
+  }
+
+  depends_on = [time_sleep.production_private_preview_metrics_propagation]
+}
+
 import {
   to = module.application.google_cloud_run_v2_service.api
   id = "projects/animated-graph-cloud-prod-jp/locations/europe-central2/services/agg-api"

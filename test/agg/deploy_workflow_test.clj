@@ -443,11 +443,65 @@
                  "production_private_preview_failures"
                  "production_private_preview_queue_age"
                  "production_private_preview_backlog"
-                 "production_private_preview_reserved_cost"]]
+                 "production_private_preview_reserved_cost"
+                 "production_private_preview_terminal_reasons"
+                 "production_private_preview_cache_outcomes"
+                 "production_private_preview_verification_failures"
+                 "production_private_preview_cancellations"
+                 "production_private_preview_infrastructure_failures"]]
     (is (str/includes?
          production-terraform
          (str "resource \"google_monitoring_alert_policy\" \"" alert "\""))
         alert)))
+
+(deftest production-private-preview-alerts-distinguish-failures-from-spikes
+  (doseq [[alert expected-fragments]
+          {"production_private_preview_terminal_reasons"
+           ["google_logging_metric.production_private_preview_terminal_reasons.name"
+            "metric.labels.status=\\\"failed\\\""
+            "resource.type=\\\"cloud_run_job\\\""
+            "resource.type=\\\"cloud_run_revision\\\""
+            "threshold_value = 0"
+            "alignment_period   = \"300s\""]
+           "production_private_preview_cache_outcomes"
+           ["google_logging_metric.production_private_preview_cache_outcomes.name"
+            "metric.labels.cache_outcome=\\\"miss\\\""
+            "resource.type=\\\"cloud_run_revision\\\""
+            "threshold_value = 5"
+            "alignment_period     = \"900s\""
+            "cross_series_reducer = \"REDUCE_SUM\""]
+           "production_private_preview_verification_failures"
+           ["google_logging_metric.production_private_preview_verification_failures.name"
+            "resource.type=\\\"cloud_run_job\\\""
+            "threshold_value = 0"
+            "alignment_period   = \"300s\""]
+           "production_private_preview_cancellations"
+           ["google_logging_metric.production_private_preview_cancellations.name"
+            "resource.type=\\\"cloud_run_revision\\\""
+            "threshold_value = 5"
+            "alignment_period     = \"900s\""
+            "cross_series_reducer = \"REDUCE_SUM\""]
+           "production_private_preview_infrastructure_failures"
+           ["google_logging_metric.production_private_preview_infrastructure_failures.name"
+            "resource.type=\\\"cloud_run_job\\\""
+            "resource.type=\\\"cloud_run_revision\\\""
+            "threshold_value = 0"
+            "alignment_period   = \"300s\""]}]
+    (let [policy (production-resource-section
+                  "google_monitoring_alert_policy"
+                  alert)]
+      (is (some? policy) alert)
+      (doseq [fragment
+              (concat
+               ["module.application.operations_notification_channel"
+                "comparison      = \"COMPARISON_GT\""
+                "duration        = \"0s\""
+                "per_series_aligner"
+                "\"ALIGN_SUM\""
+                "time_sleep.production_private_preview_metrics_propagation"]
+               expected-fragments)]
+        (is (and policy (str/includes? policy fragment))
+            (str alert " requires " fragment))))))
 
 (deftest production-private-preview-first-apply-waits-for-propagation
   (is (str/includes? production-terraform-versions
@@ -470,7 +524,12 @@
   (doseq [alert ["production_private_preview_latency"
                  "production_private_preview_failures"
                  "production_private_preview_queue_age"
-                 "production_private_preview_reserved_cost"]]
+                 "production_private_preview_reserved_cost"
+                 "production_private_preview_terminal_reasons"
+                 "production_private_preview_cache_outcomes"
+                 "production_private_preview_verification_failures"
+                 "production_private_preview_cancellations"
+                 "production_private_preview_infrastructure_failures"]]
     (is (str/includes?
          (production-resource-section
           "google_monitoring_alert_policy"
