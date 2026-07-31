@@ -437,6 +437,31 @@
        :stream-open-ended? stream-open-ended?})]
     (media/inspect-browser-playback! "ffprobe" (:url proxy))))
 
+(def ^:private inconclusive-playback-inspection-types
+  #{:agg.render.media/media-tool-failed
+    :agg.render.media/invalid-source-inspection})
+
+(defn- inconclusive-playback-inspection? [error]
+  (contains? inconclusive-playback-inspection-types
+             (:type (ex-data error))))
+
+(defn- positive-long [value]
+  (try
+    (let [parsed (some-> value str parse-long)]
+      (when (and parsed (pos? parsed)) parsed))
+    (catch Throwable _ nil)))
+
+(defn- drive-confirmed-video?
+  [{:keys [mimeType videoMediaMetadata]}]
+  (and (drive/supported-source-video-mime-type? mimeType)
+       (positive-long (:durationMillis videoMediaMetadata))
+       (positive-long (:width videoMediaMetadata))
+       (positive-long (:height videoMediaMetadata))))
+
+(def ^:private unknown-playback-evidence
+  {:container {:format "unknown"}
+   :video {:codec "unknown" :codecTag "unknown"}})
+
 (defrecord RestDriveGateway [send! chunk-size]
   auth/DriveClient
   (ensure-output-folder! [_ access-token existing-folder]
@@ -596,11 +621,15 @@
       (inspect-playback-through-proxy!
        gateway access-token file-id metadata false)
       (catch clojure.lang.ExceptionInfo error
-        (if (contains? #{:agg.render.media/media-tool-failed
-                         :agg.render.media/invalid-source-inspection}
-                       (:type (ex-data error)))
-          (inspect-playback-through-proxy!
-           gateway access-token file-id metadata true)
+        (if (inconclusive-playback-inspection? error)
+          (try
+            (inspect-playback-through-proxy!
+             gateway access-token file-id metadata true)
+            (catch clojure.lang.ExceptionInfo retry-error
+              (if (and (inconclusive-playback-inspection? retry-error)
+                       (drive-confirmed-video? metadata))
+                unknown-playback-evidence
+                (throw retry-error))))
           (throw error)))))
   drive/FolderSourceListingGateway
   (list-folder-sources! [_ access-token folder-id]

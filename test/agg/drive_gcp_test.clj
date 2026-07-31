@@ -256,6 +256,30 @@
                gateway "access" "private-file" {:size 3000000}))))
     (is (= [false true] @stream-modes))))
 
+(deftest playback-analysis-normalizes-drive-confirmed-incompatible-video
+  (doseq [failure-type [:agg.render.media/media-tool-failed
+                        :agg.render.media/invalid-source-inspection]]
+    (let [stream-modes (atom [])
+          gateway (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+          inspect!
+          (fn [_gateway _access-token _file-id _metadata stream-open-ended?]
+            (swap! stream-modes conj stream-open-ended?)
+            (throw
+             (ex-info "Bounded inspection had no complete stream evidence"
+                      {:type failure-type})))]
+      (is (= {:container {:format "unknown"}
+              :video {:codec "unknown" :codecTag "unknown"}}
+             (with-redefs-fn
+               {#'agg.drive.gcp/inspect-playback-through-proxy! inspect!}
+               #(drive/inspect-playback!
+                 gateway "access" "private-file"
+                 {:size 3000000
+                  :mimeType "video/quicktime"
+                  :videoMediaMetadata {:durationMillis "125500"
+                                       :width 1920
+                                       :height 1080}}))))
+      (is (= [false true] @stream-modes)))))
+
 (deftest playback-analysis-classifies-valid-incompatible-delayed-program-stream
   (let [path (browser-incompatible-delayed-program-mpeg-ts!)]
     (try
@@ -311,7 +335,9 @@
         error
         (try
           (drive/inspect-playback!
-           gateway "access" "private-file" {:size (alength source-bytes)})
+           gateway "access" "private-file"
+           {:size (alength source-bytes)
+            :mimeType "video/quicktime"})
           nil
           (catch clojure.lang.ExceptionInfo failure
             failure))]
