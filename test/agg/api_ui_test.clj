@@ -473,20 +473,28 @@
 
 (defn- playback-capability-browser-outcomes [page cases window-size]
   (let [browser-cases
-        (mapv (fn [{:keys [label webcodecs? can-play-type analysis-delay-ms
-                           inspected-duration]}]
+        (mapv (fn [{:keys [label webcodecs? webcodecs-supported?
+                           can-play-type analysis-delay-ms
+                           inspected-duration evidence]}]
                 {:label label
                  :webcodecs webcodecs?
+                 :webcodecsSupported (not (false? webcodecs-supported?))
                  :canPlayType can-play-type
                  :analysisDelayMs (or analysis-delay-ms 0)
-                 :inspectedDuration inspected-duration})
+                 :inspectedDuration inspected-duration
+                 :analysisEvidence
+                 (or evidence
+                     {:container {:format "mov" :majorBrand "qt  "}
+                      :video {:codec "hevc" :codecTag "hvc1"
+                              :profile "Main" :pixelFormat "yuv420p"}
+                      :audio {:codec "aac"}})})
               cases)
         fixture
         (str
          "<script>"
          "window.__capabilityState={callback:null,loads:[],currentCase:null,analysisRequests:[],sessionRequests:[],preparationRequests:[],canPlayTypeCalls:[],videoDecoderCalls:[]};"
          "crypto.randomUUID=()=> '00000000-0000-4000-8000-000000000215';"
-         "window.fetch=(path,options={})=>{const state=window.__capabilityState;if(path==='/v1/drive/playback-analyses'){state.analysisRequests.push(JSON.parse(options.body));const response={ok:true,status:200,json:()=>Promise.resolve({fileName:'supported-source.mov',evidence:{container:{format:'mov',majorBrand:'qt  '},video:{codec:'hevc',codecTag:'hvc1',profile:'Main',pixelFormat:'yuv420p'},audio:{codec:'aac'}}})};return state.currentCase.analysisDelayMs?new Promise(resolve=>setTimeout(()=>resolve(response),state.currentCase.analysisDelayMs)):Promise.resolve(response);}if(path==='/v1/drive/playback-sessions'){state.sessionRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000155',contentType:'video/quicktime',size:2048})});}if(path==='/v1/derivative-preparations'){state.preparationRequests.push({body:JSON.parse(options.body),idempotency:options.headers['Idempotency-Key']});return Promise.resolve({ok:true,status:202,json:()=>Promise.resolve({id:'00000000-0000-0000-0000-000000000215',state:'queued',attempt:1,profileVersion:'h264-aac-1080p25-v1',statusUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000215',cancelUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000215/cancel',retryUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000215/retry'})});}if(path==='/v1/drive/recording-clock-inspections'){return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:'supported-source.mov',status:'manual',candidates:[],recommendedIndex:null,ambiguous:false,durationSeconds:state.currentCase.inspectedDuration,limits:{maxBytes:524288,maxRanges:2,timeoutMillis:3000}})});}return Promise.resolve({ok:true,status:204,json:()=>Promise.resolve({})});};"
+         "window.fetch=(path,options={})=>{const state=window.__capabilityState;if(path==='/v1/drive/playback-analyses'){state.analysisRequests.push(JSON.parse(options.body));const response={ok:true,status:200,json:()=>Promise.resolve({fileName:'supported-source.mov',evidence:state.currentCase.analysisEvidence})};return state.currentCase.analysisDelayMs?new Promise(resolve=>setTimeout(()=>resolve(response),state.currentCase.analysisDelayMs)):Promise.resolve(response);}if(path==='/v1/drive/playback-sessions'){state.sessionRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000155',contentType:'video/quicktime',size:2048})});}if(path==='/v1/derivative-preparations'){state.preparationRequests.push({body:JSON.parse(options.body),idempotency:options.headers['Idempotency-Key']});return Promise.resolve({ok:true,status:202,json:()=>Promise.resolve({id:'00000000-0000-0000-0000-000000000215',state:'queued',attempt:1,profileVersion:'h264-aac-1080p25-v1',statusUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000215',cancelUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000215/cancel',retryUrl:'/v1/derivative-preparations/00000000-0000-0000-0000-000000000215/retry'})});}if(path==='/v1/drive/recording-clock-inspections'){return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:'supported-source.mov',status:'manual',candidates:[],recommendedIndex:null,ambiguous:false,durationSeconds:state.currentCase.inspectedDuration,limits:{maxBytes:524288,maxRanges:2,timeoutMillis:3000}})});}return Promise.resolve({ok:true,status:204,json:()=>Promise.resolve({})});};"
          "class PickerView{setMimeTypes(){return this;}setIncludeFolders(){return this;}setSelectFolderEnabled(){return this;}setMode(){return this;}setEnableDrives(){return this;}}"
          "class UploadView extends PickerView{}"
          "class PickerBuilder{addView(){return this;}setSelectableMimeTypes(){return this;}setOAuthToken(){return this;}setDeveloperKey(){return this;}setAppId(){return this;}setOrigin(){return this;}setCallback(callback){window.__capabilityState.callback=callback;return this;}build(){return {setVisible(){}};}}"
@@ -494,7 +502,7 @@
          "window.gapi={load(_module,handlers){window.__capabilityState.loads.push(handlers);}};"
          "Object.defineProperties(HTMLMediaElement.prototype,{duration:{configurable:true,get(){return this.__duration??42;}},currentTime:{configurable:true,get(){return this.__currentTime??0;},set(value){this.__currentTime=Number(value);this.dispatchEvent(new Event('timeupdate'));}},paused:{configurable:true,get(){return this.__paused!==false;}},buffered:{configurable:true,get(){return {length:0,start(){return 0;},end(){return 0;}};}}});"
          "HTMLMediaElement.prototype.canPlayType=function(type){const state=window.__capabilityState;state.canPlayTypeCalls.push(type);return state.currentCase.canPlayType;};"
-         "function configureCapability(testCase){Object.defineProperty(window,'VideoDecoder',{configurable:true,value:testCase.webcodecs?{isConfigSupported(config){window.__capabilityState.videoDecoderCalls.push(config);return Promise.resolve({supported:true});}}:undefined});}"
+         "function configureCapability(testCase){Object.defineProperty(window,'VideoDecoder',{configurable:true,value:testCase.webcodecs?{isConfigSupported(config){window.__capabilityState.videoDecoderCalls.push(config);return Promise.resolve({supported:testCase.webcodecsSupported});}}:undefined});}"
          "HTMLMediaElement.prototype.load=function(){this.__duration=42;this.dispatchEvent(new Event('loadedmetadata'));};HTMLMediaElement.prototype.play=function(){this.__paused=false;this.dispatchEvent(new Event('play'));return Promise.resolve();};HTMLMediaElement.prototype.pause=function(){this.__paused=true;this.dispatchEvent(new Event('pause'));};"
          "</script>")
         scenario
@@ -503,7 +511,7 @@
          "(async()=>{let outcome;try{"
          "const state=window.__capabilityState,outcomes=[],next=document.getElementById('wizard-next');state.loads[0].callback();document.querySelector('input[name=\"wizard-outcome\"][value=\"finished-video\"]').click();next.click();"
          "function waitForTerminal(){const status=document.getElementById('video-player-status'),inspection=document.getElementById('video-clock-inspection-status'),terminal=()=>((status.textContent==='Ready. Click or drag the timeline to seek.'||status.textContent==='This video needs to be prepared before it can play here.')&&!inspection.textContent.startsWith('Inspecting'));if(terminal())return Promise.resolve();return new Promise(resolve=>{const observer=new MutationObserver(()=>{if(terminal()){observer.disconnect();resolve();}});observer.observe(status,{childList:true,subtree:true,characterData:true});observer.observe(inspection,{childList:true,subtree:true,characterData:true});});}"
-         "for(const testCase of " (json/write-str browser-cases) "){state.currentCase=testCase;state.analysisRequests=[];state.sessionRequests=[];state.preparationRequests=[];state.canPlayTypeCalls=[];state.videoDecoderCalls=[];configureCapability(testCase);state.callback({action:google.picker.Action.PICKED,docs:[{id:'hevc-source',name:'ride.mov',mimeType:'video/quicktime'}]});await waitForTerminal();document.getElementById('video-recording-start').value='2026-07-26T07:12:05';document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();const video=document.getElementById('source-video-player'),panel=document.getElementById('private-preview-panel'),prepare=document.getElementById('prepare-private-preview'),offered={panelHidden:panel.hidden,message:document.getElementById('private-preview-message').textContent,disclosureHidden:document.getElementById('private-preview-disclosure').hidden,actions:[...panel.querySelectorAll('button:not([hidden])')].map(button=>button.textContent)};if(!testCase.canPlayType){prepare.click();await new Promise(resolve=>setTimeout(resolve,0));}outcomes.push({label:testCase.label,selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,analysisRequests:[...state.analysisRequests],sessionRequests:[...state.sessionRequests],preparationRequests:[...state.preparationRequests],canPlayTypeCalls:[...state.canPlayTypeCalls],videoDecoderCalls:[...state.videoDecoderCalls],status:document.getElementById('video-player-status').textContent,offered,stageHidden:document.getElementById('video-stage').hidden,transportHidden:document.querySelector('.video-transport').hidden,summaryHidden:document.getElementById('no-source-output-summary').hidden,sourceEnd:document.getElementById('video-source-end').textContent,src:video.getAttribute('src'),viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth});}outcome={outcomes};"
+         "for(const testCase of " (json/write-str browser-cases) "){state.currentCase=testCase;state.analysisRequests=[];state.sessionRequests=[];state.preparationRequests=[];state.canPlayTypeCalls=[];state.videoDecoderCalls=[];configureCapability(testCase);state.callback({action:google.picker.Action.PICKED,docs:[{id:'hevc-source',name:'ride.mov',mimeType:'video/quicktime'}]});await waitForTerminal();document.getElementById('video-recording-start').value='2026-07-26T07:12:05';document.getElementById('video-timezone').value='Europe/Warsaw';document.getElementById('confirm-video-clock').click();const video=document.getElementById('source-video-player'),panel=document.getElementById('private-preview-panel'),prepare=document.getElementById('prepare-private-preview'),offered={panelHidden:panel.hidden,message:document.getElementById('private-preview-message').textContent,disclosureHidden:document.getElementById('private-preview-disclosure').hidden,actions:[...panel.querySelectorAll('button:not([hidden])')].map(button=>button.textContent)};if(!prepare.hidden){prepare.click();await new Promise(resolve=>setTimeout(resolve,0));}outcomes.push({label:testCase.label,selection:document.getElementById('picker-selection').textContent,fileId:document.getElementById('source-video-file-id').value,analysisRequests:[...state.analysisRequests],sessionRequests:[...state.sessionRequests],preparationRequests:[...state.preparationRequests],canPlayTypeCalls:[...state.canPlayTypeCalls],videoDecoderCalls:[...state.videoDecoderCalls],status:document.getElementById('video-player-status').textContent,offered,stageHidden:document.getElementById('video-stage').hidden,transportHidden:document.querySelector('.video-transport').hidden,summaryHidden:document.getElementById('no-source-output-summary').hidden,sourceEnd:document.getElementById('video-source-end').textContent,src:video.getAttribute('src'),viewportWidth:innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth});}outcome={outcomes};"
          "}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();"
          "</script>")
         html (-> page
@@ -3569,12 +3577,33 @@
                 :can-play-type ""
                 :inspected-duration nil
                 :supported? false
-                :reason "this browser does not support the selected container and codec"}]
+                :reason "this browser does not support the selected container and codec"}
+               {:label "real Chrome accepts native H.264/AAC playback"
+                :webcodecs? true
+                :webcodecs-supported? false
+                :can-play-type "maybe"
+                :inspected-duration 42
+                :evidence {:container {:format "mp4" :majorBrand "isom"}
+                           :video {:codec "h264" :codecTag "avc1"
+                                   :profile "High" :pixelFormat "yuv420p"}
+                           :audio {:codec "aac"}}
+                :expected-mime "video/mp4; codecs=\"avc1\""
+                :expected-codec "avc1"
+                :supported? true
+                :reason nil}
+               {:label "WebCodecs rejection still prepares incompatible video"
+                :webcodecs? true
+                :webcodecs-supported? false
+                :can-play-type "maybe"
+                :inspected-duration 42
+                :supported? false
+                :reason "WebCodecs cannot decode the selected codec"}]
         result (playback-capability-browser-outcomes page cases "1280,900")
         outcomes (:outcomes result)]
     (is (nil? (:error result)) (:error result))
     (is (= (count cases) (count outcomes)))
-    (doseq [[{:keys [label webcodecs? inspected-duration supported? reason]}
+    (doseq [[{:keys [label webcodecs? inspected-duration supported? reason
+                     expected-mime expected-codec]}
              outcome]
             (map vector cases outcomes)]
       (testing label
@@ -3582,10 +3611,13 @@
         (is (= "ride.mov" (:selection outcome)) label)
         (is (= "hevc-source" (:fileId outcome)) label)
         (is (= [{:fileId "hevc-source"}] (:analysisRequests outcome)) label)
-        (is (= ["video/quicktime; codecs=\"hvc1\""] (:canPlayTypeCalls outcome))
+        (is (= [(or expected-mime "video/quicktime; codecs=\"hvc1\"")]
+               (:canPlayTypeCalls outcome))
             label)
         (if webcodecs?
-          (is (= [{:codec "hvc1"}] (:videoDecoderCalls outcome)) label)
+          (is (= [{:codec (or expected-codec "hvc1")}]
+                 (:videoDecoderCalls outcome))
+              label)
           (is (= [] (:videoDecoderCalls outcome)) label))
         (is (true? (:summaryHidden outcome)) label)
         (is (true? (:noHorizontalOverflow outcome)) label)
