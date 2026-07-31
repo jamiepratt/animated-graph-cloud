@@ -2,6 +2,8 @@
   (:require [agg.auth.core :as auth]
             [agg.drive.core :as drive]
             [agg.drive.gcp :as gcp]
+            [agg.drive.range-proxy :as range-proxy]
+            [agg.render.media :as media]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]])
@@ -255,6 +257,44 @@
              #(drive/inspect-playback!
                gateway "access" "private-file" {:size 3000000}))))
     (is (= [false true] @stream-modes))))
+
+(deftest playback-analysis-retries-invalid-inspection-despite-proxy-failure-stats
+  (let [inspection-count (atom 0)
+        proxy-starts (atom 0)
+        evidence {:container {:format "mpegts"}
+                  :video {:codec "mpeg2video"
+                          :codecTag "[2][0][0][0]"}
+                  :audio {:codec "mp2"}}
+        gateway (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+        start-proxy!
+        (fn [_]
+          (swap! proxy-starts inc)
+          (reify
+            java.io.Closeable
+            (close [_])
+            clojure.lang.ILookup
+            (valAt [_ key]
+              (case key
+                :url "http://127.0.0.1/source/bounded"
+                :stats (fn [] {:failure-reason "invalid_upstream_response"})
+                nil))
+            (valAt [this key not-found]
+              (or (.valAt ^clojure.lang.ILookup this key) not-found))))
+        inspect!
+        (fn [_ _]
+          (if (= 1 (swap! inspection-count inc))
+            (throw
+             (ex-info "Capped inspection had no complete stream evidence"
+                      {:type :agg.render.media/invalid-source-inspection}))
+            evidence))]
+    (is (= evidence
+           (with-redefs-fn
+             {#'range-proxy/start! start-proxy!
+              #'media/inspect-browser-playback! inspect!}
+             #(drive/inspect-playback!
+               gateway "access" "private-file" {:size 4096}))))
+    (is (= 2 @inspection-count))
+    (is (= 2 @proxy-starts))))
 
 (deftest playback-analysis-preserves-range-proxy-failure-class
   (let [gateway

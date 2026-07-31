@@ -434,6 +434,12 @@
     "source-download-failed"
     "unexpected_failure"})
 
+(defn- range-proxy-failure-outranks-inspection?
+  [failure-reason inspection-error]
+  (and (contains? playback-range-proxy-failure-reasons failure-reason)
+       (not= :agg.render.media/invalid-source-inspection
+             (:type (ex-data inspection-error)))))
+
 (defn- inspect-playback-through-proxy!
   [gateway access-token file-id metadata stream-open-ended?]
   (with-open
@@ -449,7 +455,8 @@
       (media/inspect-browser-playback! "ffprobe" (:url proxy))
       (catch Throwable error
         (let [failure-reason (:failure-reason ((:stats proxy)))]
-          (if (contains? playback-range-proxy-failure-reasons failure-reason)
+          (if (range-proxy-failure-outranks-inspection?
+               failure-reason error)
             (errors/raise! "Playback source range proxy failed"
                            {:type ::playback-range-proxy-failed}
                            error)
