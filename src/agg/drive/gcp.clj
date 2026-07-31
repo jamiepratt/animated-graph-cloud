@@ -442,29 +442,42 @@
 
 (defn- inspect-playback-through-proxy!
   [gateway access-token file-id metadata stream-open-ended?]
-  (with-open
-   [proxy
-    (range-proxy/start!
-      {:gateway gateway
-       :access-token access-token
-       :file-id file-id
-       :size (:size metadata)
-       :limits drive-limits/playback-analysis-range-limits-v1
-       :stream-open-ended? stream-open-ended?})]
-    (try
-      (media/inspect-browser-playback! "ffprobe" (:url proxy))
-      (catch Throwable error
-        (let [failure-reason (:failure-reason ((:stats proxy)))]
-          (if (range-proxy-failure-outranks-inspection?
-               failure-reason error)
-            (errors/raise! "Playback source range proxy failed"
-                           {:type ::playback-range-proxy-failed}
-                           error)
-            (throw error)))))))
+  (try
+    (with-open
+     [proxy
+      (range-proxy/start!
+        {:gateway gateway
+         :access-token access-token
+         :file-id file-id
+         :size (:size metadata)
+         :limits drive-limits/playback-analysis-range-limits-v1
+         :stream-open-ended? stream-open-ended?})]
+      (try
+        (media/inspect-browser-playback! "ffprobe" (:url proxy))
+        (catch Throwable error
+          (let [failure-reason (:failure-reason ((:stats proxy)))]
+            (if (range-proxy-failure-outranks-inspection?
+                 failure-reason error)
+              (errors/raise! "Playback source range proxy failed"
+                             {:type ::playback-range-proxy-failed}
+                             error)
+              (throw error))))))
+    (catch clojure.lang.ExceptionInfo error
+      (throw error))
+    (catch java.util.concurrent.CancellationException error
+      (throw error))
+    (catch InterruptedException error
+      (throw error))
+    (catch Exception error
+      (throw
+       (errors/raise! "Playback inspection lifecycle failed"
+                      {:type ::playback-inspection-lifecycle-failed}
+                      error)))))
 
 (def ^:private inconclusive-playback-inspection-types
   #{:agg.render.media/media-tool-failed
-    :agg.render.media/invalid-source-inspection})
+    :agg.render.media/invalid-source-inspection
+    ::playback-inspection-lifecycle-failed})
 
 (defn- inconclusive-playback-inspection? [error]
   (contains? inconclusive-playback-inspection-types

@@ -3,11 +3,13 @@
             [agg.api.main :as api]
             [agg.auth.core :as auth]
             [agg.drive.core :as drive]
+            [agg.drive.gcp :as gcp]
             [agg.early-access.core :as early-access]
             [agg.errors :as errors]
             [agg.http-test-support :as test-http]
             [agg.jobs-test :as fixture]
             [agg.jobs.lifecycle :as jobs]
+            [agg.render.media :as media]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]])
@@ -1718,6 +1720,98 @@
                                      "codecTag" "unknown"}}}
                (json/read-str (.body response))))
         (is (.isEmpty (.firstValue (.headers response) "Set-Cookie"))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest renderable-playback-analysis-normalizes-probe-lifecycle-failure
+  (let [port (available-port)
+        events (atom [])
+        {:keys [system session]} (auth-fixture)
+        gateway
+        (gcp/->RestDriveGateway
+         (fn [_]
+           {:status 200
+            :body (json/write-str
+                   {:id "private-source"
+                    :name "selected.mov"
+                    :mimeType "video/quicktime"
+                    :size "4096"
+                    :trashed false
+                    :videoMediaMetadata {:durationMillis "125500"}})})
+         (* 8 1024 1024))
+        auth-system (assoc system :drive gateway)
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        server (start-api! port {:auth-system auth-system
+                                 :event-sink #(swap! events conj [%1 %2])})]
+    (try
+      (let [response
+            (with-redefs [media/inspect-browser-playback!
+                          (fn [_ _]
+                            (throw (java.io.IOException.
+                                    "private probe lifecycle detail")))]
+              (post! port "/v1/drive/playback-analyses"
+                     {:fileId "private-source"}
+                     {"Content-Type" "application/json"
+                      "Cookie" (str "agg_session=" session)
+                      "X-CSRF-Token" csrf}))]
+        (is (= 200 (.statusCode response)))
+        (is (= {"fileName" "selected.mov"
+                "evidence" {"container" {"format" "unknown"}
+                            "video" {"codec" "unknown"
+                                     "codecTag" "unknown"}}}
+               (json/read-str (.body response))))
+        (is (empty? @events)))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest uninspectable-playback-analysis-reports-safe-lifecycle-failure
+  (let [port (available-port)
+        events (atom [])
+        {:keys [system session]} (auth-fixture)
+        gateway
+        (gcp/->RestDriveGateway
+         (fn [_]
+           {:status 200
+            :body (json/write-str
+                   {:id "private-source"
+                    :name "selected.mov"
+                    :mimeType "video/quicktime"
+                    :size "4096"
+                    :trashed false})})
+         (* 8 1024 1024))
+        auth-system (assoc system :drive gateway)
+        csrf (auth/issue-csrf-token auth-system
+                                    {:subject "google-subject-1"})
+        server (start-api! port {:auth-system auth-system
+                                 :event-sink #(swap! events conj [%1 %2])})]
+    (try
+      (let [response
+            (with-redefs [media/inspect-browser-playback!
+                          (fn [_ _]
+                            (throw (java.io.IOException.
+                                    "private probe lifecycle detail")))]
+              (post! port "/v1/drive/playback-analyses"
+                     {:fileId "private-source"}
+                     {"Content-Type" "application/json"
+                      "Cookie" (str "agg_session=" session)
+                      "X-CSRF-Token" csrf}))
+            request-id (some-> response .headers
+                               (.firstValue "x-request-id")
+                               (.orElse nil))
+            [event fields] (first @events)]
+        (is (= 500 (.statusCode response)))
+        (is (= {"error" "render_failed"}
+               (json/read-str (.body response))))
+        (is (= 1 (count @events)))
+        (is (= "request_failed" event))
+        (is (= request-id (:requestId fields)))
+        (is (= "playback_media_inspection_failure" (:reason fields)))
+        (is (= "playback_media_inspection" (:stage fields)))
+        (is (= ":agg.drive.gcp/playback-inspection-lifecycle-failed"
+               (:errorType fields)))
+        (is (not-any? #(contains? fields %)
+                      [:fileId :accountId :subject :fileName])))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

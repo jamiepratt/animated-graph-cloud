@@ -158,6 +158,11 @@
        :stage "playback_source_range"
        :errorType ":agg.drive.gcp/playback-range-proxy-failed"}
 
+      (contains? types :agg.drive.gcp/playback-inspection-lifecycle-failed)
+      {:reason "playback_media_inspection_failure"
+       :stage "playback_media_inspection"
+       :errorType ":agg.drive.gcp/playback-inspection-lifecycle-failed"}
+
       (contains? types :agg.render.media/media-tool-failed)
       {:reason "playback_media_tool_failure"
        :stage "playback_media_inspection"
