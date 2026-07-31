@@ -596,8 +596,9 @@
       (inspect-playback-through-proxy!
        gateway access-token file-id metadata false)
       (catch clojure.lang.ExceptionInfo error
-        (if (= :agg.render.media/media-tool-failed
-               (:type (ex-data error)))
+        (if (contains? #{:agg.render.media/media-tool-failed
+                         :agg.render.media/invalid-source-inspection}
+                       (:type (ex-data error)))
           (inspect-playback-through-proxy!
            gateway access-token file-id metadata true)
           (throw error)))))

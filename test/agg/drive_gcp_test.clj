@@ -234,6 +234,28 @@
       (finally
         (Files/deleteIfExists path)))))
 
+(deftest playback-analysis-retries-inconclusive-capped-inspection
+  (let [stream-modes (atom [])
+        evidence {:container {:format "mpegts"}
+                  :video {:codec "mpeg2video"
+                          :codecTag "[2][0][0][0]"}
+                  :audio {:codec "mp2"}}
+        gateway (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+        inspect!
+        (fn [_gateway _access-token _file-id _metadata stream-open-ended?]
+          (swap! stream-modes conj stream-open-ended?)
+          (if stream-open-ended?
+            evidence
+            (throw
+             (ex-info "Capped inspection had no complete stream evidence"
+                      {:type :agg.render.media/invalid-source-inspection}))))]
+    (is (= evidence
+           (with-redefs-fn
+             {#'agg.drive.gcp/inspect-playback-through-proxy! inspect!}
+             #(drive/inspect-playback!
+               gateway "access" "private-file" {:size 3000000}))))
+    (is (= [false true] @stream-modes))))
+
 (deftest playback-analysis-classifies-valid-incompatible-delayed-program-stream
   (let [path (browser-incompatible-delayed-program-mpeg-ts!)]
     (try
