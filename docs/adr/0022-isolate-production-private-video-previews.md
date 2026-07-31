@@ -42,6 +42,16 @@ Public diagnostics allow only stable failure code, UUID request ID,
 retryability, and bounded attempt. Derivative routes are an API-profile
 contract and remain unavailable on overlay and proto profiles.
 
+Safe correlated observability uses the submission response UUID as the durable
+production request ID. The API, queue dispatch, worker, Drive ranges, encoder,
+verification, publication, playback, cancellation, expiry, reconciliation, and
+terminal transition emit bounded events with operation, status, attempt,
+profile, revision, environment, and only applicable numeric measurements.
+Correlation is rejected unless the event environment is exactly `production`.
+Drive IDs, filenames, source and account identity, OAuth material, cookies,
+object keys, signed URLs, request bodies, and private telemetry are never event
+fields or metric labels.
+
 ## Consequences
 
 ADR 0016 remains authoritative for direct range passthrough. This decision
@@ -49,6 +59,5 @@ supersedes only its no-transcoding consequence for browser-incompatible but
 renderable sources.
 
 Infrastructure, durable preparation execution, owner-bound derivative
-playback, Timing UI, observability, deployment, and live acceptance remain
-separate implementation slices. This decision creates no cloud resource and
-does not broaden Google authorization.
+playback, Timing UI, deployment, and live acceptance remain separate
+implementation slices. This decision creates no additional authorization.

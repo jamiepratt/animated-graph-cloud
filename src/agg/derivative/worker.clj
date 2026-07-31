@@ -236,6 +236,7 @@
         correlation
         (merge
          {:requestId (get-in record [:observability :request-id])
+          :environment "production"
           :attempt attempt
           :profileVersion (:version profile)
           :reservedMinorUnits
@@ -266,6 +267,25 @@
                       :proxy-config access
                       :cancelled? cancelled?
                       :stage! emit-worker-stage!))
+              _ (emit-worker-event!
+                 "derivative_drive_ranges_completed"
+                 {:severity "INFO"
+                  :operation "drive_playback_transfer"
+                  :status "succeeded"
+                  :bytesTransferred
+                  (get-in verified [:transfer :upstream-bytes])
+                  :rangeCount
+                  (get-in verified [:transfer :request-count])
+                  :retryCount
+                  (get-in verified [:transfer :retry-count])
+                  :cacheOutcome
+                  (if (pos? (long
+                             (or
+                              (get-in verified
+                                      [:transfer :cache-hit-count])
+                              0)))
+                    "hit"
+                    "miss")})
               _ (emit-worker-event!
                  "derivative_encode_exited"
                  {:severity "INFO"
@@ -349,6 +369,7 @@
                   {:severity (if cancelled? "WARNING" "ERROR")
                    :status (if cancelled? "cancelled" "failed")
                    :reason failure-code
+                   :failureCode failure-code
                    :errorType (some-> (:type data) str)
                    :retryable retryable
                    :elapsedMs (elapsed-millis attempt-started-nanos)}

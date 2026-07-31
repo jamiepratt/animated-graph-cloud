@@ -175,6 +175,29 @@
            :fileId "private-file"
            :telemetry "private"}))))
 
+(deftest production-derivative-events-keep-only-production-scoped-correlation
+  (let [request-id "00000000-0000-0000-0000-000000000216"
+        safe
+        {:severity "INFO"
+         :component "derivative"
+         :event "derivative_preparation_submitted"
+         :environment "production"
+         :requestId request-id
+         :operation "derivative_preparation"
+         :status "queued"
+         :attempt 1
+         :profileVersion "h264-aac-1080p25-v1"
+         :revision "a0223f3"
+         :cacheOutcome "miss"
+         :reservedMinorUnits 125}]
+    (is (= safe (observability/safe-event-fields safe)))
+    (is (= (dissoc safe :environment :requestId :revision)
+           (observability/safe-event-fields
+            (assoc safe :environment "proto"))))
+    (is (= (dissoc safe :requestId)
+           (observability/safe-event-fields
+            (assoc safe :requestId "private-owner"))))))
+
 (deftest tufte-emits-structured-profile-signal
   (let [signals (atom [])]
     (tufte/with-handler

@@ -390,6 +390,7 @@
             "derivative_verification_started"
             "derivative_verification_succeeded"
             "derivative_streaming_stopped"
+            "derivative_drive_ranges_completed"
             "derivative_encode_exited"
             "derivative_publication_started"
             "derivative_publication_succeeded"
@@ -417,6 +418,19 @@
               (filter #(= "derivative_encode_exited" (first %))
                       @events)))
             [:operation :status :sourceBytes :upstreamBytes :outputBytes])))
+    (is (= {:operation "drive_playback_transfer"
+            :status "succeeded"
+            :bytesTransferred 4096
+            :rangeCount 1
+            :retryCount 0
+            :cacheOutcome "miss"}
+           (select-keys
+            (second
+             (first
+              (filter #(= "derivative_drive_ranges_completed" (first %))
+                      @events)))
+            [:operation :status :bytesTransferred :rangeCount :retryCount
+             :cacheOutcome])))
     (is (= {:operation "derivative_preparation"
             :status "succeeded"
             :reason "completed"

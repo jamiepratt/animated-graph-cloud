@@ -20,7 +20,7 @@
                                       QueueName Task TaskName)
            (java.nio.charset StandardCharsets)
            (java.security MessageDigest)
-           (java.time Clock Instant LocalDate YearMonth ZoneOffset)
+           (java.time Clock Duration Instant LocalDate YearMonth ZoneOffset)
            (java.util Date HexFormat UUID)
            (java.util.concurrent CancellationException ExecutionException)))
 
@@ -1023,7 +1023,14 @@
               (when (= :cancellation-requested (:state running))
                 (lifecycle/cancel-preparation-execution!
                  launcher execution))
-              {:started? true :job (preparation-resource running)}))))))
+              {:started? true
+               :queueAgeMs
+               (max 0
+                    (.toMillis
+                     (Duration/between
+                      ^Instant (:created-at running)
+                      ^Instant (:dispatch-started-at running))))
+               :job (preparation-resource running)}))))))
   (cancel-preparation! [_ job-id]
     (let [job-ref (.document
                    (.collection firestore "production-derivative-preparation-jobs-v1") job-id)

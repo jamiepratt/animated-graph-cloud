@@ -158,3 +158,43 @@
     (is (str/includes? openapi
                        "Google Drive delivery uses only the `drive.file` scope."))
     (is (not (str/includes? openapi "drive.readonly")))))
+
+(deftest production-private-preview-observability-is-an-operator-contract
+  (let [runbook (slurp "docs/production-runbook.md")
+        acceptance (slurp "docs/release-acceptance.md")
+        openapi (slurp "docs/openapi.yaml")
+        context (slurp "CONTEXT.md")
+        context-map (slurp "CONTEXT-MAP.md")
+        adr (slurp "docs/adr/0022-isolate-production-private-video-previews.md")
+        changelog (slurp "CHANGELOG.md")]
+    (doseq [event ["derivative_preparation_submitted"
+                   "derivative_preparation_dispatched"
+                   "derivative_drive_ranges_completed"
+                   "derivative_encode_exited"
+                   "derivative_verification_succeeded"
+                   "derivative_publication_succeeded"
+                   "derivative_playback_range_served"
+                   "derivative_cancellation_resolved"
+                   "derivative_reconciliation_completed"
+                   "derivative_preparation_terminal"]]
+      (is (str/includes? runbook event) event))
+    (doseq [contract
+            ["jsonPayload.requestId=\"$REQUEST_ID\""
+             "X-Request-Id"
+             "original video is unchanged"
+             "24 hours"
+             "processing allowance"
+             "private-preview metrics"
+             "admin logs"]]
+      (is (str/includes? (str runbook "\n" acceptance) contract) contract))
+    (is (str/includes? openapi
+                       "X-Request-Id:\n              $ref: \"#/components/headers/RequestId\""))
+    (is (str/includes? openapi "RequestId:"))
+    (is (str/includes? context "production private-preview lifecycle"))
+    (is (str/includes? context-map "Private-preview observability"))
+    (is (str/includes? adr "Safe correlated observability"))
+    (doseq [copy ["private video preview"
+                  "original Drive file is unchanged"
+                  "expires after 24 hours"
+                  "processing allowance"]]
+      (is (str/includes? changelog copy) copy))))

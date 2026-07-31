@@ -650,11 +650,17 @@ paths:
       responses:
         "200":
           description: Exact idempotent replay or eligible private cache hit.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema: {$ref: "#/components/schemas/DerivativePreparation"}
         "202":
           description: Preparation attempt admitted and queued.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema: {$ref: "#/components/schemas/DerivativePreparation"}
@@ -674,6 +680,9 @@ paths:
       responses:
         "200":
           description: Owned preparation state.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema: {$ref: "#/components/schemas/DerivativePreparation"}
@@ -691,6 +700,9 @@ paths:
       responses:
         "200":
           description: Cancellation was durably recorded.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema: {$ref: "#/components/schemas/DerivativePreparation"}
@@ -710,6 +722,9 @@ paths:
       responses:
         "202":
           description: Next exact attempt admitted and queued.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
           content:
             application/json:
               schema: {$ref: "#/components/schemas/DerivativePreparation"}
@@ -746,6 +761,8 @@ paths:
         "201":
           description: Owner-bound derivative playback session created.
           headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
             Set-Cookie:
               description: Signed Firebase-compatible `__session` cookie containing the existing session and short-lived playback authority.
               schema: {type: string}
@@ -806,6 +823,8 @@ paths:
         "206":
           description: Initial or requested bounded byte range.
           headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
             Accept-Ranges:
               schema: {const: bytes}
             Content-Range:
@@ -1202,6 +1221,10 @@ paths:
               schema: {$ref: "#/components/schemas/Member"}
         "403": {$ref: "#/components/responses/AdminRequired"}
 components:
+  headers:
+    RequestId:
+      description: Opaque production-scoped UUID correlating the private-preview lifecycle without source or account identity.
+      schema: {type: string, format: uuid}
   securitySchemes:
     bearerAuth:
       type: http

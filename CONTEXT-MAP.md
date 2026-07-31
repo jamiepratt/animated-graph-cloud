@@ -18,3 +18,4 @@
 | Completed-output playback privacy boundary | `docs/adr/0020-stream-completed-h264-output-for-browser-playback.md` |
 | Independent release identities and tags | `docs/adr/0021-independent-release-identities.md` |
 | Production private-video-preview contract and proto isolation | `docs/adr/0022-isolate-production-private-video-previews.md` |
+| Private-preview observability, request-ID queries, metrics, and acceptance | `docs/production-runbook.md`, `docs/release-acceptance.md` |

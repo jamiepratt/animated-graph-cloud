@@ -65,6 +65,7 @@
 
 (deftest preparation-routes-revalidate-drive-and-fail-closed-by-owner
   (let [metadata-requests (atom [])
+        events (atom [])
         drive-gateway
         (reify drive/SourceGateway
           (source-metadata! [_ access-token file-id]
@@ -90,6 +91,9 @@
         (api/start! port
                     {:auth-system system
                      :derivative-preparation-service (:service preparation)
+                     :event-sink
+                     (fn [event fields]
+                       (swap! events conj (assoc fields :event event)))
                      :clock clock})]
     (try
       (let [path "/v1/derivative-preparations"
@@ -105,18 +109,102 @@
                              "Cookie" (str "__session=" cookie)
                              "X-CSRF-Token" csrf))
             resource (json/read-str (.body admitted) :key-fn keyword)
+            request-id
+            (.orElse (.firstValue (.headers admitted) "X-Request-Id") nil)
             status-path (:statusUrl resource)
             owner-poll
             (request! port :get status-path nil
                       {"Cookie" (str "__session=" cookie)})
+            cancelled
+            (request! port :post (:cancelUrl resource) {}
+                      {"Cookie" (str "__session=" cookie)
+                       "X-CSRF-Token" csrf})
+            retried
+            (request! port :post (:retryUrl resource) {}
+                      {"Cookie" (str "__session=" cookie)
+                       "X-CSRF-Token" csrf})
             other-poll
             (request! port :get status-path nil
                       {"Cookie" (str "__session=" other-cookie)})]
         (is (= 401 (.statusCode unauthenticated)))
         (is (= 403 (.statusCode no-csrf)))
         (is (= 202 (.statusCode admitted)) (.body admitted))
+        (is (= request-id (:requestId resource)))
+        (is (= [{:event "derivative_preparation_submitted"
+                 :severity "INFO"
+                 :environment "production"
+                 :requestId request-id
+                 :operation "derivative_preparation"
+                 :status "queued"
+                 :attempt 1
+                 :profileVersion "h264-aac-1080p25-v1"
+                 :revision "dev"
+                 :cacheOutcome "miss"
+                 :reservedMinorUnits 125}
+                {:event "derivative_cache_resolved"
+                 :severity "INFO"
+                 :environment "production"
+                 :requestId request-id
+                 :operation "derivative_cache"
+                 :status "resolved"
+                 :attempt 1
+                 :profileVersion "h264-aac-1080p25-v1"
+                 :revision "dev"
+                 :cacheOutcome "miss"}
+                {:event "derivative_preparation_queued"
+                 :severity "INFO"
+                 :environment "production"
+                 :requestId request-id
+                 :operation "derivative_queue"
+                 :status "queued"
+                 :attempt 1
+                 :profileVersion "h264-aac-1080p25-v1"
+                 :revision "dev"}
+                {:event "derivative_cancellation_resolved"
+                 :severity "WARNING"
+                 :environment "production"
+                 :requestId request-id
+                 :operation "derivative_cancellation"
+                 :status "cancelled"
+                 :attempt 1
+                 :profileVersion "h264-aac-1080p25-v1"
+                 :revision "dev"
+                 :reason "user_requested"}
+                {:event "derivative_preparation_terminal"
+                 :severity "WARNING"
+                 :environment "production"
+                 :requestId request-id
+                 :operation "derivative_preparation"
+                 :status "cancelled"
+                 :attempt 1
+                 :profileVersion "h264-aac-1080p25-v1"
+                 :revision "dev"
+                 :reason "user_requested"}
+                {:event "derivative_preparation_retried"
+                 :severity "INFO"
+                 :environment "production"
+                 :requestId request-id
+                 :operation "derivative_queue"
+                 :status "queued"
+                 :attempt 2
+                 :profileVersion "h264-aac-1080p25-v1"
+                 :revision "dev"
+                 :cacheOutcome "not_applicable"
+                 :reservedMinorUnits 125}]
+               @events))
         (is (= [["private-access" "private-id"]] @metadata-requests))
         (is (= 200 (.statusCode owner-poll)))
+        (is (= request-id
+               (.orElse (.firstValue (.headers owner-poll) "X-Request-Id")
+                        nil)))
+        (is (= 200 (.statusCode cancelled)))
+        (is (= 202 (.statusCode retried)))
+        (is (= request-id
+               (.orElse (.firstValue (.headers cancelled) "X-Request-Id")
+                        nil)))
+        (is (= request-id
+               (.orElse (.firstValue (.headers retried) "X-Request-Id")
+                        nil)))
         (is (= 404 (.statusCode other-poll)))
         (is (not-any? #(str/includes? (.body admitted) %)
                       ["private-id" "private-name.mov" "private-owner"
@@ -137,6 +225,7 @@
              :videoMediaMetadata {:durationMillis "999999999"}})
           (stream-source! [_ _ _ _]))
         {:keys [system cookie csrf]} (auth-fixture drive-gateway)
+        events (atom [])
         preparation
         (derivative/in-memory-preparation-system
          {:fingerprint-secret "fixture-secret"})
@@ -144,7 +233,10 @@
         server
         (api/start! port
                     {:auth-system system
-                     :derivative-preparation-service (:service preparation)})]
+                     :derivative-preparation-service (:service preparation)
+                     :event-sink
+                     (fn [event fields]
+                       (swap! events conj (assoc fields :event event)))})]
     (try
       (let [response
             (request! port :post "/v1/derivative-preparations"
@@ -159,6 +251,16 @@
         (is (= "source_duration_exceeded" (:error body)))
         (is (= request-id (:requestId body)))
         (is (false? (:retryable body)))
+        (is (= [{:event "derivative_preparation_rejected"
+                 :severity "WARNING"
+                 :environment "production"
+                 :requestId request-id
+                 :operation "derivative_preparation"
+                 :status "rejected"
+                 :failureCode "source_duration_exceeded"
+                 :retryable false
+                 :revision "dev"}]
+               @events))
         (is (not (str/includes? (.body response) "private-id"))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
@@ -208,6 +310,14 @@
           (stream-source! [_ _ _ _]))
         {:keys [system]} (auth-fixture drive-gateway)
         calls (atom [])
+        events (atom [])
+        request-id "00000000-0000-0000-0000-000000000216"
+        correlated-job
+        {:id "00000000-0000-0000-0000-000000000193"
+         :state "running"
+         :attempt 3
+         :requestId request-id
+         :profileVersion "h264-aac-1080p25-v1"}
         service
         (reify derivative/PreparationService
           (submit-preparation! [_ _ _])
@@ -216,12 +326,15 @@
           (dispatch-preparation! [_ job-id attempt]
             (swap! calls conj [:dispatch job-id attempt])
             {:started? true
-             :job {:id job-id :state "running" :attempt attempt}})
+             :queueAgeMs 125
+             :job (assoc correlated-job :id job-id :attempt attempt)})
           (cancel-preparation! [_ _])
           (retry-preparation! [_ _])
           (reconcile-preparations! [_]
             (swap! calls conj [:reconcile])
-            {:repairedJobs 2}))
+            {:repairedJobs 2
+             :terminalJobs
+             [(assoc correlated-job :state "expired")]}))
         verifier
         (reify auth/TaskTokenVerifier
           (verify-task-token! [_ token]
@@ -243,7 +356,10 @@
           :task-audience "https://app.example.com"
           :derivative-tasks-service-account
           "derivative-tasks@example.com"
-          :scheduler-service-account "scheduler@example.com"})]
+          :scheduler-service-account "scheduler@example.com"
+          :event-sink
+          (fn [event fields]
+            (swap! events conj (assoc fields :event event)))})]
     (try
       (let [job-id "00000000-0000-0000-0000-000000000193"
             dispatch-path
@@ -272,8 +388,39 @@
         (is (= 401 (.statusCode unauthenticated)))
         (is (= 401 (.statusCode wrong-caller)))
         (is (= 202 (.statusCode dispatched)))
+        (is (= request-id
+               (.orElse (.firstValue (.headers dispatched) "X-Request-Id")
+                        nil)))
         (is (= 401 (.statusCode task-spoofs-scheduler)))
         (is (= 200 (.statusCode reconciled)))
-        (is (= [[:dispatch job-id 3] [:reconcile]] @calls)))
+        (is (= [[:dispatch job-id 3] [:reconcile]] @calls))
+        (is (= [{:event "derivative_preparation_dispatched"
+                 :severity "INFO"
+                 :environment "production"
+                 :requestId request-id
+                 :operation "derivative_dispatch"
+                 :status "started"
+                 :attempt 3
+                 :profileVersion "h264-aac-1080p25-v1"
+                 :revision "dev"
+                 :queueAgeMs 125}
+                {:event "derivative_reconciliation_completed"
+                 :severity "WARNING"
+                 :environment "production"
+                 :operation "derivative_reconciliation"
+                 :status "succeeded"
+                 :revision "dev"
+                 :repairedJobs 2}
+                {:event "derivative_preparation_terminal"
+                 :severity "WARNING"
+                 :environment "production"
+                 :requestId request-id
+                 :operation "derivative_preparation"
+                 :status "expired"
+                 :attempt 3
+                 :profileVersion "h264-aac-1080p25-v1"
+                 :revision "dev"
+                 :reason "reconciliation"}]
+               @events)))
       (finally
         (.close ^java.lang.AutoCloseable server)))))

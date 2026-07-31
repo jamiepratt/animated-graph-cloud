@@ -4,7 +4,8 @@
             [clojure.string :as str]
             [taoensso.telemere :as tel]
             [taoensso.tufte :as tufte]
-            [taoensso.tufte.telemere :as tufte-telemere]))
+            [taoensso.tufte.telemere :as tufte-telemere])
+  (:import (java.util UUID)))
 
 (def ^:private safe-event-keys
   #{:severity :component :event :message :reason :queueAgeMs :repairedJobs
@@ -19,14 +20,14 @@
     :operation :bytesRequested :bytesTransferred :exceptionStack
     :cancellationLagMs :durationBucket :cacheOutcome :profileVersion
     :sourceBytes :upstreamBytes :outputBytes :reservedMinorUnits
-    :queueDepth :verificationFailures})
+    :queueDepth :verificationFailures :environment :rangeCount :retryCount})
 
 (def ^:private safe-value-keys
   #{:severity :component :event :message :reason :failureCode :errorType
     :requestId :category :phase :view :listState :tokenStatus :accountStatus
     :mimeFilter :indexStatus :stage :sourceFile :exceptionClass :rangeSource
     :trace :revision :operation :status :durationBucket :cacheOutcome
-    :profileVersion})
+    :profileVersion :environment})
 
 (def ^:private early-access-delivery-event-keys
   #{:severity :component :event :requestId :category :upstreamStatus
@@ -95,6 +96,11 @@
 (defn- safe-event-value? [key value]
   (cond
     (= :message key) (safe-message? value)
+    (= :requestId key)
+    (try
+      (and (string? value) (UUID/fromString value))
+      (catch IllegalArgumentException _ false))
+    (= :environment key) (= "production" value)
     (= :stage key) (contains? safe-stages value)
     (= :operation key) (contains? safe-operations value)
     (= :durationBucket key) (contains? safe-duration-buckets value)
@@ -158,7 +164,12 @@
          (<= 1 requestedDurationSeconds 480))))
 
 (defn safe-event-fields [fields]
-  (let [safe-fields
+  (let [derivative-event?
+        (str/starts-with? (or (:event fields) "") "derivative_")
+        production-correlation?
+        (or (not derivative-event?)
+            (= "production" (:environment fields)))
+        safe-fields
         (into {}
               (keep (fn [[key value]]
                       (when (and (contains? safe-event-keys key)
@@ -168,7 +179,11 @@
         safe-fields
         (if (= "early_access_notification_failed" (:event safe-fields))
           (select-keys safe-fields early-access-delivery-event-keys)
-          safe-fields)]
+          safe-fields)
+        safe-fields
+        (if production-correlation?
+          safe-fields
+          (dissoc safe-fields :requestId :trace :revision))]
     (if (and (some #(contains? safe-fields %) preview-count-keys)
              (not (valid-preview-counts? safe-fields)))
       (apply dissoc safe-fields preview-count-keys)

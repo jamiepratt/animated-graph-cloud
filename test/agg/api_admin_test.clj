@@ -147,6 +147,24 @@
                                          :component "api"
                                          :event "wrong_severity"}
                                         "{\"severity\":\"INFO\",\"component\":\"api\",\"event\":\"wrong_severity\"}"))
+        _ (logs/append-log!
+           log-store
+           (logs/entry
+            {:severity "ERROR"
+             :component "derivative"
+             :event "derivative_preparation_terminal"
+             :failureCode "derivative_verification_failed"
+             :requestId "00000000-0000-0000-0000-000000000216"
+             :retryable false
+             :operation "derivative_preparation"
+             :status "failed"
+             :elapsedMs 12000
+             :sourceBytes 4096
+             :rangeStart 0
+             :rangeEnd 4095
+             :revision "a0223f3"
+             :environment "production"}
+            "{\"event\":\"derivative_preparation_terminal\",\"requestId\":\"00000000-0000-0000-0000-000000000216\"}"))
         {:keys [directory service]}
         (admin/in-memory-system {:owner-email "owner@example.com"
                                  :initial-emails #{"member@example.com"
@@ -170,6 +188,10 @@
             raw (request! port :get
                           "/ui/admin/logs?view=raw&severity=ERROR&component=api"
                           nil {"Cookie" owner-cookie})
+            diagnostics
+            (request! port :get
+                      "/ui/admin/logs?severity=ERROR&component=derivative"
+                      nil {"Cookie" admin-cookie})
             member-response (request! port :get "/ui/admin/logs"
                                       nil {"Cookie" member-cookie})]
         (is (str/includes? (.body landing) "View operation logs"))
@@ -193,6 +215,15 @@
         (is (str/includes? (.body raw) "&quot;event&quot;:&quot;job_failed&quot;"))
         (is (not (str/includes? (.body raw) "wrong_component")))
         (is (not (str/includes? (.body raw) "wrong_severity")))
+        (is (= 200 (.statusCode diagnostics)))
+        (doseq [safe-field
+                ["failureCode" "requestId" "retryable" "operation" "status"
+                 "elapsedMs" "sourceBytes" "rangeStart" "rangeEnd"
+                 "revision" "environment"]]
+          (is (str/includes? (.body diagnostics) safe-field) safe-field))
+        (is (not-any? #(str/includes? (.body diagnostics) %)
+                      ["private.mov" "private-owner" "object-key"
+                       "signed-url" "oauth-token"]))
         (is (= 403 (.statusCode member-response))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))

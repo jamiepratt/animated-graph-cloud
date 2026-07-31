@@ -18,6 +18,9 @@
 (def ^:private preparation-id
   "00000000-0000-0000-0000-000000000214")
 
+(def ^:private correlation-id
+  "00000000-0000-0000-0000-000000000216")
+
 (def ^:private asset
   {:asset-id "00000000-0000-0000-0000-000000000213"
    :environment "production"
@@ -27,6 +30,8 @@
    :size 20
    :content-type "video/mp4"
    :profile-version "h264-aac-1080p25-v1"
+   :request-id correlation-id
+   :revision "dev"
    :completed-at (Instant/parse "2026-07-30T09:00:00Z")
    :expires-at (Instant/parse "2026-07-31T09:00:00Z")})
 
@@ -77,6 +82,7 @@
                ZoneOffset/UTC)
         {:keys [system session cookie csrf]} (auth-fixture clock)
         opened (atom [])
+        events (atom [])
         accessed (atom [])
         truthful? (atom true)
         bytes (.getBytes "0123456789abcdefghij")
@@ -109,7 +115,10 @@
          {:auth-system system
           :clock clock
           :derivative-preparation-service service
-          :derivative-asset-store asset-store})]
+          :derivative-asset-store asset-store
+          :event-sink
+          (fn [event fields]
+            (swap! events conj (assoc fields :event event)))})]
     (try
       (let [created
             (request!
@@ -167,6 +176,9 @@
                        (str "agg_session=" session "; " playback-cookie)
                        "Range" "bytes=0-1"})]
         (is (= 201 (.statusCode created)) created-text)
+        (is (= correlation-id
+               (.orElse (.firstValue (.headers created) "X-Request-Id")
+                        nil)))
         (is (re-matches
              (re-pattern
               (str "/v1/derivative-preparations/" preparation-id
@@ -184,6 +196,9 @@
                        (:subject owner)
                        (:email owner)]))
         (is (= 206 (.statusCode streamed)))
+        (is (= correlation-id
+               (.orElse (.firstValue (.headers streamed) "X-Request-Id")
+                        nil)))
         (is (= "34567" (String. ^bytes (.body streamed))))
         (is (= "bytes 3-7/20"
                (.orElse
@@ -225,6 +240,29 @@
                  (.orElse
                   (.firstValue (.headers response) "Cache-Control") ""))))
         (is (= 502 (.statusCode untruthful)))
+        (is (= {:event "derivative_playback_session_created"
+                :severity "INFO"
+                :environment "production"
+                :requestId correlation-id
+                :operation "derivative_playback"
+                :status "succeeded"
+                :profileVersion "h264-aac-1080p25-v1"
+                :revision "dev"
+                :bytesRequested 20}
+               (first @events)))
+        (is (= {:event "derivative_playback_range_served"
+                :severity "INFO"
+                :environment "production"
+                :requestId correlation-id
+                :operation "derivative_playback"
+                :status "succeeded"
+                :profileVersion "h264-aac-1080p25-v1"
+                :revision "dev"
+                :rangeStart 3
+                :rangeEnd 7
+                :bytesRequested 5
+                :bytesTransferred 5}
+               (second @events)))
         (is (= "derivative_playback_unavailable"
                (get
                 (json/read-str (String. ^bytes (.body untruthful)))

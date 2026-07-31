@@ -42,6 +42,7 @@ Alpha Compose is the public product. The `animated-graph-cloud` service accepts 
 - Rendering emits a standard seekable MOV with ProRes 4444 alpha, 25 fps, and heartbeat audio.
 - Logs exclude email addresses, Google subjects, filenames, tokens, telemetry values, Drive credentials, and signed URLs.
 - Safe structured observability events from the API and renderer are copied best-effort to the Firestore `observability-logs` collection for 30 days. Owner and admin sessions can inspect the latest 100 events at `/ui/admin/logs` with severity/component filters and formatted or raw JSON views.
+- The production private-preview lifecycle uses one production-scoped UUID request ID from browser submission through cache, queue, worker, Drive ranges, encoding, verification, publication, playback, cancellation, expiry, reconciliation, and terminal state. Cross-environment correlation and private source, account, authority, object, and request fields are rejected.
 
 ## Time authority
 

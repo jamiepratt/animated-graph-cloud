@@ -39,6 +39,8 @@
 
 (def ^:private service-profiles #{"api" "overlay" "proto"})
 
+(declare derivative-event-fields)
+
 (def ^:private picker-diagnostic-phases
   #{"opened" "loaded" "empty" "selected" "cancelled" "error"})
 
@@ -1023,10 +1025,18 @@
   [exchange dependencies job-id attempt]
   (if-not (verified-derivative-task? exchange dependencies)
     (respond-json! exchange 401 {:error "authenticated_task_required"})
-    (let [{:keys [started? job]}
+    (let [{:keys [started? job queueAgeMs]}
           (derivative/dispatch-preparation!
            (:derivative-preparation-service dependencies)
            job-id attempt)]
+      (when-let [request-id (:requestId job)]
+        (.set (.getResponseHeaders exchange) "X-Request-Id" request-id))
+      (when started?
+        (emit-event!
+         dependencies "derivative_preparation_dispatched"
+         (cond-> (derivative-event-fields
+                  job "derivative_dispatch" "started")
+           (number? queueAgeMs) (assoc :queueAgeMs queueAgeMs))))
       (respond-json! exchange (if started? 202 200) job))))
 
 (defn- reconcile-derivative-preparations!
@@ -1037,10 +1047,27 @@
     (:scheduler-service-account dependencies))
     (respond-json! exchange 401
                    {:error "authenticated_scheduler_required"})
-    (respond-json!
-     exchange 200
-     (derivative/reconcile-preparations!
-      (:derivative-preparation-service dependencies)))))
+    (let [{:keys [repairedJobs terminalJobs] :as result}
+          (derivative/reconcile-preparations!
+           (:derivative-preparation-service dependencies))]
+      (emit-event!
+       dependencies "derivative_reconciliation_completed"
+       {:severity (if (pos? (long (or repairedJobs 0)))
+                    "WARNING"
+                    "INFO")
+        :environment "production"
+        :operation "derivative_reconciliation"
+        :status "succeeded"
+        :revision (:short-build main-release/current)
+        :repairedJobs (long (or repairedJobs 0))})
+      (doseq [job terminalJobs]
+        (emit-event!
+         dependencies "derivative_preparation_terminal"
+         (assoc (derivative-event-fields
+                 job "derivative_preparation" (:state job))
+                :severity "WARNING"
+                :reason "reconciliation")))
+      (respond-json! exchange 200 result))))
 
 (defn- begin-auth! [exchange auth-system]
   (let [recovery-requested? (contains? #{"1" "true"}
@@ -1738,8 +1765,19 @@
       (:size asset)
       (:profile-version asset)]))
 
+(defn- derivative-playback-event-fields [asset status]
+  (cond-> {:severity "INFO"
+           :environment "production"
+           :operation "derivative_playback"
+           :status status
+           :profileVersion (:profile-version asset)
+           :revision (or (:revision asset)
+                         (:short-build main-release/current))}
+    (:request-id asset) (assoc :requestId (:request-id asset))))
+
 (defn- create-derivative-playback-session!
-  [^HttpExchange exchange service asset-store auth-system preparation-id]
+  [^HttpExchange exchange service asset-store auth-system preparation-id
+   dependencies]
   (let [user (require-session-user! exchange auth-system)
         _ (require-csrf! exchange auth-system user)
         request (request-json exchange)
@@ -1776,15 +1814,21 @@
          (assoc (or (browser-cookie exchange auth-system) {})
                 :session (session-token exchange auth-system)
                 :playback playback-token))]
+    (when-let [request-id (:request-id asset)]
+      (.set (.getResponseHeaders exchange) "X-Request-Id" request-id))
     (.add (.getResponseHeaders exchange) "Set-Cookie"
           (browser-cookie-header browser-token))
+    (emit-event!
+     dependencies "derivative_playback_session_created"
+     (assoc (derivative-playback-event-fields asset "succeeded")
+            :bytesRequested (:size asset)))
     (respond-json! exchange 201
                    {:playbackUrl playback-path
                     :contentType (:content-type asset)
                     :size (:size asset)})))
 
 (defn- stream-derivative-playback!
-  [^HttpExchange exchange service asset-store auth-system path]
+  [^HttpExchange exchange service asset-store auth-system path dependencies]
   (let [user (require-session-user! exchange auth-system)
         [preparation-id playback-id]
         (rest
@@ -1814,6 +1858,8 @@
         (derivative-storage/open-range!
          asset-store asset (select-keys byte-range [:start :end]))
         content-length (inc (- end start))]
+    (when-let [request-id (:request-id asset)]
+      (.set (.getResponseHeaders exchange) "X-Request-Id" request-id))
     (when-not
      (valid-playback-response?
       source-response start end (:size authority))
@@ -1833,7 +1879,14 @@
     (.sendResponseHeaders exchange 206 content-length)
     (with-open [input ^java.io.InputStream body
                 output (.getResponseBody exchange)]
-      (.transferTo input output))))
+      (let [transferred (.transferTo input output)]
+        (emit-event!
+         dependencies "derivative_playback_range_served"
+         (assoc (derivative-playback-event-fields asset "succeeded")
+                :rangeStart start
+                :rangeEnd end
+                :bytesRequested content-length
+                :bytesTransferred transferred))))))
 
 (defn- cancel-job! [exchange job-service job-id]
   (let [job (jobs/cancel-job! job-service job-id)]
@@ -1867,7 +1920,7 @@
          (or (nil? audio-codec) (= "aac" audio-codec)))))
 
 (defn- derivative-source-request!
-  [exchange auth-system user]
+  [exchange auth-system user request-id]
   (let [request (request-json exchange)
         {:keys [file-id]}
         (derivative-contract/validate-submission!
@@ -1907,15 +1960,62 @@
      :file-id file-id
      :drive-version (some-> (:version metadata) str)
      :source-bytes (:size source-metadata)
-     :source-duration-seconds duration-seconds}))
+     :source-duration-seconds duration-seconds
+     :request-id request-id
+     :revision (:short-build main-release/current)}))
+
+(defn- derivative-event-fields [resource operation status]
+  (cond-> {:severity "INFO"
+           :environment "production"
+           :operation operation
+           :status status
+           :attempt (:attempt resource)
+           :profileVersion (:profileVersion resource)
+           :revision (:short-build main-release/current)}
+    (:requestId resource) (assoc :requestId (:requestId resource))))
+
+(defn- emit-derivative-rejection!
+  [dependencies request-id operation failure-code retryable]
+  (emit-event!
+   dependencies "derivative_preparation_rejected"
+   {:severity "WARNING"
+    :environment "production"
+    :requestId request-id
+    :operation operation
+    :status "rejected"
+    :failureCode failure-code
+    :retryable retryable
+    :revision (:short-build main-release/current)}))
 
 (defn- submit-derivative-preparation!
-  [exchange service auth-system user]
+  [exchange service auth-system user dependencies request-id]
   (let [idempotency-key
         (some-> exchange .getRequestHeaders (.getFirst "Idempotency-Key"))
-        request (derivative-source-request! exchange auth-system user)
+        request (derivative-source-request! exchange auth-system user request-id)
         {:keys [created? cache-hit? job]}
-        (derivative/submit-preparation! service idempotency-key request)]
+        (derivative/submit-preparation! service idempotency-key request)
+        cache-outcome (cond created? "miss" cache-hit? "hit" :else "replay")
+        submitted
+        (cond-> (assoc
+                 (derivative-event-fields
+                  job "derivative_preparation"
+                  (if created? "queued" (:state job)))
+                 :cacheOutcome cache-outcome)
+          created?
+          (assoc :reservedMinorUnits
+                 (get-in derivative-contract/contract-v1
+                         [:limits :cost :attempt-reservation-minor-units])))]
+    (when-let [correlation-id (:requestId job)]
+      (.set (.getResponseHeaders exchange) "X-Request-Id" correlation-id))
+    (emit-event! dependencies "derivative_preparation_submitted" submitted)
+    (emit-event!
+     dependencies "derivative_cache_resolved"
+     (assoc (derivative-event-fields job "derivative_cache" "resolved")
+            :cacheOutcome cache-outcome))
+    (when created?
+      (emit-event!
+       dependencies "derivative_preparation_queued"
+       (derivative-event-fields job "derivative_queue" "queued")))
     (respond-json! exchange
                    (if created? 202 200)
                    job)))
@@ -1935,17 +2035,44 @@
        (errors/raise! "Derivative preparation does not exist"
                       {:type ::derivative/preparation-not-found}))))
 
-(defn- cancel-derivative-preparation! [exchange service job-id]
+(defn- cancel-derivative-preparation!
+  [exchange service job-id dependencies]
   (let [resource (derivative/cancel-preparation! service job-id)]
+    (when-let [request-id (:requestId resource)]
+      (.set (.getResponseHeaders exchange) "X-Request-Id" request-id))
+    (emit-event!
+     dependencies "derivative_cancellation_resolved"
+     (assoc (derivative-event-fields
+             resource "derivative_cancellation" (:state resource))
+            :severity "WARNING"
+            :reason "user_requested"))
+    (when (derivative/terminal-transition? resource)
+      (emit-event!
+       dependencies "derivative_preparation_terminal"
+       (assoc (derivative-event-fields
+               resource "derivative_preparation" (:state resource))
+              :severity "WARNING"
+              :reason "user_requested")))
     (respond-json! exchange
                    (if (= "cancellation-requested" (:state resource))
                      202
                      200)
                    resource)))
 
-(defn- retry-derivative-preparation! [exchange service job-id]
-  (respond-json! exchange 202
-                 (derivative/retry-preparation! service job-id)))
+(defn- retry-derivative-preparation!
+  [exchange service job-id dependencies]
+  (let [resource (derivative/retry-preparation! service job-id)]
+    (when-let [request-id (:requestId resource)]
+      (.set (.getResponseHeaders exchange) "X-Request-Id" request-id))
+    (emit-event!
+     dependencies "derivative_preparation_retried"
+     (assoc
+      (derivative-event-fields resource "derivative_queue" "queued")
+      :cacheOutcome "not_applicable"
+      :reservedMinorUnits
+      (get-in derivative-contract/contract-v1
+              [:limits :cost :attempt-reservation-minor-units])))
+    (respond-json! exchange 202 resource)))
 
 (defn- issue-upload! [exchange upload-signer]
   (let [{:keys [contentType contentLength]} (request-json exchange)]
@@ -2419,7 +2546,7 @@
                                     (require-csrf! exchange auth-system user)
                                     (submit-derivative-preparation!
                                      exchange derivative-preparation-service
-                                     auth-system user))
+                                     auth-system user dependencies request-id))
 
                                   (and auth-system
                                        derivative-preparation-service
@@ -2433,7 +2560,7 @@
                                     (create-derivative-playback-session!
                                      exchange derivative-preparation-service
                                      derivative-asset-store auth-system
-                                     preparation-id))
+                                     preparation-id dependencies))
 
                                   (and auth-system
                                        derivative-preparation-service
@@ -2443,7 +2570,8 @@
                                         derivative-playback-path-pattern path))
                                   (stream-derivative-playback!
                                    exchange derivative-preparation-service
-                                   derivative-asset-store auth-system path)
+                                   derivative-asset-store auth-system path
+                                   dependencies)
 
                                   (and derivative-preparation-service
                                        (= "GET" method)
@@ -2456,10 +2584,16 @@
                                         job-id (last (.split path "/"))]
                                     (require-derivative-owner!
                                      derivative-preparation-service user job-id)
-                                    (respond-json!
-                                     exchange 200
-                                     (require-derivative-preparation!
-                                      derivative-preparation-service job-id)))
+                                    (let [resource
+                                          (require-derivative-preparation!
+                                           derivative-preparation-service
+                                           job-id)]
+                                      (when-let [correlation-id
+                                                 (:requestId resource)]
+                                        (.set (.getResponseHeaders exchange)
+                                              "X-Request-Id"
+                                              correlation-id))
+                                      (respond-json! exchange 200 resource)))
 
                                   (and derivative-preparation-service
                                        (= "POST" method)
@@ -2480,13 +2614,13 @@
                                     (if (= "cancel" action)
                                       (cancel-derivative-preparation!
                                        exchange derivative-preparation-service
-                                       job-id)
+                                       job-id dependencies)
                                       (do
                                         (require-drive-access!
                                          auth-system user)
                                         (retry-derivative-preparation!
                                          exchange derivative-preparation-service
-                                         job-id))))
+                                         job-id dependencies))))
 
                                   (and upload-signer (= "POST" method) (= "/v1/uploads" path))
                                   (do (->> (authenticated-user! exchange auth-system token-service)
@@ -2724,12 +2858,17 @@
                                                  :retryable true}))
 
                   ::derivative-contract/limit-exceeded
-                  (respond-json!
-                   exchange 422
-                   {:error (or (:failure-code (ex-data error))
-                               "derivative_source_not_renderable")
-                    :requestId request-id
-                    :retryable false})
+                  (let [failure-code
+                        (or (:failure-code (ex-data error))
+                            "derivative_source_not_renderable")]
+                    (emit-derivative-rejection!
+                     dependencies request-id "derivative_preparation"
+                     failure-code false)
+                    (respond-json!
+                     exchange 422
+                     {:error failure-code
+                      :requestId request-id
+                      :retryable false}))
 
                   ::derivative-not-required
                   (respond-json! exchange 409

@@ -246,6 +246,76 @@ long requests by `requestId` and reason
 and limit numbers. An HTTP 504 for an accepted one-second diagnostic is a
 Firebase Hosting boundary, not evidence that Cloud Run exceeded its timeout.
 
+## Production private-preview observability
+
+The preparation response `X-Request-Id` and `requestId` resource field are the
+safe correlation key for the complete production private-preview lifecycle.
+They identify only one opaque production operation. Never put Drive IDs,
+filenames, source or account identity, OAuth material, cookies, object keys,
+signed URLs, request bodies, or private telemetry in logs, screenshots, issue
+comments, metric labels, or alert documentation.
+
+The bounded lifecycle event sequence is:
+
+| Boundary | Event |
+|---|---|
+| Submission and cache decision | `derivative_preparation_submitted`, `derivative_cache_resolved` |
+| Queue handoff and dispatch | `derivative_preparation_queued`, `derivative_preparation_dispatched` |
+| Drive range transfer | `derivative_drive_ranges_completed` |
+| Encode and verification | `derivative_encode_exited`, `derivative_verification_succeeded` |
+| Immutable storage | `derivative_publication_succeeded` |
+| Owner-bound playback | `derivative_playback_session_created`, `derivative_playback_range_served` |
+| Cancellation | `derivative_cancellation_resolved` |
+| Expiry and repair | `derivative_reconciliation_completed` |
+| Succeeded, failed, cancelled, expired, or revoked | `derivative_preparation_terminal` |
+
+Events expose only safe code or reason, request ID, retryability, operation,
+status, attempt, bounded duration, bytes and ranges, profile, immutable
+revision, and `production` environment. The admin logs page at
+`/ui/admin/logs` shows these fields in formatted or raw JSON view. Filter
+component `api` for submission, dispatch, playback, cancellation, and
+reconciliation, or `derivative` for worker execution. Copy only this bounded
+evidence into an issue.
+
+Set the UUID printed in the browser response, then locate every event. The
+tested Logs Explorer predicate is `jsonPayload.requestId="$REQUEST_ID"`:
+
+```sh
+read -r REQUEST_ID
+case "$REQUEST_ID" in
+  ????????-????-????-????-????????????) ;;
+  *) echo "request ID must be a UUID" >&2; exit 2 ;;
+esac
+
+gcloud logging read \
+  "jsonPayload.environment=\"production\" AND jsonPayload.requestId=\"$REQUEST_ID\"" \
+  --project=animated-graph-cloud-prod-jp \
+  --freshness=30d \
+  --order=asc \
+  --format='table(timestamp,jsonPayload.component,jsonPayload.event,jsonPayload.operation,jsonPayload.status,jsonPayload.reason)'
+```
+
+To locate one lifecycle boundary, append an exact safe event predicate, for
+example `AND jsonPayload.event="derivative_publication_succeeded"`. An empty
+result is not permission to search by a Drive ID, filename, user, object key, or
+signed URL. Confirm the candidate revision and environment first, then inspect
+Cloud Tasks and Cloud Run execution health by resource name without private
+payloads.
+
+Terraform owns the private-preview metrics for successful latency, queue age,
+Cloud Tasks queue depth, terminal reasons, cache outcomes, capacity, processing
+allowance reservations, verification failures, cancellations, and
+infrastructure failures. Alerts cover latency, queue age/backlog capacity,
+unexpected reservation size, and every failed terminal reason, including
+verification, cancellation, publication, dispatch, and reconciliation
+failures. Verify metric and alert existence before any costed acceptance; alert
+notification delivery remains manual evidence.
+
+The original video is unchanged. A prepared asset expires after 24 hours.
+Submitting or retrying consumes the documented processing allowance even when
+the attempt later fails or is cancelled. Repository acceptance never creates a
+private preview and incurs no media-processing cost.
+
 ## Secret Manager
 
 Terraform creates containers only. Create independent production values; never

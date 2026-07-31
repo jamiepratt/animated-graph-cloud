@@ -57,6 +57,22 @@
                   ["private-drive-id" "private-owner" "owner@example.com"
                    "membership-v1" "fixture-secret"]))))
 
+(deftest dispatch-reports-bounded-queue-age
+  (let [current (atom now)
+        {:keys [service]}
+        (derivative/in-memory-preparation-system
+         {:clock (mutable-clock current)
+          :fingerprint-secret "fixture-secret"})
+        job-id
+        (get-in
+         (derivative/submit-preparation!
+          service "queue-age" (preparation-request))
+         [:job :id])]
+    (swap! current #(.plusSeconds ^Instant % 12))
+    (is (= 12000
+           (:queueAgeMs
+            (derivative/dispatch-preparation! service job-id))))))
+
 (deftest exact-eligible-cache-hit-does-not-queue-or-reserve
   (let [{:keys [service state queued]}
         (derivative/in-memory-preparation-system

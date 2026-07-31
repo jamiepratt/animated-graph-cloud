@@ -497,14 +497,121 @@ resource "google_logging_metric" "production_private_preview_reserved_minor_unit
   depends_on = [module.application]
 }
 
+resource "google_logging_metric" "production_private_preview_cache_outcomes" {
+  project     = local.project_id
+  name        = "alpha_compose_production/private_preview_cache_outcomes"
+  description = "Bounded cache outcomes for production private-preview submissions"
+  filter      = "jsonPayload.event=\"derivative_preparation_submitted\" AND jsonPayload.environment=\"production\""
+
+  label_extractors = {
+    cache_outcome = "EXTRACT(jsonPayload.cacheOutcome)"
+  }
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    display_name = "Production private-preview cache outcomes"
+
+    labels {
+      key         = "cache_outcome"
+      value_type  = "STRING"
+      description = "One of hit, miss, or replay"
+    }
+  }
+
+  depends_on = [module.application]
+}
+
+resource "google_logging_metric" "production_private_preview_terminal_reasons" {
+  project     = local.project_id
+  name        = "alpha_compose_production/private_preview_terminal_reasons"
+  description = "Bounded terminal statuses and reasons for production private previews"
+  filter      = "jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.environment=\"production\""
+
+  label_extractors = {
+    reason = "EXTRACT(jsonPayload.reason)"
+    status = "EXTRACT(jsonPayload.status)"
+  }
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    display_name = "Production private-preview terminal reasons"
+
+    labels {
+      key         = "reason"
+      value_type  = "STRING"
+      description = "Bounded terminal reason"
+    }
+
+    labels {
+      key         = "status"
+      value_type  = "STRING"
+      description = "Bounded terminal status"
+    }
+  }
+
+  depends_on = [module.application]
+}
+
+resource "google_logging_metric" "production_private_preview_verification_failures" {
+  project     = local.project_id
+  name        = "alpha_compose_production/private_preview_verification_failures"
+  description = "Failed production private-preview media verification"
+  filter      = "jsonPayload.event=\"derivative_preparation_terminal\" AND jsonPayload.environment=\"production\" AND jsonPayload.reason=\"derivative_verification_failed\""
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    display_name = "Production private-preview verification failures"
+  }
+
+  depends_on = [module.application]
+}
+
+resource "google_logging_metric" "production_private_preview_cancellations" {
+  project     = local.project_id
+  name        = "alpha_compose_production/private_preview_cancellations"
+  description = "Production private-preview cancellation outcomes"
+  filter      = "jsonPayload.event=\"derivative_cancellation_resolved\" AND jsonPayload.environment=\"production\""
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    display_name = "Production private-preview cancellations"
+  }
+
+  depends_on = [module.application]
+}
+
+resource "google_logging_metric" "production_private_preview_infrastructure_failures" {
+  project     = local.project_id
+  name        = "alpha_compose_production/private_preview_infrastructure_failures"
+  description = "Dispatch, publication, playback, or reconciliation failures"
+  filter      = "jsonPayload.environment=\"production\" AND jsonPayload.status=\"failed\" AND (jsonPayload.operation=\"derivative_dispatch\" OR jsonPayload.operation=\"derivative_publication\" OR jsonPayload.operation=\"derivative_playback\" OR jsonPayload.operation=\"derivative_reconciliation\")"
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    display_name = "Production private-preview infrastructure failures"
+  }
+
+  depends_on = [module.application]
+}
+
 resource "time_sleep" "production_private_preview_metrics_propagation" {
   create_duration = "660s"
 
   triggers = {
-    failures_metric      = google_logging_metric.production_private_preview_failures.id
-    latency_metric       = google_logging_metric.production_private_preview_latency_ms.id
-    queue_age_metric     = google_logging_metric.production_private_preview_queue_age_ms.id
-    reserved_cost_metric = google_logging_metric.production_private_preview_reserved_minor_units.id
+    failures_metric       = google_logging_metric.production_private_preview_failures.id
+    latency_metric        = google_logging_metric.production_private_preview_latency_ms.id
+    queue_age_metric      = google_logging_metric.production_private_preview_queue_age_ms.id
+    reserved_cost_metric  = google_logging_metric.production_private_preview_reserved_minor_units.id
+    cache_metric          = google_logging_metric.production_private_preview_cache_outcomes.id
+    terminal_metric       = google_logging_metric.production_private_preview_terminal_reasons.id
+    verification_metric   = google_logging_metric.production_private_preview_verification_failures.id
+    cancellation_metric   = google_logging_metric.production_private_preview_cancellations.id
+    infrastructure_metric = google_logging_metric.production_private_preview_infrastructure_failures.id
   }
 }
 

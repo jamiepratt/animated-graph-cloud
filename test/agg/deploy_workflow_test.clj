@@ -429,7 +429,12 @@
   (doseq [metric ["production_private_preview_latency_ms"
                   "production_private_preview_failures"
                   "production_private_preview_queue_age_ms"
-                  "production_private_preview_reserved_minor_units"]]
+                  "production_private_preview_reserved_minor_units"
+                  "production_private_preview_cache_outcomes"
+                  "production_private_preview_terminal_reasons"
+                  "production_private_preview_verification_failures"
+                  "production_private_preview_cancellations"
+                  "production_private_preview_infrastructure_failures"]]
     (is (str/includes?
          production-terraform
          (str "resource \"google_logging_metric\" \"" metric "\""))

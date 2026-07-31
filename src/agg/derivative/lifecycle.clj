@@ -5,7 +5,7 @@
             [agg.errors :as errors]
             [agg.render.derivative :as render-derivative])
   (:import (java.security MessageDigest)
-           (java.time Clock Instant LocalDate YearMonth ZoneOffset)
+           (java.time Clock Duration Instant LocalDate YearMonth ZoneOffset)
            (java.util HexFormat UUID)))
 
 (def ^:private profile-version
@@ -668,15 +668,21 @@
                       (not= (long attempt) (long (:attempt job)))
                       (not= :queued (:state job)))
                 {:started? false :job job}
-                (let [execution
+                (let [now (Instant/now clock)
+                      execution
                       (launch-preparation! launcher job-id (:attempt job))
                       running
                       (assoc (transition
-                              job {:type :dispatch
-                                   :now (Instant/now clock)})
+                              job {:type :dispatch :now now})
                              :execution execution)]
                   (swap! state assoc-in [:jobs job-id] running)
-                  {:started? true :job running}))))]
+                  {:started? true
+                   :queueAgeMs
+                   (max 0
+                        (.toMillis
+                         (Duration/between
+                          ^Instant (:created-at job) now)))
+                   :job running}))))]
       (update admitted :job preparation-resource)))
   (cancel-preparation! [_ job-id]
     (let [{:keys [before after]}
