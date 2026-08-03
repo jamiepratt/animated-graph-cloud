@@ -411,6 +411,12 @@
                      "resource \"google_firestore_field\" \"production_private_preview_expiry\""))
   (is (str/includes? production-terraform "ttl_config {}")))
 
+(deftest production-private-preview-worker-can-initialize-membership
+  (is (re-find
+       #"(?s)production_private_preview_worker_environment = merge\(\{.*?AGG_OWNER_EMAIL\s+=\s+local\.owner_email.*?\}, local\.production_private_preview_contract\)"
+       production-terraform)
+      "the worker membership directory requires the production owner"))
+
 (deftest production-private-preview-iam-metrics-and-alerts-are-owned
   (doseq [role ["roles/storage.objectViewer"
                 "roles/storage.objectUser"

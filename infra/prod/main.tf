@@ -8,7 +8,7 @@ module "application" {
   renderer_image               = var.renderer_image
   api_service_url              = var.api_service_url
   monthly_budget_pln           = var.monthly_budget_pln
-  operations_alert_email       = "me@jamiep.org"
+  operations_alert_email       = local.owner_email
   environment_name             = "production"
   import_default_firestore     = false
   import_api_service           = false
@@ -20,8 +20,9 @@ module "application" {
 }
 
 locals {
-  project_id = "animated-graph-cloud-prod-jp"
-  region     = "europe-central2"
+  project_id  = "animated-graph-cloud-prod-jp"
+  region      = "europe-central2"
+  owner_email = "me@jamiep.org"
 
   api_service_account       = "agg-api@${local.project_id}.iam.gserviceaccount.com"
   deployer_service_account  = "agg-github-deployer@${local.project_id}.iam.gserviceaccount.com"
@@ -68,6 +69,7 @@ locals {
   production_private_preview_worker_environment = merge({
     AGG_DERIVATIVE_BUCKET    = google_storage_bucket.production_private_previews.name
     AGG_DRIVE_SOURCE_ENABLED = "true"
+    AGG_OWNER_EMAIL          = local.owner_email
     AGG_REGION               = local.region
     GOOGLE_CLOUD_PROJECT     = local.project_id
   }, local.production_private_preview_contract)
