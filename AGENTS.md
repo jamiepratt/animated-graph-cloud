@@ -17,3 +17,12 @@
   Put repeatable configuration in the normal workflow. If it cannot run safely
   there, provide a guarded `workflow_dispatch` recovery path and document the
   remaining owner action.
+- After editing `.clj`, `.cljc`, `.cljs`, or `.bb` files, run this gate in order:
+  1. `clj-paren-repair <changed-files>`
+  2. `clj-kondo --lint <changed-files>`
+  3. `clojure -M:test-changed` to select affected tests, including reverse
+     namespace dependencies.
+- During focused TDD, use `clojure -M:test-ns <test-ns>` when the affected test
+  namespace is known. Use `clojure -M:test-area <area>` for a coherent area.
+  Do not run `clojure -M:test-all` routinely; reserve it for broad changes or a
+  conservative fallback. Fix failures before broader tests or handoff.
