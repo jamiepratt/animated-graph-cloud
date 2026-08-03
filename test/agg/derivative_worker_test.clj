@@ -264,6 +264,50 @@
     (is (= ::worker/invalid-attempt (:type (ex-data error))))
     (is (false? @source-accessed?))))
 
+(deftest cloud-attempt-terminalizes-source-authority-startup-failure
+  (let [job-id "00000000-0000-0000-0000-000000000194"
+        request-id "00000000-0000-0000-0000-000000000236"
+        events (atom [])
+        failures (atom [])]
+    (is (thrown?
+         clojure.lang.ExceptionInfo
+         (worker/run-cloud-attempt!
+          {:job-id job-id :attempt 1}
+          {:service :service
+           :load-preparation-attempt
+           (fn [_ _ _]
+             {:job-id job-id
+              :environment "production"
+              :attempt 1
+              :profile worker/profile
+              :asset {:id job-id
+                      :object-key "derivatives/opaque-final.mp4"}
+              :source {:file-id "private-id"
+                       :bytes 4096
+                       :duration-seconds 10}
+              :owner {:subject "private-owner"}
+              :observability {:request-id request-id
+                              :reservation-minor-units 125}})
+           :source-access!
+           (fn [& _]
+             (throw
+              (ex-info "source authority unavailable"
+                       {:type ::source-authority-unavailable})))
+           :fail-preparation-attempt!
+           (fn [_ _ _ failure]
+             (swap! failures conj failure))
+           :event-sink
+           (fn [event fields]
+             (swap! events conj [event fields]))})))
+    (is (= [{:failure-code "derivative_failed"
+             :retryable false}]
+           @failures))
+    (is (= ["derivative_worker_started"
+            "derivative_preparation_terminal"
+            "derivative_cleanup_completed"]
+           (mapv first @events)))
+    (is (every? #(= request-id (:requestId (second %))) @events))))
+
 (deftest cloud-attempt-consumes-only-the-exact-private-worker-record
   (let [job-id "00000000-0000-0000-0000-000000000194"
         output (Files/createTempFile
@@ -381,7 +425,8 @@
     (is (not (Files/exists
               output (make-array java.nio.file.LinkOption 0))))
     (is (not (str/includes? (pr-str result) "private")))
-    (is (= ["derivative_encode_started"
+    (is (= ["derivative_worker_started"
+            "derivative_encode_started"
             "derivative_streaming_started"
             "derivative_inspection_started"
             "derivative_inspection_succeeded"

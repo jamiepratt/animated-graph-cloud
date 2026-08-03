@@ -261,6 +261,7 @@ The bounded lifecycle event sequence is:
 |---|---|
 | Submission and cache decision | `derivative_preparation_submitted`, `derivative_cache_resolved` |
 | Queue handoff and dispatch | `derivative_preparation_queued`, `derivative_preparation_dispatched` |
+| Worker startup | `derivative_worker_started` |
 | Drive range transfer | `derivative_drive_ranges_completed` |
 | Encode and verification | `derivative_encode_exited`, `derivative_verification_succeeded` |
 | Immutable storage | `derivative_publication_succeeded` |
@@ -268,6 +269,13 @@ The bounded lifecycle event sequence is:
 | Cancellation | `derivative_cancellation_resolved` |
 | Expiry and repair | `derivative_reconciliation_completed` |
 | Succeeded, failed, cancelled, expired, or revoked | `derivative_preparation_terminal` |
+
+The minute reconciliation schedule remains paused while an unverified API
+candidate is staged, then resumes in the candidate runtime Terraform apply.
+It terminalizes an execution still reported as running after the 900-second
+Cloud Run window plus the 60-second cleanup margin as retryable
+`derivative_timeout`, releases its active admission, and emits the terminal
+event through the API boundary. It never submits a replacement attempt.
 
 Events expose only safe code or reason, request ID, retryability, operation,
 status, attempt, bounded duration, bytes and ranges, profile, immutable

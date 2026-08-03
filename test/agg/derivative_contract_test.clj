@@ -57,6 +57,7 @@
       :compute {:cpu 4
                 :memory-bytes 4294967296
                 :timeout-seconds 900
+                :cleanup-margin-seconds 60
                 :task-count 1
                 :automatic-retries 0}
       :concurrency {:queue-max-concurrent-dispatches 1

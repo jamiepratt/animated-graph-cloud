@@ -19,6 +19,12 @@ variable "api_service_url" {
   }
 }
 
+variable "private_preview_reconciliation_paused" {
+  description = "Pause private-preview reconciliation while an unverified API candidate is staged."
+  type        = bool
+  default     = false
+}
+
 variable "monthly_budget_pln" {
   description = "Production billing and application admission ceiling in PLN."
   type        = number

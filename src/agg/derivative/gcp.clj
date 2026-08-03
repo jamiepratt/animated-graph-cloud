@@ -27,6 +27,16 @@
 (def ^:private billing-zone (ZoneOffset/ofHours -8))
 (def ^:private environment :production)
 
+(def ^:private execution-window-seconds
+  (let [compute (get-in contract/contract-v1 [:limits :compute])]
+    (+ (:timeout-seconds compute) (:cleanup-margin-seconds compute))))
+
+(defn- execution-window-elapsed? [job now]
+  (when-let [started-at (:dispatch-started-at job)]
+    (not (.isBefore ^Instant now
+                    (.plusSeconds ^Instant started-at
+                                  execution-window-seconds)))))
+
 (def ^:private tasks-post
   (com.google.cloud.tasks.v2.HttpMethod/valueOf "POST"))
 
@@ -1270,18 +1280,23 @@
                          this (:id job) (:attempt job))]
                     (when (lifecycle/terminal-transition? terminal)
                       (swap! terminal-jobs conj terminal)))
-                  (lifecycle/fail-preparation-attempt!
-                   this (:id job) (:attempt job)
-                   {:failure-code "derivative_failed"
-                    :retryable true}))
+                  (let [terminal
+                        (lifecycle/fail-preparation-attempt!
+                         this (:id job) (:attempt job)
+                         {:failure-code "derivative_failed"
+                          :retryable true})]
+                    (when (lifecycle/terminal-transition? terminal)
+                      (swap! terminal-jobs conj terminal))))
                 (swap! repaired inc))))
 
           (= :cancellation-requested (:state job))
           (when (:execution job)
             (let [state
                   (lifecycle/preparation-execution-state
-                   launcher (:execution job))]
-              (if (= :cancelled state)
+                   launcher (:execution job))
+                  timed-out? (execution-window-elapsed? job now)]
+              (cond
+                (= :cancelled state)
                 (do
                   (let [terminal
                         (lifecycle/acknowledge-preparation-cancellation!
@@ -1289,6 +1304,21 @@
                     (when (lifecycle/terminal-transition? terminal)
                       (swap! terminal-jobs conj terminal)))
                   (swap! repaired inc))
+
+                timed-out?
+                (do
+                  (try
+                    (lifecycle/cancel-preparation-execution!
+                     launcher (:execution job))
+                    (catch Throwable _ nil))
+                  (let [terminal
+                        (lifecycle/acknowledge-preparation-cancellation!
+                         this (:id job) (:attempt job))]
+                    (when (lifecycle/terminal-transition? terminal)
+                      (swap! terminal-jobs conj terminal)))
+                  (swap! repaired inc))
+
+                :else
                 (try
                   (lifecycle/cancel-preparation-execution!
                    launcher (:execution job))
@@ -1297,16 +1327,29 @@
           (and (= :running (:state job)) (:execution job))
           (let [state
                 (lifecycle/preparation-execution-state
-                 launcher (:execution job))]
-            (when (contains? #{:failed :cancelled :succeeded :missing}
-                             state)
-              (lifecycle/fail-preparation-attempt!
-               this (:id job) (:attempt job)
-               {:failure-code
-                (if (= :cancelled state)
-                  "derivative_cancel_failed"
-                  "derivative_failed")
-                :retryable true})
+                 launcher (:execution job))
+                timed-out? (execution-window-elapsed? job now)]
+            (when (or timed-out?
+                      (contains? #{:failed :cancelled :succeeded :missing}
+                                 state))
+              (when timed-out?
+                (try
+                  (lifecycle/cancel-preparation-execution!
+                   launcher (:execution job))
+                  (catch Throwable _ nil)))
+              (let [terminal
+                    (lifecycle/fail-preparation-attempt!
+                     this (:id job) (:attempt job)
+                     {:failure-code
+                      (cond
+                        timed-out?
+                        "derivative_timeout"
+                        (= :cancelled state)
+                        "derivative_cancel_failed"
+                        :else "derivative_failed")
+                      :retryable true})]
+                (when (lifecycle/terminal-transition? terminal)
+                  (swap! terminal-jobs conj terminal)))
               (swap! repaired inc)))))
       (cond-> {:repairedJobs @repaired}
         (seq @terminal-jobs) (assoc :terminalJobs @terminal-jobs))))
@@ -1390,7 +1433,7 @@
           (.document
            (.collection firestore "production-derivative-active-jobs-v1")
            "admission")
-          failed
+          transition-result
           (transaction!
            firestore
            (fn [transaction]
@@ -1413,8 +1456,14 @@
                (.set ^Transaction transaction job-ref (job-doc updated))
                (.set ^Transaction transaction admission-ref
                      (admission-doc (remove-active admission job-id)))
-               updated)))]
-      (preparation-resource failed)))
+               {:before job :after updated})))]
+      (cond-> (preparation-resource (:after transition-result))
+        (and (not (contains? #{:succeeded :failed :cancelled
+                               :expired :revoked}
+                             (get-in transition-result [:before :state])))
+             (contains? #{:succeeded :failed :cancelled :expired :revoked}
+                        (get-in transition-result [:after :state])))
+        lifecycle/with-terminal-transition)))
   (acknowledge-preparation-cancellation! [_ job-id attempt]
     (let [job-ref (.document
                    (.collection firestore "production-derivative-preparation-jobs-v1") job-id)

@@ -604,3 +604,62 @@
         (finally
           (.close firestore))))
     (is true "Firestore emulator test is run by the targeted emulator command")))
+
+(deftest reconciliation-terminalizes-an-execution-past-its-bounded-window
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId "derivative-timeout-recovery-test")
+                        (.setEmulatorHost host)
+                        .build
+                        .getService)
+          _clean (clean-firestore! firestore)
+          directory (admin-gcp/member-directory firestore "owner@example.com")
+          member (admin/authorize-member! directory "owner@example.com"
+                                          "private-owner")
+          request (assoc request
+                         :membership-version (:membership-version member))
+          current-time (atom now)
+          cancelled (atom [])
+          queue
+          (reify derivative/PreparationQueue
+            (enqueue-preparation! [_ _ _])
+            (delete-preparation-task! [_ _ _]))
+          launcher
+          (reify derivative/PreparationLauncher
+            (launch-preparation! [_ job-id attempt]
+              (str "executions/" job-id "/attempts/" attempt))
+            (cancel-preparation-execution! [_ execution]
+              (swap! cancelled conj execution))
+            (preparation-execution-state [_ _] :running))
+          service
+          (gcp/preparation-service
+           {:firestore firestore
+            :queue queue
+            :launcher launcher
+            :member-directory directory
+            :fingerprint-secret "fixture-secret"
+            :clock (mutable-clock current-time)})]
+      (try
+        (let [job-id
+              (get-in (derivative/submit-preparation!
+                       service "bounded-timeout" request)
+                      [:job :id])
+              execution (str "executions/" job-id "/attempts/1")]
+          (derivative/dispatch-preparation! service job-id 1)
+          (reset! current-time (.plusSeconds now 961))
+          (let [result (derivative/reconcile-preparations! service)
+                job (derivative/get-preparation service job-id)]
+            (is (= 1 (:repairedJobs result)))
+            (is (= [{:state "failed"
+                     :attempt 1
+                     :failureCode "derivative_timeout"
+                     :retryable true}]
+                   (mapv #(select-keys % [:state :attempt :failureCode
+                                          :retryable])
+                         (:terminalJobs result))))
+            (is (= "failed" (:state job)))
+            (is (= "derivative_timeout" (:failureCode job)))
+            (is (= [execution] @cancelled))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by the targeted emulator command")))

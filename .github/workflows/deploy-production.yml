@@ -247,7 +247,8 @@ jobs:
             -lock-timeout=5m \
             -out="$plan_path" \
             -var="renderer_image=$RENDERER_IMAGE" \
-            -var="api_service_url=$API_SERVICE_URL"
+            -var="api_service_url=$API_SERVICE_URL" \
+            -var="private_preview_reconciliation_paused=true"
           terraform -chdir=infra/prod show -json "$plan_path" >"$plan_json"
 
           creates="$(jq '[.resource_changes[]? | select(.change.actions == ["create"])] | length' "$plan_json")"
@@ -499,10 +500,12 @@ jobs:
           terraform -chdir=infra/prod plan -input=false \
             -var="renderer_image=$IMAGE_DIGEST" \
             -var="api_service_url=$CLOUD_RUN_SERVICE_URL" \
+            -var="private_preview_reconciliation_paused=false" \
             -target=module.application.google_cloud_run_v2_service.api \
             -target=module.application.google_cloud_run_v2_service.overlay \
             -target=module.application.google_cloud_run_v2_job.renderer \
             -target=google_cloud_run_v2_job.production_private_preview \
+            -target=google_cloud_scheduler_job.production_private_preview_reconcile \
             -out="$runtime_plan"
           terraform -chdir=infra/prod show -json "$runtime_plan" \
             >"$runtime_plan_json"

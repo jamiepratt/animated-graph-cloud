@@ -19,7 +19,10 @@
 (def ^:private cloud-timeout-ms
   (* 1000
      (get-in contract/contract-v1 [:limits :compute :timeout-seconds])))
-(def ^:private cleanup-margin-ms 60000)
+(def ^:private cleanup-margin-ms
+  (* 1000
+     (get-in contract/contract-v1
+             [:limits :compute :cleanup-margin-seconds])))
 (def ^:private worker-compute-timeout-ms
   (- cloud-timeout-ms cleanup-margin-ms))
 
@@ -216,22 +219,14 @@
          job-id attempt)
         source (:source record)
         asset (:asset record)
-        access
-        (require-source-access!
-         (source-access! service job-id attempt)
-         (:file-id source))
-        output-path
-        (or output-path
-            (Files/createTempFile
-             "agg-derivative-output-" ".mp4"
-             (make-array FileAttribute 0)))
         cancellation-requested?
         #(preparation-cancellation-requested? service job-id attempt)
         cancelled?
         (bounded-cancellation-check
          cancellation-requested?)
         published (atom nil)
-        phase (atom :encode)
+        working-output-path (atom output-path)
+        phase (atom :startup)
         attempt-started-nanos (System/nanoTime)
         correlation
         (merge
@@ -246,9 +241,25 @@
     (observability/with-event-context
       {:fields correlation
        :event-sink (:event-sink dependencies)}
-      (Files/deleteIfExists ^Path output-path)
       (try
-        (let [encode-started-nanos (System/nanoTime)
+        (emit-worker-event!
+         "derivative_worker_started"
+         {:severity "INFO"
+          :operation "derivative_preparation"
+          :status "started"})
+        (let [access
+              (require-source-access!
+               (source-access! service job-id attempt)
+               (:file-id source))
+              output-path
+              (or output-path
+                  (Files/createTempFile
+                   "agg-derivative-output-" ".mp4"
+                   (make-array FileAttribute 0)))
+              _ (reset! working-output-path output-path)
+              _ (Files/deleteIfExists ^Path output-path)
+              _ (reset! phase :encode)
+              encode-started-nanos (System/nanoTime)
               _ (emit-worker-event!
                  "derivative_encode_started"
                  {:severity "INFO"
@@ -394,7 +405,8 @@
                 (delete-derivative! service @published)
                 (catch Throwable _
                   nil)))
-            (Files/deleteIfExists ^Path output-path)
+            (when-let [output-path @working-output-path]
+              (Files/deleteIfExists ^Path output-path))
             (let [terminal
                   (try
                     (report-failure! dependencies job-id attempt error)
@@ -416,7 +428,8 @@
                         :operation "derivative_preparation")))))
           (throw error))
         (finally
-          (Files/deleteIfExists ^Path output-path)
+          (when-let [output-path @working-output-path]
+            (Files/deleteIfExists ^Path output-path))
           (emit-worker-event!
            "derivative_cleanup_completed"
            {:severity "INFO"

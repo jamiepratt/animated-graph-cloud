@@ -431,7 +431,9 @@
   (is (not (str/includes?
             production-terraform
             "resource \"google_monitoring_notification_channel\" \"production_private_preview_owner\"")))
-  (is (str/includes? production-terraform "paused           = true"))
+  (is (str/includes?
+       production-terraform
+       "paused           = var.private_preview_reconciliation_paused"))
   (doseq [metric ["production_private_preview_latency_ms"
                   "production_private_preview_failures"
                   "production_private_preview_queue_age_ms"
@@ -615,6 +617,10 @@
                       "Plan and apply production Terraform")
         candidate-deploy
         (str/index-of production-workflow "Deploy private API candidate")
+        full-reconcile
+        (or (production-workflow-section
+             "name: Plan and apply production Terraform"
+             "name: Verify production Picker API key") "")
         runtime-reconcile
         (or (production-workflow-section
              "name: Reconcile production runtimes through Terraform"
@@ -627,8 +633,17 @@
          "AGG_DERIVATIVE_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL"))
     (is (not (str/includes? production-workflow "agg-proto")))
     (is (str/includes?
+         full-reconcile
+         "-var=\"private_preview_reconciliation_paused=true\""))
+    (is (str/includes?
          runtime-reconcile
          "-target=google_cloud_run_v2_job.production_private_preview"))
+    (is (str/includes?
+         runtime-reconcile
+         "-target=google_cloud_scheduler_job.production_private_preview_reconcile"))
+    (is (str/includes?
+         runtime-reconcile
+         "-var=\"private_preview_reconciliation_paused=false\""))
     (is (str/includes? runtime-reconcile
                        "-var=\"renderer_image=$IMAGE_DIGEST\""))
     (is (str/includes? runtime-reconcile

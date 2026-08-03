@@ -169,7 +169,7 @@ resource "google_cloud_scheduler_job" "production_private_preview_reconcile" {
   schedule         = "* * * * *"
   time_zone        = "Etc/UTC"
   attempt_deadline = "60s"
-  paused           = true
+  paused           = var.private_preview_reconciliation_paused
 
   retry_config {
     retry_count          = 3
