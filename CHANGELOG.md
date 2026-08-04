@@ -8,6 +8,10 @@ User-visible additions, changes, and fixes for Alpha Compose.
 
 - Added private video preview preparation for browser-incompatible source videos. The original Drive file is unchanged, each private preview expires after 24 hours, and every charged attempt uses the displayed processing allowance.
 
+### Fixed
+
+- Prepared private videos now honor nonzero byte-range requests when seeking during playback.
+
 ## 0.6.0 - 2026-07-30
 
 ### Added

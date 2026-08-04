@@ -7,7 +7,11 @@
             [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]])
-  (:import (java.io ByteArrayInputStream)
+  (:import (com.google.cloud ReadChannel)
+           (com.google.cloud.storage BlobInfo Storage StorageOptions)
+           (java.io ByteArrayInputStream)
+           (java.lang.reflect InvocationHandler Proxy)
+           (java.nio ByteBuffer)
            (java.time Clock Instant ZoneOffset)
            (java.util Arrays)))
 
@@ -75,6 +79,139 @@
   (test-http/send-bytes!
    method (str "http://127.0.0.1:" port path)
    body headers))
+
+(defn- absolute-limit-channel [bytes]
+  (let [position (atom 0)
+        limit (atom Long/MAX_VALUE)
+        open? (atom true)]
+    (reify ReadChannel
+      (read [_ buffer]
+        (let [available (- (min @limit (alength ^bytes bytes)) @position)
+              length (min (.remaining ^ByteBuffer buffer) available)]
+          (if (pos? length)
+            (do
+              (.put ^ByteBuffer buffer ^bytes bytes (int @position) (int length))
+              (swap! position + length)
+              length)
+            -1)))
+      (seek [_ offset]
+        (reset! position offset))
+      (limit [this offset]
+        (reset! limit offset)
+        this)
+      (limit [_]
+        @limit)
+      (setChunkSize [_ _])
+      (isOpen [_]
+        @open?)
+      (close [_]
+        (reset! open? false))
+      (capture [_]
+        nil))))
+
+(defn- gcs-store [stored-asset bytes]
+  (let [blob (atom nil)
+        service
+        (Proxy/newProxyInstance
+         (.getClassLoader Storage)
+         (into-array Class [Storage])
+         (reify InvocationHandler
+           (invoke [_ proxy method _]
+             (case (.getName method)
+               "get" @blob
+               "reader" (absolute-limit-channel bytes)
+               "getOptions" (StorageOptions/getDefaultInstance)
+               "toString" "playback-test-storage"
+               "hashCode" (System/identityHashCode proxy)
+               "equals" false
+               (throw (UnsupportedOperationException.
+                       (.getName method)))))))
+        builder
+        (BlobInfo/newBuilder
+         "playback-test-bucket"
+         (:object-key stored-asset)
+         (long (:generation stored-asset)))
+        set-size (.getDeclaredMethod (class builder) "setSize"
+                                     (into-array Class [Long]))
+        _ (.setAccessible set-size true)
+        _ (.invoke set-size builder
+                   (object-array [(Long/valueOf (:size stored-asset))]))
+        info
+        (-> builder
+            (.setContentType (:content-type stored-asset))
+            (.setMetadata
+             {"profileVersion" (:profile-version stored-asset)})
+            (.setCrc32c "test-crc32c")
+            .build)
+        as-blob (.getDeclaredMethod BlobInfo "asBlob"
+                                    (into-array Class [Storage]))]
+    (.setAccessible as-blob true)
+    (reset! blob (.invoke as-blob info (object-array [service])))
+    (storage/gcs-asset-store service "playback-test-bucket")))
+
+(deftest nonzero-open-ended-prepared-playback-starts-at-requested-byte
+  (let [clock (Clock/fixed
+               (Instant/parse "2026-07-30T10:00:00Z")
+               ZoneOffset/UTC)
+        {:keys [system session cookie csrf]} (auth-fixture clock)
+        events (atom [])
+        service
+        (reify derivative/PreparationPlaybackAccess
+          (preparation-playback-asset [_ job-id identity]
+            (when (and (= preparation-id job-id)
+                       (= owner (select-keys identity [:subject :email])))
+              asset)))
+        port (test-http/available-port)
+        server
+        (api/start!
+         port
+         {:auth-system system
+          :clock clock
+          :derivative-preparation-service service
+          :derivative-asset-store
+          (gcs-store asset (.getBytes "0123456789abcdefghij"))
+          :event-sink
+          (fn [event fields]
+            (swap! events conj (assoc fields :event event)))})]
+    (try
+      (let [created
+            (request!
+             port :post
+             (str "/v1/derivative-preparations/" preparation-id
+                  "/playback-sessions")
+             "{}"
+             {"Content-Type" "application/json"
+              "Cookie" (str "__session=" cookie)
+              "X-CSRF-Token" csrf})
+            playback-url
+            (get (json/read-str (String. ^bytes (.body created)))
+                 "playbackUrl")
+            playback-cookie
+            (-> (last (.allValues (.headers created) "Set-Cookie"))
+                (.split ";" 2)
+                first)
+            response
+            (request! port :get playback-url nil
+                      {"Cookie"
+                       (str "agg_session=" session "; " playback-cookie)
+                       "Range" "bytes=15-"})]
+        (is (= 206 (.statusCode response)))
+        (is (= "fghij" (String. ^bytes (.body response))))
+        (is (= "bytes 15-19/20"
+               (.orElse
+                (.firstValue (.headers response) "Content-Range") "")))
+        (is (= "5"
+               (.orElse
+                (.firstValue (.headers response) "Content-Length") "")))
+        (is (= {:rangeStart 15
+                :rangeEnd 19
+                :bytesRequested 5
+                :bytesTransferred 5}
+               (select-keys (second @events)
+                            [:rangeStart :rangeEnd
+                             :bytesRequested :bytesTransferred]))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
 
 (deftest completed-production-preview-mints-opaque-bounded-playback
   (let [clock (Clock/fixed

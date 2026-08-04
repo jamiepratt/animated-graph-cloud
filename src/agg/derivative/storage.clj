@@ -292,7 +292,8 @@
                         Storage$BlobSourceOption
                         [(Storage$BlobSourceOption/generationMatch generation)]))]
             (.seek channel start)
-            (.limit channel length)
+            ;; ReadChannel limits are absolute exclusive offsets.
+            (.limit channel (inc end))
             (let [buffer (ByteBuffer/wrap bytes)]
               (loop []
                 (when (.hasRemaining buffer)
