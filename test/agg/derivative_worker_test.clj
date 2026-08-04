@@ -4,6 +4,8 @@
             [agg.derivative.storage :as storage]
             [agg.derivative.worker :as worker]
             [agg.drive.range-proxy :as range-proxy]
+            [agg.logs.core :as logs]
+            [agg.observability :as observability]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]])
   (:import (java.io Closeable)
@@ -32,6 +34,137 @@
    :source-has-audio? true
    :output-path (Path/of "/tmp/opaque-output.mp4"
                          (make-array String 0))})
+
+(def ^:private production-runtime-environment
+  {"AGG_DERIVATIVE_MAX_SOURCE_DURATION_SECONDS" "480"
+   "AGG_DERIVATIVE_MAX_SOURCE_BYTES" "2147483648"
+   "AGG_DERIVATIVE_MAX_UPSTREAM_BYTES" "2415919104"
+   "AGG_DERIVATIVE_MAX_REQUEST_COUNT" "320"
+   "AGG_DERIVATIVE_MAX_RANGE_BYTES" "8388608"
+   "AGG_DERIVATIVE_MAX_OUTPUT_BYTES" "268435456"})
+
+(deftest production-worker-persists-startup-and-terminal-lifecycle-events
+  (let [job-id "00000000-0000-0000-0000-000000000194"
+        request-id "00000000-0000-0000-0000-000000000238"
+        store (logs/in-memory-store)
+        private-values ["private-file" "private-owner" "private-authority"
+                        "private-object-key"]]
+    (try
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"source authority unavailable"
+           (worker/run-cloud-worker!
+            ["--job-id" job-id "--attempt" "1"]
+            production-runtime-environment
+            {:service :service
+             :observability-log-store store
+             :load-preparation-attempt
+             (fn [_ _ _]
+               {:job-id job-id
+                :environment "production"
+                :attempt 1
+                :profile worker/profile
+                :asset {:id job-id :object-key "private-object-key"}
+                :source {:file-id "private-file"
+                         :bytes 4096
+                         :duration-seconds 10}
+                :owner {:subject "private-owner"}
+                :observability {:request-id request-id
+                                :reservation-minor-units 125}})
+             :source-access!
+             (fn [& _]
+               (throw
+                (ex-info "source authority unavailable"
+                         {:type ::source-authority-unavailable
+                          :access-token "private-authority"})))
+             :fail-preparation-attempt!
+             (fn [& _] {:state "failed"})})))
+      (let [entries (logs/list-logs store {:component "derivative"})
+            fields (mapv :fields entries)
+            events (set (map :event fields))]
+        (is (every? events
+                    ["derivative_worker_started"
+                     "derivative_preparation_terminal"]))
+        (is (every? #(= request-id (:requestId %)) fields))
+        (is (every? #(= "production" (:environment %)) fields))
+        (doseq [private-value private-values]
+          (is (not (str/includes? (pr-str fields) private-value)))))
+      (finally
+        (observability/configure-persistence! nil)))))
+
+(deftest persistence-failure-does-not-fail-or-duplicate-derivative-work
+  (let [job-id "00000000-0000-0000-0000-000000000194"
+        output (Files/createTempFile
+                "agg-worker-persistence-failure-" ".mp4"
+                (make-array FileAttribute 0))
+        calls (atom [])
+        unavailable-store
+        (reify logs/LogStore
+          (append-log! [_ _]
+            (throw (ex-info "persistence unavailable" {})))
+          (list-logs [_ _] []))]
+    (try
+      (is (= {:id job-id :state "succeeded"}
+             (worker/run-cloud-worker!
+              ["--job-id" job-id "--attempt" "1"]
+              production-runtime-environment
+              {:service :service
+               :observability-log-store unavailable-store
+               :output-path output
+               :load-preparation-attempt
+               (fn [_ _ _]
+                 {:job-id job-id
+                  :environment "production"
+                  :attempt 1
+                  :profile worker/profile
+                  :asset {:id job-id :object-key "private-object-key"}
+                  :source {:file-id "private-file"
+                           :bytes 4096
+                           :duration-seconds 10}
+                  :owner {:subject "private-owner"}
+                  :observability
+                  {:request-id "00000000-0000-0000-0000-000000000238"}})
+               :source-access!
+               (fn [& _]
+                 {:gateway :gateway
+                  :access-token "private-authority"
+                  :file-id "private-file"})
+               :preparation-cancellation-requested? (constantly false)
+               :start-source-proxy!
+               (fn [_]
+                 (proxy {:upstream-bytes 4096
+                         :request-count 1
+                         :retry-count 0
+                         :cache-hit-count 0
+                         :failure-reason nil}))
+               :inspect-source! (fn [_] {:width 320
+                                         :height 180
+                                         :audio? true})
+               :encode!
+               (fn [request]
+                 (swap! calls conj :encode)
+                 {:output-path (:output-path request)
+                  :content-type "video/mp4"
+                  :output-bytes 2048
+                  :duration-seconds 10.0
+                  :video {:codec "h264"}
+                  :audio {:codec "aac"}
+                  :fast-start? true})
+               :publish-derivative!
+               (fn [_ _]
+                 (swap! calls conj :publish)
+                 {:generation 42
+                  :size 2048
+                  :content-type "video/mp4"
+                  :profile-version (:version worker/profile)})
+               :complete-preparation-attempt!
+               (fn [_ _ _ _]
+                 (swap! calls conj :complete)
+                 {:id job-id :state "succeeded"})})))
+      (is (= [:encode :publish :complete] @calls))
+      (finally
+        (Files/deleteIfExists output)
+        (observability/configure-persistence! nil)))))
 
 (deftest directly-playable-sources-never-open-or-encode
   (let [calls (atom [])]

@@ -4,6 +4,7 @@
             [agg.derivative.lifecycle :as lifecycle]
             [agg.drive.range-proxy :as range-proxy]
             [agg.errors :as errors]
+            [agg.logs.core :as logs]
             [agg.observability :as observability]
             [agg.render.derivative :as render-derivative]
             [clojure.string :as str])
@@ -444,8 +445,12 @@
 
 (defn- cloud-dependencies []
   (let [worker-service
-        (required-resolve 'agg.derivative.gcp/worker-service)]
-    {:service (worker-service)
+        (required-resolve 'agg.derivative.gcp/worker-service)
+        service (worker-service)
+        firestore-store
+        (required-resolve 'agg.logs.gcp/firestore-store)]
+    {:service service
+     :observability-log-store (firestore-store (:firestore service))
      :load-preparation-attempt
      (required-resolve
       'agg.derivative.lifecycle/load-preparation-attempt)
@@ -468,10 +473,20 @@
      (required-resolve
       'agg.derivative.lifecycle/complete-preparation-attempt!)}))
 
+(defn run-cloud-worker!
+  "Runs the production worker with best-effort persistent observability."
+  ([args]
+   (run-cloud-worker! args (System/getenv) (cloud-dependencies)))
+  ([args environment dependencies]
+   (runtime-limits-from-environment environment)
+   (observability/configure-persistence!
+    (when-let [store (:observability-log-store dependencies)]
+      #(logs/append-log! store %)))
+   (run-cloud-attempt! (parse-options args) dependencies)))
+
 (defn -main [& args]
   (try
-    (runtime-limits-from-environment (System/getenv))
-    (run-cloud-attempt! (parse-options args) (cloud-dependencies))
+    (run-cloud-worker! args)
     nil
     (catch Throwable _
       (System/exit 1))))
