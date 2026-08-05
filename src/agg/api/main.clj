@@ -8,7 +8,7 @@
             [agg.derivative.storage :as derivative-storage]
             [agg.drive.core :as drive]
             [agg.drive.gcp :as drive-gcp]
-            [agg.early-access.core :as early-access]
+            [agg.early-access.core :as product-updates]
             [agg.jobs.gcp :as gcp]
             [agg.jobs.lifecycle :as jobs]
             [agg.logs.core :as logs]
@@ -1166,7 +1166,7 @@
                        [(browser-cookie-header cookie)])))
 
 (defn- finish-login!
-  [exchange auth-system early-access-system dependencies request-id]
+  [exchange auth-system dependencies request-id]
   (let [params (query-params exchange)
         result (auth/finish-login! auth-system
                                    {:code (get params "code")
@@ -1177,32 +1177,17 @@
       (let [failure (oauth-callback-failure ::auth/not-allowlisted)]
         (clear-browser-session! exchange)
         (log-oauth-callback-failure! dependencies request-id failure)
-        (if (and (browser-html-request? exchange) early-access-system)
-          (respond! exchange 403 "text/html; charset=utf-8"
-                    (ui/early-access-page
-                     {:email (:verified-email result)
-                      :proof (early-access/issue-proof
-                              early-access-system
-                              (:verified-email result))
-                      :request-id request-id}))
-          (respond-oauth-callback-failure! exchange failure request-id)))
+        (respond-oauth-callback-failure! exchange failure request-id))
       (respond-redirect! exchange "/"
                          [(session-cookie (:session result))
                           (clear-legacy-oauth-cookie)]))))
 
-(defn- bounded-form-value [value limit]
-  (let [value (str/trim (or value ""))]
-    (subs value 0 (min limit (count value)))))
-
-(defn- retry-contact-fields [early-access-system form]
-  (try
-    (let [{:keys [email]} (early-access/verify-proof!
-                           early-access-system (get form "proof"))]
-      {:email email
-       :proof (get form "proof")
-       :instagram (bounded-form-value (get form "instagram") 64)
-       :message (bounded-form-value (get form "message") 2000)})
-    (catch clojure.lang.ExceptionInfo _ nil)))
+(defn- signup-page [product-updates-system form feedback]
+  (ui/anonymous-page
+   (cond-> {:proof (product-updates/issue-proof product-updates-system)
+            :feedback feedback}
+     (<= (count (or (get form "email") "")) 254)
+     (assoc :email (get form "email")))))
 
 (defn- safe-upstream-status [error]
   (let [status (:status (ex-data error))]
@@ -1221,87 +1206,80 @@
       (and (integer? column) (<= 1 column 1000000000000))
       (assoc :sourceColumn column))))
 
-(defn- safe-early-access-boundary-error [cause]
+(defn- safe-product-updates-boundary-error [cause]
   (try
-    (errors/raise! "Early-access delivery failed unexpectedly"
-                   {:type ::early-access-delivery-failed
+    (errors/raise! "Product-updates delivery failed unexpectedly"
+                   {:type ::product-updates-delivery-failed
                     :retryable true}
                    cause)
     (catch clojure.lang.ExceptionInfo error
       error)))
 
-(defn- respond-early-access-delivery-failure!
-  [exchange early-access-system dependencies request-id form error]
+(defn- respond-product-updates-delivery-failure!
+  [exchange product-updates-system dependencies request-id form error]
   (let [upstream-status (safe-upstream-status error)
         response-status (if (= 503 upstream-status) 503 502)]
     (emit-event!
-     dependencies "early_access_notification_failed"
+     dependencies "product_updates_notification_failed"
      (merge {:severity "ERROR"
              :requestId request-id
-             :category "early_access_delivery"
+             :category "product_updates_delivery"
              :retryable (not= false (:retryable (ex-data error)))}
             (when upstream-status
               {:upstreamStatus upstream-status})
             (safe-error-source error)))
     (respond! exchange response-status "text/html; charset=utf-8"
-              (ui/early-access-page
-               (merge
-                (retry-contact-fields early-access-system form)
-                {:feedback
-                 {:kind :failure
-                  :title "Request not sent"
-                  :message (str "Alpha Compose could not send your request. "
-                                "Retry below or email me@jamiep.org directly.")}})))))
+              (signup-page
+               product-updates-system form
+               {:kind :failure
+                :title "Signup not sent"
+                :message (str "Alpha Compose could not send your signup. "
+                              "Please retry below.")}))))
 
-(defn- early-access-request!
-  [exchange early-access-system dependencies request-id]
+(defn- product-updates-request!
+  [exchange product-updates-system dependencies request-id]
   (let [form (request-form exchange)]
     (try
-      (early-access/submit!
-       early-access-system
+      (product-updates/submit!
+       product-updates-system
        {:proof (get form "proof")
-        :email (get form "email")
-        :instagram (get form "instagram")
-        :message (get form "message")})
+        :email (get form "email")})
       (respond! exchange 200 "text/html; charset=utf-8"
-                (ui/early-access-page
+                (ui/anonymous-page
                  {:feedback {:kind :success
-                             :title "Request sent"
-                             :message (str "Your request was sent. Alpha Compose "
-                                           "did not create a session, membership, "
-                                           "Drive grant, or render.")}}))
+                             :title "You are signed up"
+                             :message (str "Thanks. Your email was sent for "
+                                           "product-update notifications and "
+                                           "was not retained by Alpha Compose.")}}))
       (catch clojure.lang.ExceptionInfo error
         (let [type (:type (ex-data error))]
           (cond
-            (contains? #{::early-access/invalid-proof
-                         ::early-access/expired-proof}
+            (contains? #{::product-updates/invalid-proof
+                         ::product-updates/expired-proof}
                        type)
             (respond! exchange 400 "text/html; charset=utf-8"
-                      (ui/early-access-page
-                       {:feedback
-                        {:kind :failure
-                         :title "Request not verified"
-                         :message (str "Alpha Compose could not verify this request. "
-                                       "The proof may be missing, changed, or expired.")}}))
+                      (signup-page
+                       product-updates-system form
+                       {:kind :failure
+                        :title "Signup expired"
+                        :message (str "This signup could not be verified. "
+                                      "Please retry with the refreshed form below.")}))
 
-            (= ::early-access/invalid-submission type)
+            (= ::product-updates/invalid-submission type)
             (respond! exchange 400 "text/html; charset=utf-8"
-                      (ui/early-access-page
-                       (merge
-                        (retry-contact-fields early-access-system form)
-                        {:feedback
-                         {:kind :failure
-                          :title "Check your details"
-                          :message (str "Instagram handles may contain at most 64 "
-                                        "characters and messages at most 2,000.")}})))
+                      (signup-page
+                       product-updates-system form
+                       {:kind :failure
+                        :title "Check your email"
+                        :message "Enter a valid email address and try again."}))
 
             :else
-            (respond-early-access-delivery-failure!
-             exchange early-access-system dependencies request-id form error))))
+            (respond-product-updates-delivery-failure!
+             exchange product-updates-system dependencies request-id form error))))
       (catch Throwable error
-        (respond-early-access-delivery-failure!
-         exchange early-access-system dependencies request-id form
-         (safe-early-access-boundary-error error))))))
+        (respond-product-updates-delivery-failure!
+         exchange product-updates-system dependencies request-id form
+         (safe-product-updates-boundary-error error))))))
 
 (defn- logout! [exchange auth-system]
   (let [user (require-session-user! exchange auth-system)]
@@ -1339,7 +1317,7 @@
       (catch Throwable _ nil))))
 
 (defn- landing! [^HttpExchange exchange auth-system token-service admin-service
-                 log-store picker-api-key picker-app-id]
+                 log-store picker-api-key picker-app-id product-updates-system]
   (let [user (when-let [_session (session-token exchange auth-system)]
                (require-user! exchange auth-system))
         csrf (when user (auth/issue-csrf-token auth-system user))
@@ -1357,7 +1335,9 @@
                                         (admin/administrator? (:role user)))
                                (admin/list-members admin-service user))
                     :logs-enabled? (boolean log-store)})
-          ui/anonymous-page)]
+          (ui/anonymous-page
+           {:proof (when product-updates-system
+                     (product-updates/issue-proof product-updates-system))}))]
     (doto (.getResponseHeaders exchange)
       (.set "Cache-Control" "no-store")
       (.set "Referrer-Policy" "no-referrer")
@@ -2347,7 +2327,7 @@
                               derivative-asset-store
                               upload-signer auth-system picker-api-key
                               picker-app-id token-service admin-service log-store
-                              early-access-system service-profile clock]
+                              product-updates-system service-profile clock]
                        :as dependencies}]
   (reify HttpHandler
     (handle [_ exchange]
@@ -2405,7 +2385,8 @@
 
                                   (and auth-system (= "GET" method) (= "/" path))
                                   (landing! exchange auth-system token-service admin-service
-                                            log-store picker-api-key picker-app-id)
+                                            log-store picker-api-key picker-app-id
+                                            product-updates-system)
 
                                   (and (= "GET" method) (= "/faq" path))
                                   (respond! exchange 200 "text/html; charset=utf-8" ui/faq-page)
@@ -2422,14 +2403,14 @@
 
                                   (and auth-system (= "GET" method)
                                        (= "/v1/auth/login/callback" path))
-                                  (finish-login! exchange auth-system
-                                                 early-access-system dependencies
+                                  (finish-login! exchange auth-system dependencies
                                                  request-id)
 
-                                  (and early-access-system (= "POST" method)
-                                       (= "/v1/early-access/request" path))
-                                  (early-access-request! exchange early-access-system
-                                                         dependencies request-id)
+                                  (and product-updates-system (= "POST" method)
+                                       (= "/v1/product-updates/signup" path))
+                                  (product-updates-request!
+                                   exchange product-updates-system dependencies
+                                   request-id)
 
                                   (and auth-system (= "POST" method)
                                        (= "/v1/auth/logout" path))

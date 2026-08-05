@@ -395,7 +395,9 @@ Create the Resend account, add `alphacompose.com`, copy only the exact DNS
 records Resend supplies into the authoritative DNS provider, and wait for
 Resend to report the domain verified. Do not infer or invent DNS values. The
 sender configured by both workflows is
-`Alpha Compose <early-access@alphacompose.com>`.
+`Alpha Compose <early-access@alphacompose.com>`. This existing sender and the
+existing `resend-api-key` secret deliver product-updates signup notifications;
+no new Resend, DNS, secret, or Terraform bootstrap is required for that change.
 
 #### 2. Apply the Resend Terraform bootstrap
 

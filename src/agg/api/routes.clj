@@ -18,7 +18,7 @@
                path) :assets
     (or (re-matches #"/v1/auth/login/(?:start|callback)" path)
         (= path "/v1/auth/logout")) :auth
-    (or (= path "/v1/early-access/request")
+    (or (= path "/v1/product-updates/signup")
         (= path "/")
         (contains? #{"/faq" "/privacy" "/terms"} path)) :ui
     (or (re-matches #"/v1/(?:drive/(?:picker|picker/diagnostic|playback-sessions|playback-analyses|recording-clock-inspections)|ui/project-source-validation)" path)

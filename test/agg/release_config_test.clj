@@ -219,7 +219,7 @@
                             runbook))))
     (is (not (re-find #"openssl rand 48 \|" runbook)))))
 
-(deftest early-access-email-release-is-secret-backed-and-checkpointed
+(deftest product-updates-email-release-reuses-secret-and-sender-configuration
   (let [shared (slurp "infra/dev/main.tf")
         production-module (slurp "infra/prod/main.tf")
         production-workflow (slurp ".github/workflows/deploy-production.yml")
@@ -241,17 +241,17 @@
     (is (str/includes? production-workflow
                        "AGG_RESEND_API_KEY=resend-api-key:latest"))
     (is (str/includes? production-workflow
-                       "AGG_EARLY_ACCESS_SENDER=$EARLY_ACCESS_SENDER"))
+                       "AGG_PRODUCT_UPDATES_SENDER=$PRODUCT_UPDATES_SENDER"))
     (is (str/includes? production-workflow
-                       "AGG_EARLY_ACCESS_RECIPIENT=$EARLY_ACCESS_RECIPIENT"))
+                       "AGG_PRODUCT_UPDATES_RECIPIENT=$PRODUCT_UPDATES_RECIPIENT"))
     (is (str/includes? production-workflow
-                       "EARLY_ACCESS_SENDER: Alpha Compose <early-access@alphacompose.com>"))
-    (is (str/includes? production-workflow "EARLY_ACCESS_RECIPIENT: me@jamiep.org"))
+                       "PRODUCT_UPDATES_SENDER: Alpha Compose <early-access@alphacompose.com>"))
+    (is (str/includes? production-workflow "PRODUCT_UPDATES_RECIPIENT: me@jamiep.org"))
     (doseq [setting ["AGG_RESEND_API_KEY"
-                     "AGG_EARLY_ACCESS_SENDER"
-                     "AGG_EARLY_ACCESS_RECIPIENT"]]
+                     "AGG_PRODUCT_UPDATES_SENDER"
+                     "AGG_PRODUCT_UPDATES_RECIPIENT"]]
       (is (str/includes? runtime setting)))
-    (is (str/includes? auth-runtime ":early-access-system"))
+    (is (str/includes? auth-runtime ":product-updates-system"))
     (doseq [position [terraform-apply secret-check image-resolution]]
       (is (number? position)))
     (when (every? number? [terraform-apply secret-check image-resolution])
@@ -269,12 +269,13 @@
                     "gcloud secrets versions disable"
                     "No application image may be pushed or promoted"]]
       (testing manual (is (str/includes? runbook manual))))
-    (doseq [contract ["signed no-session contact flow"
-                      "10 minutes"
-                      "early-access-contact"
+    (doseq [contract ["signed-out homepage"
+                      "10-minute"
+                      "product-updates-signup"
                       "Resend"
                       "Idempotency-Key"
-                      "does not persist"]]
+                      "does not persist"
+                      "No new secret"]]
       (testing contract (is (str/includes? decision contract))))))
 
 (deftest resend-bootstrap-is-terraform-first-and-recoverable-in-both-environments

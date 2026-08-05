@@ -29,7 +29,7 @@
     :trace :revision :operation :status :durationBucket :cacheOutcome
     :profileVersion :environment})
 
-(def ^:private early-access-delivery-event-keys
+(def ^:private product-updates-delivery-event-keys
   #{:severity :component :event :requestId :category :upstreamStatus
     :retryable :sourceFile :sourceLine :sourceColumn})
 
@@ -178,8 +178,8 @@
                         [key value])))
               fields)
         safe-fields
-        (if (= "early_access_notification_failed" (:event safe-fields))
-          (select-keys safe-fields early-access-delivery-event-keys)
+        (if (= "product_updates_notification_failed" (:event safe-fields))
+          (select-keys safe-fields product-updates-delivery-event-keys)
           safe-fields)
         safe-fields
         (if production-correlation?

@@ -5,7 +5,7 @@
             [agg.auth.core :as auth]
             [agg.drive.core :as drive]
             [agg.drive.gcp :as drive-gcp]
-            [agg.early-access.core :as early-access]
+            [agg.early-access.core :as product-updates]
             [agg.early-access.resend :as resend]
             [agg.tokens.core :as tokens]
             [agg.tokens.gcp :as tokens-gcp]
@@ -396,8 +396,8 @@
            session-secret
            oauth-client-credentials tasks-service-account
            scheduler-service-account picker-api-key picker-app-id
-           token-hash-secret resend-api-key early-access-sender
-           early-access-recipient]}]
+           token-hash-secret resend-api-key product-updates-sender
+           product-updates-recipient]}]
   (let [owner-email (required owner-email "AGG_OWNER_EMAIL")
         session-key-bytes (session-key session-secret)
         member-directory (admin-gcp/member-directory firestore owner-email
@@ -418,17 +418,17 @@
                       :grant-store grant-store
                       :drive gateway
                       :drive-token-client oauth})
-        early-access-system
-        (early-access/system
+        product-updates-system
+        (product-updates/system
          {:proof-key session-key-bytes
           :notifier (resend/notifier {:api-key resend-api-key})
-          :sender early-access-sender
-          :recipient early-access-recipient})
+          :sender product-updates-sender
+          :recipient product-updates-recipient})
         token-service
         (tokens/service {:store (tokens-gcp/token-store firestore)
                          :pepper (token-hash-pepper token-hash-secret)})]
     {:auth-system auth-system
-     :early-access-system early-access-system
+     :product-updates-system product-updates-system
      :member-directory member-directory
      :credential-administration grant-store
      :task-token-verifier (task-token-verifier internal-audience)

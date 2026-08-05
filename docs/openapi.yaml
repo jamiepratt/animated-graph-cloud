@@ -54,6 +54,44 @@ paths:
                 properties:
                   status:
                     const: ok
+  /v1/product-updates/signup:
+    post:
+      operationId: signupForProductUpdates
+      summary: Send an anonymous product-updates signup.
+      description: Validates a short-lived signed homepage nonce and the submitted email, then sends one idempotent plain-text notification through Resend without retaining the email in Alpha Compose storage, logs, or analytics.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [proof, email]
+              properties:
+                proof: {type: string, description: Short-lived signed homepage nonce.}
+                email: {type: string, format: email, maxLength: 254}
+      responses:
+        "200":
+          description: Notification accepted and homepage success feedback rendered.
+          content:
+            text/html:
+              schema: {type: string}
+        "400":
+          description: Nonce or email validation failed and homepage retry feedback rendered with a fresh nonce.
+          content:
+            text/html:
+              schema: {type: string}
+        "502":
+          description: Notification delivery failed safely and homepage retry feedback rendered.
+          content:
+            text/html:
+              schema: {type: string}
+        "503":
+          description: Notification provider is temporarily unavailable and homepage retry feedback rendered.
+          content:
+            text/html:
+              schema: {type: string}
   /v1/auth/login/start:
     get:
       operationId: startGoogleLogin

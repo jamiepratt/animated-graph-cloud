@@ -42,6 +42,7 @@ deployment workflow and authenticated owner or admin check complete.
 | Lifecycle and security | Production cancellation, retry, member revocation, stale-lease reconciliation, and accepted-execution adoption are observed. Revoke Google authorization, confirm the session clears and durable submission is not accepted, then use the explicit Continue with Google recovery action and record consent recovery separately. |
 | Private-preview lifecycle | With explicit owner approval for processing allowance, prepare one browser-incompatible source, confirm the original video is unchanged, playback is owner-bound, expiry is 24 hours, and submission through terminal state is discoverable by the response `X-Request-Id` in admin logs. Do not perform this costed check during repository acceptance. |
 | Monitoring | Dashboard and each alert signal are visible; notification delivery to `me@jamiep.org` is confirmed without exposing protected data in logs. |
+| Product updates | Signed-out homepage signup succeeds through Resend, an exact retry is idempotent, safe validation and delivery failures render on the homepage, and no submitted email appears in application storage, analytics, or logs. |
 | Rollback | Push a reviewed revert or restoration commit to protected `main`, or close public ingress using the runbook, then restore the accepted candidate; capture workflow or audit-log records. |
 
 ## Costed concurrency helper

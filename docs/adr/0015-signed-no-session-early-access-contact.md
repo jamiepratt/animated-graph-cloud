@@ -1,63 +1,42 @@
-# 0015: Signed no-session early-access contact
+# 0015: Signed no-session product-updates signup
 
 - Status: Accepted
-- Date: 2026-07-22
+- Date: 2026-08-05
 
 ## Context
 
-A verified Google user who is not an active member previously received only an
-allowlist denial. Alpha Compose needs a bounded way for that person to ask to
-test the product without turning the request into authentication, membership,
-Drive authorization, or retained application data.
-
-The verified email cannot be trusted when posted back by the browser. A retry
-must not send duplicate mail, but Alpha Compose must not persist a request,
-outbox, CRM record, or analytics event.
+Signed-out visitors need a bounded way to ask for Alpha Compose product updates
+without authenticating or creating retained application data. The submitted
+email cannot be trusted without server-side validation. A retry must not send
+duplicate mail, but Alpha Compose must not persist a signup, outbox, CRM record,
+or analytics event.
 
 ## Decision
 
-Use a signed no-session contact flow available only from a verified
-`not-allowlisted` login result. The callback issues a signed proof with the
-distinct purpose `early-access-contact`, the normalized verified email, a
-random opaque notification id, and an expiry of 10 minutes. The proof is posted
-only in the form body. It grants no session or other application capability and
-is rejected when missing, expired, tampered, or used for another purpose.
+The signed-out homepage issues a signed proof with the distinct purpose
+`product-updates-signup`, a random opaque notification id, and a 10-minute
+expiry. The proof is posted only in the form body, grants no application
+capability, and is rejected when missing, expired, tampered, or used for another
+purpose. The server normalizes and validates the submitted email.
 
-The server ignores the posted email and derives Reply-To from the proof. It
-trims the optional Instagram handle and message, enforces their limits, and
-sends one plain-text notification through the Resend HTTPS API. The provider
-`Idempotency-Key` is derived only from the opaque notification id, so an exact
-replay within Resend's idempotency window returns the original result without a
-second email.
+One plain-text notification is sent through the existing Resend notifier. The
+provider `Idempotency-Key` is derived only from the opaque notification id, so
+an exact replay within Resend's idempotency window returns the original result
+without sending a second email.
 
-The Resend client uses bounded connection and request timeouts behind the
-application notifier protocol. Only HTTP 200 with a nonempty response `id` is
-delivery success. Failure telemetry is restricted to category, safe upstream
-status, retryability, request id, and source location.
+The Resend client keeps bounded connection and request timeouts. Only HTTP 200
+with a nonempty response `id` is success. Failure telemetry contains only a
+category, safe upstream status, retryability, request id, and source location.
 
-Alpha Compose does not persist early-access contact data in Firestore, logs,
-analytics, or another application store. Personal data exists only during the
-bounded request and in Resend and the recipient mailbox. Terraform creates the
-`resend-api-key` container and grants only the API runtime payload access. The
-normal workflows inject the secret plus explicit sender and recipient values.
-Development verifies an enabled version before publishing an image. Production
-requires a successful development deployment for the exact release commit
-before any production mutation. The gate has only Actions and repository read
-permissions, accepts only the trusted development workflow on `main` from this
-repository, and fails closed for missing, unfinished, failed, cancelled,
-timed-out, ambiguous, or wrong-commit results. Workflow response fields are
-compared as data and never executed. After the gate, production applies the
-complete Terraform plan first, then verifies the enabled version before
-publishing an image. A targeted, reviewed Terraform bootstrap can create the
-container and IAM in both environments without changing an application
-runtime. Manual recovery dispatches development on `main` first and production
-on `main` only after the exact development run succeeds; no dispatch input
-bypasses the gate.
+Alpha Compose does not persist the submitted email in Firestore, application
+logs, analytics, or another application data store. Personal data exists only
+during bounded request processing and in Resend and the recipient mailbox. The
+existing `resend-api-key` secret, sender address, recipient, IAM, and guarded
+Terraform-first deployment sequence are reused.
 
 ## Consequences
 
-Provider idempotency supplies replay protection without adding an application
+Provider idempotency supplies replay resistance without adding an application
 database. Replays after the provider's idempotency retention window are outside
-the proof's 10-minute lifetime. Release requires manual Resend account creation,
-sender-domain DNS verification, reviewed Terraform bootstrap, and enabled
-development and production secret versions before application promotion.
+the proof's 10-minute lifetime. No new secret, DNS, migration, Terraform import,
+or other manual release checkpoint is required.

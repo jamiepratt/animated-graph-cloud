@@ -64,14 +64,11 @@
 
 (deftest reusable-main-pages-show-one-linked-local-release-identity
   (let [pages
-        {"anonymous" ui/anonymous-page
+        {"anonymous" (ui/anonymous-page {})
          "faq" ui/faq-page
          "privacy" ui/privacy-page
          "terms" ui/terms-page
          "Drive recovery" ui/drive-recovery-page
-         "early access" (ui/early-access-page
-                         {:email "verified@example.com"
-                          :proof "signed-proof"})
          "compose" (ui/page {:user {:email "owner@example.com" :role :owner}
                              :csrf "csrf-test"})
          "tokens" (ui/token-page {:user {:email "owner@example.com"}
