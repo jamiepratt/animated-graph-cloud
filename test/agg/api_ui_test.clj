@@ -1327,9 +1327,11 @@
          "const mount=typeof id==='string'?document.getElementById(id):id,iframe=mount.tagName==='IFRAME'?mount:document.createElement('iframe');"
          "if(iframe!==mount)mount.replaceWith(iframe);let index=0;"
          "const api={getIframe:()=>iframe,getPlaylist:()=>['first123','second456','third789'],getPlaylistIndex:()=>index,playVideoAt:value=>{index=value;window.__youtubeFixture.playCalls.push(value);options.events.onStateChange({target:api});},playVideo:()=>{}};"
-         "setTimeout(()=>options.events."
-         (if fail? "onError" "onReady")
-         "({target:api}),0);return api;}};</script>")
+         "setTimeout(()=>{const callback="
+         (if fail?
+           "options.events.onError"
+           "iframe.referrerPolicy==='no-referrer'?options.events.onError:options.events.onReady")
+         ";callback({target:api});},0);return api;}};</script>")
         scenario
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
@@ -1337,7 +1339,7 @@
          "const root=document.getElementById('youtube-playlist-carousel'),items=document.getElementById('youtube-playlist-items'),status=document.getElementById('youtube-playlist-status'),frame=document.getElementById('youtube-playlist-player-frame'),fallback=document.querySelector('.playlist-fallback a'),cards=[...items.querySelectorAll('.playlist-item')],buttons=cards.map(card=>card.querySelector('button')),links=cards.map(card=>card.querySelector('a'));"
          (if fail?
            "outcome={failed:status.classList.contains('error'),status:status.textContent,frameHidden:frame.hidden,itemCount:cards.length,fallbackHref:fallback.href,headlinePresent:!!document.getElementById('activity-value'),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
-           "buttons[1].click();const selectedAfterClick=buttons.findIndex(button=>button.getAttribute('aria-current')==='true');buttons[1].dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));const selectedAfterArrow=buttons.findIndex(button=>button.getAttribute('aria-current')==='true'),rootRect=root.getBoundingClientRect(),playerFrame=frame.querySelector('iframe');outcome={failed:status.classList.contains('error'),status:status.textContent,itemCount:cards.length,labels:buttons.map(button=>button.getAttribute('aria-label')),hrefs:links.map(link=>link.href),targets:links.map(link=>link.target),rels:links.map(link=>link.rel),images:cards.map(card=>card.querySelector('img').src),playerTitle:playerFrame?.title||null,playerSrc:playerFrame?.src||null,controlsEnabled:![document.getElementById('youtube-playlist-previous').disabled,document.getElementById('youtube-playlist-next').disabled].some(Boolean),playCalls:window.__youtubeFixture.playCalls,selectedAfterClick,selectedAfterArrow,activeLabel:document.activeElement?.getAttribute('aria-label')||null,rootFits:rootRect.left>=-.5&&rootRect.right<=innerWidth+.5,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};")
+           "buttons[1].click();const selectedAfterClick=buttons.findIndex(button=>button.getAttribute('aria-current')==='true');buttons[1].dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));const selectedAfterArrow=buttons.findIndex(button=>button.getAttribute('aria-current')==='true'),rootRect=root.getBoundingClientRect(),playerFrame=frame.querySelector('iframe');outcome={failed:status.classList.contains('error'),status:status.textContent,itemCount:cards.length,labels:buttons.map(button=>button.getAttribute('aria-label')),hrefs:links.map(link=>link.href),targets:links.map(link=>link.target),rels:links.map(link=>link.rel),images:cards.map(card=>card.querySelector('img').src),playerTitle:playerFrame?.title||null,playerSrc:playerFrame?.src||null,playerReferrerPolicy:playerFrame?.referrerPolicy||null,controlsEnabled:![document.getElementById('youtube-playlist-previous').disabled,document.getElementById('youtube-playlist-next').disabled].some(Boolean),playCalls:window.__youtubeFixture.playCalls,selectedAfterClick,selectedAfterArrow,activeLabel:document.activeElement?.getAttribute('aria-label')||null,rootFits:rootRect.left>=-.5&&rootRect.right<=innerWidth+.5,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};")
          "}catch(error){outcome={error:error.message,stack:error.stack};}"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));},20);</script>")
         html (-> page
@@ -1822,6 +1824,8 @@
              "https://www.youtube-nocookie.com/embed/videoseries?"))
         (is (str/includes? (:playerSrc outcome)
                            "list=PLIIYTIXqGbuE"))
+        (is (= "strict-origin-when-cross-origin"
+               (:playerReferrerPolicy outcome)))
         (is (true? (:controlsEnabled outcome)))
         (is (= [1] (:playCalls outcome)))
         (is (= 1 (:selectedAfterClick outcome)))
