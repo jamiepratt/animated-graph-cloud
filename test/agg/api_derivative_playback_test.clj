@@ -4,6 +4,7 @@
             [agg.derivative.lifecycle :as derivative]
             [agg.derivative.storage :as storage]
             [agg.http-test-support :as test-http]
+            [agg.ui.core :as ui]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]])
@@ -149,7 +150,39 @@
     (reset! blob (.invoke as-blob info (object-array [service])))
     (storage/gcs-asset-store service "playback-test-bucket")))
 
-(deftest nonzero-open-ended-prepared-playback-starts-at-requested-byte
+(deftest api-serves-the-hosting-range-adapter
+  (let [port (test-http/available-port)
+        server (api/start! port {:service-profile "api"})]
+    (try
+      (let [response
+            (request! port :get "/derivative-playback-range-worker.js" nil {})
+            body (String. ^bytes (.body response))]
+        (is (= 200 (.statusCode response)))
+        (is (= "application/javascript; charset=utf-8"
+               (.orElse (.firstValue (.headers response) "Content-Type") "")))
+        (is (= "no-store"
+               (.orElse (.firstValue (.headers response) "Cache-Control") "")))
+        (is (str/includes? body "headers.get('Range')"))
+        (is (str/includes? body "__agg_range"))
+        (is (str/includes? body "/v1/derivative-preparations/")))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest compose-page-awaits-the-range-adapter-before-prepared-playback
+  (let [page (ui/page {:user owner :csrf "csrf"})
+        registration
+        (str/index-of
+         page
+         "const script='/derivative-playback-range-worker.js'")
+        awaited (str/index-of page "await derivativePlaybackRangeAdapter")
+        playback-session
+        (str/index-of page "preparationPath(activePreparation,'playback-sessions')")]
+    (is (str/includes? page "navigator.serviceWorker.register(script"))
+    (is (every? integer? [registration awaited playback-session]))
+    (when (every? integer? [registration awaited playback-session])
+      (is (< registration awaited playback-session)))))
+
+(deftest hosting-adapted-nonzero-prepared-playback-starts-at-requested-byte
   (let [clock (Clock/fixed
                (Instant/parse "2026-07-30T10:00:00Z")
                ZoneOffset/UTC)
@@ -191,10 +224,11 @@
                 (.split ";" 2)
                 first)
             response
-            (request! port :get playback-url nil
+            (request! port :get
+                      (str playback-url "?__agg_range=bytes%3D15-")
+                      nil
                       {"Cookie"
-                       (str "agg_session=" session "; " playback-cookie)
-                       "Range" "bytes=15-"})]
+                       (str "agg_session=" session "; " playback-cookie)})]
         (is (= 206 (.statusCode response)))
         (is (= "fghij" (String. ^bytes (.body response))))
         (is (= "bytes 15-19/20"
@@ -203,12 +237,14 @@
         (is (= "5"
                (.orElse
                 (.firstValue (.headers response) "Content-Length") "")))
-        (is (= {:rangeStart 15
+        (is (= {:rangeSource "query"
+                :receivedRange true
+                :rangeStart 15
                 :rangeEnd 19
                 :bytesRequested 5
                 :bytesTransferred 5}
                (select-keys (second @events)
-                            [:rangeStart :rangeEnd
+                            [:rangeSource :receivedRange :rangeStart :rangeEnd
                              :bytesRequested :bytesTransferred]))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
@@ -395,6 +431,8 @@
                 :status "succeeded"
                 :profileVersion "h264-aac-1080p25-v1"
                 :revision "dev"
+                :rangeSource "header"
+                :receivedRange true
                 :rangeStart 3
                 :rangeEnd 7
                 :bytesRequested 5

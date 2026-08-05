@@ -1554,6 +1554,14 @@
        :partial? true})
     (assoc (playback-range header size) :partial? true)))
 
+(defn- derivative-playback-request-range [^HttpExchange exchange]
+  (let [header (some-> exchange .getRequestHeaders (.getFirst "Range"))
+        adapted (get (query-params exchange) "__agg_range")]
+    (cond
+      (some? header) {:value header :source "header" :received? true}
+      (some? adapted) {:value adapted :source "query" :received? true}
+      :else {:value nil :source "absent" :received? false})))
+
 (defn- create-playback-session!
   [^HttpExchange exchange auth-system]
   (let [user (require-session-user! exchange auth-system)
@@ -1939,10 +1947,12 @@
             (throw
              (errors/raise! "Derivative playback asset changed"
                             {:type ::auth/invalid-playback})))
+        range-request (derivative-playback-request-range exchange)
+        _ (when (and (:received? range-request)
+                     (str/blank? (:value range-request)))
+            (invalid-playback-range! (:size authority)))
         {:keys [start end] :as byte-range}
-        (derivative-playback-range
-         (some-> exchange .getRequestHeaders (.getFirst "Range"))
-         (:size authority))
+        (derivative-playback-range (:value range-request) (:size authority))
         {:keys [body] :as source-response}
         (derivative-storage/open-range!
          asset-store asset (select-keys byte-range [:start :end]))
@@ -1972,6 +1982,8 @@
         (emit-event!
          dependencies "derivative_playback_range_served"
          (assoc (derivative-playback-event-fields asset "succeeded")
+                :rangeSource (:source range-request)
+                :receivedRange (:received? range-request)
                 :rangeStart start
                 :rangeEnd end
                 :bytesRequested content-length
@@ -2378,6 +2390,14 @@
                                   (and (= "GET" method) (contains? public-assets path))
                                   (let [[resource content-type] (get public-assets path)]
                                     (respond-asset! exchange resource content-type))
+
+                                  (and (= "api" service-profile)
+                                       (= "GET" method)
+                                       (= "/derivative-playback-range-worker.js"
+                                          path))
+                                  (respond! exchange 200
+                                            "application/javascript; charset=utf-8"
+                                            ui/derivative-playback-range-worker)
 
                                   (and (= "api" service-profile)
                                        (= "GET" method)
