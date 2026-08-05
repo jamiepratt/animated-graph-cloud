@@ -1543,6 +1543,7 @@
         "<section class=\"card trust-card\" aria-labelledby=\"product-updates-heading\">"
         "<div class=\"step\">Product updates</div>"
         "<h2 id=\"product-updates-heading\">Hear about important updates.</h2>"
+        "<p class=\"muted\">Alpha Compose is currently completely free. A free tier of access will always be available. Paid premium features will come later.</p>"
         "<p class=\"muted\">More features and improvements are on the way. We are making Alpha Compose easier and more intuitive to use, expanding what it can do, and adding support for more sports and activity data. Leave your email to hear about important updates.</p>"
         (when feedback
           (str "<div role=\"" (if (= :success (:kind feedback)) "status" "alert")

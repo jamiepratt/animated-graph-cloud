@@ -1704,6 +1704,11 @@
         (is (str/includes? body ">Keep me informed</button>"))
         (is (str/includes? body
                            "More features and improvements are on the way. We are making Alpha Compose easier and more intuitive to use, expanding what it can do, and adding support for more sports and activity data. Leave your email to hear about important updates."))
+        (doseq [pricing-copy
+                ["Alpha Compose is currently completely free."
+                 "A free tier of access will always be available."
+                 "Paid premium features will come later."]]
+          (is (str/includes? body pricing-copy) pricing-copy))
         (doseq [obsolete ["Ask to test Alpha Compose"
                           "Instagram handle"
                           "Message (optional)"

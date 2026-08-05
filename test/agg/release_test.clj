@@ -39,7 +39,7 @@
                    (release/parse-build-identity invalid true))))))
 
 (deftest main-version-matches-newest-released-changelog
-  (is (= "0.6.0" main-release/version))
+  (is (= "0.7.0" main-release/version))
   (is (= main-release/version
          (release/newest-released-version
           (main-release/changelog-markdown)))))
@@ -94,7 +94,7 @@
         (is (= 1 (count (re-seq #"class=\"release-identity\"" page))))
         (is (str/includes?
              page
-             "class=\"release-identity\" href=\"/changelog\">v0.6.0 · build dev</a>"))))))
+             "class=\"release-identity\" href=\"/changelog\">v0.7.0 · build dev</a>"))))))
 
 (deftest changelog-is-public-cacheable-and-api-profile-only
   (let [api-port (test-http/available-port)
