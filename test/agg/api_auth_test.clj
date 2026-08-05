@@ -739,6 +739,14 @@
         (is (re-find #"You are signed up" (.body success)))
         (is (re-find #"role=\"status\"[^>]+tabindex=\"-1\""
                      (.body success)))
+        (is (str/includes?
+             (.orElse (.firstValue (.headers success)
+                                   "Content-Security-Policy")
+                      "")
+             "frame-src https://www.youtube-nocookie.com;"))
+        (is (= "no-referrer"
+               (.orElse (.firstValue (.headers success) "Referrer-Policy")
+                        nil)))
         (is (not (re-find (re-pattern (java.util.regex.Pattern/quote proof))
                           (.body success))))
         (is (= 1 (count @notifications)))
@@ -778,6 +786,11 @@
           (is (= 503 (.statusCode failure)))
           (is (re-find #"could not send your signup" (.body failure)))
           (is (re-find #"name=\"proof\"" (.body failure)))
+          (is (str/includes?
+               (.orElse (.firstValue (.headers failure)
+                                     "Content-Security-Policy")
+                        "")
+               "frame-src https://www.youtube-nocookie.com;"))
           (is (= "product_updates_delivery" (:category failure-event)))
           (is (= 503 (:upstreamStatus failure-event)))
           (is (true? (:retryable failure-event)))

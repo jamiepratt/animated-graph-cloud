@@ -1318,6 +1318,38 @@
      html
      (str "--window-size=" window-size))))
 
+(defn- youtube-playlist-browser-outcome [page window-size fail?]
+  (let [fixture
+        (str
+         "<script>window.__youtubeFixture={playCalls:[]};"
+         "window.requestIdleCallback=callback=>callback();"
+         "window.YT={Player:function(id,options){"
+         "const mount=typeof id==='string'?document.getElementById(id):id,iframe=mount.tagName==='IFRAME'?mount:document.createElement('iframe');"
+         "if(iframe!==mount)mount.replaceWith(iframe);let index=0;"
+         "const api={getIframe:()=>iframe,getPlaylist:()=>['first123','second456','third789'],getPlaylistIndex:()=>index,playVideoAt:value=>{index=value;window.__youtubeFixture.playCalls.push(value);options.events.onStateChange({target:api});},playVideo:()=>{}};"
+         "setTimeout(()=>options.events."
+         (if fail? "onError" "onReady")
+         "({target:api}),0);return api;}};</script>")
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "setTimeout(()=>{let outcome;try{"
+         "const root=document.getElementById('youtube-playlist-carousel'),items=document.getElementById('youtube-playlist-items'),status=document.getElementById('youtube-playlist-status'),frame=document.getElementById('youtube-playlist-player-frame'),fallback=document.querySelector('.playlist-fallback a'),cards=[...items.querySelectorAll('.playlist-item')],buttons=cards.map(card=>card.querySelector('button')),links=cards.map(card=>card.querySelector('a'));"
+         (if fail?
+           "outcome={failed:status.classList.contains('error'),status:status.textContent,frameHidden:frame.hidden,itemCount:cards.length,fallbackHref:fallback.href,headlinePresent:!!document.getElementById('activity-value'),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+           "buttons[1].click();const selectedAfterClick=buttons.findIndex(button=>button.getAttribute('aria-current')==='true');buttons[1].dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));const selectedAfterArrow=buttons.findIndex(button=>button.getAttribute('aria-current')==='true'),rootRect=root.getBoundingClientRect(),playerFrame=frame.querySelector('iframe');outcome={failed:status.classList.contains('error'),status:status.textContent,itemCount:cards.length,labels:buttons.map(button=>button.getAttribute('aria-label')),hrefs:links.map(link=>link.href),targets:links.map(link=>link.target),rels:links.map(link=>link.rel),images:cards.map(card=>card.querySelector('img').src),playerTitle:playerFrame?.title||null,playerSrc:playerFrame?.src||null,controlsEnabled:![document.getElementById('youtube-playlist-previous').disabled,document.getElementById('youtube-playlist-next').disabled].some(Boolean),playCalls:window.__youtubeFixture.playCalls,selectedAfterClick,selectedAfterArrow,activeLabel:document.activeElement?.getAttribute('aria-label')||null,rootFits:rootRect.left>=-.5&&rootRect.right<=innerWidth+.5,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};")
+         "}catch(error){outcome={error:error.message,stack:error.stack};}"
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));},20);</script>")
+        html (-> page
+                 (str/replace "<script>(function(){"
+                              (str fixture "<script>(function(){"))
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-youtube-playlist-browser-"
+     "YouTube playlist carousel regression requires Chrome or Chromium"
+     html
+     (str "--window-size=" window-size))))
+
 (defn- compose-card-layout-browser-outcome [page window-size reveal-source?]
   (let [scenario
         (str
@@ -1673,6 +1705,12 @@
         (is (str/includes? (.body privacy) "Resend"))
         (is (str/includes? (.body privacy)
                            "does not retain product-updates signups"))
+        (is (str/includes? (.body privacy)
+                           "privacy-enhanced YouTube player"))
+        (is (str/includes? (.body privacy)
+                           "network and browser information"))
+        (is (str/includes? (.body privacy)
+                           "does not send your Google account, Drive files, or activity data to YouTube"))
         (is (str/includes? (.body privacy) "contact or deletion request"))
         (is (= 200 (.statusCode terms)))
         (is (str/includes? (.body terms)
@@ -1716,6 +1754,90 @@
           (is (not (str/includes? body obsolete)) obsolete)))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
+
+(deftest signed-out-homepage-offers-a-live-youtube-playlist-carousel
+  (let [port (available-port)
+        {:keys [auth-system]} (fixture)
+        server (start-api! port {:auth-system auth-system})]
+    (try
+      (let [response (request! port :get "/" nil {})
+            body (.body response)
+            policy (.orElse (.firstValue (.headers response)
+                                         "Content-Security-Policy")
+                            "")
+            updates-position (str/index-of body
+                                           "id=\"product-updates-heading\"")
+            carousel-position (str/index-of body
+                                            "id=\"youtube-playlist-carousel\"")]
+        (is (= 200 (.statusCode response)))
+        (is (every? some? [updates-position carousel-position]))
+        (when (every? some? [updates-position carousel-position])
+          (is (< updates-position carousel-position)))
+        (doseq [contract ["data-youtube-playlist=\"PLIIYTIXqGbuE\""
+                          "aria-roledescription=\"carousel\""
+                          "id=\"youtube-playlist-previous\""
+                          "id=\"youtube-playlist-next\""
+                          "https://www.youtube.com/playlist?list=PLIIYTIXqGbuE"
+                          "https://www.youtube.com/iframe_api"
+                          "https://www.youtube.com/watch?v="]]
+          (is (str/includes? body contract) contract))
+        (is (str/includes? body "requestIdleCallback"))
+        (is (str/includes? policy "script-src 'unsafe-inline'"))
+        (is (str/includes? policy "https://www.youtube.com"))
+        (is (str/includes? policy
+                           "frame-src https://www.youtube-nocookie.com;"))
+        (is (not (str/includes? policy
+                                "frame-src https://www.youtube.com")))
+        (is (str/includes? policy "https://i.ytimg.com")))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest live-youtube-playlist-carousel-keeps-order-context-and-fallback
+  (let [page (ui/anonymous-page {})
+        expected-links
+        ["https://www.youtube.com/watch?v=first123&list=PLIIYTIXqGbuE"
+         "https://www.youtube.com/watch?v=second456&list=PLIIYTIXqGbuE"
+         "https://www.youtube.com/watch?v=third789&list=PLIIYTIXqGbuE"]
+        desktop (youtube-playlist-browser-outcome page "1280,900" false)
+        mobile (youtube-playlist-browser-outcome page "390,844" false)
+        failure (youtube-playlist-browser-outcome page "390,844" true)]
+    (doseq [[surface outcome] {"desktop" desktop "mobile" mobile}]
+      (testing surface
+        (is (nil? (:error outcome)) outcome)
+        (is (false? (:failed outcome)))
+        (is (= 3 (:itemCount outcome)))
+        (is (= expected-links (:hrefs outcome)))
+        (is (= ["_blank" "_blank" "_blank"] (:targets outcome)))
+        (is (every? #(= #{"noopener" "noreferrer"}
+                        (set (str/split % #" ")))
+                    (:rels outcome)))
+        (is (= ["https://i.ytimg.com/vi/first123/hqdefault.jpg"
+                "https://i.ytimg.com/vi/second456/hqdefault.jpg"
+                "https://i.ytimg.com/vi/third789/hqdefault.jpg"]
+               (:images outcome)))
+        (is (= "Alpha Compose YouTube playlist player"
+               (:playerTitle outcome)))
+        (is (str/starts-with?
+             (:playerSrc outcome)
+             "https://www.youtube-nocookie.com/embed/videoseries?"))
+        (is (str/includes? (:playerSrc outcome)
+                           "list=PLIIYTIXqGbuE"))
+        (is (true? (:controlsEnabled outcome)))
+        (is (= [1] (:playCalls outcome)))
+        (is (= 1 (:selectedAfterClick outcome)))
+        (is (= 2 (:selectedAfterArrow outcome)))
+        (is (= "Play video 3 of 3" (:activeLabel outcome)))
+        (is (true? (:rootFits outcome)))
+        (is (true? (:noHorizontalOverflow outcome)))))
+    (is (nil? (:error failure)) failure)
+    (is (true? (:failed failure)))
+    (is (= 0 (:itemCount failure)))
+    (is (true? (:frameHidden failure)))
+    (is (str/includes? (:status failure) "could not load"))
+    (is (= "https://www.youtube.com/playlist?list=PLIIYTIXqGbuE"
+           (:fallbackHref failure)))
+    (is (true? (:headlinePresent failure)))
+    (is (true? (:noHorizontalOverflow failure)))))
 
 (deftest consumer-copy-uses-activity-data-without-renaming-the-json-contract
   (let [compose (ui/page {:user {:email "owner@example.com" :role :member}
@@ -2479,7 +2601,10 @@
     (is (true? (:keyboardReachable retry)))
     (is (= ["/" "/changelog" "/faq" "/privacy" "/terms"
             "/v1/auth/login/start" "/faq#generated-heartbeat-sound"
-            "product-updates-email" "button" "mailto:me@jamiep.org"]
+            "product-updates-email" "button"
+            "youtube-playlist-previous" "youtube-playlist-next"
+            "https://www.youtube.com/playlist?list=PLIIYTIXqGbuE"
+            "mailto:me@jamiep.org"]
            (:keyboardOrder retry)))
     (is (<= (:viewportWidth retry) 500))
     (is (true? (:noHorizontalOverflow retry)))
@@ -2526,6 +2651,11 @@
                                    "Content-Security-Policy")
                       "")
              "media-src 'self'"))
+        (is (not (str/includes?
+                  (.orElse (.firstValue (.headers landing)
+                                        "Content-Security-Policy")
+                           "")
+                  "youtube")))
         (is (string? script))
         (is valid?
             "The rendered compose initialization script must parse."))
