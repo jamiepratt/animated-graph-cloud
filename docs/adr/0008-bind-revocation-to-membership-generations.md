@@ -2,11 +2,13 @@
 
 - Status: Accepted
 - Date: 2026-07-17
+- Amended: 2026-08-05
 
 ## Context
 
-An environment allowlist can reject a removed email, but it cannot give the
-owner a usable administration workflow. Re-adding the same email would also
+An environment allowlist could reject a removed email, but it could not give the
+owner a usable administration workflow or admit a verified first-time user
+without preapproval. Re-adding the same email would also
 resurrect a previously signed session unless the application distinguishes the
 old membership from the new one. Job submission needs a stronger boundary than
 a check before its Firestore transaction, or a revocation can race the write and
@@ -36,9 +38,20 @@ a former owner after cleanup creates a new membership generation and requires a
 new Google login. Restarting with the same configured owner preserves its
 current generation and subject.
 
-The owner manages member records through session- and CSRF-protected JSON or
-HTMX routes. Each activation has a random membership generation. Google login
-atomically binds the active email and generation to one Google subject.
+After Google verifies the identity and returns exactly the approved scopes, the
+login callback transactionally enrolls the identity. An absent email record is
+created as an active `member` with a fresh random membership generation and is
+bound to the verified Google subject in the same transaction. An active unbound
+record is bound, and an existing binding to the same subject is idempotent.
+Concurrent callbacks retry against the committed record, so they cannot create
+conflicting generations or bindings. A revoked record or an active record bound
+to a different subject is rejected before Drive, grant, session, or job side
+effects.
+
+The owner and admins manage member records through session- and CSRF-protected
+JSON or HTMX routes; ordinary first login requires no administrator action.
+Each activation has a random membership generation. Google login atomically
+binds the active email and generation to one Google subject.
 Sessions and personal tokens carry that generation, and every use rechecks the
 active Firestore record. Re-adding any revoked email creates a new generation
 with no bound subject, so old sessions remain invalid and a new Google login is
@@ -68,7 +81,9 @@ credentials, filenames, or signed URLs.
 ## Consequences
 
 The Firestore membership record is the live authorization source for browser
-sessions and personal tokens. Deploying this decision invalidates legacy
+sessions and personal tokens. Verified Google users can enroll without
+preapproval, but revocation remains an explicit suspension boundary. Deploying
+this decision invalidates legacy
 credentials that do not contain a membership generation. Revoked members can
 return only after an owner action followed by fresh Google login and, for Drive
 delivery, a fresh `drive.file` authorization. Changing `AGG_OWNER_EMAIL`

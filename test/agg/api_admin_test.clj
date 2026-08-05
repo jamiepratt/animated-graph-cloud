@@ -124,7 +124,7 @@
           (is (= 200 (.statusCode added)))
           (is (str/includes? (.body added) "ui+member@example.com"))
           (is (= 200 (.statusCode revoked)))
-          (is (str/includes? (.body revoked) "revoked"))))
+          (is (str/includes? (.body revoked) "suspended"))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

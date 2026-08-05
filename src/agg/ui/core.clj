@@ -535,16 +535,17 @@
    "<section id=\"members\"><h2>Member administration</h2>"
    "<form hx-post=\"/ui/admin/members\" hx-target=\"#members\" hx-swap=\"outerHTML\">"
    "<label>Member email <input type=\"email\" name=\"email\" maxlength=\"254\" required></label>"
-   "<button type=\"submit\">Add member</button></form><ul>"
+   "<button type=\"submit\">Add or reactivate member</button></form><ul>"
    (apply str
           (for [{:keys [email role status]} members]
             (str "<li><strong>" (escape-html email) "</strong> · "
-                 (escape-html role) " · " (escape-html status)
+                 (escape-html role) " · "
+                 (escape-html (if (= "revoked" status) "suspended" status))
                  (when (and (= "member" role) (= "active" status))
                    (str " <form class=\"inline\" hx-post=\"/ui/admin/members/revoke\" "
                         "hx-target=\"#members\" hx-swap=\"outerHTML\">"
                         "<input type=\"hidden\" name=\"email\" value=\""
-                        (escape-html email) "\"><button type=\"submit\">Revoke</button></form>"))
+                        (escape-html email) "\"><button type=\"submit\">Suspend</button></form>"))
                  "</li>")))
    "</ul></section>"))
 
@@ -572,7 +573,7 @@
                 (conj
                  (management-link "/ui/admin/members"
                                   "Member admin"
-                                  "Allowlist members and revoke access.")))]
+                                  "Review members, suspend access, or reactivate an account.")))]
     (when (seq links)
       (str "<section class=\"card management-links-card\"><div class=\"section-head\">"
            "<div><h2>Account and admin</h2><p class=\"muted\">Open the tools that match your access.</p></div>"
@@ -862,7 +863,7 @@
 (defn member-admin-page [{:keys [user csrf members]}]
   (tool-page {:title "Member admin"
               :eyebrow "Administration"
-              :intro "Allowlist members, review their status, and revoke access when needed."
+              :intro "Review enrolled members, suspend access, or reactivate an account."
               :user user
               :csrf csrf
               :panel (member-panel members)}))
@@ -1581,9 +1582,9 @@
    (str
     "<section class=\"hero\"><div class=\"hero-copy\">"
     "<div class=\"eyebrow\">Verified Google account</div>"
-    "<h1>Alpha Compose is in early access</h1>"
-    "<p class=\"muted\">Access is currently limited to approved testers. "
-    "If you would like to test Alpha Compose, leave your details below.</p>"
+    "<h1>Alpha Compose could not enroll this account</h1>"
+    "<p class=\"muted\">This verified sign-in did not create product access. "
+    "If you would like help or product updates, leave your details below.</p>"
     "<p><strong>No session, Drive grant, membership binding, or render was created.</strong></p>"
     (when feedback
       (str "<div class=\"card\" role=\"" (if (= :success (:kind feedback))
@@ -1627,7 +1628,8 @@
         "<p>Questions or deletion "
         "requests may be sent to <a href=\"mailto:me@jamiep.org\">me@jamiep.org</a>.</p>"
         "<h2>Information used</h2><p>We use your Google account identifier and "
-        "email address to authenticate you and enforce the administrator-managed access list. "
+        "email address to authenticate you, bind a generation-scoped membership, and enforce "
+        "any explicit suspension. "
         "As part of the same authorization, Alpha Compose receives only the "
         "<code>drive.file</code> permission, allowing access to files you select or "
         "that Alpha Compose creates. We process activity data and optional watermark "
@@ -1653,7 +1655,8 @@
         "<h2>Sharing and security</h2><p>We use Google Cloud and Google Drive to "
         "operate the service, and Resend processes the plain-text early-access notification. "
         "We do not sell personal information or use activity data for "
-        "advertising. Access is limited to approved accounts; credentials are encrypted, "
+        "advertising. Verified Google users enroll on first sign-in; administrators can "
+        "suspend or reactivate membership. Credentials are encrypted, "
         "and application logs exclude activity-data values, filenames, email addresses, and tokens. "
         "Use and transfer of information received from Google APIs follows the "
         "<a href=\"https://developers.google.com/terms/api-services-user-data-policy\">Google API Services User Data Policy</a>, "

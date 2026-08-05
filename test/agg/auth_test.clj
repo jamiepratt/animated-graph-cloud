@@ -166,19 +166,30 @@
         (is (string? (:session result)))
         (is (= :login (:flow (first @exchanges))))))))
 
-(deftest verified-nonmember-login-returns-a-private-denial-without-drive-effects
+(deftest verified-first-login-enrolls-an-active-member-before-drive-effects
   (let [{:keys [system grants encrypted folders]} (drive-fixture)
-        system (assoc system :allowlist #{"another@example.com"})
+        {:keys [directory]} (admin/in-memory-system
+                             {:owner-email "admin@example.com"})
+        system (assoc system
+                      :allowlist #{}
+                      :member-directory directory)
         flow (auth/begin-flow! system :login nil)
         result (auth/finish-login! system {:code "code"
                                            :state (:state flow)
                                            :state-cookie (:stateCookie flow)})]
-    (is (= {:outcome :not-allowlisted
-            :verified-email "owner@example.com"}
-           result))
-    (is (empty? @grants))
-    (is (empty? @encrypted))
-    (is (empty? @folders))))
+    (is (= {:email "owner@example.com"
+            :role :member
+            :status :active
+            :subject "google-subject-1"}
+           (select-keys (first (filter #(= "owner@example.com" (:email %))
+                                       (admin/list-member-records directory)))
+                        [:email :role :status :subject])))
+    (is (string? (get-in result [:user :membership-version])))
+    (is (= "google-subject-1" (get-in result [:user :subject])))
+    (is (= "kms:drive-refresh-token"
+           (get-in @grants ["google-subject-1" :refresh-token-ciphertext])))
+    (is (= ["drive-refresh-token"] @encrypted))
+    (is (= [nil] (mapv :existing-folder @folders)))))
 
 (deftest combined-login-accepts-googles-normalized-identity-scope-names
   (let [oauth (reify auth/OAuthClient
@@ -266,10 +277,11 @@
              (catch clojure.lang.ExceptionInfo error
                (:type (ex-data error))))))))
 
-(deftest revoked-members-need-a-new-allowlist-generation-and-oauth-session
+(deftest suspended-members-need-reactivation-and-a-new-oauth-session
   (let [{:keys [directory service]}
-        (admin/in-memory-system {:owner-email "owner@example.com"
-                                 :initial-emails #{"member@example.com"}})
+        (admin/in-memory-system {:owner-email "owner@example.com"})
+        {base-system :system
+         :keys [grants encrypted folders]} (drive-fixture)
         oauth (reify auth/OAuthClient
                 (exchange-code! [_ flow _ _ _]
                   (is (= :login flow))
@@ -279,7 +291,7 @@
                    :access-token "drive-access-token"
                    :refresh-token "drive-refresh-token"
                    :granted-scopes (set auth/approved-scopes)}))
-        system (assoc (:system (drive-fixture))
+        system (assoc base-system
                       :allowlist #{}
                       :member-directory directory
                       :oauth oauth)
@@ -293,6 +305,32 @@
                                        "owner-subject")]
     (is (= "member-subject"
            (:subject (auth/session-user system (:session first-login)))))
+    (testing "a different subject cannot reuse the bound email"
+      (let [mismatched-system
+            (assoc system
+                   :oauth
+                   (reify auth/OAuthClient
+                     (exchange-code! [_ _ _ _ _]
+                       {:subject "different-subject"
+                        :email "member@example.com"
+                        :email-verified? true
+                        :access-token "different-access-token"
+                        :refresh-token "different-refresh-token"
+                        :granted-scopes (set auth/approved-scopes)})))
+            flow (auth/begin-flow! mismatched-system :login nil)]
+        (is (= ::auth/account-suspended
+               (try
+                 (auth/finish-login!
+                  mismatched-system
+                  {:code "different-code"
+                   :state (:state flow)
+                   :state-cookie (:stateCookie flow)})
+                 nil
+                 (catch clojure.lang.ExceptionInfo error
+                   (:type (ex-data error))))))
+        (is (= ["drive-refresh-token"] @encrypted))
+        (is (= 1 (count @folders)))
+        (is (= #{"member-subject"} (set (keys @grants))))))
     (admin/revoke-member! service owner "member@example.com")
     (is (= ::auth/not-allowlisted
            (try
@@ -300,6 +338,18 @@
              nil
              (catch clojure.lang.ExceptionInfo error
                (:type (ex-data error))))))
+    (testing "a suspended member is denied before Drive or grant side effects"
+      (is (= ::auth/account-suspended
+             (try
+               (login!)
+               nil
+               (catch clojure.lang.ExceptionInfo error
+                 (:type (ex-data error))))))
+      (is (= ["drive-refresh-token"] @encrypted))
+      (is (= 1 (count @folders)))
+      (is (= "kms:drive-refresh-token"
+             (get-in @grants ["member-subject"
+                              :refresh-token-ciphertext]))))
     (admin/add-member! service owner "member@example.com")
     (testing "re-adding does not resurrect the pre-revocation session"
       (is (= ::auth/not-allowlisted

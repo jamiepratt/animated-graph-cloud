@@ -114,7 +114,7 @@ In Google Auth Platform for `animated-graph-cloud-prod-jp`:
 - create a production Web application client with the exact redirect
   `https://alphacompose.com/v1/auth/login/callback`;
 - configure the intended `AGG_ADMIN_EMAILS` set; the release bootstraps those
-  administrators but does not add ordinary allowlisted members.
+  administrators, while verified ordinary users enroll on first sign-in.
 
 Complete the public pages and DNS/TLS before submitting OAuth brand
 verification. OAuth publication and verification are external Google actions;
