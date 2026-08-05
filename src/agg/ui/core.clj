@@ -1470,9 +1470,10 @@
         "form.card{display:grid;gap:.55rem;margin-top:1rem}input,textarea{width:100%;min-width:0;border:1px solid #6b8ba5;border-radius:.55rem;padding:.7rem;font:inherit;color:var(--color-text);background:#06182b}input[readonly]{background:#10263c;color:#c1d3e4}textarea{resize:vertical}.card:focus{outline:3px solid var(--color-warning);outline-offset:3px}"
         ".feature-grid,.value-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem;margin:1rem 0}.feature-grid .card,.value-grid .card{margin:0;min-width:0}"
         ".value-section{min-width:0;margin:1.75rem 0 1rem}.value-section>h2{font-size:clamp(1.5rem,3vw,2.25rem);max-width:22ch;margin:.3rem 0 1rem}.support-note{margin:1rem 0 0}.trust-card{margin-top:1rem}.trust-card p:last-child{margin-bottom:0}"
+        ".playlist-carousel{min-width:0;margin-top:1rem}.playlist-carousel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap}.playlist-player-frame{width:min(100%,56rem);min-height:200px;aspect-ratio:16/9;margin:1rem auto;overflow:hidden;border:1px solid var(--color-border-strong);border-radius:.85rem;background:#010813}.playlist-player-frame[hidden]{display:none}.playlist-player-frame iframe,#youtube-playlist-player{display:block;width:100%;height:100%;min-height:200px;border:0}.playlist-controls{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:.75rem;margin:1rem 0}.playlist-controls .button{margin:0}.playlist-status{margin:0;text-align:center}.playlist-items{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(min(72vw,15rem),15rem);gap:.75rem;min-width:0;padding:.2rem .15rem .65rem;overflow-x:auto;overscroll-behavior-inline:contain;scroll-snap-type:inline mandatory;scrollbar-gutter:stable}.playlist-item{display:grid;grid-template-rows:1fr auto;min-width:0;overflow:hidden;border:1px solid var(--color-border);border-radius:.8rem;background:var(--color-surface-soft);scroll-snap-align:start}.playlist-item button{display:block;min-width:0;padding:0;border:0;border-radius:0;background:transparent;color:var(--color-text);text-align:left}.playlist-item button[aria-current=true]{box-shadow:inset 0 0 0 3px var(--color-warning)}.playlist-item img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#010813}.playlist-item-label{display:block;padding:.7rem;font-weight:800}.playlist-item a{display:block;padding:0 .7rem .7rem;overflow-wrap:anywhere}.playlist-fallback{margin:.8rem 0 0}"
         ".faq-intro{max-width:46rem}.faq-sections{display:grid;gap:1.25rem;min-width:0;margin-top:2rem}.faq-category{min-width:0}.faq-category>h2{font-size:clamp(1.4rem,3vw,2rem);margin:0 0 .75rem}.faq-question{min-width:0;background:var(--color-surface);border:1px solid var(--color-border);border-radius:.8rem;box-shadow:var(--shadow-surface);margin:.65rem 0;scroll-margin-top:1rem;overflow-wrap:anywhere}.faq-question summary{cursor:pointer;padding:1rem 1.1rem;color:var(--color-link)}.faq-question summary h3{display:inline;font-size:1.05rem}.faq-answer{max-width:72ch;padding:0 1.1rem 1rem}.faq-answer p:last-child{margin-bottom:0}.faq-permalink{font-size:.9rem}.faq-question:target{outline:3px solid var(--color-warning);outline-offset:3px}"
         "footer{margin-top:2rem;color:var(--color-muted)}footer a{margin-right:.75rem}"
-        "@media(max-width:680px){.shell{padding:1rem .8rem 3rem}.hero{grid-template-columns:1fr;margin-top:1.5rem}.hero-copy{padding:1rem 0}.feature-grid,.value-grid{grid-template-columns:1fr}.faq-question summary,.faq-answer{padding-left:.85rem;padding-right:.85rem}}"
+        "@media(max-width:680px){.shell{padding:1rem .8rem 3rem}.hero{grid-template-columns:1fr;margin-top:1.5rem}.hero-copy{padding:1rem 0}.feature-grid,.value-grid{grid-template-columns:1fr}.playlist-controls{grid-template-columns:1fr 1fr}.playlist-status{grid-column:1/-1;grid-row:1}.playlist-controls .button{width:100%}.faq-question summary,.faq-answer{padding-left:.85rem;padding-right:.85rem}}"
         (theme-style)
         ".hero-copy{padding:clamp(1.25rem,3vw,2rem);background:var(--color-surface);border:1px solid var(--color-border);border-radius:1.1rem;box-shadow:var(--shadow-surface)}"
         "</style></head><body data-theme=\"telemetry\"><div class=\"shell\">"
@@ -1480,6 +1481,52 @@
         "<main>" body "</main>"
         "<footer><small>© 2026 Alpha Compose · <a href=\"mailto:me@jamiep.org\">Contact</a></small></footer>"
         "</div></body></html>")))
+
+(def ^:private homepage-youtube-playlist-id "PLIIYTIXqGbuE")
+
+(defn- homepage-youtube-playlist-carousel []
+  (let [playlist-url (str "https://www.youtube.com/playlist?list="
+                          homepage-youtube-playlist-id)]
+    (str
+     "<section class=\"card playlist-carousel\" id=\"youtube-playlist-carousel\" "
+     "data-youtube-playlist=\"" homepage-youtube-playlist-id "\" role=\"region\" "
+     "aria-roledescription=\"carousel\" aria-labelledby=\"youtube-playlist-heading\">"
+     "<div class=\"playlist-carousel-head\"><div><div class=\"step\">Latest videos</div>"
+     "<h2 id=\"youtube-playlist-heading\">Watch Alpha Compose in action.</h2>"
+     "<p class=\"muted\">This carousel follows the live YouTube playlist, so new videos appear automatically.</p>"
+     "</div></div>"
+     "<div class=\"playlist-player-frame\" id=\"youtube-playlist-player-frame\">"
+     "<div id=\"youtube-playlist-player\"></div></div>"
+     "<div class=\"playlist-controls\">"
+     "<button class=\"button\" id=\"youtube-playlist-previous\" type=\"button\" "
+     "aria-controls=\"youtube-playlist-items\" disabled>Previous video</button>"
+     "<p class=\"playlist-status muted\" id=\"youtube-playlist-status\" role=\"status\" aria-live=\"polite\">Loading the latest videos…</p>"
+     "<button class=\"button\" id=\"youtube-playlist-next\" type=\"button\" "
+     "aria-controls=\"youtube-playlist-items\" disabled>Next video</button></div>"
+     "<div class=\"playlist-items\" id=\"youtube-playlist-items\" role=\"list\" "
+     "aria-label=\"Videos in playlist order\"></div>"
+     "<p class=\"muted playlist-fallback\">If the carousel does not load, "
+     "<a href=\"" playlist-url "\" target=\"_blank\" rel=\"noopener noreferrer\">"
+     "view the full playlist on YouTube</a>.</p>"
+     "<noscript><p class=\"muted\">JavaScript is needed for the live carousel. "
+     "The full playlist link remains available.</p></noscript></section>"
+     "<script>(function(){"
+     "const root=document.getElementById('youtube-playlist-carousel');if(!root)return;"
+     "const playlistId=root.dataset.youtubePlaylist,frame=document.getElementById('youtube-playlist-player-frame'),items=document.getElementById('youtube-playlist-items'),status=document.getElementById('youtube-playlist-status'),previous=document.getElementById('youtube-playlist-previous'),next=document.getElementById('youtube-playlist-next');"
+     "let player=null,playlist=[],selectedIndex=0,loadTimeout=null,failed=false;"
+     "const validVideoId=value=>typeof value==='string'&&/^[A-Za-z0-9_-]{6,20}$/.test(value);"
+     "const watchUrl=videoId=>'https://www.youtube.com/watch?v='+encodeURIComponent(videoId)+'&list='+encodeURIComponent(playlistId);"
+     "function fail(){if(failed)return;failed=true;clearTimeout(loadTimeout);previous.disabled=true;next.disabled=true;frame.hidden=true;items.replaceChildren();status.classList.add('error');status.textContent='The video carousel could not load. Use the full playlist link below.';}"
+     "function markSelected(index,{focus=false,scroll=true}={}){if(!playlist.length)return;selectedIndex=(index+playlist.length)%playlist.length;const buttons=[...items.querySelectorAll('[data-playlist-index]')];buttons.forEach((button,buttonIndex)=>button.setAttribute('aria-current',String(buttonIndex===selectedIndex)));const selected=buttons[selectedIndex];if(scroll)selected?.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'nearest',inline:'center'});if(focus)selected?.focus();}"
+     "function play(index){if(!player||!playlist.length)return;markSelected(index);player.playVideoAt(selectedIndex);player.playVideo();}"
+     "function showPlaylist(videoIds){items.replaceChildren();videoIds.forEach((videoId,index)=>{const card=document.createElement('article'),button=document.createElement('button'),image=document.createElement('img'),label=document.createElement('span'),link=document.createElement('a');card.className='playlist-item';card.setAttribute('role','listitem');button.type='button';button.dataset.playlistIndex=String(index);button.setAttribute('aria-label','Play video '+(index+1)+' of '+videoIds.length);image.src='https://i.ytimg.com/vi/'+encodeURIComponent(videoId)+'/hqdefault.jpg';image.alt='';image.loading='lazy';image.decoding='async';image.referrerPolicy='no-referrer';label.className='playlist-item-label';label.textContent='Video '+(index+1);button.append(image,label);button.addEventListener('click',()=>play(index));link.href=watchUrl(videoId);link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open video '+(index+1)+' on YouTube';card.append(button,link);items.append(card);});}"
+     "function ready(event){clearTimeout(loadTimeout);player=event.target;const iframe=player.getIframe?.();iframe?.setAttribute('title','Alpha Compose YouTube playlist player');playlist=(player.getPlaylist?.()||[]).filter(validVideoId);if(!playlist.length){fail();return;}showPlaylist(playlist);const current=Number(player.getPlaylistIndex?.());markSelected(Number.isInteger(current)&&current>=0?current:0,{scroll:false});previous.disabled=playlist.length<2;next.disabled=playlist.length<2;status.textContent=playlist.length+' playlist video'+(playlist.length===1?'':'s')+' loaded in playlist order.';}"
+     "function syncSelection(){if(!player||!playlist.length)return;const current=Number(player.getPlaylistIndex?.());if(Number.isInteger(current)&&current>=0)markSelected(current);}"
+     "function initialize(){if(!window.YT?.Player){fail();return;}try{const mount=document.getElementById('youtube-playlist-player'),iframe=document.createElement('iframe'),origin=location.origin&&location.origin!=='null'?'&origin='+encodeURIComponent(location.origin):'';iframe.id='youtube-playlist-player';iframe.src='https://www.youtube-nocookie.com/embed/videoseries?enablejsapi=1&listType=playlist&list='+encodeURIComponent(playlistId)+'&playsinline=1&rel=0'+origin;iframe.title='Alpha Compose YouTube playlist player';iframe.allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';iframe.allowFullscreen=true;iframe.referrerPolicy='no-referrer';mount.replaceWith(iframe);player=new YT.Player(iframe,{events:{onReady:ready,onStateChange:syncSelection,onError:fail}});}catch(_error){fail();}}"
+     "function load(){loadTimeout=setTimeout(fail,10000);if(window.YT?.Player){initialize();return;}const earlier=window.onYouTubeIframeAPIReady;window.onYouTubeIframeAPIReady=function(){if(typeof earlier==='function')earlier();initialize();};const script=document.createElement('script');script.src='https://www.youtube.com/iframe_api';script.async=true;script.onerror=fail;document.head.append(script);}"
+     "previous.addEventListener('click',()=>play(selectedIndex-1));next.addEventListener('click',()=>play(selectedIndex+1));items.addEventListener('keydown',event=>{const button=event.target.closest?.('[data-playlist-index]');if(!button||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const index=Number(button.dataset.playlistIndex),target=event.key==='Home'?0:event.key==='End'?playlist.length-1:index+(event.key==='ArrowLeft'?-1:1);markSelected(target,{focus:true});});"
+     "if('requestIdleCallback'in window)requestIdleCallback(load,{timeout:1500});else setTimeout(load,0);"
+     "})();</script>")))
 
 (def changelog-page
   (public-page
@@ -1559,6 +1606,7 @@
                "<p id=\"product-updates-privacy\" class=\"muted\">Alpha Compose uses this address only to send the signup notification and does not retain it in application storage, logs, or analytics.</p>"
                "<button class=\"button primary\" type=\"submit\">Keep me informed</button></form>"))
         "</section>"
+        (homepage-youtube-playlist-carousel)
         (when feedback
           "<script>document.getElementById('product-updates-feedback')?.focus();</script>"))))
 
@@ -1627,6 +1675,12 @@
         "in Firestore, application logs, analytics, or another application data store. "
         "Those details exist only during bounded request processing and in the configured "
         "email processor and recipient mailbox.</p>"
+        "<h2>Homepage YouTube videos</h2><p>The signed-out homepage loads its live "
+        "playlist through the privacy-enhanced YouTube player after the page content is "
+        "available. YouTube receives network and browser information needed to deliver "
+        "the player and thumbnails. Alpha Compose does not send your Google account, "
+        "Drive files, or activity data to YouTube. YouTube handles its data under the "
+        "<a href=\"https://policies.google.com/privacy\">Google Privacy Policy</a>.</p>"
         "<h2>Sharing and security</h2><p>We use Google Cloud and Google Drive to "
         "operate the service, and Resend processes the plain-text product-updates notification. "
         "We do not sell personal information or use activity data for "

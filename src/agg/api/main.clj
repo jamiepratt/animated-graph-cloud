@@ -1165,6 +1165,15 @@
     (respond-redirect! exchange (:authorizationUrl started)
                        [(browser-cookie-header cookie)])))
 
+(def ^:private anonymous-page-content-security-policy
+  "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://www.youtube.com; frame-src https://www.youtube-nocookie.com; style-src 'unsafe-inline'; img-src 'self' data: https://i.ytimg.com; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+
+(defn- secure-anonymous-page! [^HttpExchange exchange]
+  (doto (.getResponseHeaders exchange)
+    (.set "Referrer-Policy" "no-referrer")
+    (.set "Content-Security-Policy"
+          anonymous-page-content-security-policy)))
+
 (defn- finish-login!
   [exchange auth-system dependencies request-id]
   (let [params (query-params exchange)
@@ -1238,6 +1247,7 @@
 
 (defn- product-updates-request!
   [exchange product-updates-system dependencies request-id]
+  (secure-anonymous-page! exchange)
   (let [form (request-form exchange)]
     (try
       (product-updates/submit!
@@ -1339,12 +1349,15 @@
            {:proof (when product-updates-system
                      (product-updates/issue-proof product-updates-system))}))]
     (doto (.getResponseHeaders exchange)
-      (.set "Cache-Control" "no-store")
-      (.set "Referrer-Policy" "no-referrer")
-      (.set "Content-Security-Policy"
-            (if picker-config
-              "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://apis.google.com https://www.gstatic.com; frame-src https://docs.google.com https://accounts.google.com; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' https://www.googleapis.com https://*.googleapis.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
-              "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")))
+      (.set "Cache-Control" "no-store"))
+    (if user
+      (doto (.getResponseHeaders exchange)
+        (.set "Referrer-Policy" "no-referrer")
+        (.set "Content-Security-Policy"
+              (if picker-config
+                "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://apis.google.com https://www.gstatic.com; frame-src https://docs.google.com https://accounts.google.com; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' https://www.googleapis.com https://*.googleapis.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+                "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")))
+      (secure-anonymous-page! exchange))
     (respond! exchange 200 "text/html; charset=utf-8" body)))
 
 (defn- proto-landing! [^HttpExchange exchange auth-system]

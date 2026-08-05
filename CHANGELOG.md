@@ -11,6 +11,7 @@ User-visible additions, changes, and fixes for Alpha Compose.
 - Opened Alpha Compose access to eligible people with a verified Google account, without requiring prior membership approval.
 - Added a signed-out homepage signup for important product updates without retaining the submitted address in application storage, logs, or analytics.
 - Explained that Alpha Compose is currently completely free, will always offer a free tier, and will add paid premium features later.
+- Added a responsive signed-out homepage carousel that follows the live Alpha Compose YouTube playlist and keeps playlist context when opening a selected video.
 - Added private video preview preparation for browser-incompatible source videos. The original Drive file is unchanged, each private preview expires after 24 hours, and every charged attempt uses the displayed processing allowance.
 
 ### Fixed
