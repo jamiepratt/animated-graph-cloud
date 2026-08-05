@@ -10,9 +10,9 @@
   {:from "Alpha Compose <early-access@alphacompose.com>"
    :to "me@jamiep.org"
    :reply-to "verified@example.com"
-   :subject "Alpha Compose early access request"
-   :text "Verified email: verified@example.com\nInstagram handle: Not provided\nMessage: Not provided\nSubmitted at: 2026-07-22T12:00:00Z"
-   :idempotency-key "early-access/opaque-notification-id"})
+   :subject "Alpha Compose product updates signup"
+   :text "Product updates email: verified@example.com\nSubmitted at: 2026-08-05T12:00:00Z"
+   :idempotency-key "product-updates/opaque-notification-id"})
 
 (defn- delivery-error [notifier]
   (try
@@ -38,12 +38,12 @@
       (is (= (Duration/ofSeconds 10) request-timeout))
       (is (= "Bearer private-resend-key" (get headers "Authorization")))
       (is (= "application/json" (get headers "Content-Type")))
-      (is (= "early-access/opaque-notification-id"
+      (is (= "product-updates/opaque-notification-id"
              (get headers "Idempotency-Key")))
       (is (= {"from" "Alpha Compose <early-access@alphacompose.com>"
               "to" "me@jamiep.org"
               "reply_to" "verified@example.com"
-              "subject" "Alpha Compose early access request"
+              "subject" "Alpha Compose product updates signup"
               "text" (:text notification)}
              parsed))
       (is (not (re-find #"proof|private-resend-key" body))))))
@@ -93,7 +93,7 @@
            ["Reply-To injection" :reply-to
             "verified@example.com\r\nBcc: attacker@example.com"]
            ["idempotency injection" :idempotency-key
-            "early-access/opaque-id\r\nX-Private: value"]]]
+            "product-updates/opaque-id\r\nX-Private: value"]]]
     (testing label
       (let [requests (atom [])
             notifier (resend/notifier

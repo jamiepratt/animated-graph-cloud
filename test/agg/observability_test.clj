@@ -106,11 +106,11 @@
             :errorType ":agg.drive.gcp/playback-range-proxy-failed"}
            fields))))
 
-(deftest early-access-delivery-event-keeps-only-bounded-operations-data
+(deftest product-updates-delivery-event-keeps-only-bounded-operations-data
   (is (= {:severity "ERROR"
           :component "api"
-          :event "early_access_notification_failed"
-          :category "early_access_delivery"
+          :event "product_updates_notification_failed"
+          :category "product_updates_delivery"
           :upstreamStatus 503
           :retryable true
           :sourceFile "agg/early_access/resend.clj"
@@ -119,8 +119,8 @@
          (observability/safe-event-fields
           {:severity "ERROR"
            :component "api"
-           :event "early_access_notification_failed"
-           :category "early_access_delivery"
+           :event "product_updates_notification_failed"
+           :category "product_updates_delivery"
            :upstreamStatus 503
            :retryable true
            :sourceFile "agg/early_access/resend.clj"

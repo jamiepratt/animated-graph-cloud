@@ -3,6 +3,7 @@
             [agg.auth.core :as auth]
             [agg.browser-process :as browser-process]
             [agg.drive.core :as drive]
+            [agg.early-access.core :as product-updates]
             [agg.http-test-support :as test-http]
             [agg.jobs-test :as fixture]
             [agg.jobs.lifecycle :as jobs]
@@ -1302,18 +1303,18 @@
      html
      (str "--window-size=" window-size))))
 
-(defn- early-access-browser-outcome [page window-size]
+(defn- product-updates-browser-outcome [page window-size]
   (let [scenario
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
-         "const form=document.querySelector('form[action=\"/v1/early-access/request\"]'),feedback=document.getElementById('early-access-feedback'),email=document.getElementById('early-access-email'),instagram=document.getElementById('early-access-instagram'),message=document.getElementById('early-access-message'),interactive=[...document.querySelectorAll('input:not([type=hidden]),textarea,button,a[href]')];"
-         "const outcome={activeId:document.activeElement?.id||null,feedbackRole:feedback?.getAttribute('role')||null,formAction:form?.getAttribute('action')||null,emailReadOnly:email?.readOnly??null,emailLabel:email?.labels?.[0]?.getAttribute('for')||null,instagramLabel:instagram?.labels?.[0]?.getAttribute('for')||null,messageLabel:message?.labels?.[0]?.getAttribute('for')||null,keyboardReachable:interactive.every(node=>node.tabIndex>=0),keyboardOrder:interactive.map(node=>node.id||node.getAttribute('href')||node.tagName.toLowerCase()),mailto:document.querySelector('a[href=\"mailto:me@jamiep.org\"]')?.href||null,viewportWidth:window.innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth,formFits:!form||form.getBoundingClientRect().right<=window.innerWidth};"
+         "const form=document.querySelector('form[action=\"/v1/product-updates/signup\"]'),feedback=document.getElementById('product-updates-feedback'),email=document.getElementById('product-updates-email'),interactive=[...document.querySelectorAll('input:not([type=hidden]),button,a[href]')];"
+         "const outcome={activeId:document.activeElement?.id||null,feedbackRole:feedback?.getAttribute('role')||null,formAction:form?.getAttribute('action')||null,emailLabel:email?.labels?.[0]?.getAttribute('for')||null,keyboardReachable:interactive.every(node=>node.tabIndex>=0),keyboardOrder:interactive.map(node=>node.id||node.getAttribute('href')||node.tagName.toLowerCase()),viewportWidth:window.innerWidth,noHorizontalOverflow:document.documentElement.scrollWidth<=window.innerWidth,formFits:!form||form.getBoundingClientRect().right<=window.innerWidth};"
          "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));"
          "</script>")
         html (str/replace page "</body>" (str scenario "</body>"))]
     (browser-outcome
-     "agg-early-access-browser-"
-     "Early-access browser regression requires Chrome or Chromium"
+     "agg-product-updates-browser-"
+     "Product-updates browser regression requires Chrome or Chromium"
      html
      (str "--window-size=" window-size))))
 
@@ -1582,15 +1583,11 @@
 
 (deftest public-pages-use-one-product-navigation-with-the-current-page-marked
   (let [pages
-        {"anonymous home" [ui/anonymous-page nil]
+        {"anonymous home" [(ui/anonymous-page {}) nil]
          "FAQ" [ui/faq-page "/faq"]
          "Privacy" [ui/privacy-page "/privacy"]
          "Terms" [ui/terms-page "/terms"]
-         "Drive recovery" [ui/drive-recovery-page nil]
-         "early access" [(ui/early-access-page
-                          {:email "verified@example.com"
-                           :proof "signed-proof"})
-                         nil]}]
+         "Drive recovery" [ui/drive-recovery-page nil]}]
     (doseq [[surface [page active-path]] pages]
       (testing surface
         (let [header (second
@@ -1670,18 +1667,48 @@
                            "Alpha Compose does not automatically persist Project JSON"))
         (is (str/includes? (.body privacy)
                            "Credentials, CSRF values, signed URLs, recording-clock candidates, preview images, playback state, and job results are excluded from Project JSON"))
-        (is (str/includes? (.body privacy) "early-access request"))
-        (is (str/includes? (.body privacy) "Instagram handle"))
-        (is (str/includes? (.body privacy) "optional message"))
+        (is (str/includes? (.body privacy) "product-updates signup"))
+        (is (not (str/includes? (.body privacy) "Instagram handle")))
+        (is (not (str/includes? (.body privacy) "optional message")))
         (is (str/includes? (.body privacy) "Resend"))
         (is (str/includes? (.body privacy)
-                           "does not retain early-access requests"))
+                           "does not retain product-updates signups"))
         (is (str/includes? (.body privacy) "contact or deletion request"))
         (is (= 200 (.statusCode terms)))
         (is (str/includes? (.body terms)
                            "<a href=\"/terms\" aria-current=\"page\">Terms</a>"))
         (is (str/includes? (.body terms) "Terms of service"))
         (is (str/includes? (.body terms) "me@jamiep.org")))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest signed-out-homepage-offers-product-updates-signup
+  (let [port (available-port)
+        {:keys [auth-system]} (fixture)
+        updates-system
+        (product-updates/system
+         {:proof-key (.getBytes "01234567890123456789012345678901")})
+        server (start-api! port {:auth-system auth-system
+                                 :product-updates-system updates-system})]
+    (try
+      (let [response (request! port :get "/" nil {})
+            body (.body response)]
+        (is (= 200 (.statusCode response)))
+        (is (str/includes? body
+                           "action=\"/v1/product-updates/signup\""))
+        (is (re-find #"name=\"proof\" value=\"[^\"]+\"" body))
+        (is (str/includes? body
+                           "<label for=\"product-updates-email\"><strong>Email</strong></label>"))
+        (is (str/includes? body
+                           "id=\"product-updates-email\" type=\"email\" name=\"email\""))
+        (is (str/includes? body ">Keep me informed</button>"))
+        (is (str/includes? body
+                           "More features and improvements are on the way. We are making Alpha Compose easier and more intuitive to use, expanding what it can do, and adding support for more sports and activity data. Leave your email to hear about important updates."))
+        (doseq [obsolete ["Ask to test Alpha Compose"
+                          "Instagram handle"
+                          "Message (optional)"
+                          "Try another Google account"]]
+          (is (not (str/includes? body obsolete)) obsolete)))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
@@ -1929,7 +1956,7 @@
     (is (not (str/includes? help-link "target=")))))
 
 (deftest contextual-help-links-target-the-narrowest-faq-answers
-  (let [homepage ui/anonymous-page
+  (let [homepage (ui/anonymous-page {})
         compose (ui/page {:user {:email "member@example.com" :role :member}
                           :csrf "csrf-test"
                           :tokens []
@@ -2162,11 +2189,11 @@
                            "Learn about Preview admission cost"]]
         surfaces {"homepage desktop"
                   [(contextual-help-browser-outcome
-                    ui/anonymous-page "1280,900")
+                    (ui/anonymous-page {}) "1280,900")
                    expected-homepage]
                   "homepage mobile"
                   [(contextual-help-browser-outcome
-                    ui/anonymous-page "390,844")
+                    (ui/anonymous-page {}) "390,844")
                    expected-homepage]
                   "compose desktop"
                   [(contextual-help-browser-outcome compose "1280,900")
@@ -2265,7 +2292,7 @@
     (is (true? (:detailsFit outcome)))))
 
 (deftest anonymous-homepage-explains-why-activity-video-matters
-  (let [page ui/anonymous-page
+  (let [page (ui/anonymous-page {})
         lower-page (str/lower-case page)]
     (doseq [claim ["Turn your activity into a video worth sharing."
                    "See what was happening inside you"
@@ -2288,14 +2315,11 @@
 
 (deftest full-page-surfaces-share-the-telemetry-theme
   (let [pages
-        {"anonymous" ui/anonymous-page
+        {"anonymous" (ui/anonymous-page {})
          "faq" ui/faq-page
          "privacy" ui/privacy-page
          "terms" ui/terms-page
          "Drive recovery" ui/drive-recovery-page
-         "early access" (ui/early-access-page
-                         {:email "verified@example.com"
-                          :proof "signed-proof"})
          "signed-in compose, tokens, and administration"
          (ui/page {:user {:email "owner@example.com" :role :owner}
                    :csrf "csrf-test"
@@ -2326,9 +2350,9 @@
                           :tokens []
                           :members []
                           :logs-enabled? true})
-        outcomes {"anonymous desktop" (theme-browser-outcome ui/anonymous-page
+        outcomes {"anonymous desktop" (theme-browser-outcome (ui/anonymous-page {})
                                                              "1280,900")
-                  "anonymous mobile" (theme-browser-outcome ui/anonymous-page
+                  "anonymous mobile" (theme-browser-outcome (ui/anonymous-page {})
                                                             "390,844")
                   "faq desktop" (theme-browser-outcome ui/faq-page "1280,900")
                   "faq mobile" (theme-browser-outcome ui/faq-page "390,844")
@@ -2421,53 +2445,43 @@
           (is (true? (:noHorizontalOverflow outcome)))
           (is (true? (:headerFits outcome))))))))
 
-(deftest early-access-feedback-and-form-are-keyboard-and-mobile-safe
+(deftest product-updates-feedback-and-form-are-keyboard-and-mobile-safe
   (let [initial-page
-        (ui/early-access-page
-         {:email "verified@example.com"
-          :proof "signed-proof"})
+        (ui/anonymous-page {:proof "signed-proof"})
         retry-page
-        (ui/early-access-page
-         {:email "verified@example.com"
+        (ui/anonymous-page
+         {:email "runner@example.com"
           :proof "signed-proof"
-          :instagram "@runner"
-          :message "Please let me test."
           :feedback {:kind :failure
-                     :title "Request not sent"
-                     :message "Retry below or email directly."}})
+                     :title "Signup not sent"
+                     :message "Retry below."}})
         success-page
-        (ui/early-access-page
+        (ui/anonymous-page
          {:feedback {:kind :success
-                     :title "Request sent"
-                     :message "Your request was sent."}})
-        initial (early-access-browser-outcome initial-page "1280,900")
-        retry (early-access-browser-outcome retry-page "375,800")
-        success (early-access-browser-outcome success-page "1280,900")]
+                     :title "You are signed up"
+                     :message "Your signup was sent."}})
+        initial (product-updates-browser-outcome initial-page "1280,900")
+        retry (product-updates-browser-outcome retry-page "375,800")
+        success (product-updates-browser-outcome success-page "1280,900")]
     (is (= 1280 (:viewportWidth initial)))
-    (is (= "/v1/early-access/request" (:formAction initial)))
+    (is (= "/v1/product-updates/signup" (:formAction initial)))
     (is (true? (:noHorizontalOverflow initial)))
     (is (true? (:formFits initial)))
-    (is (= "early-access-feedback" (:activeId retry)))
+    (is (= "product-updates-feedback" (:activeId retry)))
     (is (= "alert" (:feedbackRole retry)))
-    (is (= "/v1/early-access/request" (:formAction retry)))
-    (is (true? (:emailReadOnly retry)))
-    (is (= "early-access-email" (:emailLabel retry)))
-    (is (= "early-access-instagram" (:instagramLabel retry)))
-    (is (= "early-access-message" (:messageLabel retry)))
+    (is (= "/v1/product-updates/signup" (:formAction retry)))
+    (is (= "product-updates-email" (:emailLabel retry)))
     (is (true? (:keyboardReachable retry)))
-    (is (= ["/" "/changelog" "/faq" "/privacy" "/terms" "early-access-email"
-            "early-access-instagram" "early-access-message" "button"
-            "mailto:me@jamiep.org" "/v1/auth/login/start"
-            "mailto:me@jamiep.org"]
+    (is (= ["/" "/changelog" "/faq" "/privacy" "/terms"
+            "/v1/auth/login/start" "/faq#generated-heartbeat-sound"
+            "product-updates-email" "button" "mailto:me@jamiep.org"]
            (:keyboardOrder retry)))
-    (is (= "mailto:me@jamiep.org" (:mailto retry)))
     (is (<= (:viewportWidth retry) 500))
     (is (true? (:noHorizontalOverflow retry)))
     (is (true? (:formFits retry)))
-    (is (= "early-access-feedback" (:activeId success)))
+    (is (= "product-updates-feedback" (:activeId success)))
     (is (= "status" (:feedbackRole success)))
     (is (nil? (:formAction success)))
-    (is (= "mailto:me@jamiep.org" (:mailto success)))
     (is (true? (:noHorizontalOverflow success)))))
 
 (deftest authenticated-compose-page-renders-parseable-inline-script

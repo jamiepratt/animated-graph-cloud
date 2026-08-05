@@ -14,7 +14,7 @@
 (def ^:private locked-sender
   "Alpha Compose <early-access@alphacompose.com>")
 (def ^:private locked-recipient "me@jamiep.org")
-(def ^:private locked-subject "Alpha Compose early access request")
+(def ^:private locked-subject "Alpha Compose product updates signup")
 
 (defn- jdk-sender []
   (let [client (-> (HttpClient/newBuilder)
@@ -37,7 +37,7 @@
 
 (defn- provider-error! [status]
   (throw (errors/raise!
-          "Resend rejected the early-access notification"
+          "Resend rejected the product-updates notification"
           {:type (if (<= 500 status 599)
                    ::provider-unavailable
                    ::provider-rejected)
@@ -45,7 +45,7 @@
            :retryable (retryable-status? status)})))
 
 (defn- invalid-notification! []
-  (throw (errors/raise! "Early-access notification is invalid"
+  (throw (errors/raise! "Product-updates notification is invalid"
                         {:type ::invalid-notification
                          :retryable false})))
 
@@ -61,7 +61,7 @@
        (<= 1 (count text) 4096)
        (string? idempotency-key)
        (<= (count idempotency-key) 256)
-       (re-matches #"early-access/[A-Za-z0-9_-]{20,128}"
+       (re-matches #"product-updates/[A-Za-z0-9_-]{20,128}"
                    idempotency-key)))
 
 (defrecord ResendNotifier [api-key endpoint send!]

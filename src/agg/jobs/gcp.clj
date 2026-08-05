@@ -1172,11 +1172,11 @@
               :picker-app-id (env "AGG_PICKER_APP_ID" nil)
               :token-hash-secret (env "AGG_TOKEN_HASH_PEPPER" nil)
               :resend-api-key (env "AGG_RESEND_API_KEY" nil)
-              :early-access-sender
-              (env "AGG_EARLY_ACCESS_SENDER"
+              :product-updates-sender
+              (env "AGG_PRODUCT_UPDATES_SENDER"
                    "Alpha Compose <early-access@alphacompose.com>")
-              :early-access-recipient
-              (env "AGG_EARLY_ACCESS_RECIPIENT" "me@jamiep.org")}))
+              :product-updates-recipient
+              (env "AGG_PRODUCT_UPDATES_RECIPIENT" "me@jamiep.org")}))
           derivative-enabled?
           (and auth-enabled?
                (:bucket derivative-config)

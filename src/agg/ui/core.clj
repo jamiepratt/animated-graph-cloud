@@ -1488,7 +1488,8 @@
         (main-release/public-changelog-html)
         "</article>")))
 
-(def anonymous-page
+(defn anonymous-page
+  [{:keys [proof email feedback]}]
   (public-page
    "Finished activity videos"
    (str "<section class=\"hero\"><div class=\"hero-copy\">"
@@ -1538,7 +1539,27 @@
         "<section class=\"card trust-card\"><div class=\"step\">Access &amp; privacy</div>"
         "<h2>Your Google Drive stays under your control.</h2>"
         "<p class=\"muted\">Alpha Compose can only use files you choose and the finished "
-        "videos it creates. It cannot access the rest of your Google Drive.</p></section>")))
+        "videos it creates. It cannot access the rest of your Google Drive.</p></section>"
+        "<section class=\"card trust-card\" aria-labelledby=\"product-updates-heading\">"
+        "<div class=\"step\">Product updates</div>"
+        "<h2 id=\"product-updates-heading\">Hear about important updates.</h2>"
+        "<p class=\"muted\">More features and improvements are on the way. We are making Alpha Compose easier and more intuitive to use, expanding what it can do, and adding support for more sports and activity data. Leave your email to hear about important updates.</p>"
+        (when feedback
+          (str "<div role=\"" (if (= :success (:kind feedback)) "status" "alert")
+               "\" tabindex=\"-1\" id=\"product-updates-feedback\"><h2>"
+               (escape-html (:title feedback)) "</h2><p>"
+               (escape-html (:message feedback)) "</p></div>"))
+        (when (and proof (not= :success (:kind feedback)))
+          (str "<form class=\"card\" method=\"post\" action=\"/v1/product-updates/signup\" aria-describedby=\"product-updates-privacy\">"
+               "<input type=\"hidden\" name=\"proof\" value=\"" (escape-html proof) "\">"
+               "<label for=\"product-updates-email\"><strong>Email</strong></label>"
+               "<input id=\"product-updates-email\" type=\"email\" name=\"email\" autocomplete=\"email\" inputmode=\"email\" maxlength=\"254\" value=\""
+               (escape-html email) "\" required>"
+               "<p id=\"product-updates-privacy\" class=\"muted\">Alpha Compose uses this address only to send the signup notification and does not retain it in application storage, logs, or analytics.</p>"
+               "<button class=\"button primary\" type=\"submit\">Keep me informed</button></form>"))
+        "</section>"
+        (when feedback
+          "<script>document.getElementById('product-updates-feedback')?.focus();</script>"))))
 
 (def faq-page
   (public-page
@@ -1575,52 +1596,6 @@
         "<div class=\"actions\"><a class=\"cta\" href=\"/v1/auth/login/start?recovery=true\">"
         "Continue with Google</a></div></div></section>")))
 
-(defn early-access-page
-  [{:keys [email proof instagram message feedback request-id]}]
-  (public-page
-   "Early access"
-   (str
-    "<section class=\"hero\"><div class=\"hero-copy\">"
-    "<div class=\"eyebrow\">Verified Google account</div>"
-    "<h1>Alpha Compose could not enroll this account</h1>"
-    "<p class=\"muted\">This verified sign-in did not create product access. "
-    "If you would like help or product updates, leave your details below.</p>"
-    "<p><strong>No session, Drive grant, membership binding, or render was created.</strong></p>"
-    (when feedback
-      (str "<div class=\"card\" role=\"" (if (= :success (:kind feedback))
-                                           "status" "alert")
-           "\" tabindex=\"-1\" id=\"early-access-feedback\"><h2>"
-           (escape-html (:title feedback)) "</h2><p>"
-           (escape-html (:message feedback)) "</p></div>"))
-    (when (and email proof)
-      (str
-       "<form class=\"card\" method=\"post\" action=\"/v1/early-access/request\" "
-       "aria-describedby=\"early-access-privacy form-status\">"
-       "<input type=\"hidden\" name=\"proof\" value=\"" (escape-html proof) "\">"
-       "<label for=\"early-access-email\"><strong>Email</strong></label>"
-       "<input id=\"early-access-email\" type=\"email\" name=\"email\" value=\""
-       (escape-html email) "\" readonly required>"
-       "<p class=\"muted\">This is the Google email address just verified.</p>"
-       "<label for=\"early-access-instagram\"><strong>Instagram handle (optional)</strong></label>"
-       "<input id=\"early-access-instagram\" name=\"instagram\" maxlength=\"64\" value=\""
-       (escape-html instagram) "\">"
-       "<label for=\"early-access-message\"><strong>Message (optional)</strong></label>"
-       "<textarea id=\"early-access-message\" name=\"message\" maxlength=\"2000\" rows=\"6\">"
-       (escape-html message) "</textarea>"
-       "<p id=\"early-access-privacy\" class=\"muted\">Your details are used only to email "
-       "the Alpha Compose operator about this request. Alpha Compose does not retain them.</p>"
-       "<p id=\"form-status\" aria-live=\"polite\"></p>"
-       "<button class=\"button primary\" type=\"submit\">Ask to test Alpha Compose</button>"
-       "</form>"))
-    "<div class=\"actions\"><a href=\"mailto:me@jamiep.org\">Email me@jamiep.org directly</a>"
-    "<a href=\"/v1/auth/login/start\">Try another Google account</a></div>"
-    (when request-id
-      (str "<p class=\"muted\"><small>Request ID: "
-           (escape-html request-id) "</small></p>"))
-    "</div></section>"
-    (when feedback
-      "<script>document.getElementById('early-access-feedback')?.focus();</script>"))))
-
 (def privacy-page
   (public-page
    "Privacy policy"
@@ -1633,9 +1608,8 @@
         "As part of the same authorization, Alpha Compose receives only the "
         "<code>drive.file</code> permission, allowing access to files you select or "
         "that Alpha Compose creates. We process activity data and optional watermark "
-        "content solely to create the requested output. For an early-access request, "
-        "we collect the verified Google email address, an optional Instagram handle, "
-        "and an optional message solely so the operator can respond about testing.</p>"
+        "content solely to create the requested output. For a product-updates signup, "
+        "we process the email address solely to send the notification to the operator.</p>"
         "<h2>Project JSON and browser state</h2><p>Alpha Compose does not automatically "
         "persist Project JSON. Project JSON exists only when you explicitly download, "
         "copy, upload, or paste it yourself. It may include private activity data, a "
@@ -1648,12 +1622,12 @@
         "membership, and job records are stored in Google Cloud. Temporary request "
         "and output objects are deleted after 24 hours; job metadata is scheduled for "
         "deletion after 90 days. Completed outputs are delivered to your Google Drive "
-        "and remain there until you delete them. Alpha Compose does not retain early-access requests "
+        "and remain there until you delete them. Alpha Compose does not retain product-updates signups "
         "in Firestore, application logs, analytics, or another application data store. "
         "Those details exist only during bounded request processing and in the configured "
         "email processor and recipient mailbox.</p>"
         "<h2>Sharing and security</h2><p>We use Google Cloud and Google Drive to "
-        "operate the service, and Resend processes the plain-text early-access notification. "
+        "operate the service, and Resend processes the plain-text product-updates notification. "
         "We do not sell personal information or use activity data for "
         "advertising. Verified Google users enroll on first sign-in; administrators can "
         "suspend or reactivate membership. Credentials are encrypted, "
@@ -1663,7 +1637,7 @@
         "including its Limited Use requirements.</p>"
         "<h2>Your choices</h2><p>You may disconnect Alpha Compose in your Google Account, "
         "delete delivered files from Drive, or email me@jamiep.org with a contact or deletion request "
-        "covering service records or an early-access notification. "
+        "covering service records or a product-updates notification. "
         "Revoking Drive access may prevent pending renders from completing.</p>")
    :privacy))
 
