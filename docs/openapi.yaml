@@ -82,7 +82,7 @@ paths:
       operationId: finishGoogleLogin
       tags: [Browser authorization]
       summary: Finish combined Google identity and Drive authorization.
-      description: Validates signed state and PKCE, verifies identity and membership, rejects unexpected scopes, obtains or validates an encrypted refresh token, reuses or creates the output folder, persists the grant, and issues the browser session last.
+      description: Validates signed state and PKCE, verifies the Google identity and exact scopes, transactionally creates and subject-binds an active member on first sign-in, rejects suspended memberships and mismatched subjects, obtains or validates an encrypted refresh token, reuses or creates the output folder, persists the grant, and issues the browser session last.
       security: []
       parameters:
         - $ref: "#/components/parameters/OAuthCode"
@@ -102,7 +102,7 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/Error"}
         "401": {$ref: "#/components/responses/AuthenticationRequired"}
-        "403": {$ref: "#/components/responses/NotAllowlisted"}
+        "403": {$ref: "#/components/responses/AccountSuspended"}
         "502":
           description: Google OAuth or Drive is temporarily unavailable.
           content:
@@ -1359,7 +1359,12 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
     NotAllowlisted:
-      description: Google identity is not an approved user.
+      description: Live membership validation failed for an existing credential.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    AccountSuspended:
+      description: The verified account could not use an active membership. No session or Drive grant was created.
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -1845,7 +1850,7 @@ components:
         email: {type: string, format: email}
         role: {type: string, enum: [owner, admin, member]}
         status: {type: string, enum: [active, revoked]}
-        membershipVersion: {type: integer, minimum: 1}
+        membershipVersion: {type: string, format: uuid}
     Error:
       type: object
       required: [error]
@@ -1857,6 +1862,7 @@ components:
             - payload_too_large
             - authentication_required
             - not_allowlisted
+            - account_suspended
             - invalid_oauth_state
             - invalid_oauth_code
             - invalid_drive_scopes

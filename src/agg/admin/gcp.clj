@@ -57,7 +57,7 @@
                      (string? (:subject revocation))
                      (not-empty (:subject revocation)))
         (throw (errors/raise! "Owner rotation cleanup record is invalid"
-                        {:type ::admin/revocation-incomplete})))
+                              {:type ::admin/revocation-incomplete})))
       revocation)))
 
 (defn- owner-revocation-document [member]
@@ -87,13 +87,17 @@
       (transaction!
        firestore
        (fn [^Transaction transaction]
-         (let [member (snapshot-member (await! (.get transaction reference)))]
-           (when-not (and member
-                          (= :active (:status member))
+         (let [existing (snapshot-member (await! (.get transaction reference)))
+               member (or existing
+                          {:email email
+                           :role :member
+                           :status :active
+                           :membership-version (str (UUID/randomUUID))})]
+           (when-not (and (= :active (:status member))
                           (or (nil? (:subject member))
                               (= subject (:subject member))))
              (throw (errors/raise! "Member is not allowlisted"
-                             {:type ::admin/not-allowlisted})))
+                                   {:type ::admin/not-allowlisted})))
            (let [authorized (assoc member :subject subject)]
              (.set transaction reference (member-document authorized))
              authorized))))))
@@ -104,7 +108,7 @@
                          .get await! snapshot-member)]
       (when-not (active? member identity)
         (throw (errors/raise! "Member is not allowlisted"
-                        {:type ::admin/not-allowlisted})))
+                              {:type ::admin/not-allowlisted})))
       member))
   (with-active-member! [this identity action]
     (admin/active-member this identity)
@@ -134,7 +138,7 @@
                          snapshot-owner-revocation))
                _ (when pending
                    (throw (errors/raise! "Owner rotation cleanup is incomplete"
-                                   {:type ::admin/revocation-incomplete})))
+                                         {:type ::admin/revocation-incomplete})))
                member (if (= :active (:status existing))
                         existing
                         {:email email
@@ -153,10 +157,10 @@
          (let [member (snapshot-member (await! (.get transaction reference)))]
            (when-not member
              (throw (errors/raise! "Member does not exist"
-                             {:type ::admin/member-not-found})))
+                                   {:type ::admin/member-not-found})))
            (when (= :owner (:role member))
              (throw (errors/raise! "The owner cannot be revoked"
-                             {:type ::admin/owner-cannot-be-revoked})))
+                                   {:type ::admin/owner-cannot-be-revoked})))
            (let [revoked (assoc member :status :revoked)]
              (.set transaction reference (member-document revoked))
              revoked)))
@@ -170,7 +174,7 @@
                                                 reference)))]
       (when-not (active? member identity)
         (throw (errors/raise! "Member is not allowlisted"
-                        {:type ::admin/not-allowlisted})))
+                              {:type ::admin/not-allowlisted})))
       member))
   admin/OwnerRotationCleanup
   (pending-owner-rotation-cleanups [_]
@@ -203,7 +207,7 @@
                                  (:membership-version member))
                               (= (:subject cleanup) (:subject member)))
                  (throw (errors/raise! "Revoked owner generation changed during cleanup"
-                                 {:type ::admin/revocation-incomplete})))
+                                       {:type ::admin/revocation-incomplete})))
                (.set transaction member-reference
                      (member-document (dissoc member :subject)))
                (.delete transaction pending-reference)
@@ -246,7 +250,7 @@
                         snapshot-owner-revocation))
               _ (when pending
                   (throw (errors/raise! "Owner rotation cleanup is incomplete"
-                                  {:type ::admin/revocation-incomplete})))
+                                        {:type ::admin/revocation-incomplete})))
               owner (if (= :active (:status existing))
                       (assoc existing :role :owner)
                       {:email owner-email

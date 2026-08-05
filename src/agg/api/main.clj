@@ -434,6 +434,11 @@
      :status 403
      :body {:error "not_allowlisted"}}
 
+    ::auth/account-suspended
+    {:category "account_suspended"
+     :status 403
+     :body {:error "account_suspended"}}
+
     ::auth/invalid-state
     {:category "invalid_state"
      :status 400
@@ -571,11 +576,18 @@
            :next-step
            "Try again with the intended account and approve only the access Alpha Compose requests."}
           "not_allowlisted"
-          {:title "This Google account does not have Alpha Compose access"
+          {:title "This Google account could not sign in"
            :explanation
-           "The account was authenticated, but it is not on the administrator-managed access list."
+           "The account was authenticated, but current membership validation denied access."
            :next-step
-           "Try again with an approved Google account, or ask an Alpha Compose administrator for access."}
+           "Try another Google account, or ask an Alpha Compose administrator to review this membership."}
+          "account_suspended"
+          {:title "Alpha Compose access is suspended for this account"
+           :explanation
+           "The account was authenticated, but its Alpha Compose membership is not active."
+           :next-step
+           "Ask an Alpha Compose administrator to reactivate the membership before signing in again."
+           :no-effects "No session, Drive grant, or render was created."}
           "drive"
           (cond
             (= "workspace_restricted" reason)

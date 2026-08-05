@@ -93,7 +93,8 @@
 (defn- drive-callback-fixture
   ([oauth]
    (drive-callback-fixture oauth {}))
-  ([oauth {:keys [allowlist cipher drive grant-store drive-token-client]}]
+  ([oauth {:keys [allowlist cipher drive grant-store drive-token-client
+                  member-directory]}]
    (let [cipher (or cipher
                     (reify auth/TokenCipher
                       (encrypt-token! [_ value] (str "kms:" value))
@@ -116,6 +117,7 @@
                               :client-secret "client-secret"
                               :base-url "https://app.example.com"
                               :allowlist (or allowlist #{"owner@example.com"})
+                              :member-directory member-directory
                               :session-key (.getBytes "01234567890123456789012345678901")
                               :oauth oauth
                               :cipher cipher
@@ -123,8 +125,18 @@
                               :drive drive
                               :drive-token-client drive-token-client})]
      {:system system
-      :session (auth/issue-session system {:subject "google-subject-1"
-                                           :email "owner@example.com"})})))
+      :session (when-not member-directory
+                 (auth/issue-session system {:subject "google-subject-1"
+                                             :email "owner@example.com"}))})))
+
+(defn- suspended-member-directory []
+  (let [{:keys [directory service]}
+        (admin/in-memory-system {:owner-email "admin@example.com"})
+        owner (admin/authorize-member! directory "admin@example.com"
+                                       "admin-subject")]
+    (admin/authorize-member! directory "owner@example.com" "google-subject-1")
+    (admin/revoke-member! service owner "owner@example.com")
+    directory))
 
 (defn- valid-drive-oauth []
   (reify auth/OAuthClient
@@ -181,6 +193,8 @@
 
 (deftest login-sets-a-bounded-secure-http-only-session-cookie
   (let [port (available-port)
+        {:keys [directory]} (admin/in-memory-system
+                             {:owner-email "admin@example.com"})
         oauth (reify auth/OAuthClient
                 (exchange-code! [_ flow _ _ _]
                   (is (= :login flow))
@@ -190,7 +204,8 @@
                    :access-token "drive-access"
                    :refresh-token "drive-refresh"
                    :granted-scopes (set auth/approved-scopes)}))
-        system (assoc (:system (drive-callback-fixture oauth))
+        system (assoc (:system (drive-callback-fixture
+                                oauth {:member-directory directory}))
                       :base-url (str "http://127.0.0.1:" port))
         flow (auth/begin-flow! system :login nil)
         browser-cookie (auth/issue-browser-cookie
@@ -311,6 +326,12 @@
             :expected-status 403
             :expected-body {"error" "not_allowlisted"}
             :category "not_allowlisted"}
+           {:label "suspended member"
+            :oauth (valid-drive-oauth)
+            :options {:member-directory (suspended-member-directory)}
+            :expected-status 403
+            :expected-body {"error" "account_suspended"}
+            :category "account_suspended"}
            {:label "OAuth service"
             :oauth (reify auth/OAuthClient
                      (exchange-code! [_ _ _ _ _]
@@ -410,15 +431,13 @@
           (finally
             (.close ^java.lang.AutoCloseable server)))))))
 
-(deftest post-allowlist-login-recovers-missing-refresh-token-with-signed-consent
+(deftest first-login-enrolls-and-routine-login-reuses-the-drive-grant
   (let [port (available-port)
         events (atom [])
         grants (atom {})
         encrypted (atom [])
-        {:keys [directory service]}
+        {:keys [directory]}
         (admin/in-memory-system {:owner-email "owner@example.com"})
-        owner (admin/authorize-member! directory "owner@example.com"
-                                       "owner-subject")
         oauth (reify auth/OAuthClient
                 (exchange-code! [_ flow code _ _]
                   (is (= :login flow))
@@ -485,74 +504,26 @@
                            {:auth-system system
                             :event-sink #(swap! events conj [%1 %2])})]
     (try
-      (let [pre-membership-flow (auth/begin-flow! system :login nil)
-            rejected (callback! pre-membership-flow
-                                "pre-membership-code" "text/html")]
-        (is (= 403 (.statusCode rejected)))
-        (is (re-find #"^__session=.*Max-Age=0"
-                     (first (.allValues (.headers rejected) "Set-Cookie"))))
-        (is (empty? @grants))
-        (is (empty? @encrypted))
-        (is (empty? (filter #(= "private@example.com" (:email %))
-                            (admin/list-member-records directory))))
-        (admin/add-member! service owner "private@example.com")
-        (let [routine-flow (auth/begin-flow! system :login nil)
-              missing-refresh (callback! routine-flow "routine-code" "text/html")
-              body (.body missing-refresh)
-              recovery-cookie-token (cookie-token missing-refresh)
-              recovery-browser-cookie
-              (auth/browser-cookie system recovery-cookie-token)
-              recovery-cookie (str "__session=" recovery-cookie-token)
-              recovery-start
-              (get! port "/v1/auth/login/start?recovery=true"
-                    {"Cookie" recovery-cookie})
-              forged-recovery-start
-              (get! port "/v1/auth/login/start?recovery=true" {})
-              recovery-location
-              (.orElse (.firstValue (.headers recovery-start) "Location") "")
-              recovery-state (second (re-find #"[?&]state=([^&]+)"
-                                              recovery-location))
-              recovery-flow-cookie (cookie-token recovery-start)]
-          (is (= 401 (.statusCode missing-refresh)))
-          (is (re-find #"Google Drive authorization needs to be renewed" body))
-          (is (re-find #"no stored reusable grant" body))
-          (is (str/includes? body "<header class=\"product-header\">"))
-          (is (str/includes? body
-                             "<a class=\"brand\" href=\"/\">Alpha Compose</a>"))
-          (is (< (str/index-of body "href=\"/faq\"")
-                 (str/index-of body "href=\"/privacy\"")
-                 (str/index-of body "href=\"/terms\"")))
-          (is (re-find #"href=\"/v1/auth/login/start\?recovery=true\"" body))
-          (is (re-find #">Continue with Google<" body))
-          (is (nil? (:session recovery-browser-cookie)))
-          (is (auth/drive-recovery-token? system
-                                          (:oauth recovery-browser-cookie)))
-          (is (empty? @grants))
-          (is (empty? @encrypted))
-          (is (re-find #"prompt=consent" recovery-location))
-          (is (not (re-find #"prompt=consent"
-                            (.orElse
-                             (.firstValue (.headers forged-recovery-start)
-                                          "Location")
-                             ""))))
-          (let [recovered
-                (get! port
-                      (str "/v1/auth/login/callback?code=recovery-code&state="
-                           recovery-state)
-                      {"Accept" "text/html"
-                       "Cookie" (str "__session=" recovery-flow-cookie)})
-                recovered-user
-                (auth/session-user system (cookie-token recovered))]
-            (is (= 302 (.statusCode recovered)))
-            (is (= ["private-recovery-refresh"] @encrypted))
-            (is (= 1 (count @grants)))
-            (is (= "private@example.com" (:email recovered-user)))
-            (is (= :member (:role recovered-user)))))
-        (is (= ["not_allowlisted" "missing_refresh_token"]
-               (mapv (comp :category second) @events)))
-        (is (not (re-find
-                  #"pre-membership-code|routine-code|recovery-code|private@example.com|private-google-subject|private-access-token|private.*refresh"
-                  (pr-str @events)))))
+      (let [first-flow (auth/begin-flow! system :login nil)
+            first-login (callback! first-flow "pre-membership-code" "text/html")
+            first-user (auth/session-user system (cookie-token first-login))
+            routine-flow (auth/begin-flow! system :login nil)
+            routine-login (callback! routine-flow "routine-code" "text/html")
+            routine-user (auth/session-user system (cookie-token routine-login))
+            member (first (filter #(= "private@example.com" (:email %))
+                                  (admin/list-member-records directory)))]
+        (is (= 302 (.statusCode first-login)))
+        (is (= 302 (.statusCode routine-login)))
+        (is (= :member (:role member)))
+        (is (= :active (:status member)))
+        (is (= "private-google-subject" (:subject member)))
+        (is (string? (:membership-version member)))
+        (is (= (:membership-version member)
+               (:membership-version first-user)
+               (:membership-version routine-user)))
+        (is (= ["private-pre-refresh"] @encrypted))
+        (is (= 1 (count @grants)))
+        (is (empty? @events)))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
@@ -693,15 +664,15 @@
                                    body))
             set-cookie (first (.allValues (.headers response) "Set-Cookie"))]
         (is (= 403 (.statusCode response)))
-        (is (re-find #"Alpha Compose is in early access" body))
+        (is (re-find #"Alpha Compose could not enroll this account" body))
         (is (str/includes? body "<header class=\"product-header\">"))
         (is (str/includes? body
                            "<a class=\"brand\" href=\"/\">Alpha Compose</a>"))
         (is (< (str/index-of body "href=\"/faq\"")
                (str/index-of body "href=\"/privacy\"")
                (str/index-of body "href=\"/terms\"")))
-        (is (re-find #"limited to approved testers" body))
-        (is (re-find #"leave your details" body))
+        (is (re-find #"did not create product access" body))
+        (is (re-find #"help or product updates" body))
         (is (re-find #"action=\"/v1/early-access/request\"" body))
         (is (re-find #"type=\"email\"[^>]+value=\"owner@example\.com\"[^>]+readonly"
                      body))
@@ -718,6 +689,39 @@
         (is (= "not_allowlisted" (:category (second (first @events)))))
         (is (not (re-find #"owner@example\.com|google-subject-1|private-code|proof"
                           (pr-str @events)))))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest browser-login-callback-explains-suspended-membership
+  (let [port (available-port)
+        events (atom [])
+        {:keys [system]} (drive-callback-fixture
+                          (valid-drive-oauth)
+                          {:member-directory (suspended-member-directory)})
+        flow (auth/begin-flow! system :login nil)
+        browser-cookie (auth/issue-browser-cookie
+                        system {:oauth (:stateCookie flow)})
+        server (start-api! port
+                           {:auth-system system
+                            :early-access-system
+                            (early-access/system
+                             {:proof-key
+                              (.getBytes
+                               "01234567890123456789012345678901")})
+                            :event-sink #(swap! events conj [%1 %2])})]
+    (try
+      (let [response (get! port
+                           (str "/v1/auth/login/callback?code=code&state="
+                                (:state flow))
+                           {"Accept" "text/html"
+                            "Cookie" (str "__session=" browser-cookie)})
+            body (.body response)]
+        (is (= 403 (.statusCode response)))
+        (is (re-find #"access is suspended for this account" body))
+        (is (re-find #"reactivate the membership" body))
+        (is (not (re-find #"/v1/early-access/request" body)))
+        (is (= "account_suspended"
+               (:category (second (first @events))))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 

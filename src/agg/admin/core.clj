@@ -127,9 +127,13 @@
     (let [email (require-email email)
           subject (require-subject subject)]
       (locking lock
-        (let [member (get @records email)]
-          (when-not (and member
-                         (= :active (:status member))
+        (let [existing (get @records email)
+              member (or existing
+                         {:email email
+                          :role :member
+                          :status :active
+                          :membership-version (membership-version)})]
+          (when-not (and (= :active (:status member))
                          (or (nil? (:subject member))
                              (= subject (:subject member))))
             (throw (errors/raise! "Member is not allowlisted"

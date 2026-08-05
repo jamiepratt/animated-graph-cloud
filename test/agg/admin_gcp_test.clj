@@ -5,7 +5,7 @@
             [agg.auth.gcp :as auth-gcp]
             [agg.tokens.core :as tokens]
             [agg.tokens.gcp :as tokens-gcp]
-            [clojure.test :refer [deftest is]])
+            [clojure.test :refer [deftest is testing]])
   (:import (com.google.cloud.firestore FirestoreOptions)))
 
 (deftest configured-admins-are-bootstrapped-and-can-administer-members
@@ -38,6 +38,48 @@
                                          #{"admin@example.com"})
                    administrator))))
           (is (= :owner (:role (admin/active-member directory owner)))))
+        (finally
+          (.close firestore))))
+    (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))
+
+(deftest concurrent-first-logins-create-one-bound-membership-generation
+  (if-let [host (System/getenv "FIRESTORE_EMULATOR_HOST")]
+    (let [firestore (-> (FirestoreOptions/newBuilder)
+                        (.setProjectId "animated-graph-cloud-open-enrollment-test")
+                        (.setEmulatorHost host)
+                        .build
+                        .getService)]
+      (try
+        (doseq [collection ["members" "administration"]]
+          (.get (.recursiveDelete firestore (.collection firestore collection))))
+        (let [directory (gcp/member-directory firestore "owner@example.com")
+              start (promise)
+              attempts (doall
+                        (repeatedly
+                         12
+                         #(future
+                            @start
+                            (admin/authorize-member! directory
+                                                     "new@example.com"
+                                                     "new-subject"))))]
+          (deliver start true)
+          (let [members (mapv deref attempts)
+                enrolled (first members)]
+            (is (= 1 (count (set (map :membership-version members)))))
+            (is (= {:email "new@example.com"
+                    :role :member
+                    :status :active
+                    :subject "new-subject"}
+                   (select-keys enrolled [:email :role :status :subject])))
+            (is (= enrolled (admin/active-member directory enrolled)))
+            (testing "a different subject cannot reuse the bound email"
+              (is (= ::admin/not-allowlisted
+                     (try
+                       (admin/authorize-member! directory "new@example.com"
+                                                "different-subject")
+                       nil
+                       (catch clojure.lang.ExceptionInfo error
+                         (:type (ex-data error)))))))))
         (finally
           (.close firestore))))
     (is true "Firestore emulator test is run by script/test_firestore_emulator.sh")))

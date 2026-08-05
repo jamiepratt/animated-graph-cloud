@@ -174,7 +174,7 @@
    :authorization-endpoint authorization-endpoint
    :flows (atom {})})
 
-(defn- translate-membership-error [action]
+(defn- translate-membership-error [error-type message action]
   (try
     (action)
     (catch clojure.lang.ExceptionInfo error
@@ -182,8 +182,8 @@
                        ::admin/invalid-email
                        ::admin/invalid-subject}
                      (:type (ex-data error)))
-        (throw (errors/raise! "User is no longer allowlisted"
-                              {:type ::not-allowlisted}
+        (throw (errors/raise! message
+                              {:type error-type}
                               error))
         (throw error)))))
 
@@ -193,6 +193,10 @@
   (if-not member-directory
     user
     (translate-membership-error
+     (if authorize? ::account-suspended ::not-allowlisted)
+     (if authorize?
+       "Account access is suspended"
+       "User is no longer allowlisted")
      #(if authorize?
         (admin/authorize-member! member-directory email subject)
         (admin/active-member member-directory

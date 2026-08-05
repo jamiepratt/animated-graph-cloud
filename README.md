@@ -510,16 +510,19 @@ renderer completion, and exact public version/build identity at `/changelog`.
 
 When `AGG_AUTH_ENABLED=true`, browser users choose **Continue with Google** at
 `GET /v1/auth/login/start`. One PKCE-protected offline flow requests exactly
-`openid email profile drive.file`. Its callback verifies identity and active
-membership, encrypts or safely reuses the refresh token, ensures the user's
+`openid email profile drive.file`. Its callback verifies identity and exact
+scopes, then transactionally creates and binds a normal active membership on
+first sign-in. It encrypts or safely reuses the refresh token, ensures the user's
 `Alpha Compose` folder, persists the grant, and issues the session last. Routine
 login does not force consent. Only a signed recovery marker created after an
 unusable grant enables `prompt=consent`. The active Firestore membership
 generation is rechecked on every authenticated request. `AGG_OWNER_EMAIL`
 bootstraps the non-revocable owner, while
 `AGG_ADMIN_EMAILS` (comma- or semicolon-separated) bootstraps any number of
-active administrators. Administrators can manage the allowlist but cannot
-replace or revoke the owner. The authenticated page exposes a CSRF-protected
+active administrators. Administrators can suspend and reactivate members but
+cannot replace or suspend the owner. A suspended email remains denied until an
+administrator explicitly reactivates it, and a bound email cannot be reused by
+a different Google subject. The authenticated page exposes a CSRF-protected
 `POST /v1/auth/logout` form that expires the browser session and returns to the
 signed-out homepage. `GET /v1/drive/picker` opens a no-store
 Google Picker compatibility page for the same restricted grant. The
@@ -563,10 +566,10 @@ owned job and expose cancel or retry only when the current state permits it.
 The same page creates, lists, and revokes personal API tokens. The Picker is
 initialized and controlled by same-origin browser JavaScript in the main page.
 
-The owner and admin pages list, add, and revoke members. The equivalent JSON
+The owner and admin pages list, reactivate, and suspend members. The equivalent JSON
 routes are `GET /v1/admin/members`, `POST /v1/admin/members`, and
 `POST /v1/admin/members/revoke`; writes require an administrator's session and
-CSRF token. Revocation invalidates the member's sessions and personal tokens, deletes
+CSRF token. Suspension invalidates the member's sessions and personal tokens, deletes
 their encrypted Drive grant, and cancels queued or running work. Re-adding the
 email creates a new membership generation, so the member must complete the
 combined Google authorization again.
