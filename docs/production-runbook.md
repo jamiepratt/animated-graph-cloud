@@ -604,9 +604,8 @@ The canonical public OpenAPI contract URL is
 CI builds with the exact pushed commit and production mode. The production
 workflow consumes only that successful CI commit and verifies that
 `https://alphacompose.com/changelog` displays the matching seven-character
-build before it succeeds. No database migration, Terraform import, secret,
-OAuth, Firebase, DNS, or console action is required for the `v0.6.0` identity
-and changelog change.
+build before it succeeds. No database migration, Terraform import, new secret,
+OAuth, Firebase, DNS, or console action is required for the `v0.7.0` release.
 
 After the workflow for the intended release commit succeeds, verify the exact
 remote commit and public identity, then create and push the main tag:
@@ -616,9 +615,9 @@ release_sha="$(git rev-parse refs/remotes/origin/main)"
 short_release_sha="$(printf '%s' "$release_sha" | cut -c1-7)"
 test "$(git rev-parse HEAD)" = "$release_sha"
 curl --fail --silent --show-error https://alphacompose.com/changelog |
-  grep -F "v0.6.0 · build $short_release_sha"
-git tag --annotate v0.6.0 "$release_sha" --message "Alpha Compose v0.6.0"
-git push origin v0.6.0
+  grep -F "v0.7.0 · build $short_release_sha"
+git tag --annotate v0.7.0 "$release_sha" --message "Alpha Compose v0.7.0"
+git push origin v0.7.0
 ```
 
 Do not tag before successful deployment, retag a different commit, or create a

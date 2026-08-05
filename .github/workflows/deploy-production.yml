@@ -584,7 +584,7 @@ jobs:
           SHORT_RELEASE_COMMIT="${RELEASE_COMMIT:0:7}"
           changelog="$(curl --fail --silent --show-error --retry 5 --retry-all-errors \
             "$PUBLIC_BASE_URL/changelog")"
-          grep -Fq "v0.6.0 · build $SHORT_RELEASE_COMMIT" <<<"$changelog"
+          grep -Fq "v0.7.0 · build $SHORT_RELEASE_COMMIT" <<<"$changelog"
           if grep -Fq 'Unreleased' <<<"$changelog"; then
             echo "Public changelog exposed repository-only Unreleased notes." >&2
             exit 1
