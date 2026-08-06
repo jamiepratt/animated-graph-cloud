@@ -386,44 +386,64 @@ version whose key belongs to that environment's project and is restricted only
 to `youtube.googleapis.com`. Never paste the value into Terraform, repository
 files, logs, workflow summaries, or command arguments.
 
-Manually dispatch `Bootstrap YouTube metadata infrastructure`, select one
-environment, and enable `confirm_bootstrap`. Review its targeted plan. It
-enables `youtube.googleapis.com`, creates the empty secret container, grants
-`agg-api` runtime access, and grants the deployer only the access needed for
-the pre-promotion validation. It does not create a key, add a secret version,
-or promote an application. Repeat for development and production.
+The development and production bootstrap is complete. Do not dispatch it again,
+inspect or retrieve either key, rotate either key, or add another secret version.
+For a newly authorized environment only, manually dispatch `Bootstrap YouTube
+metadata infrastructure`, select that environment, and enable
+`confirm_bootstrap`. Review its targeted plan. It enables
+`youtube.googleapis.com`, creates the empty secret container, grants `agg-api`
+runtime access, and grants the deployer only the access needed for the
+pre-promotion validation. It does not create a key, add a secret version, or
+promote an application.
 
-After each bootstrap, an operator with API Keys administration creates the
-key and pipes its value directly from the API Keys service into Secret Manager.
-The formatter exposes only the resource name during creation; the key string
-flows through the pipe and is not stored in a shell variable:
+After the new environment's bootstrap, first prove that no matching key or
+secret version exists. Then use the API Keys REST partial-response fields below.
+Do not replace these calls with `gcloud` key creation or retrieval commands:
+their asynchronous operation output can include the generated key. Keep shell
+tracing disabled. The creation response exposes only the operation name,
+polling exposes only completion or error state, and the final partial response
+streams the generated value directly into Secret Manager without displaying or
+persisting it:
 
 ```sh
-project_id=animated-graph-cloud-jp
-key_name="$(gcloud services api-keys create \
-  --project="$project_id" \
-  --display-name='Alpha Compose homepage YouTube metadata' \
-  --api-target=service=youtube.googleapis.com \
-  --format='value(name)')"
-test -n "$key_name"
-gcloud services api-keys get-key-string "$key_name" \
-  --project="$project_id" --format='value(keyString)' | \
-  gcloud secrets versions add youtube-api-key \
-    --project="$project_id" --data-file=-
-unset key_name project_id
+create_youtube_metadata_key_version() {
+  set +x
+  set -euo pipefail
+  project_id="$1"
+  api_keys_base=https://apikeys.googleapis.com/v2
+  operation_name="$(
+    curl --fail --silent --show-error \
+      --request POST \
+      --header "Authorization: Bearer $(gcloud auth print-access-token)" \
+      --header 'Content-Type: application/json' \
+      --data '{"displayName":"Alpha Compose homepage YouTube metadata","restrictions":{"apiTargets":[{"service":"youtube.googleapis.com"}]}}' \
+      "${api_keys_base}/projects/${project_id}/locations/global/keys?fields=name" |
+      jq -er '.name'
+  )"
+  test -n "$operation_name"
 
-project_id=animated-graph-cloud-prod-jp
-key_name="$(gcloud services api-keys create \
-  --project="$project_id" \
-  --display-name='Alpha Compose homepage YouTube metadata' \
-  --api-target=service=youtube.googleapis.com \
-  --format='value(name)')"
-test -n "$key_name"
-gcloud services api-keys get-key-string "$key_name" \
-  --project="$project_id" --format='value(keyString)' | \
-  gcloud secrets versions add youtube-api-key \
-    --project="$project_id" --data-file=-
-unset key_name project_id
+  while :; do
+    operation_state="$(
+      curl --fail --silent --show-error \
+        --header "Authorization: Bearer $(gcloud auth print-access-token)" \
+        "${api_keys_base}/${operation_name}?fields=done,error" |
+        jq -er 'if .error then error("API key creation failed") elif .done == true then "done" else "pending" end'
+    )"
+    test "$operation_state" = done && break
+    sleep 2
+  done
+
+  curl --fail --silent --show-error \
+    --header "Authorization: Bearer $(gcloud auth print-access-token)" \
+    "${api_keys_base}/${operation_name}?fields=response/keyString" |
+    jq -er '.response.keyString' | gcloud secrets versions add \
+      youtube-api-key --project="$project_id" --data-file=-
+  unset operation_state operation_name api_keys_base project_id
+}
+
+# Invoke only for a separately authorized new environment after the absence
+# checks above. Never invoke this for either existing environment.
+create_youtube_metadata_key_version NEW_PROJECT_ID
 ```
 
 Rerun the normal development and production workflows manually. Each workflow

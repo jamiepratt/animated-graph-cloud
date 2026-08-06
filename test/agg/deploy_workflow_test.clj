@@ -355,7 +355,15 @@
     (is (str/includes? bootstrap "youtube-api-key"))
     (is (str/includes? bootstrap "google_secret_manager_secret.application[\\\"youtube-api-key\\\"]"))
     (is (not (str/includes? bootstrap "gcloud services api-keys create")))
-    (is (not (str/includes? bootstrap "secrets versions add")))))
+    (is (not (str/includes? bootstrap "secrets versions add"))))
+  (let [runbook (slurp "docs/production-runbook.md")]
+    (is (not (str/includes? runbook "gcloud services api-keys create")))
+    (is (not (str/includes? runbook "gcloud services api-keys get-key-string")))
+    (is (str/includes? runbook "fields=name"))
+    (is (str/includes? runbook "fields=done,error"))
+    (is (str/includes? runbook "fields=response/keyString"))
+    (is (str/includes? runbook
+                       "jq -er '.response.keyString' | gcloud secrets versions add"))))
 
 (deftest public-ingress-is-enabled-only-after-app-and-task-auth-configuration
   (let [auth-index (str/index-of workflow "AGG_AUTH_ENABLED=true")
