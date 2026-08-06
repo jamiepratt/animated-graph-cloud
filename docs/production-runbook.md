@@ -378,6 +378,59 @@ printf %s "$PICKER_API_KEY" | gcloud secrets versions add picker-api-key \
 unset PICKER_API_KEY
 ```
 
+### YouTube metadata bootstrap and mandatory release checkpoint
+
+`youtube-api-key` is separate from the browser-restricted Picker key. Do not
+push or promote the v0.8.0 application until both environments have an enabled
+version whose key belongs to that environment's project and is restricted only
+to `youtube.googleapis.com`. Never paste the value into Terraform, repository
+files, logs, workflow summaries, or command arguments.
+
+Manually dispatch `Bootstrap YouTube metadata infrastructure`, select one
+environment, and enable `confirm_bootstrap`. Review its targeted plan. It
+enables `youtube.googleapis.com`, creates the empty secret container, grants
+`agg-api` runtime access, and grants the deployer only the access needed for
+the pre-promotion validation. It does not create a key, add a secret version,
+or promote an application. Repeat for development and production.
+
+After each bootstrap, an operator with API Keys administration creates the
+key and pipes its value directly from the API Keys service into Secret Manager.
+The formatter exposes only the resource name during creation; the key string
+flows through the pipe and is not stored in a shell variable:
+
+```sh
+project_id=animated-graph-cloud-jp
+key_name="$(gcloud services api-keys create \
+  --project="$project_id" \
+  --display-name='Alpha Compose homepage YouTube metadata' \
+  --api-target=service=youtube.googleapis.com \
+  --format='value(name)')"
+test -n "$key_name"
+gcloud services api-keys get-key-string "$key_name" \
+  --project="$project_id" --format='value(keyString)' | \
+  gcloud secrets versions add youtube-api-key \
+    --project="$project_id" --data-file=-
+unset key_name project_id
+
+project_id=animated-graph-cloud-prod-jp
+key_name="$(gcloud services api-keys create \
+  --project="$project_id" \
+  --display-name='Alpha Compose homepage YouTube metadata' \
+  --api-target=service=youtube.googleapis.com \
+  --format='value(name)')"
+test -n "$key_name"
+gcloud services api-keys get-key-string "$key_name" \
+  --project="$project_id" --format='value(keyString)' | \
+  gcloud secrets versions add youtube-api-key \
+    --project="$project_id" --data-file=-
+unset key_name project_id
+```
+
+Rerun the normal development and production workflows manually. Each workflow
+fails before image promotion with `YouTube metadata bootstrap required` unless
+the latest version is enabled, project-owned, and restricted to exactly
+`youtube.googleapis.com`. Do not bypass this check with a placeholder value.
+
 ### Resend bootstrap and guarded workflow recovery
 
 Follow these sections in order. Use the reviewed checkout containing the issue
@@ -604,8 +657,10 @@ The canonical public OpenAPI contract URL is
 CI builds with the exact pushed commit and production mode. The production
 workflow consumes only that successful CI commit and verifies that
 `https://alphacompose.com/changelog` displays the matching seven-character
-build before it succeeds. No database migration, Terraform import, new secret,
-OAuth, Firebase, DNS, or console action is required for the `v0.7.0` release.
+build before it succeeds. No database migration, Terraform import, OAuth,
+Firebase, or DNS action is required for the `v0.8.0` release. The new YouTube
+secret container and API key checkpoint above is mandatory before push or
+promotion.
 
 After the workflow for the intended release commit succeeds, verify the exact
 remote commit and public identity, then create and push the main tag:
@@ -615,9 +670,9 @@ release_sha="$(git rev-parse refs/remotes/origin/main)"
 short_release_sha="$(printf '%s' "$release_sha" | cut -c1-7)"
 test "$(git rev-parse HEAD)" = "$release_sha"
 curl --fail --silent --show-error https://alphacompose.com/changelog |
-  grep -F "v0.7.0 · build $short_release_sha"
-git tag --annotate v0.7.0 "$release_sha" --message "Alpha Compose v0.7.0"
-git push origin v0.7.0
+  grep -F "v0.8.0 · build $short_release_sha"
+git tag --annotate v0.8.0 "$release_sha" --message "Alpha Compose v0.8.0"
+git push origin v0.8.0
 ```
 
 Do not tag before successful deployment, retag a different commit, or create a

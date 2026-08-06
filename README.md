@@ -65,6 +65,12 @@ The versioned production OpenAPI contract is publicly available at
 [`https://alphacompose.com/openapi.yaml`](https://alphacompose.com/openapi.yaml).
 This is the canonical published contract URL; its source is `docs/openapi.yaml`.
 
+The signed-out homepage reads bounded public YouTube playlist metadata from
+`GET /v1/homepage/videos`. The API uses the server-only
+`AGG_YOUTUBE_API_KEY`, caches one successful result per instance for 15
+minutes, and never sends that key to the browser. Terraform and the guarded
+deployment workflows mount `youtube-api-key` only on `agg-api`.
+
 The uberjar contains both entry points:
 
 ```sh

@@ -20,6 +20,7 @@
             [agg.render.media :as media]
             [agg.renderer.main :as renderer]
             [agg.tokens.core :as tokens]
+            [agg.youtube :as youtube]
             [agg.api.admin-routes :as admin-routes]
             [agg.api.token-routes :as token-routes]
             [agg.api.routes :as routes]
@@ -539,6 +540,27 @@
 (defn- respond-json! [exchange status body]
   (respond! exchange status "application/json; charset=utf-8"
             (json/write-str body)))
+
+(defn- respond-homepage-videos!
+  [^HttpExchange exchange youtube-metadata]
+  (let [{:keys [videos etag stale]} (youtube/homepage-videos! youtube-metadata)
+        not-modified? (= etag (some-> exchange .getRequestHeaders
+                                      (.getFirst "If-None-Match")))]
+    (doto (.getResponseHeaders exchange)
+      (.set "Cache-Control" "public, max-age=900, stale-if-error=900")
+      (.set "ETag" etag)
+      (.set "X-Content-Type-Options" "nosniff"))
+    (if not-modified?
+      (do
+        (.sendResponseHeaders exchange 304 -1)
+        (.close exchange))
+      (let [bytes (.getBytes (json/write-str {:videos videos :stale stale})
+                             StandardCharsets/UTF_8)]
+        (.set (.getResponseHeaders exchange) "Content-Type"
+              "application/json; charset=utf-8")
+        (.sendResponseHeaders exchange 200 (alength ^bytes bytes))
+        (with-open [response-body (.getResponseBody exchange)]
+          (.write response-body ^bytes bytes))))))
 
 (defn- browser-html-request? [^HttpExchange exchange]
   (some-> exchange .getRequestHeaders (.getFirst "Accept")
@@ -2352,7 +2374,8 @@
                               derivative-asset-store
                               upload-signer auth-system picker-api-key
                               picker-app-id token-service admin-service log-store
-                              product-updates-system service-profile clock]
+                              product-updates-system youtube-metadata
+                              service-profile clock]
                        :as dependencies}]
   (reify HttpHandler
     (handle [_ exchange]
@@ -2403,6 +2426,13 @@
                                        (= "GET" method)
                                        (= "/changelog" path))
                                   (respond-public-html! exchange ui/changelog-page)
+
+                                  (and (= "api" service-profile)
+                                       youtube-metadata
+                                       (= "GET" method)
+                                       (= "/v1/homepage/videos" path))
+                                  (respond-homepage-videos! exchange
+                                                            youtube-metadata)
 
                                   (and (= "proto" service-profile)
                                        auth-system
@@ -2886,6 +2916,11 @@
 
                   ::picker-not-configured
                   (respond-json! exchange 503 {:error "picker_not_configured"})
+
+                  ::youtube/unavailable
+                  (respond-json! exchange 503
+                                 {:error "youtube_metadata_unavailable"
+                                  :retryable true})
 
                   ::invalid-picker-diagnostic
                   (respond-json! exchange 400 {:error "invalid_picker_diagnostic"})

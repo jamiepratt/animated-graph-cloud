@@ -40,13 +40,11 @@
                        "github.event.workflow_run.head_sha || github.sha"))
     (is (not (str/includes? production "docker build")))
     (is (str/includes? production "\"$PUBLIC_BASE_URL/changelog\""))
-    (is (str/includes? production "v0.7.0 · build $SHORT_RELEASE_COMMIT"))
+    (is (str/includes? production "v0.8.0 · build $SHORT_RELEASE_COMMIT"))
     (is (str/includes? smoke "expected_build=\"${2:-dev}\""))
     (is (str/includes? smoke "\"http://127.0.0.1:$api_host_port/changelog\""))
-    (is (str/includes? smoke "v0.7.0 · build $short_build"))
-    (is (not (str/includes? (slurp "CHANGELOG.md") "Alpha Compose Proto")))
-    (is (not (str/includes? (slurp "resources/agg/main-version.edn")
-                            "0.8.0")))))
+    (is (str/includes? smoke "v0.8.0 · build $short_build"))
+    (is (not (str/includes? (slurp "CHANGELOG.md") "Alpha Compose Proto")))))
 
 (deftest production-infrastructure-is-isolated-and-main-only
   (let [production (slurp "infra/prod/main.tf")
@@ -721,7 +719,8 @@
   (let [openapi (slurp "docs/openapi.yaml")]
     (is (str/includes? openapi "openapi: 3.1.0"))
     (is (str/includes? openapi "https://alphacompose.com"))
-    (doseq [path ["/health:" "/v1/preview:" "/v1/overlay:" "/v1/jobs:"
+    (doseq [path ["/health:" "/v1/homepage/videos:"
+                  "/v1/preview:" "/v1/overlay:" "/v1/jobs:"
                   "/v1/jobs/{jobId}:" "/v1/jobs/{jobId}/cancel:"
                   "/v1/jobs/{jobId}/retry:"
                   "/v1/jobs/{jobId}/playback-sessions:"

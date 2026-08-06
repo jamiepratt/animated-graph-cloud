@@ -54,6 +54,55 @@ paths:
                 properties:
                   status:
                     const: ok
+  /v1/homepage/videos:
+    get:
+      operationId: getHomepageVideos
+      summary: Read bounded public homepage playlist metadata.
+      description: >-
+        Returns the owner-ordered public Alpha Compose YouTube playlist from a
+        15-minute in-memory cache. A warm cache may be returned with `stale:
+        true` after a temporary upstream failure. The server-only API key and
+        raw upstream errors are never returned.
+      security: []
+      parameters:
+        - in: header
+          name: If-None-Match
+          required: false
+          schema: {type: string}
+      responses:
+        "200":
+          description: Bounded public video metadata.
+          headers:
+            Cache-Control: {schema: {type: string}}
+            ETag: {schema: {type: string}}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [videos, stale]
+                properties:
+                  stale: {type: boolean}
+                  videos:
+                    type: array
+                    maxItems: 200
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [id, title, summary, duration, durationIso, position, thumbnailUrl, watchUrl]
+                      properties:
+                        id: {type: string, pattern: '^[A-Za-z0-9_-]{6,64}$'}
+                        title: {type: string, maxLength: 200}
+                        summary: {type: string, maxLength: 160}
+                        duration: {type: string, maxLength: 10}
+                        durationIso: {type: string, maxLength: 64}
+                        position: {type: integer, minimum: 0, maximum: 1000000}
+                        thumbnailUrl: {type: string, format: uri}
+                        watchUrl: {type: string, format: uri}
+        "304":
+          description: Cached representation is unchanged.
+        "503":
+          description: Metadata is temporarily unavailable and this instance has no successful cached result.
   /v1/product-updates/signup:
     post:
       operationId: signupForProductUpdates

@@ -1062,7 +1062,7 @@
                                 (.body response)))))
         (is (str/includes?
              (.body response)
-             "class=\"release-identity\" href=\"/changelog\">v0.7.0 · build dev</a>"))
+             "class=\"release-identity\" href=\"/changelog\">v0.8.0 · build dev</a>"))
         (is (re-find #"google\.picker\.PickerBuilder" (.body response)))
         (is (re-find #"picker-access-token" (.body response)))
         (is (re-find #"picker-key" (.body response)))

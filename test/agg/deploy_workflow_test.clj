@@ -338,6 +338,25 @@
   (is (str/includes? terraform
                      "resource \"google_secret_manager_secret_iam_member\" \"api_token_hash_access\"")))
 
+(deftest youtube-metadata-key-is-terraform-managed-api-only-and-guarded-before-promotion
+  (doseq [contract ["youtube.googleapis.com" "youtube-api-key"
+                    "api_youtube_access" "deployer_youtube_access"]]
+    (is (str/includes? terraform contract) contract))
+  (doseq [deployment [workflow production-workflow]]
+    (is (str/includes? deployment "Verify YouTube metadata API key"))
+    (is (str/includes? deployment "AGG_YOUTUBE_API_KEY=youtube-api-key:latest"))
+    (is (str/includes? deployment "--secret=youtube-api-key"))
+    (is (str/includes? deployment "youtube.googleapis.com"))
+    (is (str/includes? deployment "https://apikeys.googleapis.com/v2/keys:lookupKey"))
+    (is (str/includes? deployment "YouTube metadata bootstrap required")))
+  (let [bootstrap (slurp ".github/workflows/bootstrap-youtube-metadata.yml")]
+    (is (str/includes? bootstrap "workflow_dispatch"))
+    (is (str/includes? bootstrap "confirm_bootstrap"))
+    (is (str/includes? bootstrap "youtube-api-key"))
+    (is (str/includes? bootstrap "google_secret_manager_secret.application[\\\"youtube-api-key\\\"]"))
+    (is (not (str/includes? bootstrap "gcloud services api-keys create")))
+    (is (not (str/includes? bootstrap "secrets versions add")))))
+
 (deftest public-ingress-is-enabled-only-after-app-and-task-auth-configuration
   (let [auth-index (str/index-of workflow "AGG_AUTH_ENABLED=true")
         public-index (str/index-of workflow "--member=allUsers")]

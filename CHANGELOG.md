@@ -4,6 +4,12 @@ User-visible additions, changes, and fixes for Alpha Compose.
 
 ## Unreleased
 
+## 0.8.0 - 2026-08-05
+
+### Added
+
+- Replaced the homepage's all-or-nothing video list with responsive rich cards, public playlist metadata, accessible user-controlled rotation, and independent player and metadata fallbacks.
+
 ## 0.7.0 - 2026-08-05
 
 ### Added

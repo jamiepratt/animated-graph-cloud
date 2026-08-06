@@ -1,0 +1,91 @@
+name: Bootstrap YouTube metadata infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment whose secret container and IAM should be created
+        required: true
+        type: choice
+        options: [development, production]
+      confirm_bootstrap:
+        description: Confirm this creates only reviewed Terraform API, secret-container, and IAM resources and does not create or store a key value
+        required: true
+        default: false
+        type: boolean
+
+permissions: {}
+
+jobs:
+  bootstrap:
+    if: inputs.confirm_bootstrap == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - id: context
+        name: Select guarded environment
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.environment }}" = production ]; then
+            echo "project=animated-graph-cloud-prod-jp" >>"$GITHUB_OUTPUT"
+            echo "number=488013150738" >>"$GITHUB_OUTPUT"
+            echo "directory=infra/prod" >>"$GITHUB_OUTPUT"
+            echo "prefix=module.application." >>"$GITHUB_OUTPUT"
+          else
+            echo "project=animated-graph-cloud-jp" >>"$GITHUB_OUTPUT"
+            echo "number=891643499444" >>"$GITHUB_OUTPUT"
+            echo "directory=infra/dev" >>"$GITHUB_OUTPUT"
+            echo "prefix=" >>"$GITHUB_OUTPUT"
+          fi
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ steps.context.outputs.project }}
+          workload_identity_provider: projects/${{ steps.context.outputs.number }}/locations/global/workloadIdentityPools/github/providers/animated-graph-cloud
+          service_account: agg-github-deployer@${{ steps.context.outputs.project }}.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+        with:
+          version: ">= 541.0.0"
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - name: Plan and apply reviewed bootstrap only
+        env:
+          PROJECT_ID: ${{ steps.context.outputs.project }}
+          TF_DIRECTORY: ${{ steps.context.outputs.directory }}
+          TF_PREFIX: ${{ steps.context.outputs.prefix }}
+        run: |
+          set -euo pipefail
+          terraform -chdir="$TF_DIRECTORY" init -input=false
+          renderer_image="$(gcloud run jobs describe agg-renderer --project="$PROJECT_ID" --region=europe-central2 --format='value(spec.template.spec.template.spec.containers[0].image)')"
+          api_service_url="$(gcloud run services describe agg-api --project="$PROJECT_ID" --region=europe-central2 --format='value(status.url)')"
+          test -n "$renderer_image"
+          plan="$RUNNER_TEMP/youtube-metadata-bootstrap.tfplan"
+          terraform -chdir="$TF_DIRECTORY" plan -input=false -lock-timeout=5m \
+            -var="renderer_image=$renderer_image" \
+            -var="api_service_url=$api_service_url" \
+            -target="${TF_PREFIX}google_project_service.required[\"youtube.googleapis.com\"]" \
+            -target="${TF_PREFIX}google_secret_manager_secret.application[\"youtube-api-key\"]" \
+            -target="${TF_PREFIX}google_secret_manager_secret_iam_member.api_youtube_access" \
+            -target="${TF_PREFIX}google_secret_manager_secret_iam_member.deployer_youtube_access" \
+            -out="$plan"
+          terraform -chdir="$TF_DIRECTORY" show "$plan"
+          terraform -chdir="$TF_DIRECTORY" apply -input=false "$plan"
+
+      - name: Stop before the mandatory operator checkpoint
+        run: |
+          {
+            echo "## YouTube metadata bootstrap complete"
+            echo
+            echo "Terraform created the API enablement, empty youtube-api-key container, and scoped IAM only."
+            echo "An operator must now create a project-owned key restricted only to youtube.googleapis.com and add it through standard input as documented in docs/production-runbook.md."
+            echo "No application was promoted and no key value was created, read, or logged."
+          } >>"$GITHUB_STEP_SUMMARY"

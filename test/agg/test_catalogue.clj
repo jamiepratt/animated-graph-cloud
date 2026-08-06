@@ -69,7 +69,8 @@
    (entry 'agg.tokens-test :auth)
    (entry 'agg.ui-project-test :api)
    (entry 'agg.ui-wizard-test :api)
-   (entry 'agg.watermark-test :render)])
+   (entry 'agg.watermark-test :render)
+   (entry 'agg.youtube-test :api :cloud)])
 
 (defn all-namespaces []
   (mapv :namespace tests))

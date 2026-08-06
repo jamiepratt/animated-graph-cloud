@@ -22,6 +22,7 @@ locals {
     "serviceusage.googleapis.com",
     "storage.googleapis.com",
     "sts.googleapis.com",
+    "youtube.googleapis.com",
     ]), var.enable_firebase_hosting ? toset([
     "firebase.googleapis.com",
     "firebasehosting.googleapis.com",
@@ -33,6 +34,7 @@ locals {
     "resend-api-key",
     "session-key",
     "token-hash-pepper",
+    "youtube-api-key",
   ])
 
   terraform_deployer_project_roles = var.enable_terraform_deployments ? toset([
@@ -1121,6 +1123,20 @@ resource "google_secret_manager_secret_iam_member" "api_picker_access" {
 resource "google_secret_manager_secret_iam_member" "deployer_picker_access" {
   project   = var.project_id
   secret_id = google_secret_manager_secret.application["picker-api-key"].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "api_youtube_access" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.application["youtube-api-key"].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "deployer_youtube_access" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.application["youtube-api-key"].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.deployer.email}"
 }

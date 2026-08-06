@@ -1318,11 +1318,14 @@
      html
      (str "--window-size=" window-size))))
 
-(defn- youtube-playlist-browser-outcome [page window-size fail?]
+(defn- youtube-playlist-browser-outcome [page window-size fail? metadata?]
   (let [fixture
         (str
          "<script>window.__youtubeFixture={playCalls:[]};"
          "window.requestIdleCallback=callback=>callback();"
+         (if metadata?
+           "window.fetch=()=>Promise.resolve({ok:true,json:()=>Promise.resolve({stale:false,videos:[{id:'first123',title:'First title',summary:'First summary',duration:'1:01',thumbnailUrl:'https://i.ytimg.com/vi/first123/hqdefault.jpg',watchUrl:'https://www.youtube.com/watch?v=first123&list=PLIIYTIXqGbuE'},{id:'second456',title:'Second title',summary:'Second summary',duration:'2:02',thumbnailUrl:'https://i.ytimg.com/vi/second456/hqdefault.jpg',watchUrl:'https://www.youtube.com/watch?v=second456&list=PLIIYTIXqGbuE'},{id:'third789',title:'Third title',summary:'Third summary',duration:'3:03',thumbnailUrl:'https://i.ytimg.com/vi/third789/hqdefault.jpg',watchUrl:'https://www.youtube.com/watch?v=third789&list=PLIIYTIXqGbuE'}]})});"
+           "window.fetch=()=>Promise.resolve({ok:false,status:503,json:()=>Promise.resolve({error:'youtube_metadata_unavailable'})});")
          "window.YT={Player:function(id,options){"
          "const mount=typeof id==='string'?document.getElementById(id):id,iframe=mount.tagName==='IFRAME'?mount:document.createElement('iframe');"
          "if(iframe!==mount)mount.replaceWith(iframe);let index=0;"
@@ -1336,12 +1339,12 @@
         (str
          "<pre id=\"browser-result\">pending</pre><script>"
          "setTimeout(()=>{let outcome;try{"
-         "const root=document.getElementById('youtube-playlist-carousel'),items=document.getElementById('youtube-playlist-items'),status=document.getElementById('youtube-playlist-status'),frame=document.getElementById('youtube-playlist-player-frame'),fallback=document.querySelector('.playlist-fallback a'),cards=[...items.querySelectorAll('.playlist-item')],buttons=cards.map(card=>card.querySelector('button')),links=cards.map(card=>card.querySelector('a'));"
+         "const root=document.getElementById('youtube-playlist-carousel'),items=document.getElementById('youtube-playlist-items'),status=document.getElementById('youtube-playlist-status'),frame=document.getElementById('youtube-playlist-player-frame'),fallback=document.querySelector('.playlist-fallback a'),cards=[...items.querySelectorAll('.playlist-item')],buttons=cards.map(card=>card.querySelector('button')),links=cards.map(card=>card.querySelector('a')),titles=cards.map(card=>card.querySelector('.playlist-item-label')?.textContent),durations=cards.map(card=>card.querySelector('.playlist-item-duration')?.textContent),summaries=cards.map(card=>card.querySelector('.playlist-item-summary')?.textContent);"
          (if fail?
-           "outcome={failed:status.classList.contains('error'),status:status.textContent,frameHidden:frame.hidden,itemCount:cards.length,fallbackHref:fallback.href,headlinePresent:!!document.getElementById('activity-value'),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
-           "buttons[1].click();const selectedAfterClick=buttons.findIndex(button=>button.getAttribute('aria-current')==='true');buttons[1].dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));const selectedAfterArrow=buttons.findIndex(button=>button.getAttribute('aria-current')==='true'),rootRect=root.getBoundingClientRect(),playerFrame=frame.querySelector('iframe');outcome={failed:status.classList.contains('error'),status:status.textContent,itemCount:cards.length,labels:buttons.map(button=>button.getAttribute('aria-label')),hrefs:links.map(link=>link.href),targets:links.map(link=>link.target),rels:links.map(link=>link.rel),images:cards.map(card=>card.querySelector('img').src),playerTitle:playerFrame?.title||null,playerSrc:playerFrame?.src||null,playerReferrerPolicy:playerFrame?.referrerPolicy||null,controlsEnabled:![document.getElementById('youtube-playlist-previous').disabled,document.getElementById('youtube-playlist-next').disabled].some(Boolean),playCalls:window.__youtubeFixture.playCalls,selectedAfterClick,selectedAfterArrow,activeLabel:document.activeElement?.getAttribute('aria-label')||null,rootFits:rootRect.left>=-.5&&rootRect.right<=innerWidth+.5,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};")
+           "outcome={failed:status.classList.contains('error'),status:status.textContent,frameHidden:frame.hidden,itemCount:cards.length,titles,durations,summaries,fallbackHref:fallback.href,headlinePresent:!!document.getElementById('activity-value'),noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};"
+           "buttons[1].click();const selectedAfterClick=buttons.findIndex(button=>button.getAttribute('aria-current')==='true');buttons[1].dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));const selectedAfterArrow=buttons.findIndex(button=>button.getAttribute('aria-current')==='true'),activeLabel=document.activeElement?.getAttribute('aria-label')||null,rotation=document.getElementById('youtube-playlist-rotation'),next=document.getElementById('youtube-playlist-next');rotation.click();const stoppedLabel=rotation.textContent;rotation.click();const startedLabel=rotation.textContent,playCallsBeforeRail=window.__youtubeFixture.playCalls.length;next.click();const selectedAfterRail=buttons.findIndex(button=>button.getAttribute('aria-current')==='true'),rootRect=root.getBoundingClientRect(),playerFrame=frame.querySelector('iframe'),cardsPerView=Math.round(items.clientWidth/cards[0].getBoundingClientRect().width);outcome={failed:status.classList.contains('error'),status:status.textContent,itemCount:cards.length,cardsPerView,titles,durations,summaries,labels:buttons.map(button=>button.getAttribute('aria-label')),hrefs:links.map(link=>link.href),targets:links.map(link=>link.target),rels:links.map(link=>link.rel),images:cards.map(card=>card.querySelector('img').src),playerTitle:playerFrame?.title||null,playerSrc:playerFrame?.src||null,playerReferrerPolicy:playerFrame?.referrerPolicy||null,controlsEnabled:![document.getElementById('youtube-playlist-previous').disabled,document.getElementById('youtube-playlist-next').disabled].some(Boolean),playCalls:window.__youtubeFixture.playCalls,playCallsBeforeRail,selectedAfterClick,selectedAfterArrow,selectedAfterRail,stoppedLabel,startedLabel,activeLabel,rootFits:rootRect.left>=-.5&&rootRect.right<=innerWidth+.5,noHorizontalOverflow:document.documentElement.scrollWidth<=innerWidth};")
          "}catch(error){outcome={error:error.message,stack:error.stack};}"
-         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));},20);</script>")
+         "const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));},60);</script>")
         html (-> page
                  (str/replace "<script>(function(){"
                               (str fixture "<script>(function(){"))
@@ -1351,6 +1354,44 @@
      "YouTube playlist carousel regression requires Chrome or Chromium"
      html
      (str "--window-size=" window-size))))
+
+(defn- youtube-rotation-browser-outcome [page reduced?]
+  (let [fixture
+        (str
+         "<script>window.__youtubeFixture={playCalls:[],scrollCalls:[],scheduleCount:0,rotationFn:null,rotationId:null,hidden:false,media:{matches:"
+         (if reduced? "true" "false")
+         "}};"
+         "const fixture=window.__youtubeFixture,nativeSetTimeout=window.setTimeout.bind(window),nativeClearTimeout=window.clearTimeout.bind(window);let fakeTimerId=900000;"
+         "window.setTimeout=(callback,delay)=>{if(delay===10000&&callback.name==='advanceRail'){fixture.rotationFn=callback;fixture.rotationId=++fakeTimerId;fixture.scheduleCount++;return fixture.rotationId;}return nativeSetTimeout(callback,delay);};"
+         "window.clearTimeout=id=>{if(id>=900000){if(id===fixture.rotationId){fixture.rotationFn=null;fixture.rotationId=null;}return;}nativeClearTimeout(id);};"
+         "fixture.rotationPending=()=>typeof fixture.rotationFn==='function';fixture.fireRotation=()=>{const callback=fixture.rotationFn;fixture.rotationFn=null;fixture.rotationId=null;if(!callback)return false;callback();return true;};"
+         "window.matchMedia=()=>({get matches(){return fixture.media.matches;},addEventListener:(_name,listener)=>{fixture.media.listener=listener;}});"
+         "Object.defineProperty(document,'hidden',{configurable:true,get:()=>fixture.hidden});"
+         "Element.prototype.scrollIntoView=function(options){const parent=this.parentElement,index=parent?[...parent.children].indexOf(this):-1;if(parent?.id==='youtube-playlist-items')fixture.scrollCalls.push({index,behavior:options?.behavior||null});};"
+         "window.requestIdleCallback=callback=>callback();"
+         "window.fetch=()=>Promise.resolve({ok:true,json:()=>Promise.resolve({stale:false,videos:[{id:'first123',title:'First title',summary:'First summary',duration:'1:01',thumbnailUrl:'https://i.ytimg.com/vi/first123/hqdefault.jpg',watchUrl:'https://www.youtube.com/watch?v=first123&list=PLIIYTIXqGbuE'},{id:'second456',title:'Second title',summary:'Second summary',duration:'2:02',thumbnailUrl:'https://i.ytimg.com/vi/second456/hqdefault.jpg',watchUrl:'https://www.youtube.com/watch?v=second456&list=PLIIYTIXqGbuE'},{id:'third789',title:'Third title',summary:'Third summary',duration:'3:03',thumbnailUrl:'https://i.ytimg.com/vi/third789/hqdefault.jpg',watchUrl:'https://www.youtube.com/watch?v=third789&list=PLIIYTIXqGbuE'}]})});"
+         "window.YT={Player:function(id,options){const mount=typeof id==='string'?document.getElementById(id):id,iframe=mount.tagName==='IFRAME'?mount:document.createElement('iframe');if(iframe!==mount)mount.replaceWith(iframe);let index=0;const api={getIframe:()=>iframe,getPlaylist:()=>['first123','second456','third789'],getPlaylistIndex:()=>index,playVideoAt:value=>{index=value;fixture.playCalls.push(value);},playVideo:()=>{}};fixture.state=value=>options.events.onStateChange({target:api,data:value});nativeSetTimeout(()=>options.events.onReady({target:api}),0);return api;}};</script>")
+        scenario
+        (str
+         "<pre id=\"browser-result\">pending</pre><script>"
+         "setTimeout(async()=>{let outcome;try{const fixture=window.__youtubeFixture,root=document.getElementById('youtube-playlist-carousel'),items=document.getElementById('youtube-playlist-items'),rotation=document.getElementById('youtube-playlist-rotation'),previous=document.getElementById('youtube-playlist-previous'),next=document.getElementById('youtube-playlist-next'),buttons=[...items.querySelectorAll('[data-playlist-index]')],selected=()=>buttons.findIndex(button=>button.getAttribute('aria-current')==='true'),pending=()=>fixture.rotationPending(),pausePair=(start,end)=>{start();const during=pending();end();return [during,pending()];},wait=milliseconds=>new Promise(resolve=>setTimeout(resolve,milliseconds));"
+         "const initial={label:rotation.textContent,pending:pending(),selected:selected()};"
+         "next.click();previous.click();const manualControls={calls:fixture.scrollCalls.map(call=>call.index),selected:selected(),playCalls:[...fixture.playCalls],activeId:document.activeElement?.id||null};fixture.scrollCalls=[];"
+         "const statusBefore=document.getElementById('youtube-playlist-status').textContent;fixture.fireRotation();fixture.fireRotation();fixture.fireRotation();const automatic={calls:fixture.scrollCalls.map(call=>call.index),behaviors:fixture.scrollCalls.map(call=>call.behavior),selected:selected(),playCalls:[...fixture.playCalls],statusUnchanged:statusBefore===document.getElementById('youtube-playlist-status').textContent};fixture.scrollCalls=[];"
+         "const schedulesBeforeScroll=fixture.scheduleCount;items.dispatchEvent(new Event('scroll'));const scrollDuring=pending();await wait(300);const manualScroll={during:scrollDuring,after:pending(),rescheduled:fixture.scheduleCount>schedulesBeforeScroll};"
+         "const pauses={hover:pausePair(()=>root.dispatchEvent(new MouseEvent('mouseenter')),()=>root.dispatchEvent(new MouseEvent('mouseleave'))),focus:pausePair(()=>root.dispatchEvent(new FocusEvent('focusin',{bubbles:true})),()=>root.dispatchEvent(new FocusEvent('focusout',{bubbles:true}))),touch:pausePair(()=>items.dispatchEvent(new Event('touchstart')),()=>items.dispatchEvent(new Event('touchend'))),hidden:pausePair(()=>{fixture.hidden=true;document.dispatchEvent(new Event('visibilitychange'));},()=>{fixture.hidden=false;document.dispatchEvent(new Event('visibilitychange'));}),playback:pausePair(()=>fixture.state(1),()=>fixture.state(2))};"
+         "if(initial.label==='Stop rotation')rotation.click();const stopped={label:rotation.textContent,pending:pending()};root.dispatchEvent(new MouseEvent('mouseenter'));root.dispatchEvent(new MouseEvent('mouseleave'));const persisted=!pending();rotation.click();const restarted={label:rotation.textContent,pending:pending()};"
+         "fixture.scrollCalls=[];const firedAfterRestart=fixture.fireRotation();const optedIn={fired:firedAfterRestart,calls:fixture.scrollCalls.map(call=>call.index),behaviors:fixture.scrollCalls.map(call=>call.behavior)};"
+         "outcome={initial,manualControls,automatic,manualScroll,pauses,stopped,persisted,restarted,optedIn};}catch(error){outcome={error:error.message,stack:error.stack};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));},60);</script>")
+        html (-> page
+                 (str/replace "<script>(function(){"
+                              (str fixture "<script>(function(){"))
+                 (str/replace "</body>" (str scenario "</body>")))]
+    (browser-outcome
+     "agg-youtube-rotation-browser-"
+     "YouTube rotation behavior requires Chrome or Chromium"
+     html
+     "--window-size=1100,900")))
 
 (defn- compose-card-layout-browser-outcome [page window-size reveal-source?]
   (let [scenario
@@ -1710,6 +1751,8 @@
         (is (str/includes? (.body privacy)
                            "privacy-enhanced YouTube player"))
         (is (str/includes? (.body privacy)
+                           "retrieves public playlist titles, descriptions, positions, and durations server-side"))
+        (is (str/includes? (.body privacy)
                            "network and browser information"))
         (is (str/includes? (.body privacy)
                            "does not send your Google account, Drive files, or activity data to YouTube"))
@@ -1777,8 +1820,21 @@
           (is (< updates-position carousel-position)))
         (doseq [contract ["data-youtube-playlist=\"PLIIYTIXqGbuE\""
                           "aria-roledescription=\"carousel\""
+                          "id=\"youtube-playlist-rotation\""
                           "id=\"youtube-playlist-previous\""
                           "id=\"youtube-playlist-next\""
+                          "fetch('/v1/homepage/videos'"
+                          "metadata.title"
+                          "metadata.summary"
+                          "metadata.duration"
+                          "setTimeout(advanceRail,10000)"
+                          "prefers-reduced-motion: reduce"
+                          "root.addEventListener('mouseenter'"
+                          "root.addEventListener('focusin'"
+                          "items.addEventListener('touchstart'"
+                          "items.addEventListener('scroll'"
+                          "document.addEventListener('visibilitychange'"
+                          "playerPlaying"
                           "https://www.youtube.com/playlist?list=PLIIYTIXqGbuE"
                           "https://www.youtube.com/iframe_api"
                           "https://www.youtube.com/watch?v="]]
@@ -1800,14 +1856,20 @@
         ["https://www.youtube.com/watch?v=first123&list=PLIIYTIXqGbuE"
          "https://www.youtube.com/watch?v=second456&list=PLIIYTIXqGbuE"
          "https://www.youtube.com/watch?v=third789&list=PLIIYTIXqGbuE"]
-        desktop (youtube-playlist-browser-outcome page "1280,900" false)
-        mobile (youtube-playlist-browser-outcome page "390,844" false)
-        failure (youtube-playlist-browser-outcome page "390,844" true)]
-    (doseq [[surface outcome] {"desktop" desktop "mobile" mobile}]
+        wide (youtube-playlist-browser-outcome page "1440,900" false true)
+        desktop (youtube-playlist-browser-outcome page "1100,900" false true)
+        tablet (youtube-playlist-browser-outcome page "768,900" false true)
+        mobile (youtube-playlist-browser-outcome page "390,844" false false)
+        player-failure (youtube-playlist-browser-outcome page "390,844" true true)
+        total-failure (youtube-playlist-browser-outcome page "390,844" true false)]
+    (doseq [[surface outcome expected-count]
+            [["wide desktop" wide 4] ["desktop" desktop 3]
+             ["tablet" tablet 2] ["mobile" mobile 2]]]
       (testing surface
         (is (nil? (:error outcome)) outcome)
         (is (false? (:failed outcome)))
         (is (= 3 (:itemCount outcome)))
+        (is (= expected-count (:cardsPerView outcome)))
         (is (= expected-links (:hrefs outcome)))
         (is (= ["_blank" "_blank" "_blank"] (:targets outcome)))
         (is (every? #(= #{"noopener" "noreferrer"}
@@ -1828,20 +1890,63 @@
                (:playerReferrerPolicy outcome)))
         (is (true? (:controlsEnabled outcome)))
         (is (= [1] (:playCalls outcome)))
+        (is (= 1 (:playCallsBeforeRail outcome)))
         (is (= 1 (:selectedAfterClick outcome)))
         (is (= 2 (:selectedAfterArrow outcome)))
-        (is (= "Play video 3 of 3" (:activeLabel outcome)))
+        (is (= 2 (:selectedAfterRail outcome)))
+        (is (= "Start rotation" (:stoppedLabel outcome)))
+        (is (= "Stop rotation" (:startedLabel outcome)))
+        (is (str/ends-with? (:activeLabel outcome) "video 3 of 3"))
         (is (true? (:rootFits outcome)))
         (is (true? (:noHorizontalOverflow outcome)))))
-    (is (nil? (:error failure)) failure)
-    (is (true? (:failed failure)))
-    (is (= 0 (:itemCount failure)))
-    (is (true? (:frameHidden failure)))
-    (is (str/includes? (:status failure) "could not load"))
+    (is (nil? (:error player-failure)) player-failure)
+    (is (false? (:failed player-failure)))
+    (is (= 3 (:itemCount player-failure)))
+    (is (= ["First title" "Second title" "Third title"]
+           (:titles player-failure)))
+    (is (= ["1:01" "2:02" "3:03"] (:durations player-failure)))
+    (is (= ["First summary" "Second summary" "Third summary"]
+           (:summaries player-failure)))
+    (is (true? (:frameHidden player-failure)))
+    (is (str/includes? (:status player-failure) "Open a card"))
+    (is (nil? (:error total-failure)) total-failure)
+    (is (true? (:failed total-failure)))
+    (is (= 0 (:itemCount total-failure)))
+    (is (true? (:frameHidden total-failure)))
+    (is (str/includes? (:status total-failure) "unavailable"))
     (is (= "https://www.youtube.com/playlist?list=PLIIYTIXqGbuE"
-           (:fallbackHref failure)))
-    (is (true? (:headlinePresent failure)))
-    (is (true? (:noHorizontalOverflow failure)))))
+           (:fallbackHref total-failure)))
+    (is (true? (:headlinePresent total-failure)))
+    (is (true? (:noHorizontalOverflow total-failure)))))
+
+(deftest live-youtube-playlist-rotation-is-bounded-pausable-and-user-controlled
+  (let [page (ui/anonymous-page {})
+        motion (youtube-rotation-browser-outcome page false)
+        reduced (youtube-rotation-browser-outcome page true)]
+    (is (nil? (:error motion)) motion)
+    (is (= {:label "Stop rotation" :pending true :selected 0}
+           (:initial motion)))
+    (is (= [1 0] (get-in motion [:manualControls :calls])))
+    (is (= 0 (get-in motion [:manualControls :selected])))
+    (is (empty? (get-in motion [:manualControls :playCalls])))
+    (is (= [1 2 0] (get-in motion [:automatic :calls])))
+    (is (= 0 (get-in motion [:automatic :selected])))
+    (is (empty? (get-in motion [:automatic :playCalls])))
+    (is (true? (get-in motion [:automatic :statusUnchanged])))
+    (is (= {:during false :after true :rescheduled true}
+           (:manualScroll motion)))
+    (doseq [[condition states] (:pauses motion)]
+      (is (= [false true] states) (name condition)))
+    (is (= {:label "Start rotation" :pending false} (:stopped motion)))
+    (is (true? (:persisted motion)))
+    (is (= {:label "Stop rotation" :pending true} (:restarted motion)))
+    (is (nil? (:error reduced)) reduced)
+    (is (= {:label "Start rotation" :pending false :selected 0}
+           (:initial reduced)))
+    (is (= {:label "Stop rotation" :pending true} (:restarted reduced)))
+    (is (true? (get-in reduced [:optedIn :fired])))
+    (is (= [1] (get-in reduced [:optedIn :calls])))
+    (is (= ["auto"] (get-in reduced [:optedIn :behaviors])))))
 
 (deftest consumer-copy-uses-activity-data-without-renaming-the-json-contract
   (let [compose (ui/page {:user {:email "owner@example.com" :role :member}
@@ -2606,7 +2711,8 @@
     (is (= ["/" "/changelog" "/faq" "/privacy" "/terms"
             "/v1/auth/login/start" "/faq#generated-heartbeat-sound"
             "product-updates-email" "button"
-            "youtube-playlist-previous" "youtube-playlist-next"
+            "youtube-playlist-rotation" "youtube-playlist-previous"
+            "youtube-playlist-next"
             "https://www.youtube.com/playlist?list=PLIIYTIXqGbuE"
             "mailto:me@jamiep.org"]
            (:keyboardOrder retry)))

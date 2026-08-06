@@ -269,7 +269,7 @@ fi
 
 changelog="$(curl --fail --silent --show-error \
   "http://127.0.0.1:$api_host_port/changelog")"
-if ! printf '%s' "$changelog" | grep -Fq "v0.7.0 · build $short_build"; then
+if ! printf '%s' "$changelog" | grep -Fq "v0.8.0 · build $short_build"; then
   echo "container changelog does not identify the expected release build" >&2
   exit 1
 fi

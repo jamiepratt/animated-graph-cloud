@@ -83,6 +83,39 @@ jobs:
         with:
           version: ">= 541.0.0"
 
+      - name: Verify YouTube metadata API key
+        run: |
+          set -euo pipefail
+          if ! key_resource="$({
+            gcloud secrets versions access latest \
+              --project="$PROJECT_ID" \
+              --secret=youtube-api-key
+          } | curl --fail --silent --show-error --get \
+            --header "Authorization: Bearer $(gcloud auth print-access-token)" \
+            --data-urlencode 'keyString@-' \
+            'https://apikeys.googleapis.com/v2/keys:lookupKey' | \
+            jq --raw-output '.name // empty')"; then
+            echo "::error title=YouTube metadata bootstrap required::Run the guarded YouTube metadata Terraform bootstrap, add an enabled restricted youtube-api-key version for development, then rerun through workflow_dispatch."
+            exit 1
+          fi
+          case "$key_resource" in
+            "projects/$PROJECT_NUMBER/locations/global/keys/"*) ;;
+            *)
+              echo "::error title=YouTube metadata bootstrap required::youtube-api-key must belong to the development project."
+              exit 1
+              ;;
+          esac
+          restrictions="$(gcloud services api-keys describe "$key_resource" \
+            --project="$PROJECT_ID" --format='json(restrictions)')"
+          jq -e '
+            (.restrictions | keys | sort) == ["apiTargets"] and
+            (.restrictions.apiTargets | length == 1) and
+            (.restrictions.apiTargets[0].service == "youtube.googleapis.com")
+          ' <<<"$restrictions" >/dev/null || {
+            echo "::error title=YouTube metadata bootstrap required::Restrict the project-owned key only to youtube.googleapis.com."
+            exit 1
+          }
+
       - name: Verify enabled development Resend secret version
         run: |
           set -euo pipefail
@@ -140,7 +173,7 @@ jobs:
             --min 0 \
             --max 2 \
             --update-env-vars "AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_PRODUCT_UPDATES_SENDER=$PRODUCT_UPDATES_SENDER,AGG_PRODUCT_UPDATES_RECIPIENT=$PRODUCT_UPDATES_RECIPIENT" \
-            --update-secrets "AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest,AGG_RESEND_API_KEY=resend-api-key:latest" \
+            --update-secrets "AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest,AGG_RESEND_API_KEY=resend-api-key:latest,AGG_YOUTUBE_API_KEY=youtube-api-key:latest" \
             --no-allow-unauthenticated \
             --no-traffic \
             --quiet
@@ -236,7 +269,7 @@ jobs:
             --region "$REGION" \
             --remove-env-vars "AGG_MONTHLY_BUDGET_CENTS,AGG_PREVIEW_RESERVATION_CENTS,AGG_RENDER_RESERVATION_CENTS" \
             --update-env-vars "AGG_JOB_LIFECYCLE_ENABLED=true,AGG_AUTH_ENABLED=true,AGG_REGION=$REGION,AGG_TEMPORARY_BUCKET=$PROJECT_ID-temporary,AGG_TASKS_QUEUE=agg-render,AGG_TASKS_SERVICE_ACCOUNT=agg-tasks@$PROJECT_ID.iam.gserviceaccount.com,AGG_SCHEDULER_SERVICE_ACCOUNT=agg-scheduler@$PROJECT_ID.iam.gserviceaccount.com,AGG_RENDERER_JOB=agg-renderer,AGG_DISPATCHER_URL=$CLOUD_RUN_SERVICE_URL,AGG_PUBLIC_BASE_URL=$CLOUD_RUN_SERVICE_URL,AGG_OWNER_EMAIL=$OWNER_EMAIL,AGG_ADMIN_EMAILS=$ADMIN_EMAILS,AGG_PICKER_APP_ID=$PROJECT_NUMBER,AGG_PRODUCT_UPDATES_SENDER=$PRODUCT_UPDATES_SENDER,AGG_PRODUCT_UPDATES_RECIPIENT=$PRODUCT_UPDATES_RECIPIENT,AGG_DAILY_SUBMISSION_LIMIT=$DAILY_SUBMISSION_LIMIT,AGG_MONTHLY_BUDGET_MINOR_UNITS=$MONTHLY_BUDGET_MINOR_UNITS,AGG_PREVIEW_RESERVATION_MINOR_UNITS=$PREVIEW_RESERVATION_MINOR_UNITS,AGG_RENDER_RESERVATION_MINOR_UNITS=$RENDER_RESERVATION_MINOR_UNITS" \
-            --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest,AGG_RESEND_API_KEY=resend-api-key:latest" \
+            --update-secrets "AGG_OAUTH_CLIENT_CREDENTIALS=oauth-client-secret:latest,AGG_SESSION_KEY=session-key:latest,AGG_PICKER_API_KEY=picker-api-key:latest,AGG_TOKEN_HASH_PEPPER=token-hash-pepper:latest,AGG_RESEND_API_KEY=resend-api-key:latest,AGG_YOUTUBE_API_KEY=youtube-api-key:latest" \
             --quiet
 
       - name: Open ingress after application authentication is configured

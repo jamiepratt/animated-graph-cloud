@@ -11,6 +11,7 @@
             [agg.logs.gcp :as logs-gcp]
             [agg.observability :as observability]
             [agg.preview.core :as preview]
+            [agg.youtube :as youtube]
             [clojure.data.json :as json]
             [clojure.string :as str])
   (:import (com.google.api.gax.rpc ApiException StatusCode$Code)
@@ -1153,6 +1154,7 @@
           admin-emails (env-emails "AGG_ADMIN_EMAILS")
           auth-enabled? (= "true" (env "AGG_AUTH_ENABLED" "false"))
           derivative-config (derivative-gcp/runtime-config)
+          youtube-api-key (env "AGG_YOUTUBE_API_KEY" nil)
           auth-dependencies
           (when auth-enabled?
             (auth-gcp/api-dependencies
@@ -1245,6 +1247,9 @@
                    :job-service service
                    :preview-job-service service
                    :preview-asset-store store}
+            (not (str/blank? youtube-api-key))
+            (assoc :youtube-metadata
+                   (youtube/cached-service (youtube/http-api youtube-api-key)))
             derivative-service
             (assoc
              :derivative-preparation-service derivative-service
