@@ -400,29 +400,37 @@ That role contains the `apikeys.keys.lookup` and `apikeys.keys.get` permissions
 needed by the stdin-only ownership and restriction check.
 
 Fresh human authority is required before repairing development. Manually
-dispatch `Bootstrap YouTube metadata infrastructure`, select `development`,
-and enable `confirm_bootstrap`. Its saved plan targets only API Keys and YouTube
-API enablement, the existing empty secret container and accessors, and the
-shared least-privilege API Keys viewer binding. The workflow blocks every
-delete, replacement, or unrelated resource change. Review the summary before
-allowing the apply. For the current environment, the only expected change is
-creation of `google_project_iam_member.deployer_picker_api_keys_viewer`; the
-other five targets must be unchanged. Stop if the plan differs. This repair
-does not create, inspect, retrieve, rotate, or store a key and does not add a
-secret version or promote an application.
+dispatch `Repair development YouTube key lookup IAM` and enable
+`confirm_development_viewer_iam_repair` only when the authority permits exactly
+one create action for
+`google_project_iam_member.deployer_picker_api_keys_viewer`. The workflow still
+plans all six related targets, but its executable guard applies only when the
+other five are explicit no-ops and the viewer binding is the sole managed
+non-no-op action with exactly `["create"]`. It rejects updates, deletes,
+replacements, missing no-op targets, production-prefixed addresses, and every
+additional managed change before `terraform apply`.
+
+The workflow is intentionally development-only and applies immediately after
+that exact machine check; there is no human review pause between plan and
+apply. Dispatch therefore authorizes only the machine-verified single create.
+If authority instead requires a person to inspect the generated plan before
+apply, do not dispatch this workflow; use a separate reviewed plan-only path.
+This repair does not create, inspect, retrieve, rotate, or store a key, add a
+secret version, or promote an application.
 
 After that authorized development apply, rerun the normal development workflow
 through `workflow_dispatch`. Do not change the existing key or secret version.
 Production remains Terraform-first: its normal full Terraform plan and apply
 include the same viewer binding before `Verify YouTube metadata API key` and
-before runtime promotion. Do not separately dispatch the production bootstrap
-unless a reviewed recovery plan proves the binding is still missing and a
-human gives fresh authority for that exact apply.
+before runtime promotion. Production run `31145106932` completed that release
+path successfully. The development repair workflow cannot target production.
 
-For a newly authorized environment only, manually dispatch the same guarded
-workflow for that environment. Review the exact targeted plan under the same
-zero-delete, zero-replacement, and zero-unrelated-change rule. It does not
-create a key, add a secret version, or promote an application.
+For a newly authorized environment, do not repurpose the development repair
+workflow. Add a separate reviewed plan-first path whose guard matches only the
+resources and actions covered by fresh authority; it must not apply a broader
+allowlist silently. After that authorized infrastructure apply, use the
+stdin-only API Keys flow below. The current workflow deliberately provides no
+new-environment or production apply mode.
 
 After the new environment's bootstrap, first prove that no matching key or
 secret version exists. Then use the API Keys REST partial-response fields below.

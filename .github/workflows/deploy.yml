@@ -95,7 +95,7 @@ jobs:
             --data-urlencode 'keyString@-' \
             'https://apikeys.googleapis.com/v2/keys:lookupKey' | \
             jq --raw-output '.name // empty')"; then
-            echo "::error title=YouTube metadata bootstrap required::Apply the reviewed guarded YouTube metadata Terraform bootstrap with fresh authority, verify the existing enabled restricted development key, then rerun through workflow_dispatch."
+            echo "::error title=YouTube metadata bootstrap required::Dispatch Repair development YouTube key lookup IAM with fresh authority, then rerun this workflow through workflow_dispatch without changing the existing key or secret version."
             exit 1
           fi
           case "$key_resource" in

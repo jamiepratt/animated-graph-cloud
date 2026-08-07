@@ -1,6 +1,9 @@
 (ns agg.deploy-workflow-test
-  (:require [clojure.string :as str]
-            [clojure.test :refer [deftest is]]))
+  (:require [clojure.data.json :as json]
+            [clojure.java.shell :as shell]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]])
+  (:import (java.io File)))
 
 (def ^:private workflow (slurp ".github/workflows/deploy.yml"))
 (def ^:private dockerfile (slurp "Dockerfile"))
@@ -12,6 +15,37 @@
 (def ^:private production-terraform-versions
   (slurp "infra/prod/versions.tf"))
 (def ^:private cloud-spike (slurp "script/run_cloud_spike.sh"))
+
+(def ^:private youtube-bootstrap-targets
+  ["google_project_service.required[\"apikeys.googleapis.com\"]"
+   "google_project_service.required[\"youtube.googleapis.com\"]"
+   "google_secret_manager_secret.application[\"youtube-api-key\"]"
+   "google_secret_manager_secret_iam_member.api_youtube_access"
+   "google_secret_manager_secret_iam_member.deployer_youtube_access"
+   "google_project_iam_member.deployer_picker_api_keys_viewer"])
+
+(defn- terraform-plan-change [address actions]
+  {:mode "managed"
+   :address address
+   :change {:actions actions}})
+
+(defn- youtube-bootstrap-plan-result [resource-changes]
+  (let [plan (File/createTempFile "youtube-bootstrap-plan-" ".json")]
+    (try
+      (spit plan (json/write-str {:resource_changes resource-changes}))
+      (shell/sh "bash" "script/guard_youtube_metadata_bootstrap_plan.sh"
+                (.getAbsolutePath plan))
+      (finally
+        (.delete plan)))))
+
+(defn- authorized-youtube-bootstrap-plan []
+  (mapv (fn [address]
+          (terraform-plan-change
+           address
+           (if (= address (last youtube-bootstrap-targets))
+             ["create"]
+             ["no-op"])))
+        youtube-bootstrap-targets))
 
 (defn- workflow-section [start-marker end-marker]
   (let [start (str/index-of workflow start-marker)
@@ -351,7 +385,8 @@
     (is (str/includes? deployment "YouTube metadata bootstrap required")))
   (let [bootstrap (slurp ".github/workflows/bootstrap-youtube-metadata.yml")]
     (is (str/includes? bootstrap "workflow_dispatch"))
-    (is (str/includes? bootstrap "confirm_bootstrap"))
+    (is (str/includes? bootstrap
+                       "confirm_development_viewer_iam_repair"))
     (is (str/includes? bootstrap "youtube-api-key"))
     (is (str/includes? bootstrap "google_secret_manager_secret.application[\\\"youtube-api-key\\\"]"))
     (is (not (str/includes? bootstrap "gcloud services api-keys create")))
@@ -372,7 +407,7 @@
         bootstrap-plan-guard (str/index-of bootstrap
                                            "YouTube metadata bootstrap plan blocked")
         bootstrap-checkpoint (str/index-of bootstrap
-                                           "Stop before the mandatory operator checkpoint")
+                                           "Record the completed development IAM repair")
         production-apply (str/index-of production-workflow
                                        "terraform -chdir=infra/prod apply")
         production-validation (str/index-of production-workflow
@@ -384,12 +419,12 @@
                     "google_project_iam_member.deployer_picker_api_keys_viewer"]]
       (is (str/includes? bootstrap target) target))
     (doseq [guard ["terraform -chdir=\"$TF_DIRECTORY\" show -json"
-                   "unexpected_changes"
-                   "destructive_changes"
+                   "script/guard_youtube_metadata_bootstrap_plan.sh"
+                   "Only creation of the development API Keys viewer IAM binding is authorized"
                    "YouTube metadata bootstrap plan blocked"]]
       (is (str/includes? bootstrap guard) guard))
     (is (str/includes? workflow
-                       "Apply the reviewed guarded YouTube metadata Terraform bootstrap with fresh authority"))
+                       "Dispatch Repair development YouTube key lookup IAM with fresh authority"))
     (doseq [position [bootstrap-plan-guard bootstrap-apply bootstrap-checkpoint
                       production-apply production-validation]]
       (is (number? position)))
@@ -398,6 +433,56 @@
       (is (< bootstrap-plan-guard bootstrap-apply bootstrap-checkpoint)))
     (when (every? number? [production-apply production-validation])
       (is (< production-apply production-validation)))))
+
+(deftest youtube-bootstrap-plan-guard-accepts-the-exact-authorized-repair
+  (let [{:keys [exit err]}
+        (youtube-bootstrap-plan-result (authorized-youtube-bootstrap-plan))]
+    (is (zero? exit) err)))
+
+(deftest youtube-bootstrap-plan-guard-rejects-an-additional-target-create
+  (let [broader-plan (assoc-in (authorized-youtube-bootstrap-plan)
+                               [0 :change :actions]
+                               ["create"])
+        {:keys [exit]} (youtube-bootstrap-plan-result broader-plan)]
+    (is (not (zero? exit)))))
+
+(deftest youtube-bootstrap-plan-guard-rejects-every-broader-plan
+  (let [authorized (authorized-youtube-bootstrap-plan)
+        viewer-index (dec (count authorized))
+        cases {"viewer update"
+               (assoc-in authorized [viewer-index :change :actions] ["update"])
+               "viewer replacement"
+               (assoc-in authorized [viewer-index :change :actions]
+                         ["delete" "create"])
+               "missing required no-op target"
+               (subvec authorized 1)
+               "unrelated create"
+               (conj authorized
+                     (terraform-plan-change
+                      "google_project_iam_member.unrelated"
+                      ["create"]))
+               "production-prefixed repair"
+               (mapv #(update % :address (partial str "module.application."))
+                     authorized)}]
+    (doseq [[case-name plan] cases]
+      (testing case-name
+        (is (not (zero? (:exit (youtube-bootstrap-plan-result plan)))))))))
+
+(deftest youtube-bootstrap-workflow-enforces-the-development-only-plan-guard
+  (let [bootstrap (slurp ".github/workflows/bootstrap-youtube-metadata.yml")
+        guard (str/index-of bootstrap
+                            "script/guard_youtube_metadata_bootstrap_plan.sh")
+        apply-plan (str/index-of bootstrap
+                                 "terraform -chdir=\"$TF_DIRECTORY\" apply")]
+    (is (not (str/includes? bootstrap "options: [development, production]")))
+    (is (not (str/includes? bootstrap "animated-graph-cloud-prod-jp")))
+    (is (not (str/includes? bootstrap "TF_PREFIX")))
+    (is (str/includes? bootstrap
+                       "confirm_development_viewer_iam_repair"))
+    (is (number? guard))
+    (is (number? apply-plan))
+    (when (and (number? guard) (number? apply-plan))
+      (is (< guard apply-plan)))))
 
 (deftest public-ingress-is-enabled-only-after-app-and-task-auth-configuration
   (let [auth-index (str/index-of workflow "AGG_AUTH_ENABLED=true")
