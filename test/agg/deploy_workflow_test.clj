@@ -365,6 +365,40 @@
     (is (str/includes? runbook
                        "jq -er '.response.keyString' | gcloud secrets versions add"))))
 
+(deftest youtube-key-lookup-iam-is-applied-before-validation
+  (let [bootstrap (slurp ".github/workflows/bootstrap-youtube-metadata.yml")
+        bootstrap-apply (str/index-of bootstrap
+                                      "terraform -chdir=\"$TF_DIRECTORY\" apply")
+        bootstrap-plan-guard (str/index-of bootstrap
+                                           "YouTube metadata bootstrap plan blocked")
+        bootstrap-checkpoint (str/index-of bootstrap
+                                           "Stop before the mandatory operator checkpoint")
+        production-apply (str/index-of production-workflow
+                                       "terraform -chdir=infra/prod apply")
+        production-validation (str/index-of production-workflow
+                                            "Verify YouTube metadata API key")]
+    (is (re-find
+         #"(?s)resource \"google_project_iam_member\" \"deployer_picker_api_keys_viewer\".*?role\s+=\s+\"roles/serviceusage.apiKeysViewer\".*?member\s+=\s+\"serviceAccount:\$\{google_service_account.deployer.email\}\""
+         terraform))
+    (doseq [target ["google_project_service.required[\\\"apikeys.googleapis.com\\\"]"
+                    "google_project_iam_member.deployer_picker_api_keys_viewer"]]
+      (is (str/includes? bootstrap target) target))
+    (doseq [guard ["terraform -chdir=\"$TF_DIRECTORY\" show -json"
+                   "unexpected_changes"
+                   "destructive_changes"
+                   "YouTube metadata bootstrap plan blocked"]]
+      (is (str/includes? bootstrap guard) guard))
+    (is (str/includes? workflow
+                       "Apply the reviewed guarded YouTube metadata Terraform bootstrap with fresh authority"))
+    (doseq [position [bootstrap-plan-guard bootstrap-apply bootstrap-checkpoint
+                      production-apply production-validation]]
+      (is (number? position)))
+    (when (every? number? [bootstrap-plan-guard bootstrap-apply
+                           bootstrap-checkpoint])
+      (is (< bootstrap-plan-guard bootstrap-apply bootstrap-checkpoint)))
+    (when (every? number? [production-apply production-validation])
+      (is (< production-apply production-validation)))))
+
 (deftest public-ingress-is-enabled-only-after-app-and-task-auth-configuration
   (let [auth-index (str/index-of workflow "AGG_AUTH_ENABLED=true")
         public-index (str/index-of workflow "--member=allUsers")]

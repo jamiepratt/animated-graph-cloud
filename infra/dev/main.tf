@@ -1281,6 +1281,7 @@ resource "google_project_iam_member" "deployer_log_viewer" {
   member  = "serviceAccount:${google_service_account.deployer.email}"
 }
 
+# Shared least-privilege metadata access for Picker and YouTube key validation.
 resource "google_project_iam_member" "deployer_picker_api_keys_viewer" {
   project = var.project_id
   role    = "roles/serviceusage.apiKeysViewer"

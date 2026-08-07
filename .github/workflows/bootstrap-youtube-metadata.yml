@@ -9,7 +9,7 @@ on:
         type: choice
         options: [development, production]
       confirm_bootstrap:
-        description: Confirm this creates only reviewed Terraform API, secret-container, and IAM resources and does not create or store a key value
+        description: Confirm this applies only reviewed Terraform API, secret-container, and least-privilege IAM resources and does not create or store a key value
         required: true
         default: false
         type: boolean
@@ -69,15 +69,54 @@ jobs:
           api_service_url="$(gcloud run services describe agg-api --project="$PROJECT_ID" --region=europe-central2 --format='value(status.url)')"
           test -n "$renderer_image"
           plan="$RUNNER_TEMP/youtube-metadata-bootstrap.tfplan"
+          plan_json="$RUNNER_TEMP/youtube-metadata-bootstrap.tfplan.json"
           terraform -chdir="$TF_DIRECTORY" plan -input=false -lock-timeout=5m \
             -var="renderer_image=$renderer_image" \
             -var="api_service_url=$api_service_url" \
+            -target="${TF_PREFIX}google_project_service.required[\"apikeys.googleapis.com\"]" \
             -target="${TF_PREFIX}google_project_service.required[\"youtube.googleapis.com\"]" \
             -target="${TF_PREFIX}google_secret_manager_secret.application[\"youtube-api-key\"]" \
             -target="${TF_PREFIX}google_secret_manager_secret_iam_member.api_youtube_access" \
             -target="${TF_PREFIX}google_secret_manager_secret_iam_member.deployer_youtube_access" \
+            -target="${TF_PREFIX}google_project_iam_member.deployer_picker_api_keys_viewer" \
             -out="$plan"
           terraform -chdir="$TF_DIRECTORY" show "$plan"
+          terraform -chdir="$TF_DIRECTORY" show -json "$plan" >"$plan_json"
+
+          destructive_changes="$(jq '[
+            .resource_changes[]?
+            | select(.mode == "managed")
+            | select(.change.actions | index("delete"))
+          ] | length' "$plan_json")"
+          unexpected_changes="$(jq --arg prefix "$TF_PREFIX" '[
+            .resource_changes[]?
+            | select(.mode == "managed" and .change.actions != ["no-op"])
+            | .address
+            | select(
+                . != ($prefix + "google_project_service.required[\"apikeys.googleapis.com\"]") and
+                . != ($prefix + "google_project_service.required[\"youtube.googleapis.com\"]") and
+                . != ($prefix + "google_secret_manager_secret.application[\"youtube-api-key\"]") and
+                . != ($prefix + "google_secret_manager_secret_iam_member.api_youtube_access") and
+                . != ($prefix + "google_secret_manager_secret_iam_member.deployer_youtube_access") and
+                . != ($prefix + "google_project_iam_member.deployer_picker_api_keys_viewer"))
+          ] | length' "$plan_json")"
+          {
+            echo "## Guarded YouTube metadata Terraform plan"
+            echo
+            echo "- Delete or replace: $destructive_changes"
+            echo "- Unexpected resource changes: $unexpected_changes"
+            echo
+            echo "| Resource | Actions |"
+            echo "| --- | --- |"
+            jq -r '.resource_changes[]?
+              | select(.mode == "managed" and .change.actions != ["no-op"])
+              | "| `\(.address)` | `\(.change.actions | join(" -> "))` |"' \
+              "$plan_json"
+          } >>"$GITHUB_STEP_SUMMARY"
+          if [ "$destructive_changes" -ne 0 ] || [ "$unexpected_changes" -ne 0 ]; then
+            echo "::error title=YouTube metadata bootstrap plan blocked::The plan contains a delete, replacement, or unrelated resource change. Do not apply it."
+            exit 1
+          fi
           terraform -chdir="$TF_DIRECTORY" apply -input=false "$plan"
 
       - name: Stop before the mandatory operator checkpoint
@@ -85,7 +124,7 @@ jobs:
           {
             echo "## YouTube metadata bootstrap complete"
             echo
-            echo "Terraform created the API enablement, empty youtube-api-key container, and scoped IAM only."
+            echo "Terraform applied API enablement, the empty youtube-api-key container, and scoped IAM only."
             echo "An operator must now create a project-owned key restricted only to youtube.googleapis.com and add it through standard input as documented in docs/production-runbook.md."
             echo "No application was promoted and no key value was created, read, or logged."
           } >>"$GITHUB_STEP_SUMMARY"

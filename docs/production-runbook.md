@@ -392,15 +392,37 @@ version whose key belongs to that environment's project and is restricted only
 to `youtube.googleapis.com`. Never paste the value into Terraform, repository
 files, logs, workflow summaries, or command arguments.
 
-The development and production bootstrap is complete. Do not dispatch it again,
-inspect or retrieve either key, rotate either key, or add another secret version.
-For a newly authorized environment only, manually dispatch `Bootstrap YouTube
-metadata infrastructure`, select that environment, and enable
-`confirm_bootstrap`. Review its targeted plan. It enables
-`youtube.googleapis.com`, creates the empty secret container, grants `agg-api`
-runtime access, and grants the deployer only the access needed for the
-pre-promotion validation. It does not create a key, add a secret version, or
-promote an application.
+The development and production key and secret bootstraps are complete. Do not
+inspect or retrieve either key, rotate either key, or add another secret
+version. Development smoke run `31140533145` proved that its earlier four-target
+bootstrap omitted the deployer's `roles/serviceusage.apiKeysViewer` binding.
+That role contains the `apikeys.keys.lookup` and `apikeys.keys.get` permissions
+needed by the stdin-only ownership and restriction check.
+
+Fresh human authority is required before repairing development. Manually
+dispatch `Bootstrap YouTube metadata infrastructure`, select `development`,
+and enable `confirm_bootstrap`. Its saved plan targets only API Keys and YouTube
+API enablement, the existing empty secret container and accessors, and the
+shared least-privilege API Keys viewer binding. The workflow blocks every
+delete, replacement, or unrelated resource change. Review the summary before
+allowing the apply. For the current environment, the only expected change is
+creation of `google_project_iam_member.deployer_picker_api_keys_viewer`; the
+other five targets must be unchanged. Stop if the plan differs. This repair
+does not create, inspect, retrieve, rotate, or store a key and does not add a
+secret version or promote an application.
+
+After that authorized development apply, rerun the normal development workflow
+through `workflow_dispatch`. Do not change the existing key or secret version.
+Production remains Terraform-first: its normal full Terraform plan and apply
+include the same viewer binding before `Verify YouTube metadata API key` and
+before runtime promotion. Do not separately dispatch the production bootstrap
+unless a reviewed recovery plan proves the binding is still missing and a
+human gives fresh authority for that exact apply.
+
+For a newly authorized environment only, manually dispatch the same guarded
+workflow for that environment. Review the exact targeted plan under the same
+zero-delete, zero-replacement, and zero-unrelated-change rule. It does not
+create a key, add a secret version, or promote an application.
 
 After the new environment's bootstrap, first prove that no matching key or
 secret version exists. Then use the API Keys REST partial-response fields below.
