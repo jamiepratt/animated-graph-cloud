@@ -54,7 +54,8 @@
      :owner owner
      :owner-cookie (str "agg_session=" (auth/issue-session auth-system owner))}))
 
-(def browser-fixture-timeout-ms 15000)
+(def browser-fixture-timeout-ms 30000)
+(def browser-virtual-time-budget-ms 3000)
 
 (defn- chrome-executable []
   (some (fn [candidate]
@@ -111,14 +112,15 @@
       (spit temp html)
       (browser-location-outcome requirement
                                 (.toURI temp)
-                                1000
+                                browser-virtual-time-budget-ms
                                 browser-fixture-timeout-ms
                                 [])
       (finally
         (.delete temp)))))
 
 (defn- proto-page-browser-outcome
-  [{:keys [can-play-type webcodecs? timing-response]}]
+  [{:keys [can-play-type webcodecs? timing-response response-delay-ms
+           supported?]}]
   (let [page (proto/page {:user {:email "owner@example.com"}
                           :csrf "csrf-token"
                           :folder-id proto/fixed-folder-id})
@@ -126,16 +128,19 @@
         (str
          "<script>"
          "window.__protoState={analysisRequests:[],timingRequests:[],sessionRequests:[],rangeRequests:[]};"
+         "window.__protoResponse=response=>new Promise(resolve=>setTimeout(()=>resolve(response),"
+         (or response-delay-ms 0)
+         "));"
          "window.fetch=(path,options={})=>{"
-         "if(path==='/v1/proto/sources'){return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({listingMode:'folder-enumeration',folderId:'"
+         "if(path==='/v1/proto/sources'){return window.__protoResponse({ok:true,status:200,json:()=>Promise.resolve({listingMode:'folder-enumeration',folderId:'"
          proto/fixed-folder-id
          "',sources:[{fileId:'timing-source-1',fileName:'timing-ride.mp4',mimeType:'video/mp4',size:8192,durationSeconds:125.5,width:1920,height:1080}]})});}"
-         "if(path==='/v1/drive/playback-analyses'){window.__protoState.analysisRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:'timing-ride.mp4',evidence:{container:{format:'mp4',majorBrand:'isom'},video:{codec:'h264',codecTag:'avc1',profile:'High',pixelFormat:'yuv420p'},audio:{codec:'aac'}}})});}"
-         "if(path==='/v1/drive/recording-clock-inspections'){window.__protoState.timingRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve("
+         "if(path==='/v1/drive/playback-analyses'){window.__protoState.analysisRequests.push(JSON.parse(options.body));return window.__protoResponse({ok:true,status:200,json:()=>Promise.resolve({fileName:'timing-ride.mp4',evidence:{container:{format:'mp4',majorBrand:'isom'},video:{codec:'h264',codecTag:'avc1',profile:'High',pixelFormat:'yuv420p'},audio:{codec:'aac'}}})});}"
+         "if(path==='/v1/drive/recording-clock-inspections'){window.__protoState.timingRequests.push(JSON.parse(options.body));return window.__protoResponse({ok:true,status:200,json:()=>Promise.resolve("
          (json/write-str timing-response)
          ")});}"
-         "if(path==='/v1/drive/playback-sessions'){window.__protoState.sessionRequests.push(JSON.parse(options.body));return Promise.resolve({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000115',contentType:'video/mp4',size:8192})});}"
-         "if(path==='/v1/drive/playback/00000000-0000-0000-0000-000000000115'){window.__protoState.rangeRequests.push(options.headers&&options.headers.Range||null);return Promise.resolve({ok:true,status:206,headers:new Headers({'Content-Range':'bytes 0-4095/8192','Content-Length':'4096','Content-Type':'video/mp4'}),arrayBuffer:()=>Promise.resolve(new ArrayBuffer(16))});}"
+         "if(path==='/v1/drive/playback-sessions'){window.__protoState.sessionRequests.push(JSON.parse(options.body));return window.__protoResponse({ok:true,status:201,json:()=>Promise.resolve({playbackUrl:'/v1/drive/playback/00000000-0000-0000-0000-000000000115',contentType:'video/mp4',size:8192})});}"
+         "if(path==='/v1/drive/playback/00000000-0000-0000-0000-000000000115'){window.__protoState.rangeRequests.push(options.headers&&options.headers.Range||null);return window.__protoResponse({ok:true,status:206,headers:new Headers({'Content-Range':'bytes 0-4095/8192','Content-Length':'4096','Content-Type':'video/mp4'}),arrayBuffer:()=>Promise.resolve(new ArrayBuffer(16))});}"
          "return Promise.resolve({ok:false,status:500,json:()=>Promise.resolve({error:'unexpected'})});};"
          "Object.defineProperties(HTMLMediaElement.prototype,{duration:{configurable:true,get(){return this.__duration??125.5;}},currentTime:{configurable:true,get(){return this.__currentTime??0;},set(value){this.__currentTime=Number(value);this.dispatchEvent(new Event('timeupdate'));}},paused:{configurable:true,get(){return this.__paused!==false;}},buffered:{configurable:true,get(){const ranges=this.__bufferedRanges??[];return {length:ranges.length,start:index=>ranges[index][0],end:index=>ranges[index][1]};}}});"
          "HTMLMediaElement.prototype.canPlayType=function(type){window.__protoState.canPlayType=type;return "
@@ -152,7 +157,14 @@
         (str
          "<script>"
          "function recordOutcome(outcome){const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.body.dataset.outcome=btoa(String.fromCharCode(...bytes));}"
-         "window.addEventListener('load',()=>{setTimeout(async()=>{try{const first=document.querySelector('#source-list button');first.click();await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));const video=document.getElementById('proto-player');video.__bufferedRanges=[[0,30],[60,90]];video.dispatchEvent(new Event('progress'));recordOutcome({sourceStatus:document.getElementById('source-status').textContent,playerStatus:document.getElementById('player-status').textContent,selectedTitle:document.getElementById('selected-title').textContent,summary:{listing:document.getElementById('summary-listing').textContent,file:document.getElementById('summary-file').textContent,mime:document.getElementById('summary-mime').textContent,duration:document.getElementById('summary-duration').textContent,frameSize:document.getElementById('summary-size').textContent},timing:{start:document.getElementById('timing-start').textContent,end:document.getElementById('timing-end').textContent,state:document.getElementById('timing-state').textContent,confidence:document.getElementById('timing-confidence').textContent},prep:JSON.parse(document.getElementById('prep-debug').textContent),range:JSON.parse(document.getElementById('range-debug').textContent),requests:window.__protoState});}catch(error){recordOutcome({error:error.message});}},0);},{once:true});"
+         "function delay(ms){return new Promise(resolve=>setTimeout(resolve,ms));}"
+         "async function waitFor(label,predicate){for(let index=0;index<200;index+=1){const value=predicate();if(value)return value;await delay(25);}throw new Error('Timed out waiting for '+label);}"
+         "async function runScenario(){try{const first=await waitFor('source button',()=>document.querySelector('#source-list button'));first.click();await waitFor('selected title',()=>document.getElementById('selected-title').textContent==='timing-ride.mp4');"
+         (if supported?
+           "await waitFor('preparation debug',()=>{const text=document.getElementById('prep-debug').textContent;return text&&text.includes('\"support\"')&&text.includes('\"session\"');});await waitFor('prepared player status',()=>document.getElementById('player-status').textContent.includes('Private playback prepared'));const video=document.getElementById('proto-player');video.__bufferedRanges=[[0,30],[60,90]];video.dispatchEvent(new Event('progress'));"
+           "await waitFor('preparation debug',()=>{const text=document.getElementById('prep-debug').textContent;return text&&text.includes('\"support\"');});await waitFor('unsupported player status',()=>document.getElementById('player-status').textContent.includes('could not prove direct playback support'));")
+         "recordOutcome({sourceStatus:document.getElementById('source-status').textContent,playerStatus:document.getElementById('player-status').textContent,selectedTitle:document.getElementById('selected-title').textContent,summary:{listing:document.getElementById('summary-listing').textContent,file:document.getElementById('summary-file').textContent,mime:document.getElementById('summary-mime').textContent,duration:document.getElementById('summary-duration').textContent,frameSize:document.getElementById('summary-size').textContent},timing:{start:document.getElementById('timing-start').textContent,end:document.getElementById('timing-end').textContent,state:document.getElementById('timing-state').textContent,confidence:document.getElementById('timing-confidence').textContent},prep:JSON.parse(document.getElementById('prep-debug').textContent),range:JSON.parse(document.getElementById('range-debug').textContent),requests:window.__protoState});}catch(error){recordOutcome({error:error.message});}}"
+         "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',()=>setTimeout(runScenario,0),{once:true});}else{setTimeout(runScenario,0);}"
          "</script>")
         html (-> page
                  (str/replace "</head>" (str bootstrap "</head>"))
@@ -163,7 +175,7 @@
      "Proto playback browser regression requires Chrome or Chromium"
      html)))
 
-(defn- stale-source-browser-outcome []
+(defn- stale-source-browser-outcome [response-delay-ms]
   (let [page (proto/page {:user {:email "owner@example.com"}
                           :csrf "csrf-token"
                           :folder-id proto/fixed-folder-id})
@@ -171,8 +183,11 @@
         (str
          "<script>"
          "window.__protoState={analysisResolvers:{},timingResolvers:{},sessionRequests:[]};"
+         "window.__protoResponse=response=>new Promise(resolve=>setTimeout(()=>resolve(response),"
+         response-delay-ms
+         "));"
          "window.fetch=(path,options={})=>{const request=options.body?JSON.parse(options.body):{};"
-         "if(path==='/v1/proto/sources')return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({listingMode:'folder-enumeration',folderId:'"
+         "if(path==='/v1/proto/sources')return window.__protoResponse({ok:true,status:200,json:()=>Promise.resolve({listingMode:'folder-enumeration',folderId:'"
          proto/fixed-folder-id
          "',sources:[{fileId:'source-a',fileName:'alpha.mp4',mimeType:'video/mp4',size:1024},{fileId:'source-b',fileName:'beta.mp4',mimeType:'video/mp4',size:2048}]})});"
          "if(path==='/v1/drive/playback-analyses')return new Promise(resolve=>{window.__protoState.analysisResolvers[request.fileId]=()=>resolve({ok:true,status:200,json:()=>Promise.resolve({fileName:request.fileId==='source-a'?'alpha.mp4':'beta.mp4',evidence:{container:{format:'mp4'},video:{codec:'h264',codecTag:'avc1'},audio:{codec:'aac'}}})});if(request.fileId==='source-b')window.__protoState.analysisResolvers[request.fileId]();});"
@@ -186,7 +201,10 @@
         scenario
         (str
          "<script>function recordOutcome(outcome){const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.body.dataset.outcome=btoa(String.fromCharCode(...bytes));}"
-         "window.addEventListener('load',()=>setTimeout(async()=>{try{const buttons=document.querySelectorAll('#source-list button');buttons[0].click();await new Promise(resolve=>setTimeout(resolve,0));buttons[1].click();for(let i=0;i<8;i++)await new Promise(resolve=>setTimeout(resolve,0));window.__protoState.analysisResolvers['source-a']();window.__protoState.timingResolvers['source-a']();for(let i=0;i<12;i++)await new Promise(resolve=>setTimeout(resolve,0));recordOutcome({title:document.getElementById('selected-title').textContent,prep:JSON.parse(document.getElementById('prep-debug').textContent),requests:window.__protoState.sessionRequests});}catch(error){recordOutcome({error:error.message});}},0),{once:true});</script>")
+         "function delay(ms){return new Promise(resolve=>setTimeout(resolve,ms));}"
+         "async function waitFor(label,predicate){for(let index=0;index<200;index+=1){const value=predicate();if(value)return value;await delay(25);}throw new Error('Timed out waiting for '+label);}"
+         "async function runScenario(){try{const buttons=await waitFor('source buttons',()=>{const found=document.querySelectorAll('#source-list button');return found.length===2&&found;});buttons[0].click();await waitFor('source A requests',()=>window.__protoState.analysisResolvers['source-a']&&window.__protoState.timingResolvers['source-a']);buttons[1].click();await waitFor('source B preparation',()=>window.__protoState.sessionRequests.includes('source-b'));window.__protoState.analysisResolvers['source-a']();window.__protoState.timingResolvers['source-a']();await delay(0);recordOutcome({title:document.getElementById('selected-title').textContent,prep:JSON.parse(document.getElementById('prep-debug').textContent),requests:window.__protoState.sessionRequests});}catch(error){recordOutcome({error:error.message});}}"
+         "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',()=>setTimeout(runScenario,0),{once:true});}else{setTimeout(runScenario,0);}</script>")
         html (-> page
                  (str/replace "</head>" (str bootstrap "</head>"))
                  (str/replace "</body>" (str scenario "</body>"))
@@ -235,6 +253,8 @@
   (let [outcome (proto-page-browser-outcome
                  {:can-play-type "probably"
                   :webcodecs? false
+                  :response-delay-ms 100
+                  :supported? true
                   :timing-response {:fileName "timing-ride.mp4"
                                     :status "candidate"
                                     :candidates [{:source "movie"
@@ -265,6 +285,8 @@
   (let [outcome (proto-page-browser-outcome
                  {:can-play-type ""
                   :webcodecs? false
+                  :response-delay-ms 100
+                  :supported? false
                   :timing-response {:fileName "timing-ride.mp4"
                                     :status "manual"
                                     :candidates []
@@ -283,7 +305,7 @@
     (is (nil? (get-in outcome [:range :rangeProbe])))))
 
 (deftest proto-page-ignores-stale-responses-after-source-switches
-  (let [outcome (stale-source-browser-outcome)]
+  (let [outcome (stale-source-browser-outcome 100)]
     (is (nil? (:error outcome)))
     (is (= "beta.mp4" (:title outcome)))
     (is (= "beta.mp4" (get-in outcome [:prep :selected :fileName])))
