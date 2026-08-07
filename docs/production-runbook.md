@@ -384,6 +384,57 @@ printf %s "$PICKER_API_KEY" | gcloud secrets versions add picker-api-key \
 unset PICKER_API_KEY
 ```
 
+### Development Terraform backend recovery
+
+The development GCS backend requires bucket-scoped
+`roles/storage.objectAdmin`. This is the role required by the Terraform GCS
+backend for listing, reading, creating, and deleting state and lock objects.
+The existing Terraform resource
+`google_storage_bucket_iam_member.deployer_terraform_state` owns the same exact
+grant in steady state, but cannot repair the grant while its backend is
+inaccessible.
+
+An authorized human Storage IAM operator owns this one-time recovery.
+Never run recovery as the target deployer or grant a project-wide Storage role.
+First render the fixed plan. This command makes no cloud request:
+
+```sh
+script/recover_development_terraform_backend_access.sh plan
+```
+
+The only expected change is
+`roles/storage.objectAdmin` on
+`gs://animated-graph-cloud-jp-tfstate` for
+`serviceAccount:agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com`.
+Stop if the project, bucket, member, or role differs; if production is named;
+if any removal or unrelated binding is proposed; or if the active operator is
+the target deployer.
+
+Obtain fresh human authority for that one binding. Only then set the exact
+confirmation and apply it:
+
+```sh
+export CONFIRM_DEVELOPMENT_TERRAFORM_BACKEND_IAM_REPAIR='grant development state bucket object admin'
+script/recover_development_terraform_backend_access.sh apply
+unset CONFIRM_DEVELOPMENT_TERRAFORM_BACKEND_IAM_REPAIR
+```
+
+The script fails closed before mutation without the exact confirmation, rejects
+self-grant, applies only the bucket-level member binding, suppresses IAM policy
+output, and verifies the binding afterward. If the command fails or reports an
+unexpected result, stop without retrying. Do not delete or recreate the bucket,
+change production, read state objects, or broaden the grant.
+
+Fresh authority is required again before retrying `Repair development YouTube
+key lookup IAM`. In that new manual dispatch, confirm both that the development
+backend grant was recovered and that only the exact API Keys viewer create is
+authorized. The workflow verifies backend initialization in its own step before
+it plans anything. Its existing executable plan guard remains the authority for
+the later apply and still rejects every change except the single viewer IAM
+create. After the workflow succeeds, Terraform resumes ownership of the
+state-bucket grant. No key, secret, application, production resource, or other
+bucket IAM binding is part of recovery.
+
 ### YouTube metadata bootstrap and mandatory release checkpoint
 
 `youtube-api-key` is separate from the browser-restricted Picker key. Do not

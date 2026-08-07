@@ -35,6 +35,14 @@ and share the API identity. The renderer runs one task with zero retries.
 `renderer_image` must be an immutable Artifact Registry digest shared by all
 three runtimes. No GPU is attached.
 
+The development GCS backend requires bucket-scoped
+`roles/storage.objectAdmin`, including object list, read, create, and delete for
+state and locking. Terraform owns that exact steady-state grant through
+`google_storage_bucket_iam_member.deployer_terraform_state`. If the grant is
+missing, backend initialization cannot reach the resource that declares it.
+Use the reviewed operator recovery in `docs/production-runbook.md`; never grant
+project-wide Storage administration or let the deployer grant access to itself.
+
 The durable render path uses the Warsaw `agg-render` Cloud Tasks queue. Its
 dispatch concurrency is five, and every request carries an OIDC token for the
 dedicated `agg-tasks` identity and private API audience. Firestore owns job and

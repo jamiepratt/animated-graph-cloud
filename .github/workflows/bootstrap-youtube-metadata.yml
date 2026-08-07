@@ -3,6 +3,11 @@ name: Repair development YouTube key lookup IAM
 on:
   workflow_dispatch:
     inputs:
+      confirm_development_backend_access_recovered:
+        description: Confirm an authorized operator recovered and verified only the development state-bucket binding under fresh authority
+        required: true
+        default: false
+        type: boolean
       confirm_development_viewer_iam_repair:
         description: Confirm only the missing development API Keys viewer IAM binding may be created and every other target must remain unchanged
         required: true
@@ -18,7 +23,7 @@ env:
 
 jobs:
   bootstrap:
-    if: inputs.confirm_development_viewer_iam_repair == true
+    if: inputs.confirm_development_backend_access_recovered == true && inputs.confirm_development_viewer_iam_repair == true
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -41,10 +46,17 @@ jobs:
           terraform_version: 1.15.8
           terraform_wrapper: false
 
+      - name: Verify development Terraform backend access
+        run: |
+          set -euo pipefail
+          if ! terraform -chdir="$TF_DIRECTORY" init -input=false; then
+            echo "::error title=Development Terraform backend access required::Do not retry until an authorized operator has completed the reviewed development state-bucket recovery and fresh authority has been obtained for this workflow retry."
+            exit 1
+          fi
+
       - name: Plan and apply exact development viewer IAM repair
         run: |
           set -euo pipefail
-          terraform -chdir="$TF_DIRECTORY" init -input=false
           renderer_image="$(gcloud run jobs describe agg-renderer --project="$PROJECT_ID" --region=europe-central2 --format='value(spec.template.spec.template.spec.containers[0].image)')"
           api_service_url="$(gcloud run services describe agg-api --project="$PROJECT_ID" --region=europe-central2 --format='value(status.url)')"
           test -n "$renderer_image"

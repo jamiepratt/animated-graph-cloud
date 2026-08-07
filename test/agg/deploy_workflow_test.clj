@@ -47,6 +47,28 @@
              ["no-op"])))
         youtube-bootstrap-targets))
 
+(defn- with-fake-gcloud [f]
+  (let [directory (doto (File/createTempFile "fake-gcloud-" "")
+                    (.delete)
+                    (.mkdir))
+        command (File. directory "gcloud")
+        log (File. directory "calls.log")]
+    (try
+      (spit command
+            (str "#!/usr/bin/env bash\n"
+                 "set -euo pipefail\n"
+                 "printf '%s\\n' \"$*\" >>\"$GCLOUD_LOG\"\n"
+                 "if [[ \"${1:-} ${2:-}\" == 'auth list' ]]; then\n"
+                 "  printf '%s\\n' \"$ACTIVE_ACCOUNT\"\n"
+                 "elif [[ \"${1:-} ${2:-} ${3:-}\" == 'storage buckets get-iam-policy' ]]; then\n"
+                 "  printf '%s\\n' '{\"bindings\":[{\"role\":\"roles/storage.objectAdmin\",\"members\":[\"serviceAccount:agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com\"]}]}'\n"
+                 "fi\n"))
+      (.setExecutable command true)
+      (f directory log)
+      (finally
+        (doseq [file (reverse (file-seq directory))]
+          (.delete file))))))
+
 (defn- workflow-section [start-marker end-marker]
   (let [start (str/index-of workflow start-marker)
         end (and start (str/index-of workflow end-marker start))]
@@ -483,6 +505,127 @@
     (is (number? apply-plan))
     (when (and (number? guard) (number? apply-plan))
       (is (< guard apply-plan)))))
+
+(deftest development-terraform-backend-recovery-is-an-exact-reviewable-plan
+  (let [{:keys [exit out err]}
+        (shell/sh "bash"
+                  "script/recover_development_terraform_backend_access.sh"
+                  "plan")]
+    (is (zero? exit) err)
+    (doseq [contract
+            ["Development Terraform backend IAM recovery plan"
+             "gs://animated-graph-cloud-jp-tfstate"
+             "serviceAccount:agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com"
+             "roles/storage.objectAdmin"
+             "No cloud request or mutation was made."]]
+      (is (str/includes? out contract) contract))
+    (is (not (str/includes? out "animated-graph-cloud-prod-jp")))
+    (is (not (str/includes? out "roles/storage.admin")))))
+
+(deftest development-terraform-backend-recovery-fails-closed-before-mutation
+  (with-fake-gcloud
+    (fn [directory log]
+      (let [base-env {"PATH" (str (.getAbsolutePath directory)
+                                  ":" (System/getenv "PATH"))
+                      "GCLOUD_LOG" (.getAbsolutePath log)
+                      "ACTIVE_ACCOUNT" "owner@example.com"}
+            missing-confirmation
+            (shell/sh "bash"
+                      "script/recover_development_terraform_backend_access.sh"
+                      "apply"
+                      :env base-env)
+            target-self-grant
+            (shell/sh
+             "bash"
+             "script/recover_development_terraform_backend_access.sh"
+             "apply"
+             :env (assoc base-env
+                         "ACTIVE_ACCOUNT"
+                         "agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com"
+                         "CONFIRM_DEVELOPMENT_TERRAFORM_BACKEND_IAM_REPAIR"
+                         "grant development state bucket object admin"))
+            unexpected-target
+            (shell/sh
+             "bash"
+             "script/recover_development_terraform_backend_access.sh"
+             "apply"
+             "production"
+             :env (assoc base-env
+                         "CONFIRM_DEVELOPMENT_TERRAFORM_BACKEND_IAM_REPAIR"
+                         "grant development state bucket object admin"))
+            calls (if (.exists log) (slurp log) "")]
+        (is (not (zero? (:exit missing-confirmation))))
+        (is (not (zero? (:exit target-self-grant))))
+        (is (not (zero? (:exit unexpected-target))))
+        (is (not (str/includes? calls "add-iam-policy-binding")))))))
+
+(deftest development-terraform-backend-recovery-mutates-only-the-exact-binding
+  (with-fake-gcloud
+    (fn [directory log]
+      (let [result
+            (shell/sh
+             "bash"
+             "script/recover_development_terraform_backend_access.sh"
+             "apply"
+             :env {"PATH" (str (.getAbsolutePath directory)
+                               ":" (System/getenv "PATH"))
+                   "GCLOUD_LOG" (.getAbsolutePath log)
+                   "ACTIVE_ACCOUNT" "owner@example.com"
+                   "CONFIRM_DEVELOPMENT_TERRAFORM_BACKEND_IAM_REPAIR"
+                   "grant development state bucket object admin"})
+            calls (slurp log)]
+        (is (zero? (:exit result)) (:err result))
+        (is (str/includes?
+             calls
+             "storage buckets add-iam-policy-binding gs://animated-graph-cloud-jp-tfstate --project=animated-graph-cloud-jp --member=serviceAccount:agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com --role=roles/storage.objectAdmin --condition=None"))
+        (is (not (str/includes? calls "remove-iam-policy-binding")))
+        (is (not (str/includes? calls "projects add-iam-policy-binding")))
+        (is (str/includes? (:out result)
+                           "Exact development state-bucket binding verified"))))))
+
+(deftest youtube-bootstrap-verifies-development-backend-before-planning
+  (let [bootstrap (slurp ".github/workflows/bootstrap-youtube-metadata.yml")
+        backend-check (str/index-of bootstrap
+                                    "Verify development Terraform backend access")
+        terraform-init (str/index-of bootstrap
+                                     "terraform -chdir=\"$TF_DIRECTORY\" init")
+        exact-plan (str/index-of bootstrap
+                                 "Plan and apply exact development viewer IAM repair")]
+    (doseq [position [backend-check terraform-init exact-plan]]
+      (is (number? position)))
+    (when (every? number? [backend-check terraform-init exact-plan])
+      (is (< backend-check terraform-init exact-plan)))
+    (is (= 1 (count (re-seq #"terraform -chdir=\"\$TF_DIRECTORY\" init"
+                            bootstrap))))
+    (is (str/includes?
+         bootstrap
+         "Development Terraform backend access required"))
+    (is (str/includes?
+         bootstrap
+         "Do not retry until an authorized operator has completed the reviewed development state-bucket recovery"))
+    (is (not (str/includes? bootstrap "add-iam-policy-binding")))
+    (is (not (str/includes? bootstrap
+                            "recover_development_terraform_backend_access.sh apply")))))
+
+(deftest development-backend-recovery-has-two-human-authority-checkpoints
+  (let [runbook (slurp "docs/production-runbook.md")
+        recovery (str/index-of runbook
+                               "Development Terraform backend recovery")
+        plan (str/index-of runbook
+                           "recover_development_terraform_backend_access.sh plan")
+        apply-recovery (str/index-of runbook
+                                     "recover_development_terraform_backend_access.sh apply")
+        retry-authority (str/index-of runbook
+                                      "Fresh authority is required again before retrying")]
+    (doseq [position [recovery plan apply-recovery retry-authority]]
+      (is (number? position)))
+    (when (every? number? [recovery plan apply-recovery retry-authority])
+      (is (< recovery plan apply-recovery retry-authority)))
+    (is (re-find
+         #"(?s)resource \"google_storage_bucket_iam_member\" \"deployer_terraform_state\".*?bucket\s+=\s+var\.terraform_state_bucket.*?role\s+=\s+\"roles/storage.objectAdmin\".*?member\s+=\s+\"serviceAccount:\$\{google_service_account\.deployer\.email\}\""
+         terraform))
+    (is (str/includes? runbook "Never run recovery as the target deployer"))
+    (is (str/includes? runbook "stop without retrying"))))
 
 (deftest public-ingress-is-enabled-only-after-app-and-task-auth-configuration
   (let [auth-index (str/index-of workflow "AGG_AUTH_ENABLED=true")
