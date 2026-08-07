@@ -1377,8 +1377,8 @@
         (.set "Referrer-Policy" "no-referrer")
         (.set "Content-Security-Policy"
               (if picker-config
-                "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://apis.google.com https://www.gstatic.com; frame-src https://docs.google.com https://accounts.google.com; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' https://www.googleapis.com https://*.googleapis.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
-                "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")))
+                "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://apis.google.com https://www.gstatic.com; worker-src 'self'; frame-src https://docs.google.com https://accounts.google.com; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' https://www.googleapis.com https://*.googleapis.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+                "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; worker-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")))
       (secure-anonymous-page! exchange))
     (respond! exchange 200 "text/html; charset=utf-8" body)))
 
@@ -2418,9 +2418,12 @@
                                        (= "GET" method)
                                        (= "/derivative-playback-range-worker.js"
                                           path))
-                                  (respond! exchange 200
-                                            "application/javascript; charset=utf-8"
-                                            ui/derivative-playback-range-worker)
+                                  (do
+                                    (.set (.getResponseHeaders exchange)
+                                          "Service-Worker-Allowed" "/")
+                                    (respond! exchange 200
+                                              "application/javascript; charset=utf-8"
+                                              ui/derivative-playback-range-worker))
 
                                   (and (= "api" service-profile)
                                        (= "GET" method)

@@ -668,6 +668,22 @@
     (is (not (str/includes? workflow
                             "gcloud run jobs update \"$DURABLE_JOB\"")))))
 
+(deftest production-release-verifies-the-hosted-range-adapter-contract
+  (let [workflow (slurp ".github/workflows/deploy-production.yml")
+        hosting (str/index-of workflow "Publish pinned Firebase Hosting routes")
+        adapter (str/index-of workflow
+                              "$PUBLIC_BASE_URL/derivative-playback-range-worker.js")]
+    (is (number? hosting))
+    (is (number? adapter))
+    (when (and (number? hosting) (number? adapter))
+      (is (< hosting adapter)))
+    (doseq [contract ["content-type: application/javascript; charset=utf-8"
+                      "cache-control: no-store"
+                      "service-worker-allowed: /"
+                      "self.clients.claim()"
+                      "__agg_range"]]
+      (is (str/includes? workflow contract) contract))))
+
 (deftest production-release-validates-the-picker-key-before-deploying
   (let [workflow (slurp ".github/workflows/deploy-production.yml")
         key-check (str/index-of workflow

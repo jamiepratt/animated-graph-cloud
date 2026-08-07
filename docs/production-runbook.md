@@ -351,6 +351,12 @@ Submitting or retrying consumes the documented processing allowance even when
 the attempt later fails or is cancelled. Repository acceptance never creates a
 private preview and incurs no media-processing cost.
 
+Before attaching a prepared asset in live acceptance, verify the signed-in page
+has one active `/derivative-playback-range-worker.js` registration at scope `/`
+and that its worker controls the page. If registration or control is absent,
+stop before creating a playback session. Do not reload, prepare, retry, cancel,
+or spend while diagnosing the adapter.
+
 ## Secret Manager
 
 Terraform creates containers only. Create independent production values; never

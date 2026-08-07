@@ -1,6 +1,7 @@
 (ns agg.api-derivative-playback-test
   (:require [agg.api.main :as api]
             [agg.auth.core :as auth]
+            [agg.browser-process :as browser-process]
             [agg.derivative.lifecycle :as derivative]
             [agg.derivative.storage :as storage]
             [agg.http-test-support :as test-http]
@@ -10,11 +11,14 @@
             [clojure.test :refer [deftest is]])
   (:import (com.google.cloud ReadChannel)
            (com.google.cloud.storage BlobInfo Storage StorageOptions)
+           (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
            (java.io ByteArrayInputStream)
            (java.lang.reflect InvocationHandler Proxy)
+           (java.net InetSocketAddress)
            (java.nio ByteBuffer)
+           (java.nio.charset StandardCharsets)
            (java.time Clock Instant ZoneOffset)
-           (java.util Arrays)))
+           (java.util Arrays Base64)))
 
 (def ^:private owner
   {:subject "private-owner"
@@ -80,6 +84,77 @@
   (test-http/send-bytes!
    method (str "http://127.0.0.1:" port path)
    body headers))
+
+(defn- chrome-executable []
+  (some (fn [candidate]
+          (when candidate
+            (let [file (java.io.File. candidate)]
+              (when (.canExecute file) candidate))))
+        [(System/getenv "CHROME_BIN")
+         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+         "/usr/bin/google-chrome"
+         "/usr/bin/google-chrome-stable"
+         "/usr/bin/chromium"
+         "/usr/bin/chromium-browser"]))
+
+(defn- respond-fixture!
+  [^HttpExchange exchange status content-type body headers]
+  (let [bytes (.getBytes ^String body StandardCharsets/UTF_8)]
+    (doto (.getResponseHeaders exchange)
+      (.set "Content-Type" content-type))
+    (doseq [[name value] headers]
+      (.set (.getResponseHeaders exchange) name value))
+    (.sendResponseHeaders exchange status (alength bytes))
+    (with-open [output (.getResponseBody exchange)]
+      (.write output bytes))))
+
+(defn- range-adapter-browser-outcome [page policy]
+  (let [port (test-http/available-port)
+        probe
+        (str "<output id=\"browser-result\" data-outcome=\"\"></output>"
+             "<script>(async()=>{let outcome;try{const registration=await navigator.serviceWorker.ready,deadline=Date.now()+7000;while(!navigator.serviceWorker.controller&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,10));const registrations=await navigator.serviceWorker.getRegistrations(),controller=navigator.serviceWorker.controller;outcome={controlled:!!controller,controllerScript:controller?.scriptURL||null,registrationCount:registrations.length,activeState:registration.active?.state||null,scope:registration.scope};}catch(error){outcome={error:error.message};}const bytes=new TextEncoder().encode(JSON.stringify(outcome));document.getElementById('browser-result').dataset.outcome=btoa(String.fromCharCode(...bytes));})();</script>")
+        html (-> page
+                 (str/replace #"<script src=\"https://cdn\.jsdelivr\.net/[^>]+></script>"
+                              "")
+                 (str/replace "</body>" (str probe "</body>")))
+        server (HttpServer/create (InetSocketAddress. "127.0.0.1" port) 0)]
+    (.createContext
+     server "/"
+     (reify HttpHandler
+       (handle [_ exchange]
+         (case (some-> exchange .getRequestURI .getPath)
+           "/" (respond-fixture! exchange 200 "text/html; charset=utf-8"
+                                 html {"Content-Security-Policy" policy})
+           "/derivative-playback-range-worker.js"
+           (respond-fixture! exchange 200
+                             "application/javascript; charset=utf-8"
+                             ui/derivative-playback-range-worker
+                             {"Cache-Control" "no-store"
+                              "Service-Worker-Allowed" "/"})
+           (respond-fixture! exchange 404 "text/plain; charset=utf-8" "" {})))))
+    (.start server)
+    (try
+      (let [chrome (chrome-executable)]
+        (is chrome "Range-adapter registration requires Chrome or Chromium")
+        (when chrome
+          (let [{:keys [exit output cleanup]}
+                (browser-process/run!
+                 {:executable chrome
+                  :fixture "prepared playback range adapter registration"
+                  :location (str "http://127.0.0.1:" port "/")
+                  :virtual-time-budget-ms 8000
+                  :timeout-ms 30000})
+                encoded (second (re-find #"data-outcome=\"([^\"]+)\"" output))]
+            (is (= 0 exit))
+            (is (true? (:profile-removed? cleanup)))
+            (is encoded)
+            (when encoded
+              (json/read-str
+               (String. (.decode (Base64/getDecoder) ^String encoded)
+                        StandardCharsets/UTF_8)
+               :key-fn keyword)))))
+      (finally
+        (.stop server 0)))))
 
 (defn- absolute-limit-channel [bytes]
   (let [position (atom 0)
@@ -162,9 +237,40 @@
                (.orElse (.firstValue (.headers response) "Content-Type") "")))
         (is (= "no-store"
                (.orElse (.firstValue (.headers response) "Cache-Control") "")))
+        (is (= "/"
+               (.orElse (.firstValue (.headers response)
+                                     "Service-Worker-Allowed") "")))
         (is (str/includes? body "headers.get('Range')"))
         (is (str/includes? body "__agg_range"))
         (is (str/includes? body "/v1/derivative-preparations/")))
+      (finally
+        (.close ^java.lang.AutoCloseable server)))))
+
+(deftest authenticated-compose-page-allows-the-range-adapter-worker
+  (let [clock (Clock/fixed
+               (Instant/parse "2026-07-30T10:00:00Z")
+               ZoneOffset/UTC)
+        {:keys [system cookie]} (auth-fixture clock)
+        port (test-http/available-port)
+        server (api/start! port {:auth-system system :service-profile "api"})]
+    (try
+      (let [response (request! port :get "/" nil
+                               {"Cookie" (str "__session=" cookie)})
+            policy (.orElse (.firstValue (.headers response)
+                                         "Content-Security-Policy") "")
+            outcome (range-adapter-browser-outcome
+                     (String. ^bytes (.body response) StandardCharsets/UTF_8)
+                     policy)]
+        (is (= 200 (.statusCode response)))
+        (is (str/includes? policy "worker-src 'self'"))
+        (when outcome
+          (is (= true (:controlled outcome)))
+          (is (= 1 (:registrationCount outcome)))
+          (is (= "activated" (:activeState outcome)))
+          (is (str/ends-with? (:controllerScript outcome)
+                              "/derivative-playback-range-worker.js"))
+          (is (re-matches #"http://127\.0\.0\.1:[0-9]+/"
+                          (:scope outcome)))))
       (finally
         (.close ^java.lang.AutoCloseable server)))))
 
@@ -175,12 +281,16 @@
          page
          "const script='/derivative-playback-range-worker.js'")
         awaited (str/index-of page "await derivativePlaybackRangeAdapter")
+        unavailable (str/index-of page "range_adapter_unavailable")
         playback-session
         (str/index-of page "preparationPath(activePreparation,'playback-sessions')")]
     (is (str/includes? page "navigator.serviceWorker.register(script"))
-    (is (every? integer? [registration awaited playback-session]))
-    (when (every? integer? [registration awaited playback-session])
-      (is (< registration awaited playback-session)))))
+    (is (str/includes?
+         page
+         "Private video playback could not start because its range adapter is unavailable."))
+    (is (every? integer? [registration awaited unavailable playback-session]))
+    (when (every? integer? [registration awaited unavailable playback-session])
+      (is (< registration awaited unavailable playback-session)))))
 
 (deftest hosting-adapted-nonzero-prepared-playback-starts-at-requested-byte
   (let [clock (Clock/fixed

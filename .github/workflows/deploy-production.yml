@@ -614,6 +614,15 @@ jobs:
             "$PUBLIC_BASE_URL/v1/overlay")" = 401
           curl --fail --silent --show-error "$PUBLIC_BASE_URL/privacy" | grep -q 'Privacy policy'
           curl --fail --silent --show-error "$PUBLIC_BASE_URL/terms" | grep -q 'Terms of service'
+          range_worker_headers="$RUNNER_TEMP/derivative-playback-range-worker.headers"
+          range_worker="$(curl --fail --silent --show-error --retry 5 --retry-all-errors \
+            --dump-header "$range_worker_headers" \
+            "$PUBLIC_BASE_URL/derivative-playback-range-worker.js")"
+          grep -Fiq 'content-type: application/javascript; charset=utf-8' "$range_worker_headers"
+          grep -Fiq 'cache-control: no-store' "$range_worker_headers"
+          grep -Fiq 'service-worker-allowed: /' "$range_worker_headers"
+          grep -Fq 'self.clients.claim()' <<<"$range_worker"
+          grep -Fq '__agg_range' <<<"$range_worker"
           SHORT_RELEASE_COMMIT="${RELEASE_COMMIT:0:7}"
           changelog="$(curl --fail --silent --show-error --retry 5 --retry-all-errors \
             "$PUBLIC_BASE_URL/changelog")"
