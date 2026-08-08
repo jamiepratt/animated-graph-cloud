@@ -100,11 +100,14 @@
 
 (defn- write-response!
   [^HttpExchange exchange status headers ^bytes body]
-  (doseq [[key value] headers]
-    (.set (.getResponseHeaders exchange) key value))
-  (.sendResponseHeaders exchange status (alength body))
-  (with-open [output (.getResponseBody exchange)]
-    (.write output body)))
+  (try
+    (doseq [[key value] headers]
+      (.set (.getResponseHeaders exchange) key value))
+    (.sendResponseHeaders exchange status (alength body))
+    (with-open [output (.getResponseBody exchange)]
+      (.write output body))
+    (catch IOException _
+      nil)))
 
 (defn- write-empty! [^HttpExchange exchange status headers]
   (doseq [[key value] headers]

@@ -2,8 +2,8 @@
   (:require [agg.drive.core :as drive]
             [agg.drive.range-proxy :as range-proxy]
             [clojure.test :refer [deftest is]])
-  (:import (java.io ByteArrayInputStream InputStream)
-           (java.net URI)
+  (:import (java.io ByteArrayInputStream FilterInputStream InputStream)
+           (java.net Socket URI)
            (java.net.http HttpClient HttpRequest HttpResponse$BodyHandlers)))
 
 (defn- get-range [url byte-range]
@@ -96,6 +96,61 @@
               ((:stats proxy))
               [:upstream-bytes :request-count
                :retry-count :cache-hit-count]))))))
+
+(deftest downstream-client-reset-does-not-become-a-proxy-failure
+  (let [source-size (* 2 1024 1024)
+        response-size (* 1024 1024)
+        request-started (promise)
+        release-response (promise)
+        response-closed (promise)
+        gateway
+        (reify drive/PlaybackGateway
+          (open-source-range! [_ _ _ {:keys [start end]}]
+            (deliver request-started true)
+            @release-response
+            (let [length (inc (- end start))]
+              {:status 206
+               :headers {"content-range"
+                         (str "bytes " start "-" end "/" source-size)
+                         "content-length" (str length)}
+               :body
+               (proxy [FilterInputStream]
+                      [(ByteArrayInputStream. (byte-array length))]
+                 (close []
+                   (proxy-super close)
+                   (deliver response-closed true)))})))]
+    (with-open [proxy (range-proxy/start!
+                        {:gateway gateway
+                         :access-token "access"
+                         :file-id "file"
+                         :size source-size
+                         :limits
+                         (limits {:max-upstream-bytes (* 2 response-size)
+                                  :max-request-count 2
+                                  :max-range-bytes response-size
+                                  :max-cache-bytes response-size})})]
+      (let [uri (URI/create (:url proxy))
+            socket (Socket. "127.0.0.1" (.getPort uri))]
+        (try
+          (.setSoLinger socket true 0)
+          (let [request
+                (.getBytes
+                 (str "GET " (.getRawPath uri) " HTTP/1.1\r\n"
+                      "Host: 127.0.0.1\r\n"
+                      "Range: bytes=0-\r\n"
+                      "Connection: close\r\n\r\n")
+                 java.nio.charset.StandardCharsets/US_ASCII)]
+            (.write (.getOutputStream socket) request)
+            (.flush (.getOutputStream socket)))
+          (is (= true (deref request-started 1000 false)))
+          (.close socket)
+          (deliver release-response true)
+          (is (= true (deref response-closed 1000 false)))
+          (Thread/sleep 100)
+          (is (nil? (:failure-reason ((:stats proxy)))))
+          (finally
+            (deliver release-response true)
+            (.close socket)))))))
 
 (deftest malformed-drive-range-and-early-eof-fail-closed
   (doseq [response
