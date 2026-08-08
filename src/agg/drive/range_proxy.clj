@@ -246,22 +246,27 @@
 
 (defn- write-streaming-response!
   [^HttpExchange exchange status headers state start end]
-  (doseq [[key value] headers]
-    (.set (.getResponseHeaders exchange) key value))
-  (.sendResponseHeaders exchange status (long (inc (- end start))))
-  (with-open [output (.getResponseBody exchange)]
+  (let [chunk-size (get-in state [:limits :max-range-bytes])
+        first-chunk-end (min end (dec (+ start chunk-size)))
+        first-loaded (load-range! state start first-chunk-end)]
     (try
-      (loop [offset start]
-        (when (<= offset end)
-          (let [chunk-end
-                (min end
-                     (dec (+ offset
-                             (get-in state [:limits :max-range-bytes]))))
-                loaded (load-range! state offset chunk-end)
-                bytes (cached-bytes loaded offset chunk-end)]
+      (doseq [[key value] headers]
+        (.set (.getResponseHeaders exchange) key value))
+      (.sendResponseHeaders exchange status (long (inc (- end start))))
+      (with-open [output (.getResponseBody exchange)]
+        (loop [offset start
+               chunk-end first-chunk-end
+               loaded first-loaded]
+          (let [bytes (cached-bytes loaded offset chunk-end)]
             (.write output ^bytes bytes)
             (.flush output)
-            (recur (inc chunk-end)))))
+            (let [next-offset (inc chunk-end)]
+              (when (<= next-offset end)
+                (let [next-chunk-end
+                      (min end (dec (+ next-offset chunk-size)))]
+                  (recur next-offset
+                         next-chunk-end
+                         (load-range! state next-offset next-chunk-end))))))))
       (catch IOException _
         nil))))
 
