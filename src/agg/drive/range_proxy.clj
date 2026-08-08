@@ -249,26 +249,40 @@
   (let [chunk-size (get-in state [:limits :max-range-bytes])
         first-chunk-end (min end (dec (+ start chunk-size)))
         first-loaded (load-range! state start first-chunk-end)]
-    (try
-      (doseq [[key value] headers]
-        (.set (.getResponseHeaders exchange) key value))
-      (.sendResponseHeaders exchange status (long (inc (- end start))))
-      (with-open [output (.getResponseBody exchange)]
+    (doseq [[key value] headers]
+      (.set (.getResponseHeaders exchange) key value))
+    (when-let
+     [output
+      (try
+        (.sendResponseHeaders exchange status (long (inc (- end start))))
+        (.getResponseBody exchange)
+        (catch IOException _
+          nil))]
+      (try
         (loop [offset start
                chunk-end first-chunk-end
                loaded first-loaded]
-          (let [bytes (cached-bytes loaded offset chunk-end)]
-            (.write output ^bytes bytes)
-            (.flush output)
-            (let [next-offset (inc chunk-end)]
-              (when (<= next-offset end)
-                (let [next-chunk-end
-                      (min end (dec (+ next-offset chunk-size)))]
-                  (recur next-offset
-                         next-chunk-end
-                         (load-range! state next-offset next-chunk-end))))))))
-      (catch IOException _
-        nil))))
+          (let [bytes (cached-bytes loaded offset chunk-end)
+                written?
+                (try
+                  (.write output ^bytes bytes)
+                  (.flush output)
+                  true
+                  (catch IOException _
+                    false))]
+            (when written?
+              (let [next-offset (inc chunk-end)]
+                (when (<= next-offset end)
+                  (let [next-chunk-end
+                        (min end (dec (+ next-offset chunk-size)))]
+                    (recur next-offset
+                           next-chunk-end
+                           (load-range! state next-offset next-chunk-end))))))))
+        (finally
+          (try
+            (.close output)
+            (catch IOException _
+              nil)))))))
 
 (defn- acquire! [active limit]
   (<= (swap! active inc) limit))

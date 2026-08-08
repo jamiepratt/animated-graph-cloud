@@ -2,7 +2,7 @@
   (:require [agg.drive.core :as drive]
             [agg.drive.range-proxy :as range-proxy]
             [clojure.test :refer [deftest is]])
-  (:import (java.io ByteArrayInputStream FilterInputStream InputStream)
+  (:import (java.io ByteArrayInputStream FilterInputStream IOException InputStream)
            (java.net Socket URI)
            (java.net.http HttpClient HttpRequest HttpResponse$BodyHandlers)))
 
@@ -180,6 +180,68 @@
           (is (= 502 (.statusCode response))))
         (is (= "invalid_upstream_response"
                (:failure-reason ((:stats proxy)))))))))
+
+(deftest streaming-later-upstream-io-failure-is-a-proxy-failure
+  (let [source-size 32
+        requests (atom 0)
+        second-read (promise)
+        gateway
+        (reify drive/PlaybackGateway
+          (open-source-range! [_ _ _ {:keys [start end]}]
+            (swap! requests inc)
+            (let [length (inc (- end start))]
+              {:status 206
+               :headers {"content-range"
+                         (str "bytes " start "-" end "/" source-size)
+                         "content-length" (str length)}
+               :body
+               (if (zero? start)
+                 (ByteArrayInputStream. (byte-array length))
+                 (proxy [InputStream] []
+                   (read
+                     ([]
+                      (deliver second-read true)
+                      (throw (IOException. "upstream body failed")))
+                     ([_ _ _]
+                      (deliver second-read true)
+                      (throw (IOException. "upstream body failed"))))))})))]
+    (with-open [proxy (range-proxy/start!
+                        {:gateway gateway
+                         :access-token "access"
+                         :file-id "file"
+                         :size source-size
+                         :limits (limits {:max-upstream-bytes source-size
+                                          :max-request-count 2})
+                         :stream-open-ended? true})]
+      (let [uri (URI/create (:url proxy))
+            socket (Socket. "127.0.0.1" (.getPort uri))]
+        (try
+          (let [request
+                (.getBytes
+                 (str "GET " (.getRawPath uri) " HTTP/1.1\r\n"
+                      "Host: 127.0.0.1\r\n"
+                      "Range: bytes=0-\r\n"
+                      "Connection: close\r\n\r\n")
+                 java.nio.charset.StandardCharsets/US_ASCII)]
+            (.write (.getOutputStream socket) request)
+            (.flush (.getOutputStream socket)))
+          (is (= true (deref second-read 1000 false)))
+          (let [stats
+                (loop [remaining 100]
+                  (let [current ((:stats proxy))]
+                    (if (or (:failure-reason current) (zero? remaining))
+                      current
+                      (do
+                        (Thread/sleep 10)
+                        (recur (dec remaining))))))]
+            (is (= {:upstream-bytes source-size
+                    :request-count 2
+                    :failure-reason "unexpected_failure"}
+                   (select-keys stats
+                                [:upstream-bytes :request-count
+                                 :failure-reason]))))
+          (finally
+            (.close socket)))))))
 
 (deftest malformed-drive-range-and-early-eof-fail-closed
   (doseq [response
