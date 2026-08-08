@@ -2,7 +2,6 @@
 set -euo pipefail
 
 terraform_directory='infra/dev'
-target_account='agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com'
 required_confirmation='apply exact development youtube refresh reader'
 
 if (( $# != 1 )); then
@@ -24,8 +23,8 @@ if [[ -z "$active_account" ]]; then
   echo 'Blocked: no active gcloud operator identity.' >&2
   exit 1
 fi
-if [[ "$active_account" == "$target_account" ]]; then
-  echo 'Blocked: the deployer cannot grant refresh access to itself.' >&2
+if [[ "$active_account" == *.gserviceaccount.com ]]; then
+  echo 'Blocked: an authorized human IAM operator is required.' >&2
   exit 1
 fi
 operator_access_token="$(gcloud auth print-access-token --account="$active_account")"

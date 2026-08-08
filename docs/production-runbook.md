@@ -455,42 +455,26 @@ authority for the read-only plan, then run from the repository root:
 export GOOGLE_CLOUD_QUOTA_PROJECT=animated-graph-cloud-jp
 refresh_plan_directory="$(mktemp -d)"
 refresh_plan="$refresh_plan_directory/development-youtube-refresh.tfplan"
-refresh_plan_json="$refresh_plan_directory/development-youtube-refresh.tfplan.json"
-renderer_image="$(gcloud run jobs describe agg-renderer \
-  --project=animated-graph-cloud-jp \
-  --region=europe-central2 \
-  --format='value(spec.template.spec.template.spec.containers[0].image)')"
-api_service_url="$(gcloud run services describe agg-api \
-  --project=animated-graph-cloud-jp \
-  --region=europe-central2 \
-  --format='value(status.url)')"
-test -n "$renderer_image"
-test -n "$api_service_url"
-terraform -chdir=infra/dev init -input=false
-terraform -chdir=infra/dev plan \
-  -input=false \
-  -lock-timeout=5m \
-  -var="renderer_image=$renderer_image" \
-  -var="api_service_url=$api_service_url" \
-  -target='google_project_iam_custom_role.youtube_repair_refresh_reader[0]' \
-  -target='google_project_iam_member.deployer_youtube_repair_refresh_reader[0]' \
-  -out="$refresh_plan"
-terraform -chdir=infra/dev show "$refresh_plan"
-terraform -chdir=infra/dev show -json "$refresh_plan" >"$refresh_plan_json"
-script/guard_youtube_metadata_refresh_plan.sh "$refresh_plan_json"
+script/plan_development_youtube_refresh.sh "$refresh_plan"
 ```
 
-The guard requires exactly two managed creates: the custom role with only the
-two permissions above and its binding to the development deployer. The existing
+The wrapper requires an active human gcloud account, rejects every service
+account identity, and obtains a short-lived token for that exact account. It
+uses the account explicitly for the runtime reads and binds Terraform backend
+initialization, planning, and saved-plan review to the same token. Its executable
+`script/guard_youtube_metadata_refresh_plan.sh` guard requires exactly two
+managed creates: the custom role with only the two permissions above and its
+binding to the development deployer. The existing
 deployer service account must be an explicit no-op. Stop on any missing target,
 update, delete, replacement, production-prefixed address, unrelated change,
-backend or refresh error, or operator identity that is the target deployer.
+backend or refresh error, missing operator identity, or service-account
+operator identity.
 
 Obtain fresh human authority for those exact two creates. Then apply only the
 same saved binary plan through the wrapper, which regenerates JSON from that
 plan, reruns the executable guard, rejects self-grant, binds Terraform to a
-short-lived token from that checked operator account, and invokes no direct IAM
-mutation command:
+short-lived token from that checked human operator account, rejects every
+service-account identity, and invokes no direct IAM mutation command:
 
 ```sh
 export CONFIRM_DEVELOPMENT_YOUTUBE_REFRESH_IAM_REPAIR='apply exact development youtube refresh reader'

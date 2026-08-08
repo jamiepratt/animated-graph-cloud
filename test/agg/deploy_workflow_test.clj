@@ -93,6 +93,10 @@
                  "  printf '%s\\n' \"$ACTIVE_ACCOUNT\"\n"
                  "elif [[ \"${1:-} ${2:-}\" == 'auth print-access-token' ]]; then\n"
                  "  printf '%s\\n' 'test-operator-token'\n"
+                 "elif [[ \"${1:-} ${2:-} ${3:-}\" == 'run jobs describe' ]]; then\n"
+                 "  printf '%s\\n' 'europe-central2-docker.pkg.dev/animated-graph-cloud-jp/agg/renderer:test'\n"
+                 "elif [[ \"${1:-} ${2:-} ${3:-}\" == 'run services describe' ]]; then\n"
+                 "  printf '%s\\n' 'https://agg-api.test.example'\n"
                  "elif [[ \"${1:-} ${2:-} ${3:-}\" == 'storage buckets get-iam-policy' ]]; then\n"
                  "  printf '%s\\n' '{\"bindings\":[{\"role\":\"roles/storage.objectAdmin\",\"members\":[\"serviceAccount:agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com\"]}]}'\n"
                  "fi\n"))
@@ -570,6 +574,111 @@
       (is (not (zero? (:exit
                        (youtube-refresh-prerequisite-plan-result plan))))))))
 
+(deftest development-youtube-refresh-plan-binds-the-reviewed-human-identity
+  (with-fake-gcloud
+    (fn [directory log]
+      (let [terraform-command (File. directory "terraform")
+            plan-json (File/createTempFile "youtube-refresh-plan-" ".json")
+            plan-file (File/createTempFile "youtube-refresh-plan-" ".tfplan")
+            base-env {"PATH" (str (.getAbsolutePath directory)
+                                  ":" (System/getenv "PATH"))
+                      "GCLOUD_LOG" (.getAbsolutePath log)
+                      "PLAN_JSON" (.getAbsolutePath plan-json)
+                      "ACTIVE_ACCOUNT" "owner@example.com"
+                      "GOOGLE_APPLICATION_CREDENTIALS" "/stale/adc.json"}]
+        (try
+          (spit plan-json
+                (json/write-str
+                 {:resource_changes
+                  (authorized-youtube-refresh-prerequisite-plan)}))
+          (spit terraform-command
+                (str "#!/usr/bin/env bash\n"
+                     "set -euo pipefail\n"
+                     "test \"${GOOGLE_OAUTH_ACCESS_TOKEN:-}\" = 'test-operator-token'\n"
+                     "printf 'terraform %s\\n' \"$*\" >>\"$GCLOUD_LOG\"\n"
+                     "if [[ \" $* \" == *' show -json '* ]]; then\n"
+                     "  cat \"$PLAN_JSON\"\n"
+                     "fi\n"))
+          (.setExecutable terraform-command true)
+          (let [{:keys [exit err]}
+                (shell/sh
+                 "bash"
+                 "script/plan_development_youtube_refresh.sh"
+                 (.getAbsolutePath plan-file)
+                 :env base-env)
+                calls (slurp log)]
+            (is (zero? exit) err)
+            (doseq [call ["auth print-access-token --account=owner@example.com"
+                          (str "run jobs describe agg-renderer "
+                               "--project=animated-graph-cloud-jp "
+                               "--region=europe-central2 "
+                               "--account=owner@example.com")
+                          (str "run services describe agg-api "
+                               "--project=animated-graph-cloud-jp "
+                               "--region=europe-central2 "
+                               "--account=owner@example.com")
+                          "terraform -chdir=infra/dev init -input=false"
+                          "-target=google_project_iam_custom_role.youtube_repair_refresh_reader[0]"
+                          "-target=google_project_iam_member.deployer_youtube_repair_refresh_reader[0]"
+                          "terraform -chdir=infra/dev show -json"]]
+              (is (str/includes? calls call) call))
+            (is (not (str/includes? calls "terraform -chdir=infra/dev apply"))))
+          (spit plan-json
+                (json/write-str
+                 {:resource_changes
+                  [(terraform-plan-change
+                    "google_project_iam_member.unrelated" ["create"])]}))
+          (let [result
+                (shell/sh
+                 "bash"
+                 "script/plan_development_youtube_refresh.sh"
+                 (.getAbsolutePath plan-file)
+                 :env base-env)]
+            (is (not (zero? (:exit result)))))
+          (finally
+            (.delete plan-json)
+            (.delete plan-file)))))))
+
+(deftest development-youtube-refresh-plan-rejects-non-human-identities
+  (with-fake-gcloud
+    (fn [directory log]
+      (let [terraform-command (File. directory "terraform")
+            plan-json (File/createTempFile "youtube-refresh-plan-" ".json")
+            plan-file (File/createTempFile "youtube-refresh-plan-" ".tfplan")
+            base-env {"PATH" (str (.getAbsolutePath directory)
+                                  ":" (System/getenv "PATH"))
+                      "GCLOUD_LOG" (.getAbsolutePath log)
+                      "PLAN_JSON" (.getAbsolutePath plan-json)}]
+        (try
+          (spit plan-json
+                (json/write-str
+                 {:resource_changes
+                  (authorized-youtube-refresh-prerequisite-plan)}))
+          (spit terraform-command
+                (str "#!/usr/bin/env bash\n"
+                     "set -euo pipefail\n"
+                     "printf 'terraform %s\\n' \"$*\" >>\"$GCLOUD_LOG\"\n"
+                     "if [[ \" $* \" == *' show -json '* ]]; then\n"
+                     "  cat \"$PLAN_JSON\"\n"
+                     "fi\n"))
+          (.setExecutable terraform-command true)
+          (doseq [account
+                  [""
+                   "agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com"
+                   "operator-bot@other-project.iam.gserviceaccount.com"]]
+            (spit log "")
+            (let [result
+                  (shell/sh
+                   "bash"
+                   "script/plan_development_youtube_refresh.sh"
+                   (.getAbsolutePath plan-file)
+                   :env (assoc base-env "ACTIVE_ACCOUNT" account))]
+              (is (not (zero? (:exit result))) account)
+              (is (not (str/includes? (slurp log) "terraform")) account)))
+          (finally
+            (.delete plan-json)
+            (.delete plan-file)))))))
+
 (deftest development-youtube-refresh-apply-fails-closed-and-applies-only-the-saved-plan
   (with-fake-gcloud
     (fn [directory log]
@@ -609,6 +718,16 @@
                          "agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com"
                          "CONFIRM_DEVELOPMENT_YOUTUBE_REFRESH_IAM_REPAIR"
                          "apply exact development youtube refresh reader"))))))
+          (spit log "")
+          (let [result
+                (run-apply
+                 (assoc base-env
+                        "ACTIVE_ACCOUNT"
+                        "operator-bot@other-project.iam.gserviceaccount.com"
+                        "CONFIRM_DEVELOPMENT_YOUTUBE_REFRESH_IAM_REPAIR"
+                        "apply exact development youtube refresh reader"))]
+            (is (not (zero? (:exit result))))
+            (is (not (str/includes? (slurp log) "terraform"))))
           (spit plan-json
                 (json/write-str
                  {:resource_changes
@@ -786,6 +905,8 @@
   (let [runbook (slurp "docs/production-runbook.md")
         refresh-recovery (str/index-of runbook
                                        "Development Terraform refresh recovery")
+        refresh-plan (str/index-of runbook
+                                   "plan_development_youtube_refresh.sh")
         refresh-guard (str/index-of runbook
                                     "guard_youtube_metadata_refresh_plan.sh")
         refresh-apply (str/index-of runbook
@@ -797,15 +918,22 @@
                       "serviceusage.services.list"
                       "google_project_iam_custom_role.youtube_repair_refresh_reader[0]"
                       "google_project_iam_member.deployer_youtube_repair_refresh_reader[0]"
+                      "plan_development_youtube_refresh.sh"
                       "CONFIRM_DEVELOPMENT_YOUTUBE_REFRESH_IAM_REPAIR"
                       "confirm_development_refresh_access_recovered"
                       "stop without retrying"]]
       (is (str/includes? runbook contract) contract))
-    (doseq [position [refresh-recovery refresh-guard refresh-apply viewer-repair]]
+    (doseq [position
+            [refresh-recovery refresh-plan refresh-guard refresh-apply viewer-repair]]
       (is (number? position)))
     (when (every? number?
-                  [refresh-recovery refresh-guard refresh-apply viewer-repair])
-      (is (< refresh-recovery refresh-guard refresh-apply viewer-repair)))
+                  [refresh-recovery refresh-plan refresh-guard refresh-apply
+                   viewer-repair])
+      (is (< refresh-recovery refresh-plan refresh-guard refresh-apply
+             viewer-repair))
+      (is (not
+           (str/includes? (subs runbook refresh-recovery refresh-apply)
+                          "terraform -chdir=infra/dev"))))
     (is (str/includes? runbook
                        "The deployer cannot grant this prerequisite to itself"))
     (is (re-find #"Production\s+keeps this development-only role disabled"
