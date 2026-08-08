@@ -4,6 +4,7 @@
             [agg.drive.gcp :as gcp]
             [agg.drive.range-proxy :as range-proxy]
             [agg.render.media :as media]
+            [agg.render.process :as process]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]])
@@ -14,6 +15,18 @@
            (java.nio ByteBuffer ByteOrder)
            (java.nio.charset StandardCharsets)
            (java.nio.file Files OpenOption)))
+
+(def ^:private fixture-generation-timeout-ms 30000)
+
+(defn- generate-media-fixture! [path command]
+  (try
+    (process/run-captured! command fixture-generation-timeout-ms)
+    path
+    (catch Throwable error
+      (Files/deleteIfExists path)
+      (throw (ex-info "Media fixture generation failed"
+                      {:type ::fixture-generation-failed}
+                      error)))))
 
 (defn- atom-bytes [atom-type payload]
   (let [type-bytes (.getBytes ^String atom-type StandardCharsets/ISO_8859_1)
@@ -43,68 +56,40 @@
 (defn- browser-supported-mp4! []
   (let [path (Files/createTempFile
               "agg-playback-analysis-" ".mp4"
-              (make-array java.nio.file.attribute.FileAttribute 0))
-        process
-        (.start
-         (doto
-          (ProcessBuilder.
-           ^java.util.List
-           ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
-            "-f" "lavfi" "-i" "color=c=black:s=64x36:d=1"
-            "-f" "lavfi" "-i" "anullsrc=r=48000:cl=stereo"
-            "-shortest" "-c:v" "libx264" "-pix_fmt" "yuv420p"
-            "-c:a" "aac" "-movflags" "+faststart" "-y" (str path)])
-           (.redirectErrorStream true)))]
-    (when-not (zero? (.waitFor process))
-      (let [output (slurp (.getInputStream process))]
-        (Files/deleteIfExists path)
-        (throw (ex-info "Browser-supported fixture generation failed"
-                        {:output output}))))
-    path))
+              (make-array java.nio.file.attribute.FileAttribute 0))]
+    (generate-media-fixture!
+     path
+     ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
+      "-f" "lavfi" "-i" "color=c=black:s=64x36:d=1"
+      "-f" "lavfi" "-i" "anullsrc=r=48000:cl=stereo"
+      "-shortest" "-c:v" "libx264" "-pix_fmt" "yuv420p"
+      "-c:a" "aac" "-movflags" "+faststart" "-y" (str path)])))
 
 (defn- browser-incompatible-mov! []
   (let [path (Files/createTempFile
               "agg-playback-analysis-" ".mov"
-              (make-array java.nio.file.attribute.FileAttribute 0))
-        process
-        (.start
-         (doto
-          (ProcessBuilder.
-           ^java.util.List
-           ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
-            "-f" "lavfi" "-i" "testsrc2=s=640x360:r=25:d=1"
-            "-f" "lavfi" "-i" "anullsrc=r=48000:cl=stereo"
-            "-shortest" "-c:v" "prores_ks" "-profile:v" "2"
-            "-pix_fmt" "yuv422p10le" "-c:a" "pcm_s16le"
-            "-y" (str path)])
-           (.redirectErrorStream true)))]
-    (when-not (zero? (.waitFor process))
-      (let [output (slurp (.getInputStream process))]
-        (Files/deleteIfExists path)
-        (throw (ex-info "Browser-incompatible fixture generation failed"
-                        {:output output}))))
-    path))
+              (make-array java.nio.file.attribute.FileAttribute 0))]
+    (generate-media-fixture!
+     path
+     ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
+      "-f" "lavfi" "-i" "testsrc2=s=640x360:r=25:d=1"
+      "-f" "lavfi" "-i" "anullsrc=r=48000:cl=stereo"
+      "-shortest" "-c:v" "prores_ks" "-profile:v" "2"
+      "-pix_fmt" "yuv422p10le" "-c:a" "pcm_s16le"
+      "-movflags" "+faststart" "-y" (str path)])))
 
 (defn- browser-incompatible-delayed-program-mpeg-ts! []
   (let [path (Files/createTempFile
               "agg-playback-analysis-" ".ts"
-              (make-array java.nio.file.attribute.FileAttribute 0))
-        process
-        (.start
-         (doto
-          (ProcessBuilder.
-           ^java.util.List
-           (into ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
-                  "-f" "lavfi" "-i" "testsrc2=s=64x36:r=25:d=1"
-                  "-f" "lavfi" "-i" "anullsrc=r=48000:cl=stereo"
-                  "-shortest" "-t" "1"]
-                 ["-c:v" "mpeg2video" "-c:a" "mp2" "-f" "mpegts"
-                  "-y" (str path)]))
-           (.redirectErrorStream true)))]
-    (when-not (zero? (.waitFor process))
-      (let [output (slurp (.getInputStream process))]
-        (Files/deleteIfExists path)
-        (throw (ex-info "Video fixture generation failed" {:output output}))))
+              (make-array java.nio.file.attribute.FileAttribute 0))]
+    (generate-media-fixture!
+     path
+     ["ffmpeg" "-hide_banner" "-nostdin" "-loglevel" "error"
+      "-f" "lavfi" "-i" "testsrc2=s=64x36:r=25:d=1"
+      "-f" "lavfi" "-i" "anullsrc=r=48000:cl=stereo"
+      "-shortest" "-t" "1"
+      "-c:v" "mpeg2video" "-c:a" "mp2" "-f" "mpegts"
+      "-y" (str path)])
     (let [media-bytes (Files/readAllBytes path)
           packet-count 12000
           packet-size 188
@@ -153,9 +138,11 @@
   (let [path (browser-supported-mp4!)]
     (try
       (let [media-bytes (Files/readAllBytes path)
-            source-bytes (byte-array (* 12 1024 1024))
-            _ (System/arraycopy media-bytes 0 source-bytes 0
-                                (alength media-bytes))
+            source-size (* 12 1024 1024)
+            free-payload-size (- source-size (alength media-bytes) 8)
+            source-bytes (joined-bytes
+                          media-bytes
+                          (atom-bytes "free" (byte-array free-payload-size)))
             requested-lengths (atom [])
             gateway
             (assoc
@@ -226,7 +213,7 @@
             evidence
             (drive/inspect-playback!
              gateway "access" "private-file" {:size (alength source-bytes)})]
-        (is (> moov-offset (* 1024 1024)))
+        (is (<= 0 moov-offset (dec (* 1024 1024))))
         (is (= "mov" (get-in evidence [:container :format])))
         (is (= "prores" (get-in evidence [:video :codec])))
         (is (= "apcn" (get-in evidence [:video :codecTag])))
@@ -253,10 +240,36 @@
                       {:type :agg.render.media/invalid-source-inspection}))))]
     (is (= evidence
            (with-redefs-fn
-             {#'agg.drive.gcp/inspect-playback-through-proxy! inspect!}
+             {(ns-resolve 'agg.drive.gcp
+                          'inspect-playback-through-proxy!) inspect!}
              #(drive/inspect-playback!
                gateway "access" "private-file" {:size 3000000}))))
     (is (= [false true] @stream-modes))))
+
+(deftest playback-analysis-does-not-retry-bounded-media-tool-timeouts
+  (let [stream-modes (atom [])
+        gateway (gcp/->RestDriveGateway (constantly nil) (* 8 1024 1024))
+        inspect!
+        (fn [_gateway _access-token _file-id _metadata stream-open-ended?]
+          (swap! stream-modes conj stream-open-ended?)
+          (throw
+           (ex-info "Media tool exceeded its deadline"
+                    {:type :agg.render.media/media-tool-timeout
+                     :timeout-ms 25})))
+        error
+        (try
+          (with-redefs-fn
+            {(ns-resolve 'agg.drive.gcp
+                         'inspect-playback-through-proxy!) inspect!}
+            #(drive/inspect-playback!
+              gateway "access" "private-file" {:size 3000000}))
+          nil
+          (catch clojure.lang.ExceptionInfo failure
+            failure))]
+    (is (= :agg.render.media/media-tool-timeout
+           (:type (ex-data error))))
+    (is (= 25 (:timeout-ms (ex-data error))))
+    (is (= [false] @stream-modes))))
 
 (deftest playback-analysis-retries-invalid-inspection-despite-proxy-failure-stats
   (let [inspection-count (atom 0)
@@ -333,7 +346,8 @@
       (is (= {:container {:format "unknown"}
               :video {:codec "unknown" :codecTag "unknown"}}
              (with-redefs-fn
-               {#'agg.drive.gcp/inspect-playback-through-proxy! inspect!}
+               {(ns-resolve 'agg.drive.gcp
+                            'inspect-playback-through-proxy!) inspect!}
                #(drive/inspect-playback!
                  gateway "access" "private-file"
                  {:size 3000000
@@ -369,7 +383,8 @@
     (is (= {:container {:format "unknown"}
             :video {:codec "unknown" :codecTag "unknown"}}
            (with-redefs-fn
-             {#'agg.drive.gcp/inspect-playback-through-proxy! inspect!}
+             {(ns-resolve 'agg.drive.gcp
+                          'inspect-playback-through-proxy!) inspect!}
              #(drive/inspect-playback!
                gateway "access" "private-file" metadata))))
     (is (= [false true] @stream-modes))
@@ -409,6 +424,7 @@
 
 (deftest playback-analysis-still-rejects-malformed-media-with-bounded-reads
   (let [source-bytes (byte-array (* 2 1024 1024))
+        _ (java.util.Arrays/fill source-bytes (unchecked-byte 0x5a))
         requested-lengths (atom [])
         gateway
         (assoc
