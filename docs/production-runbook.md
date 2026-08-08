@@ -425,15 +425,95 @@ output, and verifies the binding afterward. If the command fails or reports an
 unexpected result, stop without retrying. Do not delete or recreate the bucket,
 change production, read state objects, or broaden the grant.
 
-Fresh authority is required again before retrying `Repair development YouTube
-key lookup IAM`. In that new manual dispatch, confirm both that the development
-backend grant was recovered and that only the exact API Keys viewer create is
-authorized. The workflow verifies backend initialization in its own step before
-it plans anything. Its existing executable plan guard remains the authority for
-the later apply and still rejects every change except the single viewer IAM
-create. After the workflow succeeds, Terraform resumes ownership of the
-state-bucket grant. No key, secret, application, production resource, or other
-bucket IAM binding is part of recovery.
+Backend-recovery authority does not authorize the refresh recovery below or a
+retry of `Repair development YouTube key lookup IAM`. Complete each later
+checkpoint under separate fresh authority. No key, secret, application,
+production resource, or other bucket IAM binding is part of backend recovery.
+
+### Development Terraform refresh recovery
+
+Repair run `31238519331` proved that backend initialization now succeeds, then
+stopped before producing a plan because the deployer could not refresh the two
+selected Service Usage resources or its own service-account dependency. Google
+provider `7.40.0` lists enabled services when reading
+`google_project_service` and gets the referenced account when reading
+`google_service_account`. The exact missing permissions are therefore only
+`serviceusage.services.list` and `iam.serviceAccounts.get`.
+
+Terraform declares those two reads in the project custom role
+`google_project_iam_custom_role.youtube_repair_refresh_reader[0]` and grants it
+to the development deployer with
+`google_project_iam_member.deployer_youtube_repair_refresh_reader[0]`. No
+predefined Service Usage or service-account viewer role is used. Production
+keeps this development-only role disabled.
+
+The deployer cannot grant this prerequisite to itself. An authorized human IAM
+operator must use the development state and a reviewed saved plan. First obtain
+authority for the read-only plan, then run from the repository root:
+
+```sh
+export GOOGLE_CLOUD_QUOTA_PROJECT=animated-graph-cloud-jp
+refresh_plan_directory="$(mktemp -d)"
+refresh_plan="$refresh_plan_directory/development-youtube-refresh.tfplan"
+refresh_plan_json="$refresh_plan_directory/development-youtube-refresh.tfplan.json"
+renderer_image="$(gcloud run jobs describe agg-renderer \
+  --project=animated-graph-cloud-jp \
+  --region=europe-central2 \
+  --format='value(spec.template.spec.template.spec.containers[0].image)')"
+api_service_url="$(gcloud run services describe agg-api \
+  --project=animated-graph-cloud-jp \
+  --region=europe-central2 \
+  --format='value(status.url)')"
+test -n "$renderer_image"
+test -n "$api_service_url"
+terraform -chdir=infra/dev init -input=false
+terraform -chdir=infra/dev plan \
+  -input=false \
+  -lock-timeout=5m \
+  -var="renderer_image=$renderer_image" \
+  -var="api_service_url=$api_service_url" \
+  -target='google_project_iam_custom_role.youtube_repair_refresh_reader[0]' \
+  -target='google_project_iam_member.deployer_youtube_repair_refresh_reader[0]' \
+  -out="$refresh_plan"
+terraform -chdir=infra/dev show "$refresh_plan"
+terraform -chdir=infra/dev show -json "$refresh_plan" >"$refresh_plan_json"
+script/guard_youtube_metadata_refresh_plan.sh "$refresh_plan_json"
+```
+
+The guard requires exactly two managed creates: the custom role with only the
+two permissions above and its binding to the development deployer. The existing
+deployer service account must be an explicit no-op. Stop on any missing target,
+update, delete, replacement, production-prefixed address, unrelated change,
+backend or refresh error, or operator identity that is the target deployer.
+
+Obtain fresh human authority for those exact two creates. Then apply only the
+same saved binary plan through the wrapper, which regenerates JSON from that
+plan, reruns the executable guard, rejects self-grant, binds Terraform to a
+short-lived token from that checked operator account, and invokes no direct IAM
+mutation command:
+
+```sh
+export CONFIRM_DEVELOPMENT_YOUTUBE_REFRESH_IAM_REPAIR='apply exact development youtube refresh reader'
+script/apply_development_youtube_refresh_plan.sh "$refresh_plan"
+unset CONFIRM_DEVELOPMENT_YOUTUBE_REFRESH_IAM_REPAIR
+```
+
+If apply or verification fails, stop without retrying. Do not run a full
+Terraform apply, import or delete a resource, grant either predefined viewer
+role, change production, or dispatch the later viewer-binding repair under this
+authority.
+
+After the prerequisite apply succeeds, stop.
+Fresh authority is required again before retrying
+`Repair development YouTube key lookup IAM`. Confirm
+`confirm_development_backend_access_recovered`,
+`confirm_development_refresh_access_recovered`, and
+`confirm_development_viewer_iam_repair`. The workflow initializes the backend,
+probes the two exact refresh reads without emitting resource data, then runs the
+unchanged six-target plan. Its existing guard still permits only the later
+single `google_project_iam_member.deployer_picker_api_keys_viewer` create, with
+all five other targets explicit no-ops. Stop without retrying on any failed
+probe, plan, guard, apply, or verification.
 
 ### YouTube metadata bootstrap and mandatory release checkpoint
 

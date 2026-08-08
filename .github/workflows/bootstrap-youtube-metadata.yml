@@ -8,6 +8,11 @@ on:
         required: true
         default: false
         type: boolean
+      confirm_development_refresh_access_recovered:
+        description: Confirm an authorized operator applied only the exact development refresh-reader role and binding under fresh authority
+        required: true
+        default: false
+        type: boolean
       confirm_development_viewer_iam_repair:
         description: Confirm only the missing development API Keys viewer IAM binding may be created and every other target must remain unchanged
         required: true
@@ -23,7 +28,7 @@ env:
 
 jobs:
   bootstrap:
-    if: inputs.confirm_development_backend_access_recovered == true && inputs.confirm_development_viewer_iam_repair == true
+    if: inputs.confirm_development_backend_access_recovered == true && inputs.confirm_development_refresh_access_recovered == true && inputs.confirm_development_viewer_iam_repair == true
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -51,6 +56,24 @@ jobs:
           set -euo pipefail
           if ! terraform -chdir="$TF_DIRECTORY" init -input=false; then
             echo "::error title=Development Terraform backend access required::Do not retry until an authorized operator has completed the reviewed development state-bucket recovery and fresh authority has been obtained for this workflow retry."
+            exit 1
+          fi
+
+      - name: Verify development Terraform refresh access
+        run: |
+          set -euo pipefail
+          if ! gcloud services list --enabled \
+            --project="$PROJECT_ID" \
+            --filter='config.name:(apikeys.googleapis.com youtube.googleapis.com)' \
+            --format=none; then
+            echo "::error title=Development Terraform refresh access required::Do not retry until an authorized operator has applied the reviewed development refresh-reader plan and fresh authority has been obtained for this workflow retry."
+            exit 1
+          fi
+          if ! gcloud iam service-accounts describe \
+            "agg-github-deployer@$PROJECT_ID.iam.gserviceaccount.com" \
+            --project="$PROJECT_ID" \
+            --format=none; then
+            echo "::error title=Development Terraform refresh access required::The development deployer cannot refresh its own service-account dependency. Stop without retrying."
             exit 1
           fi
 

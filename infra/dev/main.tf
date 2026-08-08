@@ -1281,6 +1281,29 @@ resource "google_project_iam_member" "deployer_log_viewer" {
   member  = "serviceAccount:${google_service_account.deployer.email}"
 }
 
+resource "google_project_iam_custom_role" "youtube_repair_refresh_reader" {
+  count = var.enable_youtube_repair_refresh_reader ? 1 : 0
+
+  project     = var.project_id
+  role_id     = "aggYoutubeRepairRefreshReader"
+  title       = "Alpha Compose YouTube repair refresh reader"
+  description = "Refresh only the Service Usage and deployer service-account dependencies of the guarded development YouTube IAM repair"
+  permissions = [
+    "iam.serviceAccounts.get",
+    "serviceusage.services.list",
+  ]
+}
+
+resource "google_project_iam_member" "deployer_youtube_repair_refresh_reader" {
+  count = var.enable_youtube_repair_refresh_reader ? 1 : 0
+
+  project = var.project_id
+  role    = "projects/${var.project_id}/roles/aggYoutubeRepairRefreshReader"
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+
+  depends_on = [google_project_iam_custom_role.youtube_repair_refresh_reader]
+}
+
 # Shared least-privilege metadata access for Picker and YouTube key validation.
 resource "google_project_iam_member" "deployer_picker_api_keys_viewer" {
   project = var.project_id

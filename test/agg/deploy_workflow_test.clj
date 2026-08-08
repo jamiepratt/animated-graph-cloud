@@ -24,6 +24,10 @@
    "google_secret_manager_secret_iam_member.deployer_youtube_access"
    "google_project_iam_member.deployer_picker_api_keys_viewer"])
 
+(def ^:private youtube-refresh-prerequisite-targets
+  ["google_project_iam_custom_role.youtube_repair_refresh_reader[0]"
+   "google_project_iam_member.deployer_youtube_repair_refresh_reader[0]"])
+
 (defn- terraform-plan-change [address actions]
   {:mode "managed"
    :address address
@@ -38,6 +42,15 @@
       (finally
         (.delete plan)))))
 
+(defn- youtube-refresh-prerequisite-plan-result [resource-changes]
+  (let [plan (File/createTempFile "youtube-refresh-prerequisite-plan-" ".json")]
+    (try
+      (spit plan (json/write-str {:resource_changes resource-changes}))
+      (shell/sh "bash" "script/guard_youtube_metadata_refresh_plan.sh"
+                (.getAbsolutePath plan))
+      (finally
+        (.delete plan)))))
+
 (defn- authorized-youtube-bootstrap-plan []
   (mapv (fn [address]
           (terraform-plan-change
@@ -46,6 +59,24 @@
              ["create"]
              ["no-op"])))
         youtube-bootstrap-targets))
+
+(defn- authorized-youtube-refresh-prerequisite-plan []
+  [(assoc-in
+    (terraform-plan-change (first youtube-refresh-prerequisite-targets)
+                           ["create"])
+    [:change :after]
+    {:project "animated-graph-cloud-jp"
+     :role_id "aggYoutubeRepairRefreshReader"
+     :permissions ["iam.serviceAccounts.get"
+                   "serviceusage.services.list"]})
+   (assoc-in
+    (terraform-plan-change (second youtube-refresh-prerequisite-targets)
+                           ["create"])
+    [:change :after]
+    {:project "animated-graph-cloud-jp"
+     :role "projects/animated-graph-cloud-jp/roles/aggYoutubeRepairRefreshReader"
+     :member "serviceAccount:agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com"})
+   (terraform-plan-change "google_service_account.deployer" ["no-op"])])
 
 (defn- with-fake-gcloud [f]
   (let [directory (doto (File/createTempFile "fake-gcloud-" "")
@@ -60,6 +91,8 @@
                  "printf '%s\\n' \"$*\" >>\"$GCLOUD_LOG\"\n"
                  "if [[ \"${1:-} ${2:-}\" == 'auth list' ]]; then\n"
                  "  printf '%s\\n' \"$ACTIVE_ACCOUNT\"\n"
+                 "elif [[ \"${1:-} ${2:-}\" == 'auth print-access-token' ]]; then\n"
+                 "  printf '%s\\n' 'test-operator-token'\n"
                  "elif [[ \"${1:-} ${2:-} ${3:-}\" == 'storage buckets get-iam-policy' ]]; then\n"
                  "  printf '%s\\n' '{\"bindings\":[{\"role\":\"roles/storage.objectAdmin\",\"members\":[\"serviceAccount:agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com\"]}]}'\n"
                  "fi\n"))
@@ -506,6 +539,104 @@
     (when (and (number? guard) (number? apply-plan))
       (is (< guard apply-plan)))))
 
+(deftest development-youtube-repair-refresh-reader-is-exact-and-production-disabled
+  (is (re-find
+       #"(?s)resource \"google_project_iam_custom_role\" \"youtube_repair_refresh_reader\".*?permissions\s+=\s+\[\s*\"iam\.serviceAccounts\.get\",\s*\"serviceusage\.services\.list\",?\s*\]"
+       terraform))
+  (is (re-find
+       #"(?s)resource \"google_project_iam_member\" \"deployer_youtube_repair_refresh_reader\".*?role\s+=\s+\"projects/\$\{var\.project_id\}/roles/aggYoutubeRepairRefreshReader\".*?member\s+=\s+\"serviceAccount:\$\{google_service_account\.deployer\.email\}\".*?depends_on\s+=\s+\[google_project_iam_custom_role\.youtube_repair_refresh_reader\]"
+       terraform))
+  (is (str/includes?
+       production-terraform
+       "enable_youtube_repair_refresh_reader = false")))
+
+(deftest youtube-repair-refresh-prerequisite-guard-allows-only-the-exact-plan
+  (let [authorized (authorized-youtube-refresh-prerequisite-plan)
+        broader
+        [(assoc-in authorized [0 :change :actions] ["update"])
+         (assoc-in authorized [1 :change :actions] ["delete" "create"])
+         (update-in authorized [0 :change :after :permissions]
+                    conj "serviceusage.services.enable")
+         (assoc-in authorized [1 :change :after :member]
+                   "serviceAccount:unrelated@animated-graph-cloud-jp.iam.gserviceaccount.com")
+         (subvec authorized 1)
+         (conj authorized
+               (terraform-plan-change "google_project_iam_member.unrelated"
+                                      ["create"]))
+         (mapv #(update % :address (partial str "module.application."))
+               authorized)]]
+    (is (zero? (:exit (youtube-refresh-prerequisite-plan-result authorized))))
+    (doseq [plan broader]
+      (is (not (zero? (:exit
+                       (youtube-refresh-prerequisite-plan-result plan))))))))
+
+(deftest development-youtube-refresh-apply-fails-closed-and-applies-only-the-saved-plan
+  (with-fake-gcloud
+    (fn [directory log]
+      (let [terraform-command (File. directory "terraform")
+            plan-json (File/createTempFile "youtube-refresh-apply-" ".json")
+            plan-file (File/createTempFile "youtube-refresh-apply-" ".tfplan")
+            authorized (authorized-youtube-refresh-prerequisite-plan)
+            base-env {"PATH" (str (.getAbsolutePath directory)
+                                  ":" (System/getenv "PATH"))
+                      "GCLOUD_LOG" (.getAbsolutePath log)
+                      "PLAN_JSON" (.getAbsolutePath plan-json)
+                      "ACTIVE_ACCOUNT" "owner@example.com"}
+            run-apply (fn [env]
+                        (shell/sh
+                         "bash"
+                         "script/apply_development_youtube_refresh_plan.sh"
+                         (.getAbsolutePath plan-file)
+                         :env env))]
+        (try
+          (spit plan-json (json/write-str {:resource_changes authorized}))
+          (spit terraform-command
+                (str "#!/usr/bin/env bash\n"
+                     "set -euo pipefail\n"
+                     "test -n \"${GOOGLE_OAUTH_ACCESS_TOKEN:-}\"\n"
+                     "printf 'terraform %s\\n' \"$*\" >>\"$GCLOUD_LOG\"\n"
+                     "if [[ \" $* \" == *' show -json '* ]]; then\n"
+                     "  cat \"$PLAN_JSON\"\n"
+                     "fi\n"))
+          (.setExecutable terraform-command true)
+          (is (not (zero? (:exit (run-apply base-env)))))
+          (is (not
+               (zero?
+                (:exit
+                 (run-apply
+                  (assoc base-env
+                         "ACTIVE_ACCOUNT"
+                         "agg-github-deployer@animated-graph-cloud-jp.iam.gserviceaccount.com"
+                         "CONFIRM_DEVELOPMENT_YOUTUBE_REFRESH_IAM_REPAIR"
+                         "apply exact development youtube refresh reader"))))))
+          (spit plan-json
+                (json/write-str
+                 {:resource_changes
+                  (conj authorized
+                        (terraform-plan-change
+                         "google_project_iam_member.unrelated" ["create"]))}))
+          (is (not
+               (zero?
+                (:exit
+                 (run-apply
+                  (assoc base-env
+                         "CONFIRM_DEVELOPMENT_YOUTUBE_REFRESH_IAM_REPAIR"
+                         "apply exact development youtube refresh reader"))))))
+          (spit plan-json (json/write-str {:resource_changes authorized}))
+          (let [result
+                (run-apply
+                 (assoc base-env
+                        "CONFIRM_DEVELOPMENT_YOUTUBE_REFRESH_IAM_REPAIR"
+                        "apply exact development youtube refresh reader"))
+                calls (slurp log)]
+            (is (zero? (:exit result)) (:err result))
+            (is (= 1 (count (re-seq #"terraform -chdir=infra/dev apply -input=false"
+                                    calls))))
+            (is (not (str/includes? calls "projects add-iam-policy-binding"))))
+          (finally
+            (.delete plan-json)
+            (.delete plan-file)))))))
+
 (deftest development-terraform-backend-recovery-is-an-exact-reviewable-plan
   (let [{:keys [exit out err]}
         (shell/sh "bash"
@@ -607,6 +738,30 @@
     (is (not (str/includes? bootstrap
                             "recover_development_terraform_backend_access.sh apply")))))
 
+(deftest youtube-bootstrap-verifies-exact-refresh-access-before-planning
+  (let [bootstrap (slurp ".github/workflows/bootstrap-youtube-metadata.yml")
+        terraform-init (str/index-of bootstrap
+                                     "terraform -chdir=\"$TF_DIRECTORY\" init")
+        refresh-check (str/index-of bootstrap
+                                    "Verify development Terraform refresh access")
+        exact-plan (str/index-of bootstrap
+                                 "Plan and apply exact development viewer IAM repair")]
+    (is (str/includes? bootstrap
+                       "confirm_development_refresh_access_recovered"))
+    (doseq [contract ["gcloud services list --enabled"
+                      "apikeys.googleapis.com youtube.googleapis.com"
+                      "gcloud iam service-accounts describe"
+                      "--format=none"
+                      "Development Terraform refresh access required"]]
+      (is (str/includes? bootstrap contract) contract))
+    (doseq [position [terraform-init refresh-check exact-plan]]
+      (is (number? position)))
+    (when (every? number? [terraform-init refresh-check exact-plan])
+      (is (< terraform-init refresh-check exact-plan)))
+    (is (not (str/includes? bootstrap "roles/serviceusage.serviceUsageViewer")))
+    (is (not (str/includes? bootstrap "roles/iam.serviceAccountViewer")))
+    (is (not (str/includes? bootstrap "projects add-iam-policy-binding")))))
+
 (deftest development-backend-recovery-has-two-human-authority-checkpoints
   (let [runbook (slurp "docs/production-runbook.md")
         recovery (str/index-of runbook
@@ -626,6 +781,35 @@
          terraform))
     (is (str/includes? runbook "Never run recovery as the target deployer"))
     (is (str/includes? runbook "stop without retrying"))))
+
+(deftest development-youtube-refresh-recovery-precedes-the-viewer-repair-checkpoint
+  (let [runbook (slurp "docs/production-runbook.md")
+        refresh-recovery (str/index-of runbook
+                                       "Development Terraform refresh recovery")
+        refresh-guard (str/index-of runbook
+                                    "guard_youtube_metadata_refresh_plan.sh")
+        refresh-apply (str/index-of runbook
+                                    "apply_development_youtube_refresh_plan.sh")
+        viewer-repair (str/index-of runbook
+                                    "Repair development YouTube key lookup IAM"
+                                    (or refresh-apply 0))]
+    (doseq [contract ["iam.serviceAccounts.get"
+                      "serviceusage.services.list"
+                      "google_project_iam_custom_role.youtube_repair_refresh_reader[0]"
+                      "google_project_iam_member.deployer_youtube_repair_refresh_reader[0]"
+                      "CONFIRM_DEVELOPMENT_YOUTUBE_REFRESH_IAM_REPAIR"
+                      "confirm_development_refresh_access_recovered"
+                      "stop without retrying"]]
+      (is (str/includes? runbook contract) contract))
+    (doseq [position [refresh-recovery refresh-guard refresh-apply viewer-repair]]
+      (is (number? position)))
+    (when (every? number?
+                  [refresh-recovery refresh-guard refresh-apply viewer-repair])
+      (is (< refresh-recovery refresh-guard refresh-apply viewer-repair)))
+    (is (str/includes? runbook
+                       "The deployer cannot grant this prerequisite to itself"))
+    (is (re-find #"Production\s+keeps this development-only role disabled"
+                 runbook))))
 
 (deftest public-ingress-is-enabled-only-after-app-and-task-auth-configuration
   (let [auth-index (str/index-of workflow "AGG_AUTH_ENABLED=true")

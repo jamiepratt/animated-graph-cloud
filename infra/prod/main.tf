@@ -17,6 +17,8 @@ module "application" {
   enable_observability_log_ttl = true
   enable_terraform_deployments = true
   terraform_state_bucket       = "animated-graph-cloud-prod-jp-tfstate"
+
+  enable_youtube_repair_refresh_reader = false
 }
 
 locals {

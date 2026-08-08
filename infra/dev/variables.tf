@@ -113,6 +113,12 @@ variable "enable_terraform_deployments" {
   default     = false
 }
 
+variable "enable_youtube_repair_refresh_reader" {
+  description = "Grant the development deployer only the reads needed to refresh the guarded YouTube IAM repair plan."
+  type        = bool
+  default     = true
+}
+
 variable "terraform_state_bucket" {
   description = "State bucket whose objects the Terraform-enabled GitHub deployer may manage."
   type        = string
