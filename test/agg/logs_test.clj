@@ -4,17 +4,18 @@
   (:import (java.time Instant)))
 
 (deftest in-memory-log-store-orders-limits-and-filters
-  (let [store (logs/in-memory-store)]
+  (let [store (logs/in-memory-store)
+        now (Instant/now)]
     (logs/append-log! store
                       (assoc (logs/entry {:severity "INFO"
                                           :component "api"
                                           :event "older"})
-                             :created-at (Instant/parse "2026-07-18T10:00:00Z")))
+                             :created-at (.minusSeconds now 60)))
     (logs/append-log! store
                       (assoc (logs/entry {:severity "ERROR"
                                           :component "renderer"
                                           :event "newer"})
-                             :created-at (Instant/parse "2026-07-18T10:01:00Z")))
+                             :created-at now))
     (is (= ["newer" "older"]
            (mapv #(get-in % [:fields :event])
                  (logs/list-logs store {:limit 2}))))
