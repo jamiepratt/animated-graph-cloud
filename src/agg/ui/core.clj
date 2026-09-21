@@ -1461,6 +1461,11 @@
      (picker-script picker-config)
      "})();</script></div></body></html>")))
 
+(def ^:private plausible-script
+  (str "<!-- Privacy-friendly analytics by Plausible -->"
+       "<script async src=\"https://plausible.io/js/pa-IyHwW-b4miRHjWqH9wgNo.js\"></script>"
+       "<script>window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};plausible.init()</script>"))
+
 (defn- public-page
   ([title body]
    (public-page title body nil))
@@ -1468,6 +1473,7 @@
    (str "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
         (icon-links)
+        plausible-script
         "<title>" title " · Alpha Compose</title>"
         "<meta name=\"color-scheme\" content=\"dark\">"
         "<style>"
@@ -1671,7 +1677,7 @@
 (def privacy-page
   (public-page
    "Privacy policy"
-   (str "<h1>Privacy policy</h1><p><strong>Effective 22 July 2026.</strong></p>"
+   (str "<h1>Privacy policy</h1><p><strong>Effective 21 September 2026.</strong></p>"
         "<p>Questions or deletion "
         "requests may be sent to <a href=\"mailto:me@jamiep.org\">me@jamiep.org</a>.</p>"
         "<h2>Information used</h2><p>We use your Google account identifier and "
@@ -1698,6 +1704,14 @@
         "in Firestore, application logs, analytics, or another application data store. "
         "Those details exist only during bounded request processing and in the configured "
         "email processor and recipient mailbox.</p>"
+        "<h2>Website analytics</h2><p>We use Plausible Analytics to understand visits to "
+        "our public pages and freediving.alphacompose.com, including referral sources, "
+        "page views, approximate locations, and browser and device types. Both sites "
+        "share an analytics dashboard. Plausible uses no cookies or persistent visitor "
+        "identifiers and processes analytics in the EU. We do not send account identifiers, "
+        "email addresses, Drive files, or activity data to Plausible. The signed-in editor "
+        "and administration pages do not include this tracker. See "
+        "<a href=\"https://plausible.io/data-policy\">Plausible's data policy</a>.</p>"
         "<h2>Homepage YouTube videos</h2><p>Alpha Compose retrieves public playlist "
         "titles, descriptions, positions, and durations server-side for the signed-out "
         "homepage. The privacy-enhanced YouTube player and video thumbnails can still cause your "
